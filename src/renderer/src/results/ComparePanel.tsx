@@ -13,7 +13,8 @@ const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
  * new side (+); the Table picked from the list is the old side (−), and Swap turns them round. It lists each side's
  * columns the diff leaves out (pairing is the backend's rule: name and wire, no mapping), Exact text, and that the inputs'
  * filters and sorts are not applied, as a warning while either is sorted or filtered. Compare starts the comparison, or
- * shows it when the run already has it.
+ * shows it when the run already has it. Only the user closes it: while the query runs it waits, and while the run has no
+ * Table of its group it says so.
  */
 export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabResults }) {
   const { compare, results } = useWorkbench()
@@ -21,11 +22,13 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
   useServiceSnapshot(results)
   const ids = useId()
   const panel = useRef<HTMLElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
   const picker = state.pickers[tabId]
   if (!picker) return null
-  const active = entryOf(tab.sets, picker.active)
-  if (!active) return null
-  const targets = compare.targetsOf(tabId, active.key)
+  const waiting = tab.status === 'running' || tab.queryId !== picker.queryId
+  const active = waiting ? undefined : entryOf(tab.sets, picker.active)
+  const name = active ? entryName(active) : `Result ${picker.ordinal}`
+  const targets = active ? compare.targetsOf(tabId, active.key) : []
   const sides = compare.sidesOf(tabId)
   const running = !!sides && compare.isRunning(tabId, sides.old.key, sides.neu.key, picker.exact)
   const shown = sides ? compare.existing(tabId, sides.old.key, sides.neu.key, picker.exact) : undefined
@@ -37,20 +40,20 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
     <code className="compare-column">{nameOf(column)}</code>
     {column.otherType !== undefined && <span className="compare-why">{column.dataType}; {column.otherType} in {entryName(other)}</span>}
   </li>)
-  // Compare (or Show It) closes the picker once the comparison is there: the keyboard focus, which was on the button that
-  // went, goes to the comparison's grid, unless the user has put it somewhere since.
+  // Compare (or Show It) shows the comparison: the keyboard focus goes to its grid too, unless the user has put it somewhere
+  // other than this button since. The picker stays open.
   const start = async () => {
-    const owner = panel.current?.ownerDocument
-    await compare.run(tabId)
-    const lost = !owner?.activeElement || owner.activeElement === owner.body || !owner.activeElement.isConnected
-    const focused = results.getSnapshot()[tabId]?.focused
-    if (!compare.getSnapshot().pickers[tabId] && lost && focused !== undefined) focusResultGrid(owner, tabId, focused)
+    const owner = panel.current?.ownerDocument, from = button.current
+    const shown = await compare.run(tabId)
+    const at = owner?.activeElement
+    const lost = !at || at === owner.body || !at.isConnected || at === from
+    if (shown !== undefined && lost && results.getSnapshot()[tabId]?.focused === shown) focusResultGrid(owner, tabId, shown)
   }
   const oldOnly = sides?.pairing.oldOnly ?? [], newOnly = sides?.pairing.newOnly ?? []
   return <aside ref={panel} className="profile-panel pivot-panel compare-panel" aria-label="Compare" aria-busy={running || undefined}>
     <div className="profile-head">
       <span className="profile-title">Compare</span>
-      <span className="profile-facts">{entryName(active)} · Table</span>
+      <span className="profile-facts">{name} · Table</span>
       <button type="button" className="icon-button" aria-label="Close Compare" title="Close Compare" onClick={() => compare.close(tabId)}><Icon name="close" /></button>
     </div>
     <div className="pivot-body">
@@ -61,12 +64,14 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
       </div>}
       <section className="pivot-section">
         <fieldset className="compare-targets">
-          <legend>Compare {entryName(active)} with</legend>
-          {targets.length === 0 && <div className="pivot-hint">No other result of this run shares a column with {entryName(active)}.</div>}
+          <legend>Compare {name} with</legend>
+          {waiting ? <div className="pivot-hint">Waiting for the query to finish.</div>
+            : !active ? <div className="pivot-hint">This run has no {name} open. Run the query again, or close Compare.</div>
+              : targets.length === 0 && <div className="pivot-hint">No other result of this run shares a column with {name}.</div>}
           {targets.map(target => <label key={target.entry.key} className="compare-target">
             <input type="radio" name={ids + 'target'} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
             <span className="compare-target-name">{entryName(target.entry)}</span>
-            <small>{formatCount(target.pairing.pairs.length)} of {formatCount(active.descriptor.columns.filter(column => column.role !== 'tone').length)} columns pair · {formatCount(target.entry.descriptor.rowsStored)} rows</small>
+            <small>{formatCount(target.pairing.pairs.length)} of {formatCount((active?.descriptor.columns ?? []).filter(column => column.role !== 'tone').length)} columns pair · {formatCount(target.entry.descriptor.rowsStored)} rows</small>
           </label>)}
         </fieldset>
         <div className="pivot-hint">Tables of this run that share a column. Pivots, comparisons and plan sets are not offered.</div>
@@ -83,8 +88,8 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
       </div>
     </div>
     <div className="pivot-foot">
-      {/* Mounted while the picker is, so a failure written into it is read out. */}
-      <div className={picker.error ? 'profile-note error' : 'profile-note'} role="status" hidden={!picker.error}>{picker.error ?? ''}</div>
+      {/* Mounted, and in the accessibility tree, while the picker is, so a failure written into it is read out. */}
+      <div className={picker.error ? 'profile-note error' : picker.cancelled ? 'profile-note' : 'visually-hidden'} role="status">{picker.error ?? (picker.cancelled ? 'Comparison cancelled.' : '')}</div>
       {busy && <div className="profile-note">Another comparison of this run is running. Each runs on its own.</div>}
       {sides && <div className="profile-note">{shown ? `${entryName(shown)} is already open.` : running ? `Comparing ${entryName(sides.old)} with ${entryName(sides.neu)}…`
         : `Opens “Differences: ${entryName(sides.old)} → ${entryName(sides.neu)}”, a snapshot that outlives both results.`}</div>}
@@ -92,7 +97,8 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
         {running && sides
           ? <button type="button" onClick={() => compare.cancel(tabId, sides.old.key, sides.neu.key, picker.exact)}>Cancel</button>
           : <button type="button" onClick={() => compare.close(tabId)}>Close</button>}
-        <button type="button" className="primary" disabled={!sides || running} onClick={() => void start()}>{shown ? 'Show It' : 'Compare'}</button>
+        {/* Only aria-disabled while its comparison runs, so the keyboard focus stays on it and a failure is met there. */}
+        <button ref={button} type="button" className="primary" disabled={!sides} aria-disabled={running || undefined} onClick={() => { if (!running) void start() }}>{shown ? 'Show It' : 'Compare'}</button>
       </div>
     </div>
   </aside>

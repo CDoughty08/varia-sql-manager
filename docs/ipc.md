@@ -1489,7 +1489,7 @@ refusal (after 1, 4 and 16 s), as highlights do; the backend is unchanged by tha
   query's own result sets, kind `rows` (`INVALID_PARAMS`, "Only a query's own result sets can be compared: not a pivot, a
   comparison or an execution plan set."), and complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
   have stopped storing (`BUDGET_STOPPED`, as a pivot). Columns pair by name,
-  case-insensitively (`OrdinalIgnoreCase`), in `left`'s order, when both hold text or both binary, a repeated name with the
+  case-insensitively (`OrdinalIgnoreCase` through one fixed table, `src/shared/ordinal-casing.ts`, so every platform pairs alike), in `left`'s order, when both hold text or both binary, a repeated name with the
   next unused one (`tests/fixtures/compare-pairing/cases.json` pins the rule for the backend and the picker's copy of it); at least one must pair (`INVALID_PARAMS`), at
   most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
   name up to 64 that do not, which are not compared.

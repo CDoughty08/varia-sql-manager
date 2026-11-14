@@ -1,4 +1,7 @@
 import type { ResultColumn } from '../../../shared/contracts'
+import { sameName } from '../../../shared/ordinal-casing'
+
+export { sameName }
 
 /** A column one side of a comparison leaves out: its place and name, its type, and the type of a column of the same name
  *  on the other side that did not pair with it (another wire, or already paired), for saying why. */
@@ -13,15 +16,6 @@ export interface ColumnPairing {
 type PairableColumn = Pick<ResultColumn, 'name' | 'wire' | 'role'> & Partial<Pick<ResultColumn, 'dataType'>>
 
 const hidden = (column: PairableColumn) => column.role === 'tone'
-/** One character as OrdinalIgnoreCase compares it: upper-cased when that is one character, as the invariant mapping is. */
-// .NET's invariant upper-casing keeps the dotless ı as itself (it does on Windows and, to match, on ICU), where JavaScript gives I.
-const upper = (char: string) => { if (char === 'ı') return char; const up = char.toUpperCase(); return up.length === 1 ? up : char }
-/** String.Equals(a, b, StringComparison.OrdinalIgnoreCase), code unit by code unit. */
-export function sameName(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  for (let at = 0; at < a.length; at++) if (a[at] !== b[at] && upper(a[at]) !== upper(b[at])) return false
-  return true
-}
 
 /**
  * The backend's pairing (ResultDiffer.Pairs), copied for the Compare picker: each visible column of the old side, in order,

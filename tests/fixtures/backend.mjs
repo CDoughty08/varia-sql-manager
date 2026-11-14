@@ -80,6 +80,7 @@ import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { copyText, exportText, validTurn } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
+import { sameName } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
 import { fixturePlan } from './plans/model.mjs'
 
@@ -644,8 +645,6 @@ function buildIdentity(result, by, column) {
 // both share whose values are unique and NULL-free in both (names ending in id, key or guid first), else by whole rows;
 // text equal case-insensitively without trailing spaces is a soft difference (the real backend's collation-aware
 // comparison is checked by its own checks), numbers compare by value.
-const upperChar = char => { const up = char.toUpperCase(); return up.length === 1 ? up : char }
-const sameName = (a, b) => a.length === b.length && [...Array(a.length).keys()].every(at => a[at] === b[at] || upperChar(a[at]) === upperChar(b[at]))
 function buildDiff(left, right, exact, context) {
   const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => item.role !== 'tone')
   const used = new Set(), pairs = []

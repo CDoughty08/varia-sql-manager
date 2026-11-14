@@ -1514,7 +1514,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare with Any Result…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -2277,8 +2277,9 @@ try {
   // 14g. The Compare picker (grouped results PR 16): on Result 1's grid it offers the other Table, Result 2 (never the
   // comparison), as the old side with Result 1 as the new. Swapped, it is the comparison the run has, so Show It goes to
   // it; the other way round makes a second one, whose strip links to its inputs and reads one closed once it is closed.
+  // The picker stays open through all of it until the user closes it.
   await cell(0, 0, grid('Result 1')).click({ button: 'right' })
-  await outputMenu.getByRole('menuitem', { name: 'Compare with Any Result…', exact: true }).click()
+  await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
   const picker = page.getByRole('complementary', { name: 'Compare', exact: true })
   await expect(picker.getByRole('radio')).toHaveCount(1)
   await expect(picker.getByRole('radio', { name: /^Result 2/ })).toBeChecked()
@@ -2288,14 +2289,14 @@ try {
   await picker.getByRole('button', { name: 'Swap old and new' }).click()
   await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 1')
   await picker.getByRole('button', { name: 'Show It', exact: true }).click()
-  await expect(picker).toHaveCount(0)
   await expect(diff).toBeFocused()
-  await cell(0, 0, grid('Result 1')).click({ button: 'right' })
-  await outputMenu.getByRole('menuitem', { name: 'Compare with Any Result…', exact: true }).click()
+  await expect(picker).toBeVisible()
+  await picker.getByRole('button', { name: 'Swap old and new' }).click()
+  await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 2')
   await picker.getByRole('button', { name: 'Compare', exact: true }).click()
-  await expect(picker).toHaveCount(0)
   const second = grid('Result 4')
   await expect(second).toBeFocused()
+  await expect(picker.getByRole('button', { name: 'Show It', exact: true })).toBeVisible()
   await expect(page.getByText('Differences: Result 2 → Result 1', { exact: true })).toBeVisible()
   await expect(strip('Result 4')).toContainText('Result 2 → Result 1, rows matched by ItemId:')
   await expect(strip('Result 4')).toContainText('Filters and sorts on the inputs were not applied.')
@@ -2306,7 +2307,12 @@ try {
   await expect(strip('Result 4')).toContainText('Result 2 (closed) → Result 1')
   await expect(strip('Result 4').getByRole('button', { name: 'Result 2', exact: true })).toHaveCount(0)
   await expect(strip('Result 4').getByRole('button', { name: 'Result 1', exact: true })).toHaveCount(1)
-  console.log('Results checks: the Compare picker offers the other Table only, swaps its sides, shows a comparison the run has, makes a new one that takes the focus, and its strip links to its inputs and reads a closed one closed.')
+  // Its target closed, the picker stays on Result 1 with nothing to compare it with, until the user closes it.
+  await expect(picker.getByRole('radio')).toHaveCount(0)
+  await expect(picker.getByRole('button', { name: 'Compare', exact: true })).toBeDisabled()
+  await picker.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(picker).toHaveCount(0)
+  console.log('Results checks: the Compare picker offers the other Table only, swaps its sides, shows a comparison the run has, makes a new one that takes the focus while it stays open, and its strip links to its inputs and reads a closed one closed.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

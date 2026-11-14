@@ -2721,3 +2721,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .compare-panel .pivot-foot .profile-note { padding: 0; }
 .profile-note.warning { color: var(--varia-warningForeground); }
 .compare-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+/* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
+   the whole button, so its focus ring stays at full strength. */
+.compare-buttons button[aria-disabled="true"], .compare-buttons button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }

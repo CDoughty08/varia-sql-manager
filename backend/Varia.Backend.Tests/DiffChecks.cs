@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Varia.Backend;
@@ -26,6 +27,7 @@ internal static class DiffChecks
         CellMemory(check);
         WireMismatch(check);
         SharedPairing(check);
+        OrdinalCasing(check);
         Rules(check);
         Tones(check);
         Halves(check);
@@ -314,6 +316,78 @@ internal static class DiffChecks
         }
         check(cases.Count >= 9 && differences.Count == 0, "ResultDiffer.Pairs gives each pairing case in tests/fixtures/compare-pairing: " + string.Join("; ", differences));
     }
+
+    /// <summary>
+    /// ResultDiffer.Pairs, the Compare picker and the fake backend compare column names through one fixed table
+    /// (src/shared/ordinal-casing.ts, embedded in the backend as OrdinalNames), since OrdinalIgnoreCase follows the operating
+    /// system's ICU and so its Unicode version. The table must agree with this runtime wherever the runtime cases the
+    /// letter (an older ICU may case fewer), and its keys are final; VARIA_UPDATE_ORDINAL_CASING=1 rewrites it from this runtime's casing: each
+    /// code point equal by OrdinalIgnoreCase to its invariant upper case maps to it (ı and ſ keep their own).
+    /// </summary>
+    private static void OrdinalCasing(Action<bool, string> check)
+    {
+        var entries = new List<(int Code, int Key)>();
+        var disagree = new List<string>();
+        for (var code = 0; code <= 0x10FFFF; code++)
+        {
+            if (code is >= 0xD800 and <= 0xDFFF) continue;
+            var text = char.ConvertFromUtf32(code);
+            var upper = text.ToUpperInvariant();
+            var known = upper != text && upper.Length == text.Length;
+            if (known && string.Equals(text, upper, StringComparison.OrdinalIgnoreCase)) entries.Add((code, char.ConvertToUtf32(upper, 0)));
+            var key = OrdinalNames.Key(code);
+            // A mapping this runtime contradicts. Every key is final (itself unmapped), so a mapping turned round shows on
+            // any runtime. Where the runtime upper-cases the letter, the key is that upper case. Where it does not, the
+            // mapping stands if the runtime compares the two equal anyway, or the code point is unassigned or a lower- or
+            // title-case letter, which a newer ICU than this one may case: only an older ICU is tolerated.
+            var category = Rune.GetUnicodeCategory(new Rune(code));
+            var contradicted = key != code && (OrdinalNames.Key(key) != key || (known
+                ? key != char.ConvertToUtf32(upper, 0) || !string.Equals(text, upper, StringComparison.OrdinalIgnoreCase)
+                : !string.Equals(text, char.ConvertFromUtf32(key), StringComparison.OrdinalIgnoreCase) && category is not (UnicodeCategory.OtherNotAssigned or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter)));
+            if (contradicted) disagree.Add(code.ToString("X4", CultureInfo.InvariantCulture));
+        }
+        var path = Path.Combine(GoldenText.Repository(), "src", "shared", "ordinal-casing.ts");
+        var source = File.ReadAllText(path).Replace("\r\n", "\n");
+        // Rewriting checks only that it wrote: the embedded copy is the old table until the next build.
+        if (Environment.GetEnvironmentVariable("VARIA_UPDATE_ORDINAL_CASING") == "1") { WriteOrdinalCasing(check, path, source, entries); return; }
+        // The table read (the embedded copy) is the whole one its generator described in the file: a range lost by an edit,
+        // or a line the parser skips, shows here on any runtime. (A runtime that knows more letters is not an error.)
+        var described = OrdinalLine(OrdinalNames.Count, OrdinalNames.Checksum);
+        check(source.Contains(described, StringComparison.Ordinal), "the column-name casing table read is the whole generated table (" + described.TrimEnd() + ")");
+        check(OrdinalNames.Count > 1000 && disagree.Count == 0, "the column-name casing table agrees with this runtime's OrdinalIgnoreCase wherever it knows the letter: " + string.Join(", ", disagree.Take(10)));
+        check(OrdinalNames.Same("ItemId", "ITEMID") && !OrdinalNames.Same("ſid", "SID") && !OrdinalNames.Same("ıd", "ID") && OrdinalNames.Same("\U00010428d", "\U00010400D") && !OrdinalNames.Same("\U00010428", "\uD801x"),
+            "OrdinalNames compares as the table says: ſ and ı keep their own, a surrogate pair is one code point, a lone surrogate its own");
+    }
+
+    private static void WriteOrdinalCasing(Action<bool, string> check, string path, string source, List<(int Code, int Key)> entries)
+    {
+        // Runs of [first, last, delta, stride]: every stride-th code point from first to last maps to itself plus delta.
+        var ranges = new List<(int First, int Last, int Delta, int Stride)>();
+        for (var at = 0; at < entries.Count;)
+        {
+            var (first, key) = entries[at];
+            var delta = key - first;
+            var stride = at + 1 < entries.Count && entries[at + 1].Key - entries[at + 1].Code == delta && entries[at + 1].Code - first is 1 or 2 ? entries[at + 1].Code - first : 1;
+            var last = first;
+            at++;
+            while (at < entries.Count && entries[at].Code == last + stride && entries[at].Key - entries[at].Code == delta) last = entries[at++].Code;
+            ranges.Add((first, last, delta, stride));
+        }
+        const string Open = "// <generated: DiffChecks.OrdinalCasing>\n", Close = "// </generated>\n";
+        var start = source.IndexOf(Open, StringComparison.Ordinal);
+        var end = source.IndexOf(Close, StringComparison.Ordinal);
+        var hash = 2166136261u;
+        foreach (var (code, key) in entries) foreach (var value in new[] { code, key }) { hash ^= (uint)value; hash *= 16777619u; }
+        // Numbers in the invariant culture: some cultures write a minus sign JavaScript cannot read.
+        var block = new StringBuilder(OrdinalLine(entries.Count, hash)).Append("const ranges: readonly (readonly [number, number, number, number])[] = [\n");
+        for (var i = 0; i < ranges.Count; i++)
+            block.Append(CultureInfo.InvariantCulture, $"  [{ranges[i].First}, {ranges[i].Last}, {ranges[i].Delta}, {ranges[i].Stride}]").Append(i + 1 < ranges.Count ? ",\n" : "\n");
+        block.Append("]\n");
+        check(start >= 0 && end > start, "src/shared/ordinal-casing.ts has the generated block VARIA_UPDATE_ORDINAL_CASING=1 rewrites");
+        if (start >= 0 && end > start) File.WriteAllText(path, source[..(start + Open.Length)] + block + source[end..]);
+    }
+
+    private static string OrdinalLine(int count, uint checksum) => string.Create(CultureInfo.InvariantCulture, $"// {count} code points, FNV-1a {checksum:x8}\n");
 
     private static void Host(Action<bool, string> check)
     {

@@ -95,12 +95,48 @@ describe('the Compare picker', () => {
     await settle()
     expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, signal: expect.any(AbortSignal) })
     const made = tab().comparisons[0]
-    // Named old → new, its frozen sources in that order, and it took the focus; the picker closed.
+    // Named old → new, its frozen sources in that order, and it took the focus; the picker stays open, now on a pair the
+    // run has (Show It).
     expect(made.entry.label).toBe('Differences: Result 3 → Result 1')
     expect(made.sources.map(source => source.key)).toEqual([keys[2], keys[0]])
     expect(tab().focused).toBe(made.key)
-    expect(compare.getSnapshot().pickers.t1).toBeUndefined()
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ active: keys[2], target: keys[0] })
+    expect(compare.existing('t1', keys[2], keys[0], true)?.key).toBe(made.key)
     expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true })
+  })
+
+  it('leaves the focus where the user put it while the comparison ran, and says a cancel in the picker', async () => {
+    const { compare, results, run, tab, handle } = fixture()
+    const keys = run(3)
+    compare.open('t1', keys[1])
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const comparing = compare.run('t1')
+    results.focusEntry('t1', keys[2])
+    answer.resolve({ descriptor: descriptor(990, { index: 3, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await expect(comparing).resolves.toBeUndefined()
+    expect(tab().comparisons).toHaveLength(1)
+    expect(tab().focused).toBe(keys[2])
+    // Cancel: said in the picker until the next Compare or another choice.
+    compare.setExact('t1', true)
+    vi.mocked(handle(keys[0]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
+    const cancelled = compare.run('t1')
+    compare.cancel('t1', keys[0], keys[1], true)
+    await expect(cancelled).resolves.toBeUndefined()
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ cancelled: true })
+    expect(compare.getSnapshot().pickers.t1.error).toBeUndefined()
+    compare.swap('t1')
+    expect(compare.getSnapshot().pickers.t1.cancelled).toBeUndefined()
+    // What it said goes with its pair: a new run clears it too.
+    compare.swap('t1')
+    vi.mocked(handle(keys[0]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
+    const again = compare.run('t1')
+    compare.cancel('t1', keys[0], keys[1], true)
+    await again
+    expect(compare.getSnapshot().pickers.t1.cancelled).toBe(true)
+    run(3, { queryId: 'q2' })
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ queryId: 'q2' })
+    expect(compare.getSnapshot().pickers.t1.cancelled).toBeUndefined()
   })
 
   it('shows a comparison the run already has instead of making it again', async () => {
@@ -113,10 +149,11 @@ describe('the Compare picker', () => {
     expect(compare.existing('t1', keys[0], keys[1], false)?.key).toBe(tab().comparisons[0].key)
     // Exact text is another comparison.
     expect(compare.existing('t1', keys[0], keys[1], true)).toBeUndefined()
-    await compare.run('t1')
+    await expect(compare.run('t1')).resolves.toBe(tab().comparisons[0].key)
     expect(handle(keys[0]).diff).toHaveBeenCalledTimes(1)
     expect(tab().comparisons).toHaveLength(1)
     expect(tab().focused).toBe(tab().comparisons[0].key)
+    expect(compare.getSnapshot().pickers.t1).toBeDefined()
   })
 
   it('runs one comparison per pair and exact-text choice, other pairs at once, at most four at a time', async () => {
@@ -165,6 +202,21 @@ describe('the Compare picker', () => {
     expect(tab().sets).toHaveLength(resultLimits.sets)
   })
 
+  it('does not count a comparison of an earlier run that was given up but has not settled yet', async () => {
+    const { compare, run, handle } = fixture()
+    let keys = run(2)
+    // It settles only once its abort reaches it, a turn after the re-run gives it up.
+    vi.mocked(handle(keys[0]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
+    const earlier = compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    // The re-run gives it up; before it settles, the new run has room for exactly one more.
+    keys = run(resultLimits.sets - 1, { queryId: 'q2' })
+    vi.mocked(handle(keys[0]).diff).mockResolvedValueOnce({ descriptor: descriptor(6000, { index: 999, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    const next = compare.comparePair('t1', keys[0], keys[1], { exact: false, quiet: true })
+    expect(handle(keys[0]).diff).toHaveBeenCalledTimes(1)
+    await expect(earlier).resolves.toBeUndefined()
+    await expect(next).resolves.toMatchObject({ key: expect.any(String) })
+  })
+
   it('says a failure in the picker while it shows that pair, and keeps the picker open', async () => {
     const { compare, run, handle } = fixture()
     const keys = run(2)
@@ -177,19 +229,43 @@ describe('the Compare picker', () => {
     expect(compare.getSnapshot().pickers.t1.error).toBeUndefined()
   })
 
-  it('closes the picker when its Table closes or a new run starts, and gives up a comparison whose input closes', async () => {
+  it('stays open until the user closes it, following its groups into the next run, and gives up a comparison whose input closes', async () => {
     const { compare, results, run, handle, client } = fixture()
     let keys = run(3)
     compare.open('t1', keys[2])
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ ordinal: 3, targetOrdinal: 2 })
     results.removeEntry('t1', keys[1])
-    // Its target closed: the picker stays on its Table and picks again.
+    // Its target closed: the picker stays on its Table with nothing picked, and picks again.
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ active: keys[2] })
+    expect(compare.getSnapshot().pickers.t1.target).toBeUndefined()
     expect(compare.sidesOf('t1')).toBeUndefined()
     compare.pick('t1', keys[0])
     expect(compare.sidesOf('t1')?.old.key).toBe(keys[0])
+    expect(compare.getSnapshot().pickers.t1.targetOrdinal).toBe(1)
+    // Its own Table closed: it stays, with nothing to compare.
     results.removeEntry('t1', keys[2])
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ ordinal: 3, queryId: 'q1' })
+    expect(compare.sidesOf('t1')).toBeUndefined()
+    // While the next run goes it waits, unchanged; once it finishes it is on that run's Results 3 and 1.
+    results.begin('t1', 'q2')
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ queryId: 'q1', ordinal: 3 })
+    keys = run(3, { queryId: 'q3' })
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ queryId: 'q3', active: keys[2], target: keys[0], ordinal: 3, targetOrdinal: 1 })
+    expect(compare.sidesOf('t1')).toMatchObject({ old: { key: keys[0] }, neu: { key: keys[2] } })
+    // A run with no Result 3: it says so (no Table, nothing picked) until the user closes it or a run brings one back.
+    keys = run(2, { queryId: 'q4' })
+    const stale = compare.getSnapshot().pickers.t1
+    expect(stale).toMatchObject({ queryId: 'q4', ordinal: 3 })
+    expect(stale.target).toBeUndefined()
+    expect(results.getSnapshot().t1.sets.some(set => set.key === stale.active)).toBe(false)
+    expect(compare.sidesOf('t1')).toBeUndefined()
+    // A run whose Result 3 is a plan set has no Table of it either.
+    run(3, { queryId: 'q4b', plan: 2 })
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ queryId: 'q4b', active: stale.active })
+    expect(compare.sidesOf('t1')).toBeUndefined()
+    compare.close('t1')
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
-    keys = run(2, { queryId: 'q2' })
+    keys = run(2, { queryId: 'q4c' })
     compare.open('t1', keys[1])
     let signal: AbortSignal | undefined
     const answer = held<DiffAnswer>()
@@ -200,7 +276,14 @@ describe('the Compare picker', () => {
     answer.resolve({ descriptor: descriptor(970, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await comparing
     expect(client.released()).toContain(970)
-    run(2, { queryId: 'q3' })
+    run(2, { queryId: 'q5' })
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ queryId: 'q5', ordinal: 2 })
+    // It goes with the results themselves: Close Results, or a run that leaves none.
+    results.closeResults('t1')
+    expect(compare.getSnapshot().pickers.t1).toBeUndefined()
+    keys = run(2, { queryId: 'q6' })
+    compare.open('t1', keys[1])
+    run(0, { queryId: 'q7' })
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
   })
 })

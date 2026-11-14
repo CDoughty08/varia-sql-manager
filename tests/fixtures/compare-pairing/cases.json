@@ -1,5 +1,5 @@
 {
-  "about": "Column pairing for results.diff (ResultDiffer.Pairs in the backend; pairColumns in src/renderer/src/results/compare-pairing.ts for the Compare picker). Visible columns of the old side, in order, each with the first unused visible column of the new side of the same name, compared case-insensitively, and the same wire. A tone column is hidden and never pairs. Both DiffChecks.cs and tests/compare-pairing.test.ts read these cases.",
+  "about": "Column pairing for results.diff (ResultDiffer.Pairs in the backend; pairColumns in src/renderer/src/results/compare-pairing.ts for the Compare picker). Visible columns of the old side, in order, each with the first unused visible column of the new side of the same name, compared as OrdinalIgnoreCase does (src/shared/ordinal-casing.ts holds .NET's table), and the same wire. A tone column is hidden and never pairs. Both DiffChecks.cs and tests/compare-pairing.test.ts read these cases.",
   "cases": [
     {
       "name": "same names, same order",
@@ -145,6 +145,40 @@
         { "name": "ID", "wire": "text" }
       ],
       "pairs": []
+    },
+    {
+      "name": "the long s does not pair with S, which JavaScript's upper-casing would give",
+      "left": [
+        { "name": "\u017Fid", "wire": "text" }
+      ],
+      "right": [
+        { "name": "SID", "wire": "text" }
+      ],
+      "pairs": []
+    },
+    {
+      "name": "a letter past the Basic Multilingual Plane pairs with its upper case (Deseret), compared as one code point",
+      "left": [
+        { "name": "\uD801\uDC28d", "wire": "text" }
+      ],
+      "right": [
+        { "name": "\uD801\uDC00D", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
+    },
+    {
+      "name": "a letter whose full upper case is two letters pairs by its simple one (alpha with ypogegrammeni)",
+      "left": [
+        { "name": "\u1FB3", "wire": "text" }
+      ],
+      "right": [
+        { "name": "\u1FBC", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
     },
     {
       "name": "each old column takes the first match wherever it stands on the new side",

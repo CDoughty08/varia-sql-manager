@@ -848,7 +848,7 @@ export const commandCatalog = {
   },
   'output.copyColumnName': {
     title: 'Copy Column Name', category: 'Query', icon: 'copy', palette: false,
-    menus: [{ menu: 'output.context', group: '1_copy', order: 3, mnemonic: 'n', when: "outputView == 'grid' || outputView == 'live'" }]
+    menus: [{ menu: 'output.context', group: '1_copy', order: 3, mnemonic: 'y', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.selectAll': {
     title: 'Select All', category: 'Query', palette: false,
@@ -1019,11 +1019,11 @@ export const commandCatalog = {
   },
   // Opens the Compare picker (CompareService) on the grid's Table, else the focused one: another group's Table of the run
   // that shares a column is picked as the old side, the picker can swap them, and Compare adds their diff (results.diff) as
-  // a comparison. Tables only: never a Pivot, a comparison, a plan set or a Peek grid. The grid menu's access keys leave no
-  // letter of "Compare…" free, hence the menu's longer title.
+  // a comparison. Tables only: never a Pivot, a comparison, a plan set or a Peek grid. Every letter of "Compare…" had an access
+  // key in the grid menu, so Copy Column Name takes y and Transpose n, leaving p for it.
   'output.compare': {
     title: 'Compare Results…', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result', 'table', 'pick', 'swap'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 9, title: 'Compare with Any Result…', mnemonic: 'y', when: "outputView == 'grid' && !outputGridBare" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 9, title: 'Compare…', mnemonic: 'p', when: "outputView == 'grid' && !outputGridBare" }]
   },
   // Opens the pivot builder on the grid's group (PivotService); Build Pivot there shows the pivot (results.pivot) under
   // the group's Table, in place of the Pivot it had. Offered for a Table or its Pivot, never for a Peek grid.

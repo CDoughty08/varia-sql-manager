@@ -56,7 +56,7 @@ message stays with the result it was for until that result's draft is edited or 
 
 ## Comparisons
 
-**Compare with Any Result…** in a result's grid menu (**Compare Results…** in the command palette, or the results
+**Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results
 toolbar's **Compare**) opens the Compare picker in the pivot builder's place, on that result's own grid. The picker
 lists the run's other results that have all their rows and share at least one column with it; Pivots, comparisons and
 plan sets are never offered, and the backend refuses them too. The grid it was opened on is the new side (+) and the
@@ -71,13 +71,15 @@ reads the stored results, so the inputs' sorts and filters are not applied: the 
 input is sorted or filtered, and so does the strip.
 
 **Compare** starts it; while it runs the picker offers **Cancel**, and a failure is said there. When it is done the
-picker closes and the comparison takes the focus, unless you moved it meanwhile. Asking for a comparison the run
+comparison takes the focus, unless you moved it meanwhile, and the picker stays open for the next one. Asking for a comparison the run
 already has (the same two results, the same way round, the same Exact text choice) shows that one (**Show It**), and
 asking again while it runs does nothing. Comparisons of other pairs run at the same time, at most four at once in a
 window (the rest wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails.
 A run keeps at most 1,000 results, comparisons included, so a comparison that would pass that is refused with a sentence
-saying so. The picker closes when its result closes or the query runs again; it stays on its result when you use
-another grid.
+saying so. Only you close the picker (**Close**, its close button, the toolbar's **Compare**, or **Pivot…**). It stays
+on its result when you use another grid. When the query runs again it waits, then returns to the results of the same
+numbers; while the run has no such result, or that result was closed, it says so and offers nothing to compare. It
+goes with the results themselves: closing the tab, **Close Results**, a run that leaves no result, or closing its last result closes it too.
 
 A comparison's strip starts with its two inputs: each is a link to that result's grid while that exact result is open.
 Once one is closed it reads "Result 1 (closed)": the comparison copied what it compared, so it stays.

@@ -15,6 +15,13 @@ describe('Compare picker column pairing', () => {
 
   it('has the cases both suites need', () => expect(cases.length).toBeGreaterThanOrEqual(9))
 
+  // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it.
+  it('the fake backend compares names with the shared rule', () => {
+    const source = readFileSync(new URL('./fixtures/backend.mjs', import.meta.url), 'utf8')
+    expect(source).toContain("import { sameName } from '../../src/shared/ordinal-casing.ts'")
+    expect(source).not.toMatch(/(const|function) sameName/)
+  })
+
   it('lists each side\'s columns left out, with the other side\'s type when a column of the same name did not pair', () => {
     const column = (name: string, dataType: string, wire: 'text' | 'binary' = 'text', role?: 'tone') => ({ name, dataType, wire, nullable: true, ...role ? { role } : {} })
     const old = [column('Id', 'int'), column('Hash', 'varbinary', 'binary'), column('Note', 'nvarchar'), column('', 'nvarchar(400)', 'text', 'tone')]
@@ -26,11 +33,11 @@ describe('Compare picker column pairing', () => {
     expect(pairing.newOnly).toEqual([{ index: 1, name: 'Hash', dataType: 'char(64)', otherType: 'varbinary' }, { index: 2, name: 'Added', dataType: 'date' }])
   })
 
-  it('compares names as OrdinalIgnoreCase does: by upper-cased characters, length for length', () => {
+  it('compares names as OrdinalIgnoreCase does: by the casing table of .NET, length for length', () => {
     expect(sameName('ItemId', 'ITEMID')).toBe(true)
     expect(sameName('', '')).toBe(true)
     expect(sameName('Id', 'Id ')).toBe(false)
-    // ß upper-cases to two characters, so it is compared as itself; the Kelvin sign only lower-cases to k.
+    // ß has no one-letter upper case, so it is compared as itself; the Kelvin sign only lower-cases to k.
     expect(sameName('Straße', 'STRASSE')).toBe(false)
     expect(sameName('Key', 'key')).toBe(false)
   })
