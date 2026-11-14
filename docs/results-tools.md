@@ -61,7 +61,8 @@ comparisons and plan sets are never compared.
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Stacked stays the default for now.
+groups one at a time instead of stacked. Stacked stays the default for now. In a window narrower than 1,180 pixels the
+toolbar's Tabs gives way, like Transposed; the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
 

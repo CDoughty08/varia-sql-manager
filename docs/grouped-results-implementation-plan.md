@@ -653,7 +653,7 @@ Outcome, accepted by the owner:
         selected tab's focus ring is HighlightText on Highlight.
       - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and
         `explorer-smoke` through `pinStackedResults` (`scripts/fixtures/results-pane.mjs`), `menus-smoke` in its seeded
-        `settings.json`. The new suite's CI seconds are placeholders (25 s) until the first CI run.
+        `settings.json`. The new suite took 4 s on Linux and 6 s on Windows in CI (its shard weights).
       - Departures from the mock: one toggle button rather than a Stacked/Tabs segmented pair (the toolbar must fit a
         1,024 px window); no facts row of its own under the view tabs; no streaming dot on a group's tab; the view's
         actions stay in the results toolbar (the mock's Actions menu is PR 15's narrow-pane work).

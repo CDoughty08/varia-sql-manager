@@ -43,7 +43,7 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
   `grouped-results-smoke.mjs` covers the results' Tabs layout (grouped results PR 13) in its own launch, because
   `results-smoke.mjs` is already near the split guideline; the existing results suites pin the Stacked layout by setting.
-  Its weights are 25 seconds on Linux and Windows until CI measures it; replace them with the first PR run's seconds.
+  PR #467's run measured it at 4 seconds on Linux and 6 on Windows.
 
   About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
   browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took

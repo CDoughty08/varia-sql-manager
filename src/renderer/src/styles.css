@@ -854,8 +854,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
   .results-search input { min-width: 12px; }
-  /* Transposed and its Headers give way too: they are also in the grid's menu and the palette. */
-  .results-toolbar .results-transpose { display: none; }
+  /* Transposed and its Headers give way too: they are also in the grid's menu and the palette. So does Tabs, which is in
+     the palette and the Window menu. */
+  .results-toolbar .results-transpose, .results-toolbar .results-layout { display: none; }
 }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */

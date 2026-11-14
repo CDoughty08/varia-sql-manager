@@ -144,7 +144,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
         onClick={event => void commands.execute('output.transposeChooseHeaders', { tabId, anchor: event.currentTarget }, 'toolbar')}><span>Headers: {headers}</span><Icon name="chevron-down" /></button>}
     </div>
     <div className="results-segments" role="group" aria-label="Results">
-      <button type="button" className="results-icon-toggle" aria-label="Tabs" aria-pressed={tabs} tabIndex={-1}
+      <button type="button" className="results-icon-toggle results-layout" aria-label="Tabs" aria-pressed={tabs} tabIndex={-1}
         title="Tabs: show one result at a time, under a row of tabs, with its Table and Pivot as view tabs; off, every result is stacked"
         onClick={() => void commands.execute('output.toggleResultsTabs', undefined, 'toolbar')}><Icon name="window" /></button>
       <button type="button" className="results-icon-toggle" aria-label="Close Results" tabIndex={-1} disabled={!canClose}
