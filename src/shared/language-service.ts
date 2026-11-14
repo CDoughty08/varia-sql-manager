@@ -53,3 +53,11 @@ export const languageStatusSchema = z.object({ providers: z.array(z.object({
   id: databaseProviderIdSchema, configured: z.boolean(), completion: z.boolean(), hover: z.boolean(), refresh: z.boolean().optional(), diagnostics: z.boolean().optional(), reason: z.string().max(1024).optional()
 }).strict()).max(16) }).strict()
 export type LanguageStatus = z.infer<typeof languageStatusSchema>
+/** Go to Definition's kinds: what `language.definition` resolves a name to, as Object Explorer names them. */
+export const languageDefinitionKinds = ['table', 'view', 'procedure', 'function', 'synonym', 'sequence', 'type', 'tableType'] as const
+export const languageDefinitionSchema = z.object({
+  database: identifier, schema: identifier, name: identifier, kind: z.enum(languageDefinitionKinds),
+  subtype: z.string().min(1).max(64).optional(), range: languageRangeSchema
+}).strict().nullable()
+/** The object a name under the caret stands for, or null when nothing (or no object this database can script) matches. */
+export type LanguageDefinition = z.infer<typeof languageDefinitionSchema>

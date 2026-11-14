@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (310)
+## Commands (312)
 
 ### File
 
@@ -64,6 +64,8 @@ keys it uses are listed below.
 | Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
 | Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
+| Go To Definition | `edit.goToDefinition` | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Go To Definition |
+| Peek Definition | `edit.peekDefinition` | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | ⌥F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Peek Definition |
 | Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
 | Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
@@ -615,6 +617,8 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `0_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
 | `0_snippets` | **S**urround With… | `edit.surroundWith` | Always |
 | `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
+| `2_definition` | **G**o To Definition | `edit.goToDefinition` | Always |
+| `2_definition` | Pee**k** Definition | `edit.peekDefinition` | Always |
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
 | `2_execute` | **D**isplay Estimated Execution Plan | `query.estimatePlan` | Always |

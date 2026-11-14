@@ -12,6 +12,9 @@ editor.context, for the query editor
     C&hange Connection…  ++--
     &Environment…  -++-
   ---
+  &Go To Definition  F12  ----
+  Pee&k Definition  ⌥F12  ----
+  ---
   E&xecute  F5  ++--
   Ca&ncel Executing Query  --+-
   &Display Estimated Execution Plan  ⌘L  -+--

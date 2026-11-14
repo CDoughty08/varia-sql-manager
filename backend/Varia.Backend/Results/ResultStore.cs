@@ -194,36 +194,51 @@ internal sealed partial class ResultStore
     public int Count { get { lock (gate) return sets.Count; } }
 
     /// <summary>The packing a new store starts with: off, but for the checks' second pass over the result suites, which
-    /// packs every complete result (<see cref="PagePacking.EveryComplete"/>).</summary>
+    /// packs every complete result (<see cref="PagePacking.EveryComplete"/>). The backend process sets its own store's
+    /// (SqlService's packHidden: <see cref="PagePacking.OnRequest"/>).</summary>
     internal static PagePacking DefaultPacking { get; set; } = PagePacking.Off;
 
-    /// <summary>Whether and how complete results' pages are packed (<see cref="ResultSetBuffer.Pack"/>). An internal switch:
-    /// off in the product until a policy decides which results to pack (docs/page-compression-findings.md, the later
-    /// steps). Switching it off packs nothing more and leaves packed pages packed; they read as ever.</summary>
+    /// <summary>Whether and how complete results' pages are packed (<see cref="ResultSetBuffer.Pack"/>). An internal switch,
+    /// on request in the product, where the hidden-result policy (<see cref="ResultPacker"/>) asks; the service that runs that
+    /// policy turns it on. Switching it off packs nothing more and leaves packed pages packed; they read as ever.</summary>
     internal PagePacking Packing { get; set; } = DefaultPacking;
 
-    private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, packedIn, packedOut, unpackedOut, packTicks, unpackTicks;
+    private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
     /// <summary>The store's packing figures (<see cref="PackingSnapshot"/>): what is held now (packed bytes, their bytes as
     /// sealed, the unpacked pages cached for reads) and counts since the store began (pages packed, kept raw because
-    /// packing saved under a tenth, and unpacked; cache hits; bytes in and out; time spent, in Stopwatch ticks).</summary>
+    /// packing saved under a tenth, and unpacked; cache hits and lookups; bytes in and out; time spent, and the last
+    /// operation's whole unpack, in Stopwatch ticks).</summary>
     internal sealed record PackingCounters(long PackedBytes, long PackedLogicalBytes, long CacheBytes, long PagesPacked, long PagesKeptRaw, long PagesUnpacked,
-        long CacheHits, long PackedInBytes, long PackedOutBytes, long UnpackedBytes, long PackTicks, long UnpackTicks);
+        long CacheHits, long PackedInBytes, long PackedOutBytes, long UnpackedBytes, long PackTicks, long UnpackTicks, long CacheLookups = 0, long LastUnpackTicks = 0);
 
-    /// <summary>The packing figures now. Internal: results.memory does not carry them yet.</summary>
+    /// <summary>The packing figures now (results.memory's codec counters, <see cref="MemoryDetail"/>).</summary>
     internal PackingCounters PackingSnapshot() => new(Interlocked.Read(ref packedBytes), Interlocked.Read(ref packedLogical), Interlocked.Read(ref cacheBytes),
         Interlocked.Read(ref pagesPacked), Interlocked.Read(ref pagesKeptRaw), Interlocked.Read(ref pagesUnpacked), Interlocked.Read(ref cacheHits),
-        Interlocked.Read(ref packedIn), Interlocked.Read(ref packedOut), Interlocked.Read(ref unpackedOut), Interlocked.Read(ref packTicks), Interlocked.Read(ref unpackTicks));
+        Interlocked.Read(ref packedIn), Interlocked.Read(ref packedOut), Interlocked.Read(ref unpackedOut), Interlocked.Read(ref packTicks), Interlocked.Read(ref unpackTicks),
+        Interlocked.Read(ref cacheLookups), Interlocked.Read(ref lastUnpackTicks));
+
+    /// <summary>Called when a set may have become packable: it completed, or the last pin or lease ended on one whose packing
+    /// stopped for it or that an operation unpacked (<see cref="ResultSetBuffer.Pack"/>). The policy
+    /// (<see cref="ResultPacker"/>) sets it to wake itself; it must return at once and take none of the store's locks.</summary>
+    internal Action? Settled { get; set; }
+
+    internal void Settle() => Settled?.Invoke();
+
+    /// <summary>Every stored set now, for the policy and the Memory panel, which read each outside the store's lock.</summary>
+    internal ResultSetBuffer[] Sets()
+    {
+        lock (gate) return [.. sets.Values];
+    }
 
     /// <summary>A page packed (<see cref="PageCodec.Pack"/>), timed and counted; null when the codec failed.</summary>
-    internal byte[]? Pack(byte[] page)
+    internal byte[]? Pack(byte[] page, Action<bool>? quiet = null)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var packed = PageCodec.Pack(page);
+        var packed = PageCodec.Pack(page, quiet);
         Interlocked.Add(ref packTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
         Interlocked.Add(ref packedIn, page.Length);
         if (packed is null) return null;
-        Interlocked.Increment(ref pagesPacked);
         Interlocked.Add(ref packedOut, packed.Length);
         return packed;
     }
@@ -259,7 +274,12 @@ internal sealed partial class ResultStore
     }
 
     internal void CountCacheHit() => Interlocked.Increment(ref cacheHits);
+    internal void CountCacheLookup() => Interlocked.Increment(ref cacheLookups);
+    /// <summary>Records how long an operation's whole unpack took (<see cref="ResultSetBuffer.UnpackAll"/>).</summary>
+    internal void Unpacked(long ticks) => Interlocked.Exchange(ref lastUnpackTicks, ticks);
     internal void CountKeptRaw() => Interlocked.Increment(ref pagesKeptRaw);
+    /// <summary>A page's packed copy replaced it (pages compressed and then kept raw or dropped are not counted).</summary>
+    internal void CountPacked() => Interlocked.Increment(ref pagesPacked);
 
     /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
     public QueryBudget BeginQuery(string sessionId)

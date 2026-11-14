@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult } from '../../../shared/language-service'
+import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -9,16 +9,44 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import { isLiveConnection } from '../services/connection-availability'
 import type { BackendStateService } from '../services/backend'
+import { definitionErrors } from './definition'
 
-type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics'>>
+type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition'>>
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
-/** `peek`: the model is a Peek definition's (read-only), which gets hover but neither completion nor diagnostics. */
+/** `peek`: the model is a Peek definition's (read-only), which gets hover and Go to Definition but neither completion nor diagnostics. */
 interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel; readonly peek: boolean }
 interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void>; readonly peek: boolean }
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
+/** What Go to Definition found: the object `language.definition` resolved, on the model's connection. */
+export interface FoundDefinition { readonly connectionId: string; readonly definition: NonNullable<LanguageDefinition> }
+/** The URI a definition location names: the object, not a file. `parseDefinitionUri` reads it back. */
+export const definitionScheme = 'varia-object'
+export function definitionUri(found: FoundDefinition): { scheme: string; authority: string; path: string; query: string } {
+  const { database, schema, name, kind, subtype } = found.definition
+  return { scheme: definitionScheme, authority: found.connectionId, path: '/' + [database, schema, name].map(encodeURIComponent).join('/'), query: subtype ? `${kind}.${subtype}` : kind }
+}
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
+/** A token cancelled by `token` or by `cancel()`, whichever comes first. */
+function cancellable(token: Monaco.CancellationToken): { token: Monaco.CancellationToken; cancel: () => void; dispose: () => void } {
+  let cancelled = false
+  const listeners = new Set<() => void>()
+  const cancel = () => { if (cancelled) return; cancelled = true; for (const listener of [...listeners]) listener() }
+  const outer = token.onCancellationRequested(cancel)
+  return {
+    token: {
+      get isCancellationRequested() { return cancelled || token.isCancellationRequested },
+      onCancellationRequested: (listener: (event: unknown) => unknown) => {
+        const run = () => { listener(undefined) }
+        listeners.add(run)
+        return { dispose: () => { listeners.delete(run) } }
+      }
+    } as Monaco.CancellationToken,
+    cancel,
+    dispose: () => { outer.dispose(); listeners.clear() }
+  }
+}
 // Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
 // their own here: a burst of them on a slow server never fills the renderer's slots for query tabs. On the backend they
 // still share the metadata slots with every other metadata request.
@@ -40,6 +68,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly pending = new Map<string, PendingRequest>()
   private readonly inFlight = new Map<string, Set<Promise<unknown>>>()
   private readonly waiters = new Set<() => void>()
+  /** Each document's Go to Definition still waiting, cancelled by the next press on that document. */
+  private readonly definitionCancels = new Map<string, () => void>()
   private readonly closing = new Map<string, Promise<void>>()
   private readonly closeQueue: (() => void)[] = []
   private readonly urgentCloses: (() => void)[] = []
@@ -136,6 +166,14 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return null
         } finally { activity.dispose(); pending.finish(); foreground.dispose() }
+      }
+    }), monaco.languages.registerDefinitionProvider('sql', {
+      // F12, Alt+F12 and Ctrl+click are Varia's commands (contributions/languages.ts), which call definition() directly and take
+      // their keys before Monaco's gotoSymbol actions; each editor drops Monaco's Ctrl+hover link (create-editor.ts), so nothing
+      // asks the provider as the pointer moves. A location still names the object, for anything that asks Monaco's provider.
+      provideDefinition: async (model, position, token) => {
+        const found = await this.definition(model, position, token).catch(() => undefined)
+        return found ? { uri: monaco.Uri.from(definitionUri(found)), range: toMonacoRange(found.definition.range) } : null
       }
     }))
     const reconcile = () => this.reconcile()
@@ -294,6 +332,40 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       if (result.value.version !== version) return
       return result.value
     } finally { pending.finish() }
+  }
+  /**
+   * Go to Definition: the object the name at `position` stands for, from `language.definition` on the model's own connection
+   * and database (a query document's or a Peek model's). Null when nothing matches; undefined when it was superseded (a newer
+   * request for the same document, or `token`), Peek's in-flight cap is full, or an edit or context change made the answer
+   * stale. A query with no live connection, one too large to send, and a failure throw their message. It needs no SQL Tools
+   * Service, so it serves every connection, and opens no backend document.
+   */
+  async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
+    if (!this.api.languageDefinition || token.isCancellationRequested) return
+    if (model.getValueLength() > languageLimits.documentCharacters) throw new Error(definitionErrors.tooLarge)
+    const capture = this.capture(model, position)
+    const connectionId = capture?.request.context.connectionId
+    if (!capture || !connectionId) throw new Error(definitionErrors.connectFirst)
+    // The newest press wins: an earlier one still waiting on the backend is cancelled here, and answers nothing.
+    const key = `${capture.request.documentId}:definition`
+    this.definitionCancels.get(key)?.()
+    const own = cancellable(token)
+    this.definitionCancels.set(key, own.cancel)
+    const pending = this.begin(key, own.token, capture.peek)
+    try {
+      if (!pending) return
+      try {
+        if (pending.previous && !await this.waitFor(pending.previous, own.token)) return
+        if (!this.current(capture, own.token)) return
+        const result = await this.track(capture.request.documentId, this.api.languageDefinition(capture.request))
+        if (!this.current(capture, own.token)) return
+        if (!result.ok) throw new Error(result.error)
+        return result.value && validRange(model, result.value.range) ? { connectionId, definition: result.value } : null
+      } finally { pending.finish() }
+    } finally {
+      if (this.definitionCancels.get(key) === own.cancel) this.definitionCancels.delete(key)
+      own.dispose()
+    }
   }
   diagnosticsEpoch(documentId: string): number {
     const key = this.context(documentId)?.key

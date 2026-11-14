@@ -584,7 +584,20 @@ internal static class StoreChecks
         var expected = sets.Select(set => (Id: set.ResultId, Bytes: set.Progress().BytesStored)).OrderByDescending(set => set.Bytes).Take(ResultStore.MaxLargest).ToArray();
         var total = sets.Sum(set => set.Progress().BytesStored) + live.Progress().BytesStored;
         var codec = detail.GetProperty("codec");
-        check(detail.GetProperty("logicalBytes").GetInt64() == total && detail.GetProperty("storedBytes").GetInt64() == total
+        if (store.Packing == PagePacking.EveryComplete)
+        {
+            // The packed pass: every complete set is packed, the live table never is, and the figures say so.
+            var stored = sets.Sum(set => set.Memory().StoredBytes) + live.BytesStored;
+            var packed = sets.Sum(set => set.Memory().Packed);
+            check(detail.GetProperty("logicalBytes").GetInt64() == total && detail.GetProperty("storedBytes").GetInt64() == stored && stored < total
+                && detail.GetProperty("compressedBytes").GetInt64() == packed && detail.GetProperty("packedLogicalBytes").GetInt64() == total - live.BytesStored
+                && largest.Length == ResultStore.MaxLargest
+                && largest.Select(entry => (Id: entry.GetProperty("resultId").GetUInt32(), Bytes: entry.GetProperty("logicalBytes").GetInt64())).SequenceEqual(expected)
+                && largest.All(entry => entry.GetProperty("storedBytes").GetInt64() < entry.GetProperty("logicalBytes").GetInt64() && entry.GetProperty("state").GetString() == "packed")
+                && codec.GetProperty("name").GetString() == ResultStore.CodecName && codec.GetProperty("level").GetInt32() == PageCodec.Quality && codec.GetProperty("pagesPacked").GetInt64() > 0,
+                "results.memory's detail totals packed sets as read and as stored, marks them packed and names the codec: " + detail);
+        }
+        else check(detail.GetProperty("logicalBytes").GetInt64() == total && detail.GetProperty("storedBytes").GetInt64() == total
             && detail.GetProperty("compressedBytes").GetInt64() == 0 && detail.GetProperty("packedLogicalBytes").GetInt64() == 0 && detail.GetProperty("cacheBytes").GetInt64() == 0
             && largest.Length == ResultStore.MaxLargest
             && largest.Select(entry => (Id: entry.GetProperty("resultId").GetUInt32(), Bytes: entry.GetProperty("logicalBytes").GetInt64())).SequenceEqual(expected)
