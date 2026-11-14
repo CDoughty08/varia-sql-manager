@@ -101,6 +101,8 @@ statusPill.runningBackground #232842 #dde1f9|statusPill.runningForeground #bcc5f
 statusPill.successForeground #a6e8bf #0f5a2f|statusPill.warningBackground #e4bb6a24 #87580024|statusPill.warningForeground #f0d49e #6b4400
 statusPill.criticalBackground #f39a9a24 #b4222924|statusPill.criticalForeground #f6bcc1 #8f1d24|statusPill.infoBackground #8f9cff24 #4453d024
 statusPill.infoForeground #bcc5ff #3240b0|statusPill.neutralBackground #30343e #d6dae0|statusPill.neutralForeground #bcc1cb #3a404b
+memoryPanel.rawBackground #6ea4ea24 #2563a824|memoryPanel.rawForeground #6ea4ea #2563a8
+memoryPanel.packedBackground #ab95ea24 #7a4bbf24|memoryPanel.packedForeground #ab95ea #7a4bbf
 chip.background #d9dce300 #1c1f2600|chip.foreground #bcc1cb #3a404b|chip.border #6b728673 #878e9b73|chip.activeBackground #21273b #e7ebfc
 chip.activeForeground #bcc5ff #3240b0|chip.activeBorder #8f9cff #4453d0|live.indicator #74d19c #146f3b|live.pausedForeground #9298a4 #5c6370
 live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|tile.background #16181d #ffffff|tile.border #262a31 #e3e6eb
@@ -137,10 +139,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 285 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 289 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(285)
-    expect(new Set(colorKeys).size).toBe(285)
+    expect(colorKeys).toHaveLength(289)
+    expect(new Set(colorKeys).size).toBe(289)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -155,7 +157,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(285)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(289)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -257,7 +259,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(285)
+      expect(Object.keys(theme.colors)).toHaveLength(289)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

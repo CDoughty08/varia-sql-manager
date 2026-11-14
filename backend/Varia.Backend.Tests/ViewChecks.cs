@@ -135,6 +135,7 @@ internal static class ViewChecks
             }
             set.Complete();
             var approximate = false;
+            using var pin = set.Pin();
             var key = ViewSorter.Build(set, new ViewSorter.PageSource(set.SealedSnapshot(), 1), new ViewKey(0, false, SortMode.Value), null, cells.Length, CancellationToken.None, ref approximate);
             return [key.Layout, string.Join(",", ViewSorter.Sort(set, set.SealedSnapshot(), [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order)];
         }
@@ -259,6 +260,7 @@ internal static class ViewChecks
             set.TryCommitRow();
         }
         set.Complete();
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var none = CancellationToken.None;
         long reserved = 0, returned = 0, asked = 0;
@@ -342,6 +344,7 @@ internal static class ViewChecks
             ordered.TryCommitRow();
         }
         ordered.Complete();
+        using var orderedPin = ordered.Pin();
         var orderedPages = ordered.SealedSnapshot();
         var orderedSource = new ViewSorter.PageSource(orderedPages, 2);
         string Held(int column)
@@ -516,7 +519,7 @@ internal static class ViewChecks
         catch (OperationCanceledException) { cancelled = true; }
         check(cancelled, "a Stop ends a sort");
         var view = store.AddView(set, ids, [new ViewKey(0, false, SortMode.Value)], false, true, 0, null);
-        var pages = ViewPages.Build(view, 1, 3).Select(body => PageReader.Read(body, Wires)).ToList();
+        var pages = ViewPages.Build(view, 1, 3).Select(page => PageReader.Read(page.Body(), Wires)).ToList();
         var shown = pages.SelectMany(page => page.Rows).Select(row => row[0].Text ?? "NULL").ToList();
         check(pages.Count == 1 && pages[0].FirstRow == 1 && pages[0].ResultId == set.ResultId && string.Join(",", shown) == "-5,2,2" && pages[0].Rows[1][7].Flags == PageReader.Null,
             "a view's pages hold its rows in view order, numbered by view position, with each cell's flags");

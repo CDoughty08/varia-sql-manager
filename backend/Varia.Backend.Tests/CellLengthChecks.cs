@@ -260,7 +260,7 @@ internal static class CellLengthChecks
             "row bytes read back for any range, across page boundaries, only as far as sealed pages go (" + pages.Count + " pages)");
 
         var metadata = 512 + (2 * "idnamedata".Length + 3 * 64);
-        var charged = metadata + pages.Sum(page => page.Body.Length + ResultStore.PageOverhead + page.Lengths.MemoryBytes);
+        var charged = metadata + pages.Sum(page => page.Length + ResultStore.PageOverhead + page.Lengths.MemoryBytes);
         var sidecar = pages.Sum(page => page.Lengths.MemoryBytes);
         check(store.UsedBytes == charged && query.UsedBytes == charged && sidecar >= 4L * 10_000 && sidecar < 4L * 10_000 + pages.Count * (PageLengths.Overhead + 64),
             "a complete set is charged its metadata and each page's bytes, overhead and lengths sidecar (4 bytes a row here): " + store.UsedBytes + " of " + charged + ", sidecar " + sidecar);

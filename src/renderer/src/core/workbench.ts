@@ -21,6 +21,7 @@ import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
+import { ResultVisibilityService } from '../results/ResultVisibilityService'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
@@ -139,6 +140,8 @@ export interface Workbench extends Disposable {
   readonly backend: BackendStateService
   /** Stored query results, read through the results worker. */
   readonly resultClient: ResultClient
+  /** Which results' grids are shown in any window, for the backend (results.visibility). */
+  readonly resultVisibility: ResultVisibilityService
   /** Each query tab's results: its result sets, Messages, view state, and copy jobs. */
   readonly results: ResultsService
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
@@ -286,6 +289,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Closing the active document shows the next one in its own editor group.
   const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
+  // The main window's visibility, for live views and result visibility alike.
+  const mainPage = eitherHidden(documentPage(document), mainWindowPage(api))
+  const resultVisibility = new ResultVisibilityService({
+    send: params => api.setResultVisibility(params), generation: () => resultClient.backendGeneration, onGeneration: listener => resultClient.onGeneration(listener),
+    onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
+  })
   const retainedPlans = new RetainedPlansService()
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
@@ -297,7 +306,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
-  const live = new LiveService({ client: resultClient, settings, page: eitherHidden(documentPage(document), mainWindowPage(api)), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
+  const live = new LiveService({ client: resultClient, settings, page: mainPage, schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
@@ -500,6 +509,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     connections,
     backend,
     resultClient,
+    resultVisibility,
     results,
     highlights,
     compare,
@@ -600,6 +610,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       explorerRuntime.dispose()
       explorerStatus.dispose()
       live.dispose()
+      resultVisibility.dispose()
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()

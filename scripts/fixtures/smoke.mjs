@@ -1,9 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { _electron, expect as baseExpect } from '@playwright/test'
+import { holdForEntry } from '../machine-lock.mjs'
 import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
 
 ignoreCrashedTargetReplies()
+
+// Every smoke suite and Electron benchmark imports this fixture, so each takes the machine lock's exclusive tier as it loads:
+// it shares the clipboard, focus and CPU with nothing (scripts/machine-lock.mjs). vitest files importing it take none.
+await holdForEntry()
 
 /**
  * Windows runners can take seconds to open, flush, or replace a new file while antivirus and indexer scans hold it, and

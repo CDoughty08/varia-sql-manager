@@ -105,7 +105,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }` |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -234,6 +234,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
+| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again each time the backend becomes ready or the results port's generation changes; once main has reported a state (read at start, then pushed), only while it reports the backend ready in the port's generation; one request in flight at a time | unary | control | 10 s. Takes `{ source, seq, visible }`: a UUID per renderer load, a number rising from 1 (at most 2^31 - 1), and the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last. Answers `{ visible, applied }`: how many ids the backend's visible set holds, and false for a set from the same source not numbered above the last one applied (control requests run concurrently, and one past its deadline still runs). Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
@@ -1116,12 +1117,31 @@ ignores a query's events once its summary has arrived.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. A summary has no `detail`, so the next check after one sends the event once even when use is unchanged. |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
 
 Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
 pairs each sequence with the backend generation, retains the latest report for each feature, and replays both when a new
 results port opens.
+
+`results.memory` also carries `detail`, what the result store holds, for the status bar Memory panel's Nerd metrics
+([status-bar-memory.md](status-bar-memory.md)). It is read only when an event goes out, at the moments above, so it adds
+no timer and nothing to a check that finds no change; a query summary's `budget` has none, so main keeps the last
+event's with it until the check after the summary sends a new one. `resultMemoryDetailSchema` (`src/shared/ipc/port-messages.ts`) and `ResultMemoryDetail`
+(`Contracts.cs`) define it:
+
+| Field | Meaning |
+| --- | --- |
+| `logicalBytes` | The rows as read: every stored result's pages uncompressed |
+| `storedBytes` | What holds them now: raw pages plus compressed ones |
+| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
+| `cacheBytes` | Decompressed pages kept for reads |
+| `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
+| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
+| `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
+
+Nothing is compressed yet: `storedBytes` equals `logicalBytes`, the compressed and cache figures and the codec's counters
+are 0, every result is `raw`, and the codec has no name.
 
 ## Result pages
 
@@ -1224,6 +1244,23 @@ Results stay in backend memory, never on disk (`ResultStore`).
   exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
   SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
   `RESULT_RELEASED` after the current page and stops storing at once.
+- **Visibility.** `results.visibility` tells the backend which query results' grids are shown in any window, popouts
+  included (result sets, pivots, comparisons and Peek's rows; not live views' tables, which are replaced every tick, so
+  a stored live table always counts as hidden and a policy must exclude live tables). A grid is shown while it is
+  rendered with a size (a query tab not shown has unmounted it; a hidden or collapsed Results panel and a detached panel
+  have no size; a dock tab behind another, or a panel beside a maximized group, is `visibility: hidden`, which the
+  renderer reads when PaneService publishes and again after the main window's next frame, where the dock un-hides a
+  panel) and its window is visible (main's word for the main window while popouts keep its document visible; a popout's
+  own document). The renderer sends the whole set when it changes (one message per task's changes, never on a timer),
+  and again each time the backend becomes ready, so a lost, refused or stale message only delays what reads it, until
+  the next change or the next return to ready (nothing retries on a timer; a set flushed as main restarts the backend
+  can still reach the next one, since the request carries no generation, until the set sent at its ready replaces it).
+  `ResultVisibility` (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it
+  became hidden (or was first asked about). Nothing is evicted by age: results.close forgets released results at once,
+  and other released results' entries are swept once the table has doubled since the last sweep, so it stays within
+  twice its size after the last sweep. It changes nothing in the store: `IsHidden(resultId, out since)` is the query for
+  a later policy that compresses hidden results (stage 1 of the page compression plan), which must not call it while
+  holding the store's locks.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
@@ -2640,6 +2677,13 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   the request, start its task); CANCEL; CREDIT; and PING, whose PONG it queues on the control lane itself, so liveness
   survives a starved thread pool (SMO is synchronous). More than 288 requests in flight are answered `BUSY`. At stdin
   EOF (main exited or closed the generation) it cancels everything, waits at most 1.5 s, disposes the service and exits 0.
+- **Thread pool floor** (`ThreadPoolFloor`): the service raises the pool's minimum worker and completion threads to 64
+  when it starts, so the pool makes threads at once up to there instead of about two a second. SqlClient's managed SNI
+  (Linux and macOS) logs in synchronously on a pool thread, and timers fire through the pool, script deadlines among them:
+  with 24 tabs opening sessions together on one processor's worth of threads, a 1 s deadline fired only after its 5 s
+  batch had finished, and the script reported `completedWithErrors` instead of `timedOut`. A live check holds 32 pool
+  threads in sleeps (which the pool does not compensate for, unlike `Monitor.Wait`) and requires a 1 s deadline to stop a
+  5 s `WAITFOR` within 4 s.
 - **Writer thread** (`varia-ipc-writer`) drains the control lane before the bulk lane, drops droppable events past 1,000
   frames or 8 MiB, and exits 0 if a write fails. .NET's console stdout ignores broken-pipe errors, so that does not
   happen when main exits: stdin EOF is what ends the process. The writer never exits because of queue size: main may be
@@ -2726,6 +2770,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Shown results a set names | `results.visibility`: 0 – 4,096 distinct result ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |

@@ -617,6 +617,8 @@ export const resultGrid = (scope, name = 'Result 1', view) => {
   return scope.locator(part.resultItem).filter({ has: page.getByRole('button', { name, exact: true }) }).locator(gridPart.root)
 }
 export const anyResultGrid = page => page.locator(gridPart.root)
+/** The stored result a grid shows (its backend result id), as results.visibility names it. */
+export const resultIdOf = async grid => Number(await grid.getAttribute('data-result-id'))
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** A results grid drawn transposed (its columns as rows): `matching(resultGrid(page), transposedGridSelector)` says whether one is. */
 export const transposedGridSelector = `${gridPart.root}[data-orientation="transposed"]`

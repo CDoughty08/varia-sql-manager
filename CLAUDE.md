@@ -28,6 +28,11 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 - `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` needs the Release backend built).
 - `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`: benchmarks, not part of `check`;
   `node scripts/check-bench.mjs` compares them with `tests/bench/floors.json`.
+- Other sessions share this machine. While developing, run only the checks that cover your change (one vitest file, the
+  area's smoke suite); `check` once before committing, the full smoke and benchmarks only when the change calls for them.
+  Heavy runs queue on a machine lock (`scripts/machine-lock.mjs`): `Waiting for the machine lock ...` means another
+  session's run holds it. Never stop or retry a waiting run; it continues by itself. Run long commands in the background.
+  docs/testing.md's "Parallel sessions and the machine lock" has the detail.
 
 ## Environment
 

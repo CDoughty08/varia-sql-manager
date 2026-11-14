@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema, truncationSchema } from './descriptors'
@@ -106,7 +106,8 @@ export const testPortRequestSchema = buildPortRequestSchema({ subscribe: testLiv
 export type PortRequest = z.infer<typeof portRequestSchema>
 
 export type MemoryFeature = 'results' | 'index'
-export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number } & MemoryOrder
+/** A budget's figures; a results.memory event also carries `detail`, which a query summary's budget does not. */
+export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number; readonly detail?: ResultMemoryDetail } & MemoryOrder
 
 /** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. A live event carries the EVENT body's
  *  length, which the worker grants back once the page has applied it. */
@@ -200,7 +201,22 @@ export const queryResultSchema = z.object({
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
 export type JobProgressEvent = z.infer<typeof jobProgressSchema>
-/** Global memory EVENTs (id 0). Each feature has its own sequence. Results shares its sequence with query summaries. */
-export const memoryEventSchema = z.object({
-  type: z.enum(['results.memory', 'explorer.index.memory']), usedBytes: count, globalBytes: count.min(1), seq: count.min(1)
+/** The most results a results.memory event names (the backend's ResultStore.MaxLargest). */
+export const maxLargestResults = 8
+const codecCounters = z.object({
+  name: z.string().min(1).max(16).optional(), level: z.number().int().min(-131072).max(22).optional(), pagesPacked: count, pagesUnpacked: count, packInputBytes: count, packMicroseconds: count,
+  unpackOutputBytes: count, unpackMicroseconds: count, cacheHits: count, cacheLookups: count, lastUnpackMicroseconds: count
 }).strict()
+export const resultMemoryDetailSchema = z.object({
+  logicalBytes: count, storedBytes: count, compressedBytes: count, packedLogicalBytes: count, cacheBytes: count,
+  largest: z.array(z.object({
+    resultId: u32, logicalBytes: count, storedBytes: count, state: z.enum(['raw', 'packed', 'unpacking']), progress: z.number().int().min(0).max(100).optional(), live: z.literal(true).optional()
+  }).strict()).max(maxLargestResults),
+  codec: codecCounters, heap: z.object({ committedBytes: count, freeBytes: count }).strict()
+}).strict() satisfies z.ZodType<ResultMemoryDetail>
+/** Global memory EVENTs (id 0). Each feature has its own sequence. Results shares its sequence with query summaries, and its
+ *  events carry what the store holds (`detail`, the Memory panel's Nerd metrics). */
+export const memoryEventSchema = z.union([
+  z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count.min(1), seq: count.min(1), detail: resultMemoryDetailSchema.optional() }).strict(),
+  z.object({ type: z.literal('explorer.index.memory'), usedBytes: count, globalBytes: count.min(1), seq: count.min(1) }).strict()
+])

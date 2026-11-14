@@ -44,7 +44,7 @@ internal static class LiveResultChecks
     {
         var stored = store.Find(set.ResultId) ?? throw new InvalidOperationException("Result " + set.ResultId + " is no longer stored.");
         var rows = new List<PageCell[]>();
-        foreach (var page in stored.PagesFor(0, int.MaxValue)) rows.AddRange(PageReader.Read(page.Body, stored.Wires).Rows);
+        foreach (var page in stored.PagesFor(0, int.MaxValue)) rows.AddRange(PageReader.Read(PinnedPage.Body(page), stored.Wires).Rows);
         return rows;
     }
 
@@ -344,7 +344,7 @@ internal static class LiveResultChecks
             writer.Header(all);
             foreach (var page in store.Find(set.ResultId)!.PagesFor(0, int.MaxValue))
             {
-                var view = PageView.Parse(page.Body, all.Length);
+                var view = PageView.Parse(PinnedPage.Body(page), all.Length);
                 for (var row = 0; row < view.Rows; row++) writer.Row(view, row, all);
             }
             check(written.WrittenSpan.SequenceEqual(File.ReadAllBytes(paths["csv"])), "the exported file holds exactly ResultTextWriter's bytes over the stored pages");
@@ -724,8 +724,9 @@ internal static class LiveResultChecks
         var table = "##varia_skip_" + Guid.NewGuid().ToString("N");
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY, doc nvarchar(max)); INSERT " + table + " SELECT TOP (1500) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'x' FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
-        // More readers than the pool has threads, so that blocking them would need many new ones.
-        var readers = Enumerable.Range(0, ThreadPool.ThreadCount + 2 * Environment.ProcessorCount).Select(_ =>
+        // More readers than the pool has threads or makes at once (ThreadPoolFloor), so that blocking them would need many new ones.
+        ThreadPool.GetMinThreads(out var minimum, out _);
+        var readers = Enumerable.Range(0, Math.Max(ThreadPool.ThreadCount, minimum) + 2 * Environment.ProcessorCount).Select(_ =>
         {
             var opened = new List<uint>();
             var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) =>

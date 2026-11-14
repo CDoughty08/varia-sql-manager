@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
@@ -519,12 +519,24 @@ try {
   await typeSql('SELECT 2;')
   await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-b')
+  // The backend learns which results are shown in any window (results.visibility): B's, then none once tab A hides it.
+  const shownSets = async () => (await calls()).filter(call => call.method === 'results.visibility').map(call => call.params.visible)
+  const resultB = await resultIdOf(anyResultGrid(page))
+  await expect.poll(async () => (await shownSets()).at(-1)).toEqual([resultB])
   await selectOpenDocument(page, tabA)
+  await expect.poll(async () => (await shownSets()).at(-1)).toEqual([])
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
   await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
   await expect(anyResultGrid(page)).toContainText('AppData')
+  const resultA = await resultIdOf(anyResultGrid(page))
+  await expect.poll(async () => (await shownSets()).at(-1)).toEqual([resultA])
+  // Messages in the Results group: the dock hides the grid's panel with visibility: hidden, which leaves its size.
+  await outputView(page, /^Messages/).click()
+  await expect.poll(async () => (await shownSets()).at(-1)).toEqual([])
+  await outputView(page, /^Results/).click()
+  await expect.poll(async () => (await shownSets()).at(-1)).toEqual([resultA])
   const executed = (await executions()).map(call => call.params)
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)

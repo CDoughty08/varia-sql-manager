@@ -62,6 +62,12 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
+  the grids `ResultGrid` registers (one shared ResizeObserver per window, PaneService for the dock's `visibility:
+  hidden` tabs, document visibility, no timers), as the whole set when it changes and again each time the backend
+  becomes ready or the results port's generation changes; once main has reported a state, only while it and the results
+  port agree on the generation; ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`, outside the
+  store's page code, as a hint: it never releases, pins or changes a result by itself.
 - The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
   sent by main alone when Tools › Options' limit changes and as each generation becomes ready). They are replaced whole and
   each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
@@ -122,6 +128,16 @@ being true.
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
+  Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
+  identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
+  `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
+  meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
+  So no pin outlasts the reading: an operation over the whole result runs through `SqlService.UntilReleased`, which the
+  release cancels (`ResultSetBuffer.Released`, answering `RESULT_RELEASED`), and results.read pins only to take or build a
+  page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
+  The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
+  (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
+  (`ResultSetBuffer.RequirePins`).
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
