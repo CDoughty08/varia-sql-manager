@@ -1019,10 +1019,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
 | `activeDocumentIsProperties` | boolean | state | The active document is Database Properties. |
 | `activeDocumentIsTableProperties` | boolean | state | The active document is Table Properties. |
-| `propertiesChanged` | boolean | state | The active Database Properties document has changes that are not applied yet. |
-| `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
-| `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
-| `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `propertiesChanged` | boolean | state | The active Database Properties or Table Properties document has changes that are not applied yet. |
+| `propertiesApplicable` | boolean | state | The active Database Properties or Table Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
+| `propertiesApplying` | boolean | state | The active Database Properties or Table Properties document is applying its changes (Stop cancels them in SQL Server). |
+| `propertiesRefreshable` | boolean | state | The active Database Properties or Table Properties document can read the database or table again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
 | `activeDocumentIsNewDatabase` | boolean | state | The active document is New Database. |
 | `newDatabaseCreatable` | boolean | state | The active New Database document can create its database now: it has read the server, nothing runs in it, and its server is connected. |
 | `newDatabaseCreating` | boolean | state | The active New Database document is creating its database (Stop cancels it in SQL Server). |

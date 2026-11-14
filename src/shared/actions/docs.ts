@@ -1130,7 +1130,7 @@ function tablePropertiesDocs(): string[] {
     '## Table Properties',
     '',
     'A table\'s Properties opens Table Properties as a document tab, on every table (SQL Server\'s own and the special kinds',
-    'included, as in SSMS), from Object Explorer and from Peek\'s table card. Its pages are SSMS\'s: General (name, schema,',
+    'included, as in SSMS), from Object Explorer and from a table\'s Peek tab (Open as Tab). Its pages are SSMS\'s: General (name, schema,',
     'dates, system object, ANSI NULLs, replicated, memory optimized, FileTable, external and graph kinds, Lock escalation, and',
     'the temporal and ledger facts of a table that is either), Permissions (each grant or deny on the table and its columns, by',
     `principal, at most ${tableLimits.permissions.toLocaleString('en-US')} rows), Change Tracking, Storage (compression, filegroups, partitioning, rows and`,

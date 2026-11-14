@@ -87,6 +87,10 @@ describe('Table Properties draft', () => {
     const errors = tableErrors(model, clash), row = clash.extendedProperties[3]!
     expect([errors.get(propertyKey(row, 'name')), errors.get(propertyKey(row, 'value'))]).toEqual([tableMessages.duplicateName, tableNotes.broken])
     expect(errors.get(propertyKey(clash.extendedProperties[0]!, 'name'))).toBeUndefined()
+    // Changing only the value of one of two names that differ by case keeps the name SQL Server already accepted.
+    const valueOnly = patchPropertyRow(start, 'read-1', { value: 'ok' })
+    expect(tableErrors(model, valueOnly).size).toBe(0)
+    expect(request(model, valueOnly).tableChanges.extendedProperties).toEqual([{ op: 'update', name: 'desc', value: 'ok' }])
   })
   it('turns change tracking off and on again only to change Track columns updated, and asks first when it discards what was tracked', () => {
     const tracked = tableModel({ changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: false, primaryKey: true } }), start = initialTableDraft(tracked)

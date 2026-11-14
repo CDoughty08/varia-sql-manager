@@ -838,6 +838,18 @@ three, the policy options all or none for `sql` (none on Managed Instance, all o
 backend re-validates all of it, and refuses a kind or policy options the server's engine does not take (`NOT_SUPPORTED`) before it
 connects.
 
+**Table Properties** uses them too. `actions.describe { …, dialog: 'tableProperties', target: { kind: 'table', database, schema,
+name } }` answers `{ tableProperties: { general (name, schema, id, created, lock escalation and the table's kind facts), storage
+(partitions ≤ 1,000, partitionsTruncated), changeTracking { databaseEnabled, enabled, trackColumnsUpdated, primaryKey }, permissions
+(≤ 1,024), permissionsTruncated, securityPredicates? (band 13+), extendedProperties [{ name, value, type? (a base type that is not
+text), truncated? (the value was read cut short) }], extendedPropertiesTruncated, temporal?, ledger?, level, readOnlyReason? } }`.
+`actions.script` and `actions.execute` take `{ action: 'tableProperties', target, tableChanges: { lockEscalation?, changeTracking?:
+{ enabled, trackColumnsUpdated? }, extendedProperties?: [{ op: 'add' | 'update' | 'drop', name, value? }] }, identity? }` (limits in
+`src/shared/actions/tables.ts`). Execute runs every statement in one transaction whose first step finds the table again: another
+table by that name (`identity` differs) is `NOT_FOUND` with notTheTable's text, one changed so the plan differs is `NOT_SUPPORTED`
+with changed's, and a failure or Stop rolls everything back (the error says so). SQL Server's own, external and dropped ledger
+tables are `NOT_SUPPORTED` to both; a read-only database is `NOT_SUPPORTED` to Execute only (Script still answers).
+
 **Login Properties** (D2c) too. `actions.describe { …, dialog: 'loginProperties', target: { kind: 'login', name } }` answers
 `{ login, lock? (a SQL Server login's, as unlockLogin's), newLogin (New Login's lists), loginProperties: { defaultDatabase,
 defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users: [{ database, user, defaultSchema?, owner }], read, credentials

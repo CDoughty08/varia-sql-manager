@@ -150,7 +150,7 @@ export interface TablePropertiesModel {
   readonly extendedPropertiesTruncated: boolean
   /** The version band (13 = SQL Server 2016 … 17 = 2025). */
   readonly level: number
-  /** Why nothing can change: a system table, an external, FileTable, or ledger table, a database that is read-only. */
+  /** Why nothing can change: one of SQL Server's own tables, an external or dropped ledger table, or a read-only database. */
   readonly readOnlyReason?: string
 }
 

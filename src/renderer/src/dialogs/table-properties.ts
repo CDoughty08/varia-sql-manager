@@ -33,7 +33,7 @@ export const tableNotes = {
   tooLong: 'This value is longer than Varia changes; it can only be removed here.',
   tooMany: `Apply at most ${actionLimits.statements} changes at once.`,
   tooManyProperties: `Change at most ${tableLimits.extendedPropertyChanges} extended properties at once.`,
-  databaseTracking: 'Change tracking is off for the database. Turn it on in Database Properties first.',
+  databaseTracking: tableMessages.databaseTracking,
   primaryKey: tableMessages.primaryKey,
   memoryOptimized: tableMessages.memoryOptimized,
   trackingMemoryOptimized: tableMessages.trackingMemoryOptimized,
@@ -94,7 +94,8 @@ export function tableErrors(model: TablePropertiesModel, draft: TableDraft): Map
     else if (row.name.length > 128) errors.set(name, tableNotes.longName)
     else if (row.name.includes('\0')) errors.set(name, tableNotes.nul)
     else if (!wellFormed(row.name)) errors.set(name, tableNotes.broken)
-    else if (live.some(other => other !== row && nameKey(other.name) === nameKey(row.name))) errors.set(name, tableMessages.duplicateName)
+    // Only a new name is checked: a read row whose value alone changes keeps a name SQL Server already accepted beside the others.
+    else if ((!row.origin || row.name !== row.origin.name) && live.some(other => other !== row && nameKey(other.name) === nameKey(row.name))) errors.set(name, tableMessages.duplicateName)
     if (row.value.length > tableLimits.extendedPropertyValue) errors.set(value, tableNotes.longValue)
     else if (row.value.includes('\0')) errors.set(value, tableNotes.nul)
     else if (!wellFormed(row.value)) errors.set(value, tableNotes.broken)
