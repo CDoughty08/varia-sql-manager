@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
 - **Results:** the notice for a running query that has filled its result memory, or that stopped keeping rows because the computer is low on memory, now has a **Stop query** button (Cancel Executing Query for that tab), reachable by keyboard, until the query ends. The row limit you set yourself only says it was reached.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
