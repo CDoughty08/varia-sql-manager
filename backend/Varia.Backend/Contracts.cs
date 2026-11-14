@@ -86,6 +86,11 @@ internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
+/// <summary>results.visibility: the results whose grids are shown in any window now, at most ResultVisibility.MaxResults
+/// distinct ids. Source names the renderer load and Seq (1 to 2^31 - 1) orders its sets, so a late set never undoes a
+/// newer one. Visible is how many ids the visible set holds; Applied is false for such a late set.</summary>
+internal sealed record ResultsVisibilityArgs(string? Source, long? Seq, uint[]? Visible);
+internal sealed record ResultsVisibilityResult(int Visible, bool Applied);
 /// <summary>results.setMemoryLimit (main only): Tools › Options' limit in GiB, 0 for automatic, 0 to 1024.</summary>
 internal sealed record ResultsMemoryLimitArgs(int? LimitGiB);
 /// <summary>results.setMemoryLimit: whether the limit applied (false with the test hooks' fixed budget) and the figures now.</summary>

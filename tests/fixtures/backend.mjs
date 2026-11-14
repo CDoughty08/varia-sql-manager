@@ -1779,6 +1779,7 @@ async function workbench(id, method, params, credit) {
       if (runningDirectives.has(params.queryId)) cancelledQueries.add(params.queryId)
       return respond(id, { cancelled: !!script || runningDirectives.has(params.queryId) })
     }
+    case 'results.visibility': return respond(id, { visible: params.visible.length, applied: true })
     case 'results.read': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Result pages are read as a stream with credit.') : readResults(id, credit, params)
     case 'results.copy': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Copied text is sent as a stream with credit.') : copyResults(id, credit, params)
     case 'results.export': return exportResults(id, params)
