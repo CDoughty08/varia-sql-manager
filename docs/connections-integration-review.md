@@ -162,12 +162,24 @@ shortcut or fictional sample behavior changed in this corrective pass.
 
 Independent cross-reviews closed an additional deferred-prune race, three accepted-startup/preemption cases and a
 database-cache rollback regression.
+An additional close/reload review exposed a shared manual/startup checkpoint gap: after an accepted A-to-B redirect,
+the source could already have stopped resuming while its wanted tabs still referenced A. A close task holds the same
+document lock that association completion needs, so it could otherwise keep that intermediate state. A common
+in-memory association guard refuses capture/revalidation until completion or safe abandonment; waiting for idle
+inside the close task would deadlock. This guard also covers the manual receipt path and preserves explicit Stop intent.
+The final independent pass also caught an earlier file-operation waiter reclaiming the document lock before manual
+Connect resumed. Rechecking idle preserves the pending explicit Execute action, and Stop still cancels it. The final
+focused pass covered 128 cases across seven files, including the actual close-window and queued-file-task paths;
+independent re-review found no further actionable issue.
 Before merging newer main, the full check passed in 90.9 seconds: 2,762 offline .NET checks, 5,106 Vitest tests,
 TypeScript and the production build; 24 configuration-dependent cases were skipped. Focused real-driver validation
 passed 29 live checks and 31 Login Properties checks. The owned SQL fixtures were cleaned up.
 The combined tree through main `310e1b7f` passed the full check in 99.2 seconds: 2,805 offline .NET checks and 5,193
 Vitest tests, with the same 24 configuration-dependent skips, TypeScript and the production build. Generated command
 and settings references were regenerated from the merged catalogs.
+The full check with the association guard then passed in 92.6 seconds: 2,805 offline .NET checks, 5,211 Vitest tests,
+TypeScript and the production build, with the same 24 configuration-dependent skips. Its Vitest lane started after the
+final source and regression edits. Final Electron and cross-platform CI results are recorded in the PR.
 
 ## Initial local validation and limits
 

@@ -32,9 +32,11 @@ const associations = (documents: readonly QueryDocument[]) => JSON.stringify(doc
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets }: {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
+    assertConnectionsReady?: () => void
   } = {}): KeptSession {
+  assertConnectionsReady?.()
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
   const workspace = connectionTargets?.exportWorkspace(), targetIds = new Set(workspace?.targets.map(target => target.id))
   const capturedAssociations = associations(tabs), capturedWorkspace = JSON.stringify(workspace)
@@ -65,7 +67,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
   const places = new Map([...kept].map((id, index) => [id, index]))
   const layout = groups?.capture(id => places.get(id))
   const checkpointCurrent = () => {
-    try { return associations(documents.getSnapshot().documents) === capturedAssociations && JSON.stringify(connectionTargets?.exportWorkspace()) === capturedWorkspace }
+    try { assertConnectionsReady?.(); return associations(documents.getSnapshot().documents) === capturedAssociations && JSON.stringify(connectionTargets?.exportWorkspace()) === capturedWorkspace }
     catch { return false }
   }
   return { session: { documents: written, activeIndex, ...layout ? { groups: layout } : {}, ...workspace ? { workspace } : {} }, kept, checkpointCurrent }

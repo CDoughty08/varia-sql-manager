@@ -349,7 +349,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
       if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned) || connectionTargets.getSnapshot().length)
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets })
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady() })
     }
   })
   const recentFiles = new RecentFilesService(api)
@@ -514,7 +514,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reloadPins = (): ReloadPins | undefined => {
     if (!api.hotExit) return
     return reloadSession(documents, id => connections.get(id)?.server, {
-      restoreQueries: settings.get('environment.documents.hotExit'), recoveryId: id => recovery.copyId(id), groups: editorGroups, connectionTargets
+      restoreQueries: settings.get('environment.documents.hotExit'), recoveryId: id => recovery.copyId(id), groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady()
     })
   }
   const workbench: Workbench = {

@@ -19,6 +19,7 @@ import { EditorOptionsService } from '../../src/renderer/src/services/editor-opt
 import { ShellOptionsService } from '../../src/renderer/src/services/shell-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
+import { keptSession } from '../../src/renderer/src/services/session'
 import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
 import { RecoveryService } from '../../src/renderer/src/services/recovery'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
@@ -290,6 +291,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
+    hotExit: false,
+    keepSession: vi.fn<VariaApi['keepSession']>(async () => ({ ok: true, value: undefined })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     // Nothing to ask unless a test says otherwise; answers Cancel when asked.
@@ -373,7 +376,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const pivot = new PivotService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const files = new FileService(documents, queries, api, {
+    autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
+    hotExit: () => api.hotExit ? keptSession(documents, id => connections.get(id)?.server, {
+      pinnedOnly: !settings.get('environment.documents.hotExit'), connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady()
+    }) : undefined
+  })
   const recentFiles = new RecentFilesService(api)
   // AutoRecover's timer runs only when a test advances it.
   const recoveryTimers = manualTimers()

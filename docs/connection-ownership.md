@@ -100,6 +100,12 @@ Successful IPC delivery is a receipt. It does not make that caller the owner of 
 The two new main-only IPC methods, `acceptConnectionRequest` and `pruneConnectionTargets`, use trusted sender checks,
 strict UUID schemas, bounded arrays and dedicated preload methods. They do not expose generic backend access.
 
+Renderer association handoffs remain pending until the receipt's canonical target has been applied to its query tabs
+or the attempt is safely abandoned. Hot exit and reload refuse capture during that interval and revalidate before
+closing. A close task already owns the document lock, so it must never await startup idle. Nonexplicit abandonment
+can restore the prior source resume intent only under the exact unchanged operation epoch; Stop, removal and explicit
+disconnect must not be undone.
+
 ## Disconnect, pruning and backend loss
 
 The disconnect coordinator completes document prompts and Close Query Tabs preflight before main fences the target

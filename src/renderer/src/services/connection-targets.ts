@@ -202,6 +202,14 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     return true
   }
 
+  /** Only an unchanged, internally cancelled redirect may recover its pre-adoption reconnect intent. */
+  restoreCancelledConnectIntent(id: string): boolean {
+    const target = this.get(id)
+    if (!target?.inExplorer || target.resumeWanted || target.lifecycle.state !== 'disconnected' || target.lifecycle.reason !== 'cancelled' || this.operations.has(id)) return false
+    this.replace(id, { ...persisted(target), resumeWanted: true }, target.lifecycle)
+    return true
+  }
+
   /** The disconnect coordinator calls this only after its complete save/session preflight has succeeded. */
   beginDisconnect(id: string, attemptId: string): ConnectionOperation | undefined {
     const target = this.get(id)

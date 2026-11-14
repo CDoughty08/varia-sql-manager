@@ -1,6 +1,6 @@
 import type { ConnectionOptions } from '../../../shared/contracts'
 import { changedConnectionDetails, type ConnectionDetails } from '../../../shared/connection-targets'
-import { detailsOf, type ConnectionAttempt, type ConnectionService, type LiveConnection, type TargetConnectionInfo } from './connections'
+import { detailsOf, type ConnectionAssociationHandoff, type ConnectionAttempt, type ConnectionService, type LiveConnection, type TargetConnectionInfo } from './connections'
 import type { ConnectionCompletion } from './connection-targets'
 import { isQueryDocument } from '../documents'
 import type { DocumentService } from './documents'
@@ -8,6 +8,7 @@ import type { TargetService } from './targets'
 import type { QueryService } from './queries'
 
 export interface OpenedConnection {
+  readonly association?: ConnectionAssociationHandoff
   readonly id: string
   readonly targetId?: string
   readonly generation: number
@@ -17,6 +18,23 @@ export interface OpenedConnection {
   readonly reused: boolean
   readonly current: ConnectionDetails
   readonly selected: ConnectionDetails
+}
+
+/** Waiting happens outside document tasks: close captures must refuse an unfinished association, never wait on it. */
+export async function whenConnectionDocumentsIdle(documents: Pick<DocumentService, 'getSnapshot' | 'subscribe'>, signal: AbortSignal): Promise<boolean> {
+  while (!signal.aborted && documents.getSnapshot().busy) {
+    const ready = await new Promise<boolean>(resolve => {
+      const finish = (ready: boolean) => { stop(); signal.removeEventListener('abort', abort); resolve(ready) }
+      const abort = () => finish(false)
+      const stop = documents.subscribe(() => { if (!documents.getSnapshot().busy) finish(!signal.aborted) })
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) finish(false)
+      else if (!documents.getSnapshot().busy) finish(true)
+    })
+    // An earlier file waiter can start its next task before this continuation resumes.
+    if (!ready) return false
+  }
+  return !signal.aborted
 }
 
 /** A successful main receipt is the sole equivalence evidence. Never compare profile keys or submitted settings here. */

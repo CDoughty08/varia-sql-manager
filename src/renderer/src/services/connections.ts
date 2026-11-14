@@ -19,6 +19,11 @@ export interface LiveConnection extends ConnectionInfo {
 /** Main supplies both fields after authenticated adoption/reuse. No renderer equality key crosses this seam. */
 export interface TargetConnectionInfo extends ConnectionInfo { readonly targetId?: string; readonly authentication?: ConnectionAuthentication }
 export interface ConnectionAttempt { readonly operation: ConnectionOperation; readonly created: boolean; readonly targetEpochs: ReadonlyMap<string, number> }
+export interface ConnectionAssociationHandoff {
+  adopted(targetId: string): void
+  complete(): void
+  abandon(explicitlyCancelled?: boolean): void
+}
 
 function withoutPassword(options: ConnectionOptions): SavedOptions {
   const saved: ConnectionOptions = { ...options }
@@ -35,6 +40,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   private readonly legacyDetails = new Map<string, ConnectionDetails>()
   private readonly targetEpochs = new Map<string, number>()
   private readonly targetStates = new Map<string, string>()
+  private readonly associationHandoffs = new Map<symbol, () => void>()
   private targetRevision = 0
   private readonly unsubscribe: () => void
   constructor(readonly connectionTargets = new ConnectionTargetService()) {
@@ -47,6 +53,60 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   /** The connection is still there and was not lost with its backend generation. */
   isLive(id: string): boolean { return isLiveConnection(this.get(id)) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
+  assertCheckpointReady(): void {
+    if (this.associationHandoffs.size) throw new Error('Wait for query tabs to finish connecting, or cancel the connection dialog, before closing or reloading.')
+  }
+  /** Canonical adoption and query affinity must be one durable checkpoint, including across main's acknowledgement. */
+  beginAssociationHandoff(attempt: ConnectionAttempt, canonical: BackendConnectionHandle & { readonly targetId: string }, settled: () => void = () => {}): ConnectionAssociationHandoff {
+    const token = Symbol(), sourceId = attempt.operation.targetId, registry = this.connectionTargets
+    const restoreWanted = !attempt.created && !!registry.get(sourceId)?.resumeWanted
+    const canonicalId = canonical.targetId
+    let adopted = false, abandoned: boolean | undefined, sourceEpoch: number | undefined, canonicalValid = true
+    const intent = () => {
+      const target = registry.get(canonicalId)
+      return JSON.stringify([target?.inExplorer, target?.resumeWanted, target?.lifecycle])
+    }
+    let previousIntent = intent(), previousState = registry.get(canonicalId)?.lifecycle.state
+    const canonicalCurrent = () => {
+      const target = registry.get(canonicalId), current = this.get(canonicalId)
+      return !!target?.inExplorer && target.resumeWanted && current?.id === canonical.id && current.generation === canonical.generation
+    }
+    const stop = this.subscribe(() => {
+      if (sourceEpoch === undefined && registry.operation(sourceId) !== attempt.operation) sourceEpoch = this.targetEpochs.get(sourceId)
+      const next = intent(), target = registry.get(canonicalId)
+      if (next !== previousIntent) {
+        const accepting = !adopted && target?.inExplorer && target.resumeWanted
+          && (target.lifecycle.state === 'connecting' || target.lifecycle.state === 'connected' && canonicalCurrent())
+        // Unexpected backend loss is not Disconnect. Any other lifecycle intent stays authoritative even if rolled back.
+        const lost = previousState === 'connected' && target?.lifecycle.state === 'lost' && canonicalCurrent()
+        if (!accepting && !lost) canonicalValid = false
+        previousIntent = next
+        previousState = target?.lifecycle.state
+      }
+    })
+    const finish = (repair: boolean) => {
+      if (!this.associationHandoffs.has(token)) return
+      stop()
+      try {
+        if (repair && restoreWanted && canonicalId !== sourceId && canonicalValid && this.targetEpochs.get(sourceId) === sourceEpoch)
+          registry.restoreCancelledConnectIntent(sourceId)
+      } finally { this.associationHandoffs.delete(token); settled() }
+    }
+    this.associationHandoffs.set(token, () => finish(false))
+    return {
+      adopted: targetId => {
+        const state = registry.get(canonicalId)?.lifecycle.state
+        if (targetId !== canonicalId || !canonicalCurrent() || state !== 'connected' && state !== 'lost') canonicalValid = false
+        adopted = true
+        if (abandoned !== undefined) finish(!abandoned)
+      },
+      complete: () => finish(false),
+      abandon: (explicitlyCancelled = false) => {
+        if (!adopted) { abandoned = explicitlyCancelled || abandoned === true; return }
+        finish(!explicitlyCancelled)
+      }
+    }
+  }
   bindingsChanged(update: ConnectionBindingsChanged): boolean {
     const accepted = this.connectionTargets.applyBindings(update)
     for (const change of accepted) {
@@ -217,7 +277,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     })
     this.publish([...this.legacy.filter(connection => !connection.targetId || !ids.has(connection.targetId)), ...adopted])
   }
-  dispose(): void { this.unsubscribe(); this.clearListeners(); this.metadata.clear(); this.legacyDetails.clear(); this.targetEpochs.clear(); this.targetStates.clear(); this.legacy = []; this.publish([]) }
+  dispose(): void { for (const finish of [...this.associationHandoffs.values()]) finish(); this.unsubscribe(); this.clearListeners(); this.metadata.clear(); this.legacyDetails.clear(); this.targetEpochs.clear(); this.targetStates.clear(); this.legacy = []; this.publish([]) }
 }
 
 export function detailsOf(options: SavedOptions, autoReconnect: ConnectionDetails['autoReconnect'] = 'inherit'): ConnectionDetails {
