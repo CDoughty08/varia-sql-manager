@@ -397,6 +397,23 @@ describe('the Compare popover', () => {
     await comparing
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
   })
+
+  it('leaves a popover moved to another pair open, and the focus where it is, when the first comparison is made', async () => {
+    const { compare, results, run, handle } = fixture()
+    const keys = run(2)
+    compare.open('t1', keys[1])
+    const focusEntry = vi.spyOn(results, 'focusEntry')
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const comparing = compare.run('t1')
+    compare.swap('t1')
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    expect(await comparing).toBeUndefined()
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ swapped: true })
+    expect(focusEntry).not.toHaveBeenCalled()
+    // The comparison was still added.
+    expect(results.getSnapshot().t1.sets.some(set => set.descriptor.kind === 'diff')).toBe(true)
+  })
 })
 
 describe('a comparison\'s source links', () => {

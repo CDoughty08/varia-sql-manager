@@ -307,6 +307,34 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
+  it('stays open, with the focus on Swap, when a comparison finishes after the pair was swapped', async () => {
+    // An earlier test's comparison may still be looking for its grid (focusResultGrid tries for 10 frames), under the same
+    // entry key as this one's: let those tries run out first, so only this test's comparison could focus the grid below.
+    for (let frame = 0; frame < 11; frame++) await new Promise(resolve => requestAnimationFrame(resolve))
+    const view = fixture()
+    let finish!: (answer: DiffAnswer) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(yes => { finish = yes }))
+    await act(async () => { view.button('Compare')!.click() })
+    view.draw()
+    const swap = view.popover()!.querySelector<HTMLButtonElement>('button[aria-label="Swap old and new"]')!
+    swap.focus()
+    act(() => { swap.click() })
+    view.draw()
+    expect(view.button('Close')).toBeDefined()
+    // The finished comparison's grid is there to take the focus, but it does not: the popover shows another pair.
+    const grid = view.container.appendChild(document.createElement('div'))
+    grid.tabIndex = 0
+    grid.setAttribute('data-result-grid', '')
+    grid.setAttribute('data-tab-id', 't1')
+    const off = view.results.subscribe(() => { const made = view.results.getSnapshot().t1?.sets.find(set => set.descriptor.kind === 'diff'); if (made) grid.setAttribute('data-result-entry', made.key) })
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }) })
+    view.draw()
+    off()
+    expect(grid.hasAttribute('data-result-entry')).toBe(true)
+    expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+    expect(document.activeElement).toBe(swap)
+  })
+
   it('opened again on a pair still comparing, still offers the other targets, which compare beside it', async () => {
     const view = fixture({ count: 3, open: 2 })
     vi.mocked(view.handle(view.keys[1]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(() => {}))

@@ -243,7 +243,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
 
   /** The popover's Compare: shows the comparison of its sides when the run has it, else starts it. Once the comparison is
    *  there the popover closes (while it still shows that pair) and the comparison takes the focus, unless the user moved it
-   *  meanwhile. A failure is said in the popover while it shows that pair, else in the toolbar. Returns the entry focused. */
+   *  meanwhile or the popover is still open on another pair (picked, swapped or Exact text changed while it ran: the
+   *  comparison is added and the popover keeps the focus). A failure is said in the popover while it shows that pair, else
+   *  in the toolbar. Returns the entry focused. */
   async run(tabId: string): Promise<EntryKey | undefined> {
     const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
     if (!picker || !sides) return undefined
@@ -262,6 +264,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     }
     if (outcome === undefined) return undefined
     if (same) this.close(tabId)
+    else if (now) return undefined
     if (this.results.focusStamp(tabId) !== stamp) return undefined
     this.results.focusEntry(tabId, outcome.key)
     return outcome.key
