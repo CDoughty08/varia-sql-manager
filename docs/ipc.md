@@ -1189,7 +1189,10 @@ Results stay in backend memory, never on disk (`ResultStore`).
   is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
   (`VARIA_RESULT_MEMORY_MIB`) at each launch, so a backend starts with the right figure, and sends it again with
   `results.setMemoryLimit` as each generation becomes ready (the setting may change between the spawn and HELLO) and
-  whenever it changes, so a change applies at once to the running backend. The new global figure is sized as at launch
+  whenever it changes, so a change applies at once to the running backend. It sends it again after every read of the
+  settings that succeeds (`SettingsStore.onDidLoad`): a first read slower than the first launch's 3 s wait, or one that
+  failed and succeeded later (Tools › Options reads again), would otherwise leave that backend on the automatic figure
+  while Options shows the user's. The new global figure is sized as at launch
   (the same clamp), with half of it per query and the live share keeping its fraction; the figures are replaced
   together, and each reservation reads them once, so a concurrent change applies from the next reservation. Lowered
   below what is stored, nothing is dropped: every reservation is refused, so a query storing rows stops with
@@ -1201,15 +1204,21 @@ Results stay in backend memory, never on disk (`ResultStore`).
   stays: the smaller of it and the current half holds. The test hooks' `VARIA_RESULT_BUDGET_BYTES` budget is fixed and
   ignores the limit. The budget holds the rows and the working memory of the operations on
   them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
-  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
-  only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are
+  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, any memory that
+  only makes an operation faster once 64 MiB of it is held, and memory taken in smaller steps (a profile's long
+  values, a diff's differing cells, a pivot's figures and Distinct Count bounds: `WorkSteps`) at each further 64 MiB
+  held (the load is read then, not at every step), is refused under high system memory load as rows are
   (`TOO_LARGE`, saying the computer is low on memory, as does a pivot or diff refused while the load is
   high). One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
   again by a collection of the youngest generation when it is more than a second old). A release's forced collection
   compacts, which alone returns the memory to the operating system, only when what remains is no more than was
   released and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it copies); under high
-  memory load the 8 GiB does not apply. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
+  memory load the 8 GiB does not apply. So with a limit over 16 GiB, closing more than 8 GiB of results while more than
+  8 GiB remain keeps the released memory in the process, reused by the next results, until a later close finds the
+  machine low on memory; packing pages (below) does not change this, since its saving never counts toward a compacting
+  collection, and it stays until a measurement shows a pause worth taking. Every operation's reservations in
+  `SqlService` are pinned by `tests/working-memory-lint.test.ts`. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
 - **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name

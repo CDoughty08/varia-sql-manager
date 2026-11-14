@@ -362,8 +362,8 @@ internal sealed partial class ResultStore
     /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a
     /// page of rows is: the budget is a share of the machine's memory, not of what is free, and a sort of a large result
     /// would otherwise take gigabytes from a machine with none to spare. Smaller requests are not asked: a busy machine
-    /// still sorts a small result. (What is taken in many small steps, a profile's long values or a diff's cells, is
-    /// not asked either.)</summary>
+    /// still sorts a small result. What is taken in many small steps (a profile's long values, a diff's cells) asks once
+    /// for every this much taken (<see cref="WorkSteps"/>), as a sort key's pages do.</summary>
     public const long WorkCheckBytes = 64L << 20;
 
     /// <summary>Takes the working memory of an operation on a result (a sort's keys, a profile's figures).</summary>

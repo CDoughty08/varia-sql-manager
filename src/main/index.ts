@@ -768,7 +768,11 @@ app.whenReady().then(async () => {
     request: (params, generation) => backend.request('results.setMemoryLimit', params, { generation }),
     onState: listener => backend.onState(listener), read: () => settings.current()['queryResults.grid.memoryLimitGiB']
   })
-  // A first read slower than the first launch's wait leaves that backend on the defaults, and a load fires no change.
+  // A first read slower than the first launch's wait, or one that failed and was read again later (Tools › Options reads
+  // it), leaves that backend on the defaults, and a read fires no change.
+  // Registered before the first read can finish (no await since settings.load() above); the first read is also followed
+  // directly, which sends nothing more when the value is already applied.
+  settings.onDidLoad(() => memoryLimit.settingsChanged())
   loaded.then(() => memoryLimit.settingsChanged(), () => {})
   // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })

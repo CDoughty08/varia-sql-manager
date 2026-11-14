@@ -87,6 +87,21 @@ describe('settings file', () => {
     expect([first.warning, second.warning].filter(Boolean)).toHaveLength(2)
     expect(await quarantined('settings.json')).toHaveLength(1)
   })
+  it('tells its load listeners after every read that succeeds, a retry after a failure too, and its change listeners never', async () => {
+    await mkdir(path())
+    const settings = store()
+    const loads: unknown[] = [], changes: unknown[] = []
+    settings.onDidLoad(state => loads.push(state.values['textEditor.sql.wordWrap']))
+    settings.onDidChange(state => changes.push(state.values['textEditor.sql.wordWrap']))
+    await expect(settings.load()).rejects.toThrow('Expected a regular file')
+    expect(loads).toEqual([])
+    await rm(path(), { recursive: true })
+    await writeFile(path(), file({ 'textEditor.sql.wordWrap': true }))
+    await settings.load()
+    await settings.load()
+    expect(loads).toEqual([true])
+    expect(changes).toEqual([])
+  })
   it('does not cache a read that failed, and the next load reads again', async () => {
     for (const blocked of [path, legacyPath]) {
       await rm(directory, { recursive: true, force: true }); await mkdir(directory)

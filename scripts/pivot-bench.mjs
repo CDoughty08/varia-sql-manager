@@ -3,6 +3,7 @@ import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
+import { lowMemoryStop, lowMemoryText, stopIfLowMemory } from './fixtures/memory-load.mjs'
 import { sizeResultStack } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, outputStatus, part, pivotPanel, resultsToolbar } from './fixtures/ui.mjs'
@@ -13,6 +14,8 @@ import { backendReady, outputStatus, part, pivotPanel, resultsToolbar } from './
 // the answer (the panel stops being busy), to the pivot's grid being in the document and to its first cell being painted,
 // with the renderer's long tasks, longest frame gap and main-thread task time over that span. docs/pivot-performance-findings.md
 // holds the numbers it produced. Writes artifacts/bench/pivot-e2e.json. Needs out/ and the Release backend (npm run build:smoke).
+// It uses the backend's own result budget, memory-load check included: on a computer at high memory load it stops and says
+// so (scripts/fixtures/memory-load.mjs) rather than time a paging machine or wait for a pivot that was refused.
 if (!process.env.VARIA_TEST_SQL_SERVER) throw new Error('pivot-bench needs VARIA_TEST_SQL_SERVER (and VARIA_TEST_SQL_USER and VARIA_TEST_SQL_PASSWORD for SQL authentication).')
 const option = (name, fallback) => { const at = process.argv.indexOf(name); return at < 0 ? fallback : Number(process.argv[at + 1]) }
 const reported = option('--rows', 20463), runs = option('--runs', 7)
@@ -89,6 +92,15 @@ const arm = index => page.evaluate(({ index, stackPart }) => {
       if (last !== undefined && marks.clicked !== undefined) marks.frames.push(now - last)
       last = now
       check()
+      // A build refused for memory adds no grid: the panel says why, and the bench stops.
+      const refusal = marks.answered !== undefined && marks.mounted === undefined
+        && [...panel.querySelectorAll('[role="status"]')].map(node => node.textContent).join(' ').match(/low on memory|not enough result memory/i)
+      if (refusal) {
+        observer.disconnect()
+        tasks.disconnect()
+        marks.refused = refusal.input.trim()
+        return done(marks)
+      }
       // Two frames after the cell was drawn, so the paint that showed it is counted.
       // A pivot added below the stack's fold draws no cells until it is scrolled to: give up on it 3 s after its grid came.
       const hidden = marks.drawn === undefined && marks.mounted !== undefined && now - marks.clicked - marks.mounted > 3000
@@ -115,6 +127,7 @@ async function builds(first, count) {
     const before = await taskSeconds()
     await pivotPanel(page).getByRole('button', { name: 'Build Pivot', exact: true }).click()
     const marks = await page.evaluate(() => window.__pivotBench)
+    if (marks.refused) throw new Error(lowMemoryText.test(marks.refused) ? lowMemoryStop(step) : `${step}: Build Pivot was refused: ${marks.refused}`)
     marks.taskMs = (await taskSeconds() - before) * 1000
     samples.push(marks)
   }
@@ -144,6 +157,7 @@ async function pivotCase(name, sql, sets, group, { before, detail = '', asColumn
   if (only && only !== name) return
   step = name + ': query'
   const queryMs = await run(sql)
+  await stopIfLowMemory(page, step)
   step = name + ': panel'
   await expect(grid(sets - 1)).toBeVisible()
   if (!sized) sized = await sizeResultStack(page, 720)
