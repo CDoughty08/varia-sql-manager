@@ -33,6 +33,11 @@ const explorerSelections: Partial<ContextKeys>[] = [
   ...serverEngines.map((engine): Partial<ContextKeys> => ({ ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder', explorerServerEngine: engine, explorerSelectionServerEngine: engine })),
   { ...noExplorerContext, explorerNode: 'background' }
 ]
+/**
+ * Menu items left without an access key. The result grid's menu shows more items than its titles have letters (none has
+ * k, q or x), so Update Pivot takes 'u' and Pivot Results… goes without; every other item keeps the key users know.
+ */
+const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…'] }
 /** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
 function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
   const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
@@ -57,7 +62,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(307)
+    expect(commandIds).toHaveLength(308)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -179,8 +184,17 @@ describe('command catalogue', () => {
         expect(mnemonicIndex(title, mnemonic), `${menu}: ${title} has no "${mnemonic}"`).toBeGreaterThanOrEqual(0)
       }
       const assigned = assignMnemonics(items)
-      expect(assigned.every(index => index >= 0), `${menu}: ${assigned.join(' ')}`).toBe(true)
-      const letters = assigned.map((index, position) => items[position].title[index].toLowerCase())
+      const letters = assigned.map((index, position) => index < 0 ? undefined : items[position].title[index].toLowerCase())
+      // An item goes without an access key, as Windows allows, only where it is named here and its menu has run out of
+      // letters: every letter in its title is another item's key, shown with it.
+      const keyless = items.flatMap((item, position) => assigned[position] < 0 ? [item.title] : [])
+      expect(keyless, menu).toEqual(keylessItems[menu] ?? [])
+      for (const [position, item] of items.entries()) {
+        if (assigned[position] >= 0) continue
+        for (const character of new Set([...item.title.toLowerCase()].filter(character => /^[a-z0-9]$/.test(character)))) {
+          expect(items.some((other, at) => letters[at] === character && showTogether(menu, item.when, other.when)), `${menu}: ${item.title} could take "${character}"`).toBe(true)
+        }
+      }
       // A menu assigns access keys over the items it shows, so only items that never show together may share one (an SSIS
       // folder's Properties and a database's).
       for (let first = 0; first < items.length; first++) for (let second = first + 1; second < items.length; second++) {

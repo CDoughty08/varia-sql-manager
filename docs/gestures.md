@@ -8,13 +8,19 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (20)
+## Gestures (21)
 
 ### Global
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Zoom | `global.wheelZoom` | Zooms the window, except over a document tab shelf where Control+wheel changes its row count. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+| Zoom | `global.wheelZoom` | Zooms the window outside surfaces with their own wheel gestures. | Fixed | Ctrl+Wheel the workbench | Ctrl+Wheel the workbench | ⌃ Wheel the workbench | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+
+### SQL Query Editor
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Zoom Editor Text | `editor.wheelZoom` | Scroll up to enlarge editor text or down to shrink it for this session. | Fixed | Ctrl+Wheel editor text | Ctrl+Wheel editor text | ⌃ Wheel editor text | Locked: Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work. | — |
 
 ### Results Grid
 

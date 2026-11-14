@@ -3087,11 +3087,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw, plan layout, object search
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
+npm run bench:startup                           # Electron, real backend: time to ready, and memory idle, with tabs, holding a result
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
 ```
 
-The harnesses need the Release backend and, for `bench:e2e` and `bench:grid`, the built app (`npm run check`). They
-write `artifacts/bench/node.json`, `e2e.json` and `grid.json`; they are not part of `npm run check`. The benchmarks only
+The harnesses need the Release backend and, for `bench:e2e`, `bench:grid` and `bench:startup`, the built app
+(`npm run check`). They write `artifacts/bench/node.json`, `e2e.json`, `grid.json` and `startup.json`; they are not part of `npm run check`. The benchmarks only
 measure (and check that every row and cell arrived); `check-bench.mjs --enforce` fails when a value is worse than its
 floor, or when a metric with a floor was not measured (a live one only when its harness ran `--live`). CI enforces
 floors on Linux (with live SQL Server); Windows and macOS report only.
@@ -3147,6 +3148,15 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   (each a cache miss), the window and page caches after a sweep and 300 jumps, heap growth after a collection, and long
   tasks. `--live` copies 100,000 rows and saves a million rows as CSV from SQL Server, comparing the text with the rows
   the query produces.
+- **The startup run** (`scripts/startup-bench.mjs`) launches the built app six times on one profile and times the last
+  five (the first fills Chromium's caches and V8's code cache) from the main process's creation to the query editor in
+  the page and to the status bar naming the backend, on the page's own clock from an observer in the page. The window is
+  shown as it is created, as a user's is; Playwright's debugger is attached, which a user's launch does not pay for. The
+  last launch then gives the memory of the whole process tree by role (Electron's processes as `app.getAppMetrics` names
+  them, the backend, and anything else the app started, such as the SQL Tools Service), sampled until it stops moving:
+  idle, after 20 empty query tabs, and holding 500,000 W1 rows that the results worker has read once. Working sets count
+  the pages Chromium's processes share once each, so the tree's private bytes are reported beside them. Every figure is
+  report only, and the run is part of the daily desktop benchmarks, not of CI's Linux ones.
 
 | Metric | Target | Floor (Linux CI) | Measured, 4 CPUs | Measured, 2 CPUs |
 | --- | --- | --- | --- | --- |
@@ -3219,6 +3229,12 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 32 / 101 ms | 18 / 70 ms |
 | Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
 | Grid, live: Save Results As CSV, 1,000,000 × 8 rows (172 MB) | ≤ 3 s | ≤ 15 s | 1.5 – 2.0 s | 1.5 s |
+| Startup: main process created → query editor in the page / status bar names the backend / both, median of 5 | ≤ 1,000 / 1,000 / 1,000 ms | reported only | 639 – 649 / 678 – 689 / 678 – 689 ms over 2 runs, launches from 598 ms (Windows, 24 CPUs) | not measured |
+| Memory, idle: working set of the whole tree / of Electron's processes / private bytes of the tree | ≤ 750 / 650 / 400 MB | reported only | 692 / 612 / 368 MB: main 190, renderer 172, GPU 150, utility 101, backend 62 (Windows, 24 CPUs; 820 and 424 MB while the welcome query was analysed at launch, which held a SQL Tools Service process of 113 MB for a minute) | not measured |
+| Memory, idle: renderer / .NET backend with no connection open | ≤ 200 / 100 MB | reported only | 170 – 172 / 62 – 70 MB (Windows, 24 CPUs) | not measured |
+| Memory: renderer growth per empty query tab, 20 opened | ≤ 1 MB | reported only | 0.64 – 0.73 MB (Windows, 24 CPUs) | not measured |
+| Memory: backend growth holding 500,000 W1 rows (109 MB of pages) / that growth ÷ page bytes | ≤ 150 MB / 1.3 | reported only | 133 – 134 MB / 1.22 – 1.23 (Windows, 24 CPUs) | not measured |
+| Memory: renderer growth after every one of those rows was read once / working set of the tree then | ≤ 220 / 1,100 MB | reported only | 187 – 203 / 1,067 MB (Windows, 24 CPUs; the worker's heap is not collected first) | not measured |
 
 Measured in a shared Linux container (Xeon at 2.1 GHz, Node 24, .NET 10, SQL Server 2022 in Docker on the same machine)
 while another build was running, once with its 4 CPUs and once with the app and benchmarks pinned to 2 (`taskset`), as

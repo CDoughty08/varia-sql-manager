@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           npm run bench
-          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; fi
+          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; npm run bench:startup; fi
           node scripts/check-bench.mjs
       - name: Upload IPC benchmark results
         if: always()

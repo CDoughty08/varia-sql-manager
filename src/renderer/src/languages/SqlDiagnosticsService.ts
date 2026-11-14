@@ -3,7 +3,7 @@ import { languageLimits, type LanguageDiagnostic } from '../../../shared/languag
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
-import type { DocumentService } from '../services/documents'
+import { isWelcomeQuery, type DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 import type { SqlLanguageService } from './SqlLanguageService'
@@ -109,7 +109,10 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     const detail = this.paused(entry)
     this.put(entry.id, { phase: detail ? 'paused' : 'checking', errors: previous?.errors ?? 0, warnings: previous?.warnings ?? 0,
       ...previous?.isIncomplete ? { isIncomplete: true } : {}, ...detail ? { detail } : {} })
-    if (detail || !entry.model.getValue().trim()) {
+    // The welcome query is known to be valid: analysing it started a SQL Tools process at every first launch, to report
+    // nothing. Its first edit is analysed as any other.
+    const text = detail ? '' : entry.model.getValue()
+    if (detail || !text.trim() || isWelcomeQuery(text)) {
       if (!detail) this.put(entry.id, { phase: 'ready', errors: 0, warnings: 0 })
       return
     }
