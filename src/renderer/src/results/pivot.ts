@@ -107,6 +107,8 @@ export interface PivotInfo {
   readonly rowGroups: number
   readonly columnGroups: number
   readonly approximate: boolean
+  /** The pivoted result holds only part of its query's rows (truncated, or the query stopped before it finished). */
+  readonly partial?: boolean
 }
 
 /** A pivot grid's strip: what was pivoted, then what its highlights say, if anything. */
@@ -120,6 +122,7 @@ export function pivotText(info: PivotInfo): string {
     ? `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')} × ${formatCount(info.columnGroups)} ${plural(info.columnGroups, 'column group')}`
     : `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')}`
   const parts = [`Pivot of ${info.sourceLabel}${info.viewed ? ' (as sorted and filtered)' : ''}: ${formatCount(info.rows)} ${plural(info.rows, 'row')} in ${groups}.`]
+  if (info.partial) parts.push(`${info.sourceLabel} holds only part of its query's rows, so the pivot counts those.`)
   if (info.approximate) parts.push('Long values were grouped by the part these results keep.')
   return parts.join(' ')
 }

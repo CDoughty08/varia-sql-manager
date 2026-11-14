@@ -44,14 +44,14 @@ function source(rows: number, columns: number) {
 const descriptor = (handle: ResultHandle): ResultDescriptor => ({ generation: 1, resultId: 1, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [...handle.columns], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'complete', incomplete: false } as unknown as ResultDescriptor)
 const cells = (a: [number, number], b: [number, number] = a): GridSelection => ({ entry: 'e1', active: { row: b[0], column: b[1] }, blocks: [{ kind: 'cells', anchor: { row: a[0], column: a[1] }, focus: { row: b[0], column: b[1] } }] })
 
-function mount(o: { rows: number; columns: number }) {
+function mount(o: { rows: number; columns: number; widths?: readonly number[] }) {
   const made = source(o.rows, o.columns)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
   root.append(scroller)
   document.body.append(root)
   for (const [name, value] of [['clientWidth', 900], ['offsetWidth', 900], ['clientHeight', 300]] as const) Object.defineProperty(scroller, name, { value })
-  const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true }
+  const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, ...o.widths ? { widths: Float64Array.from(o.widths) } : {} }
   const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn()
   const view = new GridView({
     root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', resultNumber: 1, resultCount: 1, platform: 'win32',
@@ -66,6 +66,16 @@ function mount(o: { rows: number; columns: number }) {
 }
 
 describe('the grid\'s seams', () => {
+  it('sizes as new only the widths a rebuilt Pivot could not carry (NaN), keeping the rest', () => {
+    const fresh = mount({ rows: 5, columns: 3 })
+    const initial = [...fresh.state.widths!]
+    fresh.view.dispose()
+    const rebuilt = mount({ rows: 5, columns: 3, widths: [Number.NaN, 250, Number.NaN] })
+    expect([...rebuilt.state.widths!]).toEqual([initial[0], 250, initial[2]])
+    expect(rebuilt.state.sized).toBe(true)
+    rebuilt.view.dispose()
+  })
+
   it('reads tiles of 128 rows by 32 columns and shows each cell from its own row and column', async () => {
     const grid = mount({ rows: 500, columns: 40 })
     expect(grid.reads.every(read => read.count === 128 && read.o.colStart! % 32 === 0)).toBe(true)
