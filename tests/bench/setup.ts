@@ -3,9 +3,12 @@
 import { cpus, totalmem } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { acquire } from '../../scripts/machine-lock.mjs'
 import { metricsLog, nodeResults, type Metric } from './harness'
 
-export default function setup(): () => void {
+export default async function setup(): Promise<() => void> {
+  // Benchmarks measure only themselves: they wait for the machine lock's exclusive tier (scripts/machine-lock.mjs).
+  const lock = await acquire('exclusive', { label: 'npm run bench' })
   mkdirSync(dirname(metricsLog), { recursive: true })
   rmSync(metricsLog, { force: true })
   rmSync(nodeResults, { force: true })
@@ -21,5 +24,6 @@ export default function setup(): () => void {
       cpus: cpus().length, cpu: cpus()[0]?.model ?? 'unknown', memoryBytes: totalmem(), metrics
     }, null, 2) + '\n')
     rmSync(metricsLog, { force: true })
+    lock.release()
   }
 }

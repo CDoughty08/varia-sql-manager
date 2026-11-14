@@ -10,7 +10,8 @@ the rules that keep it lean.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
   prints each lane's seconds): every lane at once with 8 or more CPUs, otherwise (CI's runners) two chains side by side, so
   time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either; `VARIA_CHECK_SKIP=typecheck`, as CI's Windows and
-  macOS jobs set, leaves out tsc, which Linux's job runs). A stopped check prints its running lanes' output. Run before every commit.
+  macOS jobs set, leaves out tsc, which Linux's job runs). Off CI it first takes the machine lock (below) and plans for its share
+  of the CPUs. A stopped check prints its running lanes' output. Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
   from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
   The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
@@ -35,6 +36,44 @@ the rules that keep it lean.
 - `-- --result-work-bench [--rows N] [--runs N] [--only name,name]` on the same project times, stage by stage, a pivot's
   Distinct Count, Compare Results and a column's distinct values past the coded limit on synthetic results (4,000,000 rows
   by default); set `DOTNET_PROCESSOR_COUNT` to simulate fewer cores. Measures only, run by hand.
+
+## Parallel sessions and the machine lock
+
+Several agent sessions (Claude, Codex) or a developer beside them often work in separate worktrees on one machine. Each
+running the full check, the benchmarks or the smoke suites at once overloaded it: time-bounded tests missed their deadlines,
+benchmarks measured each other, and smoke suites overwrote each other's clipboard. Two things keep them apart.
+
+**Run only what applies while developing.** A change's own checks are the vitest files, .NET suite and smoke suite that
+cover it: `npx vitest run tests/<name>.test.ts`, and the smoke suite of the area you changed (`node scripts/<area>-smoke.mjs`
+after `npm run build:smoke`). Run `npm run check` once before committing, the whole `test:smoke` only when a change reaches
+across the UI, and the benchmarks only when a change can move them. CI runs everything on every PR.
+
+**The machine lock** (`scripts/machine-lock.mjs`) queues the heavy runs across every worktree and clone on the machine:
+
+| Tier | Taken by | Runs |
+| --- | --- | --- |
+| shared | `npm run check`, `npm run build:smoke`, `npm run backend:test` | up to `VARIA_LOCK_SHARED` at once (default 2) |
+| exclusive | every smoke suite and Electron benchmark (through `scripts/fixtures/smoke.mjs`), `npm run bench` | alone |
+
+- A run that has to wait prints `Waiting for the machine lock (<tier>) for <run>, held by <run> (pid, worktree, since)`, a
+  line a minute while it waits, then `Took the machine lock`. **Leave it running**: it continues by itself when the holder
+  finishes, and stopping it only loses its place. Agents should run long commands in the background so a tool timeout
+  does not kill a waiting run.
+- An exclusive run that is waiting goes ahead of shared runs that arrive after it; it then waits for the shared runs already
+  going. Each smoke suite takes the lock as it starts, so another session's check can run between two suites of
+  `test:smoke`.
+- Each check plans for its share of the machine: the CPUs divided among the shared slots (12 of 24 with the default),
+  which picks its lane layout and caps each vitest lane's workers (`vitestWorkers` in `scripts/check.mjs`: the main lane
+  leaves room for the build and .NET lanes beside it, the Release-backend files get two), so two checks about fill the
+  machine rather than oversubscribe it. `VARIA_CHECK_CPUS` and `VITEST_MAX_WORKERS` still override it.
+- A run started with `node scripts/machine-lock.mjs` holds the lock under the wrapper's process: kill the whole process
+  tree, not only the wrapper, or the command keeps running after the lock is cleared.
+- The lock is files in `<os temp>/varia-machine-lock` (`VARIA_LOCK_DIR` moves it), each naming its holder's process and
+  touched every few seconds. A file whose process has gone, or that nobody touched for a while (a killed run), is cleared,
+  so a crash never blocks the next run; nothing needs deleting by hand.
+- CI (`CI=true`) skips the lock: each job has its runner to itself. `VARIA_LOCK=off` skips it locally. A process started
+  under a holder (`VARIA_LOCK_HELD`, set by the holder) never waits, so the check's own vitest cannot wait on it.
+- `node scripts/machine-lock.mjs shared|exclusive <executable> [args...]` runs any other command under the lock.
 
 ## Environment
 
