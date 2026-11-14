@@ -89,6 +89,7 @@ main/renderer lifecycle, Explorer/menu behavior and backend identity/binding pat
 | Dropped Connect replies | Native protocol cancellation or response serialization failure could hide a successful registration from main. Connect now supplies idempotent exact-ID Dropped/Unsent cleanup. Actual protocol tests gate a successful dispatch before cancellation and exercise an oversized reply while retaining a separate accepted target. |
 | Activity Monitor pool protection | Long application names were truncated differently by the factory and its own-pool name matcher. Both use one prefix/suffix rule, so Kill cannot miss the application's own pool because its name is long. Offline parity and actual session-action tests cover the boundary. |
 | CI fixtures | Exact scripting command budgets include the account preflight. Intentional owned opens in native live fixtures use the central opener. Electron recovery checks use the current credential-update action and wait for exact attachment/focus. Activity Monitor retries only opening a non-mutating confirmation after a live sample changes, never the Kill action. The overview metric fixture owns a retained user query session rather than depending on an idle pool that cleanup tests can retire; its CPU, rates and user-session assertions remain unchanged. |
+| Hot-exit observation | A recovery snapshot could remain pending against a dead renderer while main replaced its window, preventing the poll from observing the replacement. Each snapshot now has a bounded attempt and reselects the current window. A deterministic old-window crash-state override exercises the five-second fallback, requires a different window ID and preserves every pins, active-tab and unsaved-text assertion. Context listeners cover replacement pages; graceful quits retain their exit requirement within the shared close bound, and the unchanged suite watchdog names its phase. |
 
 A proposed extra database-binding refresh API was investigated and retracted. Database-only mutation settlement
 publishes synchronously; password and database receipt producers are disjoint, and reload projects current main pins.
@@ -114,6 +115,16 @@ After merging current main through `362cf04d`, the full check passed again in 96
 checks and 5,075 Vitest tests. Separate integration-impact reviews found no connection, cancellation or result-lease
 issues from main's fair worker gate or thread-pool floor. The thread-pool floor preserves authentication scopes,
 request ownership and Dropped/Unsent cleanup; the worker gate retains its independent CPU concurrency limit.
+
+The next CI run, `43543130900`, passed all three platform checks, all three live SQL groups, Linux benchmarks, all 31
+Linux Electron suites and 30 of 31 Windows suites. Windows hot exit reached its suite watchdog after the first
+crash-recovery check; the old log did not identify which unbounded quit/relaunch await was pending. Five ordinary local repeats passed. The forced replacement
+case then reproduced the stalled snapshot before the correction and passed afterward. Three corrected full hot-exit
+runs passed, including two measured at 19.6 and 19.2 seconds. Both independent follow-up reviews found no assertion
+weakening, unhandled late rejection, timer leak or production behavior change. The exact original CI await remains
+unproven; the reproduced observer bug and the lifecycle bounds are recorded separately from that inference.
+The full check after this correction passed in 87.0 seconds with 2,722 offline .NET checks and 5,075 Vitest tests,
+TypeScript and the production build; the same 24 configuration-dependent Vitest cases were skipped.
 
 One opt-in local SQL Server 2025 Windows Extended Events assertion remains a baseline limitation: its password-redaction
 test fails identically on an isolated build of unchanged main `733b2917`. The login/SSIS SQL and that assertion are

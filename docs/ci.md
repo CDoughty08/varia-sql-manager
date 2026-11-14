@@ -366,7 +366,9 @@ Considered and rejected (do not re-propose without new numbers):
   `suiteSeconds` or `LiveGroups.Suites`. Both budget checks trust those tables.
   [PR #469's run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/43540439831) measured the expanded connections,
   Activity Monitor, Explorer, results, live-plan and menus suites. Their weights now use those CI seconds. Windows live
-  plans keep their existing weight because that run had no SQL endpoint and skipped them. The resulting modeled shard
-  totals are 300/299/301 seconds on Linux and 307/307/306 on Windows, within the existing 360-second budget; no job was added.
+  plans keep their existing weight because that run had no SQL endpoint and skipped them. Hot exit uses its last green
+  Linux/Windows measurements of 17/18 seconds plus the five-second grace now exercised by its forced replacement-window
+  regression. The resulting modeled shard totals are 301/301/302 seconds on Linux and 310/310/310 on Windows, within the
+  existing 360-second budget; no job was added and no suite timeout increased.
 - **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs` (runner-minutes,
   job count, queue) in its PR and here.
