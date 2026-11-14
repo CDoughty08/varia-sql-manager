@@ -4,6 +4,7 @@ export interface Held { release(): void, others: number }
 export interface AcquireOptions {
   label?: string, env?: Record<string, string | undefined>, dir?: string, slots?: number, pollMs?: number, beatMs?: number
   log?: (text: string) => void, isAlive?: (pid: number) => boolean
+  signal?: AbortSignal
 }
 export const heartbeatMs: number
 export const staleMs: number

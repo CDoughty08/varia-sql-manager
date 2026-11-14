@@ -181,6 +181,16 @@ The full check with the association guard then passed in 92.6 seconds: 2,805 off
 TypeScript and the production build, with the same 24 configuration-dependent skips. Its Vitest lane started after the
 final source and regression edits. Final Electron and cross-platform CI results are recorded in the PR.
 
+The full local Electron collection exposed a validation-runner interaction with main's new machine lock: the chart
+suite's outer watchdog expired entirely while waiting for admission, before any test started. Acquiring the suite's
+exclusive lease in the parent before spawning it excludes queue time from the unchanged execution budget. Cancellation
+must release only that queued reservation, and child exit/error/tree cleanup must release an acquired lease. The
+affected suites are rerun after this correction; this queue expiration is distinct from an application test failure.
+The correction passed 46 focused runner/lock/CI checks and TypeScript. Independent re-review found no additional issue
+in queue cancellation, environment isolation, exact lease release or the existing execution watchdog and tree cleanup.
+Its full check passed in 106.2 seconds while sharing the permitted check tier with one other run: 2,805 offline .NET
+checks, 5,215 Vitest tests, TypeScript and the production build, with 24 configuration-dependent skips.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,

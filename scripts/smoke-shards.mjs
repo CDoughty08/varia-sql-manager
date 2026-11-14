@@ -4,6 +4,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { acquire, entryMode } from './machine-lock.mjs'
 
 /** The smoke suites in `test:smoke` order. */
 export function smokeSuites() {
@@ -96,36 +97,47 @@ function killAll(pids) {
  * finishes). After `graceMs`, or once the suite has gone, every process the suite started, read before the SIGINT and again
  * then, gets SIGKILL with any group it leads, and so does the suite's group.
  */
-export function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [], signal } = {}) {
-  return new Promise(resolve => {
-    const posix = process.platform !== 'win32'
-    const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix })
-    let timedOut = false, interrupted = false, stopping = false, grace, seen = []
-    const finish = () => killAll([...new Set([child.pid, ...seen])])
-    const stop = () => {
-      if (stopping || child.exitCode !== null || child.signalCode !== null) return
-      stopping = true
-      if (!posix) {
-        try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
-        return
+export async function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [], signal, env = process.env } = {}) {
+  const childEnv = { ...env }, mode = entryMode(suite)
+  const interrupted = () => ({ status: null, signal: null, timedOut: false, interrupted: true })
+  let lease
+  try {
+    if (signal?.aborted) return interrupted()
+    // Queue time belongs to the machine lock, not the suite's execution budget. The child inherits only this lease.
+    if (mode) lease = await acquire(mode, { env: childEnv, label: suite, signal })
+    if (signal?.aborted) return interrupted()
+    return await new Promise(resolve => {
+      const posix = process.platform !== 'win32'
+      const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix, env: childEnv })
+      let timedOut = false, interrupted = false, stopping = false, grace, seen = []
+      const finish = () => killAll([...new Set([child.pid, ...seen])])
+      const stop = () => {
+        if (stopping || child.exitCode !== null || child.signalCode !== null) return
+        stopping = true
+        if (!posix) {
+          try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
+          return
+        }
+        seen = descendants(child.pid)
+        try { process.kill(-child.pid, 'SIGINT') } catch { /* Already gone. */ }
+        grace = setTimeout(() => { seen = [...seen, ...descendants(child.pid)]; finish() }, graceMs)
       }
-      seen = descendants(child.pid)
-      try { process.kill(-child.pid, 'SIGINT') } catch { /* Already gone. */ }
-      grace = setTimeout(() => { seen = [...seen, ...descendants(child.pid)]; finish() }, graceMs)
-    }
-    const timer = setTimeout(() => { timedOut = true; stop() }, limitMs)
-    const abort = () => { interrupted = true; stop() }
-    if (signal?.aborted) abort()
-    else signal?.addEventListener('abort', abort, { once: true })
-    const settle = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
-    child.once('error', error => { settle(); resolve({ status: null, signal: null, timedOut, interrupted, error }) })
-    child.once('exit', (status, exitSignal) => {
-      settle()
-      // The suite has gone; on POSIX whatever it started, reparented now, still gets the SIGKILL.
-      if (posix && stopping) { clearTimeout(grace); finish() }
-      resolve({ status, signal: exitSignal, timedOut, interrupted })
+      const timer = setTimeout(() => { timedOut = true; stop() }, limitMs)
+      const abort = () => { interrupted = true; stop() }
+      if (signal?.aborted) abort()
+      else signal?.addEventListener('abort', abort, { once: true })
+      const settle = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+      child.once('error', error => { settle(); resolve({ status: null, signal: null, timedOut, interrupted, error }) })
+      child.once('exit', (status, exitSignal) => {
+        settle()
+        // The suite has gone; on POSIX whatever it started, reparented now, still gets the SIGKILL.
+        if (posix && stopping) { clearTimeout(grace); finish() }
+        resolve({ status, signal: exitSignal, timedOut, interrupted })
+      })
     })
-  })
+  } catch (error) {
+    return signal?.aborted ? interrupted() : { status: null, signal: null, timedOut: false, interrupted: false, error }
+  } finally { lease?.release() }
 }
 
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */
