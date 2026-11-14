@@ -85,6 +85,15 @@ describe('result pages', () => {
     expect(cellText(view, 0, 0, 1)).toEqual({ text: '0x', truncated: true })
     expect(cellText(view, 0, 1)).toEqual({ text: '0x01', truncated: true })
     expect(hex(new Uint8Array(256).map((_, i) => i))).toBe(Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(''))
+    // Short spans are joined pair by pair, longer ones written as bytes into a shared scratch, and the longest into a
+    // buffer of their own: every length around each boundary reads the same, and a call never sees the last one's bytes.
+    const reference = (bytes: Uint8Array) => Array.from(bytes, value => value.toString(16).padStart(2, '0').toUpperCase()).join('')
+    for (const length of [0, 1, 31, 32, 33, 4095, 4096, 4097, 20000]) {
+      const bytes = new Uint8Array(length).map((_, i) => (i * 131 + length) & 255)
+      expect(hex(bytes), String(length)).toBe(reference(bytes))
+    }
+    expect(hex(new Uint8Array(40).fill(0xab))).toBe('AB'.repeat(40))
+    expect(hex(new Uint8Array(33).fill(0x01))).toBe('01'.repeat(33))
   })
   it('caps text without splitting surrogate pairs and replaces invalid UTF-8', () => {
     const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text)
