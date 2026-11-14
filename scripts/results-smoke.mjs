@@ -717,6 +717,32 @@ try {
   await enlargeOutput(page)
   console.log('Results checks: at the default split the Messages strip yields to the grids and shows the first error in its line.')
 
+  // 4d. Discard results after execution: while it is on the status bar says so, and its item opens Options on the setting.
+  // A run keeps no set, and the Results view says why, with the one step that turns it off; the next run keeps its rows.
+  const discardItem = () => statusBar(page).getByRole('button', { name: 'Results discarded', exact: true })
+  await expect(discardItem()).toHaveCount(0)
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.discardResults': true }))).ok).toBe(true)
+  await expect(discardItem()).toBeVisible()
+  await run('-- varia-fake: sets=N1*3,N1*5')
+  await expect(outputTab('Results, not kept')).toHaveAttribute('aria-selected', 'true')
+  await expect(anyResultGrid(page)).toHaveCount(0)
+  await expect(emptyStateTitle(outputEmpty(page))).toHaveText('Results were not kept')
+  await expect(emptyStateDetail(outputEmpty(page))).toContainText('2 result sets were read and not kept.')
+  await page.screenshot({ path: resolve('artifacts', 'results-discarded.png') })
+  await discardItem().click()
+  const optionsDialog = page.getByRole('dialog', { name: 'Options', exact: true })
+  await expect(optionsDialog.getByRole('checkbox', { name: 'Discard results after execution', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(optionsDialog).toHaveCount(0)
+  await outputEmpty(page).getByRole('button', { name: 'Turn off Discard results', exact: true }).click()
+  await expect(discardItem()).toHaveCount(0)
+  await expect(outputEmpty(page).getByRole('button', { name: 'Execute again', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(outputTab('Results, 2 result sets')).toHaveAttribute('aria-selected', 'true')
+  await expect(anyResultGrid(page)).toHaveCount(2)
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.discardResults': null }))).ok).toBe(true)
+  console.log('Results checks: Discard results after execution shows in the status bar and in place of the grids, and one step turns it off.')
+
   // 5. ARIA: after each grid key the active descendant is a selected gridcell at the active row and column, labelled
   // with its text and what it is.
   await run('-- varia-fake: sets=N1*300')
