@@ -125,6 +125,34 @@ internal static class SqlLanguageLiveChecks
             var hover = await Call<LanguageHover?>("language.hover", Request(firstId, 4, hoverText, firstConnection, "SELECT f.First".Length));
             check(hover is not null && hover.Contents.Contains("FirstOnly", StringComparison.OrdinalIgnoreCase) && hover.Contents.Contains("int", StringComparison.OrdinalIgnoreCase),
                 "real SQL Tools Service hover describes the live fixture column and its type");
+
+            // Go to Definition: language.definition on the query's own connection and database, through Object Explorer's pool.
+            var definitionFixtures = new[]
+            {
+                await Sql("CREATE PROCEDURE dbo.LoadFixture AS SELECT FirstOnly FROM dbo.LanguageFixture;", firstDatabase),
+                await Sql("CREATE SYNONYM dbo.FixtureAlias FOR dbo.LanguageFixture;", firstDatabase),
+                await Sql("CREATE TYPE dbo.FixtureList AS TABLE (Id int NOT NULL);", firstDatabase)
+            };
+            check(definitionFixtures.All(fixture => fixture.Status == "completed"), "definition live fixtures create a procedure, a synonym and a table type in the marked scratch database");
+            Task<LanguageDefinition?> Definition(string text, string near) =>
+                Call<LanguageDefinition?>("language.definition", Request(Guid.NewGuid().ToString(), 1, text, firstConnection, text.IndexOf(near, StringComparison.Ordinal) + 1));
+            var table = await Definition("SELECT * FROM dbo.LanguageFixture", "LanguageFixture");
+            check(table is { Schema: "dbo", Name: "LanguageFixture", Kind: "table", Subtype: null } && table.Database == firstDatabase
+                && table.Range == new LanguageRange(new(0, 14), new(0, 33)), "Go to Definition resolves a table in the query's database, with the name's range");
+            check(await Definition("SELECT f.FirstOnly FROM dbo.LanguageFixture AS f", "FirstOnly") is { Name: "LanguageFixture", Kind: "table" },
+                "a column resolves to its alias's table");
+            check(await Definition("SELECT EditedOnly FROM dbo.LanguageFixture AS l CROSS JOIN dbo.EditedFixture AS e", "EditedOnly") is { Name: "EditedFixture", Kind: "table" },
+                "a bare column of two tables resolves to the table that has it");
+            check(await Definition("EXEC dbo.LoadFixture;", "LoadFixture") is { Schema: "dbo", Name: "LoadFixture", Kind: "procedure", Subtype: "sql" }, "a procedure resolves with its subtype");
+            check(await Definition("SELECT * FROM FixtureAlias", "FixtureAlias") is { Schema: "dbo", Name: "FixtureAlias", Kind: "synonym" }, "a one-part synonym resolves in the default schema");
+            check(await Definition("DECLARE @ids dbo.FixtureList;", "FixtureList") is { Schema: "dbo", Name: "FixtureList", Kind: "tableType" }, "a user-defined table type resolves");
+            check(await Definition("EXEC sp_who;", "sp_who") is { Schema: "sys", Name: "sp_who", Kind: "procedure" }, "a one-part system procedure falls back to sys, as SQL Server resolves it");
+            check(await Definition("WITH LanguageFixture AS (SELECT 1 AS x) SELECT * FROM LanguageFixture", "LanguageFixture") is null, "a CTE hides the table of its name");
+            var crossDatabase = await Definition("SELECT * FROM [" + secondDatabase + "].dbo.LanguageFixture", "LanguageFixture");
+            check(crossDatabase is { Schema: "dbo", Name: "LanguageFixture", Kind: "table" } && crossDatabase.Database == secondDatabase, "a three-part name resolves in its own database");
+            check(await Definition("SELECT * FROM dbo.NoSuchFixture", "NoSuchFixture") is null
+                && await Definition("SELECT * FROM [NoSuchDatabase_" + Guid.NewGuid().ToString("N") + "].dbo.LanguageFixture", "LanguageFixture") is null,
+                "an unknown object or database answers null, not an error");
             launchedProcesses = LanguageProcesses().Except(initialProcesses).ToHashSet();
             check(launchedProcesses.Count > 0, "live language requests launch the actual bundled SQL Tools Service child process");
 

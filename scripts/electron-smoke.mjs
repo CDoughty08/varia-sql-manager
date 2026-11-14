@@ -481,10 +481,30 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(await explorerRow(page, server)).toBeVisible()
+    // The picker and provisional root finish before the unbound query's session ends and its connection is assigned.
+    // Wait for this server's selected option: any nonempty value could still be the previous server's query.
+    await expect(queryServer(page).getByRole('option', { selected: true })).toHaveText(server)
+    await expect(queryServer(page)).not.toHaveValue('')
+    await expect(queryServer(page)).toBeEnabled()
   }
   // The servers also list databases whose names differ only in their spaces.
   await writeFile(join(control, 'spaced-databases'), '')
-  await connect('server-a', 'Long environment name')
+  // Hold the initial query handoff after the dialog closes: the helper must not return the still-disconnected query.
+  const initialCloses = (await calls()).filter(call => call.method === 'query.session.close').length
+  const initialHandoff = join(control, 'hold', 'query.session.close')
+  await writeFile(initialHandoff, '')
+  let firstConnected = false
+  const connectingA = connect('server-a', 'Long environment name')
+  void connectingA.then(() => { firstConnected = true }, () => {})
+  try {
+    await expect.poll(async () => (await calls()).filter(call => call.method === 'query.session.close').length).toBe(initialCloses + 1)
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(await explorerRow(page, 'server-a')).toBeVisible()
+    await expect(queryServer(page)).toBeDisabled()
+    await expect(queryServer(page)).toHaveValue('')
+    expect(firstConnected).toBe(false)
+  } finally { await rm(initialHandoff) }
+  await connectingA
   const tabA = await activeDocument(page).getAttribute('aria-label')
   const idA = await queryServer(page).inputValue()
   await queryDatabase(page).selectOption('AppData')
@@ -954,13 +974,23 @@ try {
   await activeDocument(page).focus()
   await page.keyboard.press('Space')
   await page.screenshot({ path: artifact('workbench.png') })
-  // The toolbar's Disconnect acts on the selected node's server.
+  // The toolbar's Disconnect acts on the selected node's server, retaining its root and query target after Keep Tabs.
   await (await explorerRow(page, 'server-b', 'Security')).click()
+  const tabsBeforeDisconnect = await documentTabs(page).getByRole('tab').count()
   await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
-  await expect.poll(async () => (await explorerLines(page)).some(line => line.startsWith('1 server-b'))).toBe(false)
+  const disconnectPrompt = page.getByRole('dialog', { name: 'Disconnect server-b?', exact: true })
+  await expect(disconnectPrompt).toBeVisible()
+  await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
+  await expect(disconnectPrompt).toHaveCount(0)
+  const disconnectedServer = await explorerRow(page, 'server-b')
+  await expect(disconnectedServer).toHaveAccessibleName(/server-b \(Disconnected\)/)
+  await expect(disconnectedServer).not.toHaveAttribute('aria-expanded', 'true')
+  await expect(disconnectedServer.getByRole('button', { name: 'Reconnect server-b', exact: true })).toBeEnabled()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(tabsBeforeDisconnect)
   await expect(queryServer(page)).toHaveValue(idA)
   await selectOpenDocument(page, tabB)
-  await expect(queryServer(page)).toHaveValue('')
+  await expect(queryServer(page).getByRole('option', { selected: true })).toHaveText('server-b Disconnected')
+  await expect(queryServer(page).getByRole('option', { selected: true })).toBeDisabled()
   // A disconnected query's Execute connects it first.
   await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))

@@ -400,6 +400,7 @@ export const ssisErrorRetryable = {
   AUTH_KERBEROS: true,
   AUTH_UNSUPPORTED: false,
   AUTH_ENTRA: false,
+  AUTH_IDENTITY: false,
   /** A box server's SSISDB changes nothing for a SQL Server login (27123): reconnect with Windows authentication. */
   WINDOWS_AUTH_REQUIRED: false,
   /** Stop Operation on an operation that has ended or is already stopping: nothing to do, shown as information. */

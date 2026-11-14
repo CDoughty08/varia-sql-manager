@@ -36,9 +36,34 @@ being true.
   process (SIGSTOP) before it kills it, and an exit in between would leave the child stopped for good. The gate cannot
   cover a backend that main kills, so only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send the
   one signal, which has no stopped state.
+  Go To Definition (`language.definition`, `DefinitionService`) never goes through SQL Tools: ScriptDom finds the name under
+  the caret (white space and comments allowed around its dots) and, from the caret's batch only (or, when that does not
+  parse, the widest run of statements around the caret that does, statements starting after a semicolon or at a statement
+  keyword),
+  whether it is a column (whose table is the target) and which tables its aliases name (`DefinitionNames`, at most 8
+  candidates). Each query level's tables are its own FROM clause and DML target, never a subquery's; in a column's qualifier
+  an alias hides an object of its name, while a table reference's own name is always the object it names; a CTE, derived
+  table, table variable, PIVOT or trigger's inserted names no object; a table-valued function's alias stands for the
+  function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML target, and a column in an
+  INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER COLUMN, DROP COLUMN and PERIOD FOR SYSTEM_TIME) for
+  that table. A correlated subquery's or APPLY's bare column may be
+  an outer table's (offered after its own, with the column checked); a derived table's or CTE's may not. A call on a column
+  (t.Doc.value(), x.Doc.nodes()) is its table's column, a qualified star's qualifier (o.*) is its table, an INSERT's or
+  OUTPUT INTO's table is never a source of the statement's columns, a declared column (a table's, CTE's or derived table's
+  column list, a select-list alias) names no object, and USE earlier in the script (never a query's USE HINT) is the database
+  for names without one. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
+  Explorer pool, names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, a one-part name in the
+  default schema, then dbo, then sys, within a 10 s budget. A missing object or a database that is gone or closed to the
+  login is `null`, which the renderer shows as a status-bar notice, never an error banner; a server or login that cannot be
+  reached is an error. A newer F12 on a document supersedes one still waiting, and a query with no connection says so.
+  F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
+  `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions (loaded with hover), and each
+  editor drops Monaco's Ctrl+hover link, which would ask the backend for every word under a Ctrl-held pointer (`create-editor.ts`).
+  F12 scripts the object as CREATE to a new query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
+  precondition, so they work in Peek's editor without enabling query commands there.
   The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
-  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
-  or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
+  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover and Go To Definition only, never
+  completion or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
   context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
   (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
   documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
@@ -57,6 +82,76 @@ being true.
   `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and never sent to
   main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
   (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
+- Durable connection targets use `src/shared/connection-targets.ts`: a stable target ID, saved-profile hint and
+  backend handle are distinct. Persist only the strict nonsecret target/workspace shapes; live lifecycle, handles,
+  operation epochs and main-only comparison keys never enter persisted snapshots. `ConnectionIdentityRegistry`
+  (`src/main/connection-identity.ts`) compares candidates only with authenticated live handles, using actual
+  credentials and trusted resolved-account evidence; neither the saved-profile key nor server-name equality proves
+  equivalence. The target registry (`src/renderer/src/services/connection-targets.ts`) returns stale successful
+  handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
+  membership separate from document references. Session v2 stores the strict workspace and exact query association,
+  database and attachment intent; v1 server names remain display hints and never establish identity. Reload capture
+  shares hot-exit's eligibility and pin validation. Workbench exposes one `connectionTargets` registry;
+  ConnectionService projects its authenticated targets for runtime-handle consumers. `connection-open.ts` in main
+  owns validation, credential resolution, live/pending reuse and receipt acceptance. Cancellation releases only that
+  request's ownership; it cannot close a transport another accepted caller uses. The renderer adopts only verified
+  receipts and acknowledges them through the bounded main-only IPC. `docs/connection-ownership.md` describes main's
+  authentication, receipt, checkpoint and pruning contracts. Replacement pages reconcile obsolete pins against their
+  trusted saved workspace while protecting current live/pending/delivered owners, including late credential settlement.
+- Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
+  targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
+  validate that pinned principal before caller SQL. Entra uses target-private token-callback pool keys while preserving
+  the submitted Application Name. Identity-bound connections disable idle connection recovery so a newly selected
+  account cannot silently replace the pinned one. Failed identity
+  checks close the physical connection and invalidate language context. Entra token acquisition requires an explicit
+  request scope: initial Connect/database discovery may establish an account, while later native opens carry the
+  pinned principal. Unscoped driver background replenishment cannot acquire a token or seed a target's pool.
+  An unapproved library reopen permanently fences that exact connection's commands before scheduling physical cleanup:
+  closing synchronously inside SqlClient's Open state callback can wait on the same unfinished Open. The existing
+  SqlClient diagnostic listener enforces the command fence, with synchronous single-instance initialization; real-driver
+  regressions must continue to prove refusal before command send when upgrading the driver.
+  Initial SQL, Windows/Kerberos and Entra authentication use a fresh physical session; later guarded opens retain the
+  requested pooling preference. Known password rotation retires affected old pools before publishing its binding.
+  A SID probe preserves transient/session-lost SQL errors; only missing or different account proof becomes AUTH_IDENTITY.
+  Cancelled or failed guarded opens dispose their connection; pool retirement is reserved for rejected identity.
+  A missing logical registration/profile fails closed at factory ownership and Open admission, including during
+  Disconnect. Optional metadata fallback must preserve fatal connection errors and their authentication details.
+  SQL Tools Service remains a separate process
+  with its existing SQL/Windows credential contract and unsupported Entra modes; it does not provide the native
+  connection owner's cross-open identity proof. No token, raw password or secret-derived comparison key enters a
+  workspace snapshot or renderer receipt.
+- Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
+  dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
+  password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
+  connect timeout; an interaction-required response never escalates to browser sign-in. A server login refusal can
+  quarantine its exact saved revision without deleting ciphertext; coarse SQL client states need not identify whether
+  the secret itself was wrong. Fresh typed authentication and exact stored-secret verification can readmit it.
+  Unavailable keyring, network, certificate and database failures retain ciphertext.
+  The initial startup/reload pass starts only after session restoration, successfully loaded settings and backend
+  readiness; it runs at most two attempts concurrently with no timer retries. An unexpected backend restart in the
+  same window does not start another pass. Explicit disconnect, Stop and removal clear resume intent. Background
+  attachment follows only exact query targets with attachment intent; it never resumes custom-document sampling.
+  Document tasks pause admission and defer receipt adoption/attachment without spending queued eligibility. Manual
+  Connect preempts unaccepted work temporarily; unrelated interrupted targets resume afterward. Its exact target is
+  superseded even when that manual attempt fails, and accepted targets finish attachment unless explicitly cancelled.
+  Every capture/checkpoint includes the target workspace, including target-only sessions, and revalidates it after
+  asynchronous writes before allowing final close/reload.
+  Main's `ConnectionSessionCheckpoint` separately projects current authentication pins and checks their revision
+  around the write and final close. Credential settlement must drain before approval; new admissions cannot race an
+  approved close. A renderer-only checkpoint comparison cannot prove that main's saved credential revision stayed current.
+- Disconnect orchestration lives in `services/disconnect.ts`, behind `DisconnectHost`; `disconnect-workbench.ts` adapts
+  existing services without owning connection state. Save and transaction choices finish before cancellation,
+  session completion or backend teardown. Revalidate document revisions/associations, management blockers and target
+  operation/backend generation at mutation boundaries. A failed save, cancellation, commit or disconnect closes no
+  tab; completed session changes are reported, not described as undone. Close Query Tabs uses a synchronous local
+  close only after successful teardown, through normal close events for result/file release. Keep Tabs retains output
+  and immutable `QueryState.provenance` from its original execution, independently of the current SQL session.
+  App mounts one prompt service and coordinator; Explorer, palette and popout commands use the same path. Custom
+  providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
+  reject replies from replaced handles, and retain drafts with dependent operations disabled while disconnected.
+  A failed native disconnect restores the same operation's prior resume preference. New work requires a connected
+  lifecycle; a retained disconnecting handle may still be inspected for transaction teardown. Cached database lists
+  remain available for failed-disconnect rollback, without admitting new metadata reads during teardown.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
@@ -253,7 +348,7 @@ being true.
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
   while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
   `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  Explorer's status chips are `background` views (`ExplorerStatusService`, isolated by exact target, handle and generation, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
   Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.
@@ -277,7 +372,7 @@ being true.
   Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
   a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
   `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
-  query command acts on it.
+  query command acts on it. Go To Definition and Peek Definition are the exception: their keys accept `peekEditorFocus`.
   User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
   hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
   file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
@@ -296,6 +391,9 @@ being true.
   back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
   `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+  Explorer's pinned server shortcuts use the same canonical target as its ordinary rows. Closing a shortcut popover
+  leaves its visible invoker as the keyboard menu anchor and focus destination. Deferred Connect focus yields to newer
+  input recorded by `WindowRegistry`, including input in a popout.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,

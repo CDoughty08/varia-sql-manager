@@ -77,6 +77,39 @@ internal static class FusedReadChecks
         Refused(check);
     }
 
+    /// <summary>Run from Store's isolated lane: returning a room keeps it reusable and charged until disposal, which must
+    /// drop its unpooled buffer even while the disposed owner stays reachable (PageSource.Rehydrate keeps that owner).</summary>
+    public static void ReturnedRooms(Action<bool, string> check)
+    {
+        var store = Raw();
+        var set = Filled(store, "room ownership", rows: 1);
+        var before = store.UsedBytes;
+        const int bytes = 128 << 10;
+        using var rooms = new PageRooms(set, bytes, 0, () => new InvalidOperationException("The room was refused."));
+        var buffer = ReturnedRoom(rooms);
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        check(buffer.IsAlive && rooms.Made == 1 && rooms.Reserved == bytes && store.UsedBytes == before + bytes,
+            "a returned fused-read room stays reusable and charged while its owner is open");
+        rooms.Dispose();
+        rooms.Dispose();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        check(!buffer.IsAlive && rooms.Made == 0 && rooms.Reserved == 0 && store.UsedBytes == before,
+            "a still-reachable disposed fused-read rooms owner drops its returned buffer and returns its reservation exactly once");
+        var refused = false;
+        try { rooms.Rent(); }
+        catch (ObjectDisposedException) { refused = true; }
+        check(refused && store.UsedBytes == before, "disposed fused-read rooms refuse new rentals without taking budget");
+        GC.KeepAlive(rooms);
+    }
+
+    // The renting frame must end before collection, so no JIT-kept local can retain the room or its buffer.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference ReturnedRoom(PageRooms rooms)
+    {
+        using var room = rooms.Rent();
+        return new WeakReference(room.Bytes);
+    }
+
     private static (int[] Order, bool Approximate, string Filters) View(ResultSetBuffer set, ViewKey[] keys, ViewFilter[] filters, ViewSorter.KeyMemory? memory = null, CancellationToken token = default)
     {
         var built = ViewSorter.Build(set, set.SealedSnapshot(), keys, filters, token, memory);

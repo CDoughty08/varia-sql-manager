@@ -10,6 +10,7 @@ import { SnapshotStore } from '../core/store'
 import type { ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { ResultsService } from '../results/ResultsService'
+import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
@@ -76,7 +77,7 @@ export type PeekResults = Pick<ResultsService, 'begin' | 'finish' | 'release'>
 export interface PeekServiceOptions {
   readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
     | 'tableColumns' | 'execute' | 'closeQuerySession'>
-  readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
+  readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
   readonly scriptingOptions: ExternalStore<{ readonly options: ScriptingOptions }>
   /** Where Top rows' result sets live; without it the tab says it cannot read them. */
@@ -168,7 +169,7 @@ export class PeekReads {
   get isDisposed(): boolean { return this.disposed }
 
   isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection))
   }
 
   /**
@@ -393,6 +394,7 @@ export class PeekReads {
  * or reads the rows again after a failure, and when its server is lost (a lost backend loses its connections too).
  */
 export class PeekView extends SnapshotStore<PeekSnapshot> {
+  private detached = false
   private next = 0
   private requests: Requests = {}
   private rowsRun: RowsRun | undefined
@@ -412,11 +414,12 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   }
 
   /** Whether the view's server is live, so Refresh can read it again. */
-  get connected(): boolean { const open = this.getSnapshot().open; return !!open && this.reads.isLive(open.node.connectionId) }
+  get connected(): boolean { const open = this.getSnapshot().open; return !this.detached && !!open && this.reads.isLive(open.node.connectionId) }
 
   /** Shows `node` (an object of a kind the catalogue describes), replacing whatever the view showed, on `tab` when its kind has it. */
   show(node: ExplorerMenuNode, tab?: PeekTab): void {
     if (this.disposed || node.ref.type !== 'object' || node.kind === 'folder' || !isPeekKind(node.kind)) return
+    this.detached = false
     this.load(node, node.kind, 'keyboard', false, tab ? { tab } : {})
   }
 
@@ -463,16 +466,28 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
    */
   rebind(connectionId: string): void {
     const open = this.getSnapshot().open
-    if (this.disposed || !open || open.node.connectionId === connectionId) return
+    if (this.disposed || !open || !this.detached && open.node.connectionId === connectionId) return
+    this.detached = false
     const move = (node: ExplorerMenuNode): ExplorerMenuNode => ({ ...node, connectionId, lost: false })
     this.publish({ open: { ...open, node: move(open.node), back: open.back.map(step => ({ ...step, node: move(step.node) })) } })
     this.refresh()
   }
 
+  /** A retained tab whose target detached cancels its work and keeps completed metadata until exact reassociation. */
+  detach(): void {
+    if (this.detached) return
+    this.detached = true
+    const open = this.getSnapshot().open
+    if (!open) return
+    this.lost(open)
+    const current = this.getSnapshot().open
+    if (current) this.publish({ open: { ...current, node: { ...current.node, lost: true } } })
+  }
+
   /** Reads the object again, its script and its rows included: Refresh never takes a kept script. */
   refresh(): void {
     const open = this.getSnapshot().open
-    if (open && this.reads.isLive(open.node.connectionId)) this.load(open.node, open.kind, open.source, true, { back: open.back, tab: open.tab })
+    if (open && this.connected) this.load(open.node, open.kind, open.source, true, { back: open.back, tab: open.tab })
   }
 
   /** Copies the definition, once the view has all of it and the clipboard takes it (`maxClipboardText`). */
@@ -500,7 +515,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   }
 
   protected load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: PeekTab } = {}): void {
-    if (node.ref.type !== 'object') return
+    if (node.ref.type !== 'object' || this.detached || this.disposed) return
     // A refresh asks for the same script again, so the one running is not worth keeping.
     this.reads.release(this.requests, !fresh)
     this.releaseRows()
@@ -511,7 +526,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     // Rows the row's card does not own (a followed dependency) still anchor at that row.
     const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
     this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [] } })
-    this.reads.begin({ connectionId: node.connectionId, object: node.ref.object, kind, ...(node.subtype === undefined ? {} : { subtype: node.subtype }) }, fresh, requests, () => !this.disposed && this.getSnapshot().open?.id === id, change => {
+    this.reads.begin({ connectionId: node.connectionId, object: node.ref.object, kind, ...(node.subtype === undefined ? {} : { subtype: node.subtype }) }, fresh, requests, () => !this.disposed && !this.detached && this.getSnapshot().open?.id === id, change => {
       const open = this.getSnapshot().open
       if (open && open.id === id) this.publish({ open: { ...open, ...change } })
     })
@@ -536,7 +551,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
    */
   private loadTab(): void {
     const open = this.getSnapshot().open
-    if (!open || open.node.ref.type !== 'object' || this.disposed || open.tab === 'definition') return
+    if (!open || open.node.ref.type !== 'object' || this.disposed || this.detached || open.tab === 'definition') return
     const connectionId = open.node.connectionId, target = open.node.ref.object
     switch (open.tab) {
       case 'members': {
@@ -557,7 +572,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   private loadPart<K extends TabPart, R extends { readonly error?: ExplorerError }>(open: OpenPeek, key: K, request: (requestId: string) => Promise<ApiResult<R>>, value: (result: R) => PartValue<K>): void {
     if (open[key] && open[key].status !== 'error') return
     const id = open.id, requestId = this.reads.newId()
-    const update = (part: PeekPart<PartValue<K>>) => { const now = this.getSnapshot().open; if (!this.disposed && now?.id === id) this.publish({ open: { ...now, [key]: part } }) }
+    const update = (part: PeekPart<PartValue<K>>) => { const now = this.getSnapshot().open; if (!this.disposed && !this.detached && now?.id === id) this.publish({ open: { ...now, [key]: part } }) }
     const requests = this.requests
     requests[key] = requestId
     update({ status: 'loading' })
@@ -577,7 +592,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   private loadRows(open: OpenPeek): void {
     if (open.rows && open.rows.status !== 'error') return
     const id = open.id
-    const update = (part: PeekPart<PeekRows>) => { const now = this.getSnapshot().open; if (!this.disposed && now?.id === id) this.publish({ open: { ...now, rows: part } }) }
+    const update = (part: PeekPart<PeekRows>) => { const now = this.getSnapshot().open; if (!this.disposed && !this.detached && now?.id === id) this.publish({ open: { ...now, rows: part } }) }
     const object = open.node.ref.type === 'object' ? open.node.ref.object : undefined
     const results = this.reads.results
     if (!results || object?.database === undefined || object.schema === undefined || object.name === undefined) { update({ status: 'error', message: peekMessages.rowsUnavailable }); return }

@@ -9,6 +9,7 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode, ObjectMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import { DependencyTree, type DependencyNode, type DependencyRow } from './dependency-tree'
 
 export interface OpenDependencies {
@@ -22,6 +23,8 @@ export interface OpenDependencies {
   readonly selected: number
   /** The server was lost: the tree stays as it was, and nothing more is read. */
   readonly lost?: boolean
+  /** Teardown is in progress; only rollback to this exact owner can resume explicit reads. */
+  readonly disconnecting?: boolean
 }
 export interface DependenciesSnapshot { readonly open?: OpenDependencies }
 export interface DependenciesServiceOptions {
@@ -69,6 +72,7 @@ const sameObject = (parent: NonNullable<ObjectRef['parent']>, object: ObjectRef)
  */
 export class DependenciesService extends SnapshotStore<DependenciesSnapshot> implements Disposable {
   private tree?: DependencyTree
+  private owner?: Pick<LiveConnection, 'id' | 'generation' | 'targetId'>
   private dialogs = 0
   private disposed = false
   private readonly unsubscribe: () => void
@@ -88,6 +92,8 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
   open(node: ExplorerMenuNode | undefined): void {
     if (this.disposed || !this.canOpen(node)) return
     this.dropTree()
+    const connection = this.connection(node.connectionId)!
+    this.owner = { id: connection.id, generation: connection.generation, targetId: connection.targetId }
     const open: OpenDependencies = { id: ++this.dialogs, connectionId: node.connectionId, root: node, direction: 'usedBy', rows: [], selected: 0 }
     this.publish({ open })
     this.plant(open)
@@ -95,32 +101,33 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
 
   close(): void {
     this.dropTree()
+    this.owner = undefined
     if (this.current) this.publish({})
   }
 
   setDirection(direction: DependencyDirection): void {
     const open = this.current
     // Once the server is lost the tree stays as it was: the other choice could not be read.
-    if (!open || open.direction === direction || open.lost) return
+    if (!open || open.direction === direction || !this.canRead()) return
     this.dropTree()
     const next = { ...open, direction, rows: [], selected: 0 }
     this.publish({ open: next })
-    if (!open.lost) this.plant(next)
+    this.plant(next)
   }
 
   select(id: number): void {
     const open = this.current
     if (open && open.selected !== id && this.tree?.node(id)) this.publish({ open: { ...open, selected: id } })
   }
-  expand(id: number): void { this.tree?.expand(id) }
+  expand(id: number): void { if (this.current?.lost || this.canRead()) this.tree?.expand(id) }
   collapse(id: number): void { this.tree?.collapse(id) }
-  retry(id: number): void { if (!this.current?.lost) this.tree?.retry(id) }
+  retry(id: number): void { if (this.canRead()) this.tree?.retry(id) }
   node(id: number): DependencyNode | undefined { return this.tree?.node(id) }
 
   /** Whether a node can be shown in Object Explorer: the root, or a dependency named in the root's database. */
   canReveal(id: number): boolean {
     const node = this.tree?.node(id)
-    return !!node && !!node.ref && (id === 0 && !!this.options.explorer.menuNode(this.current?.root.id) || listingFolder(node.ref, id === 0 ? this.current?.root.subtype : node.item?.subtype) !== undefined)
+    return this.canRead() && !!node && !!node.ref && (id === 0 && !!this.options.explorer.menuNode(this.current?.root.id) || listingFolder(node.ref, id === 0 ? this.current?.root.subtype : node.item?.subtype) !== undefined)
   }
   /** Selects the node in Object Explorer and closes the dialog. */
   reveal(id: number): void {
@@ -140,7 +147,7 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
   /** Whether a node can be peeked: an object of a kind Peek describes, named in the root's database. */
   canPeek(id: number): boolean {
     const node = this.tree?.node(id)
-    return !!node?.ref && isPeekKind(node.ref.kind) && !this.current?.lost
+    return !!node?.ref && isPeekKind(node.ref.kind) && this.canRead()
   }
   /** Opens Peek on the node (as a tab) and closes the dialog. */
   peek(id: number): void {
@@ -156,18 +163,19 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     if (this.disposed) return
     this.disposed = true
     this.dropTree()
+    this.owner = undefined
     this.unsubscribe()
     this.clearListeners()
   }
 
   private plant(open: OpenDependencies): void {
     const root = open.root
-    if (root.ref.type !== 'object') return
+    if (root.ref.type !== 'object' || !this.canRead()) return
     const type = kindSpecs[root.ref.object.kind].title
     // The tree starts reading its root as it is made, before `this.tree` names it: changes until then show with the first publish.
     let made: DependencyTree | undefined
     const tree = new DependencyTree(open.connectionId, root.ref.object, root.label, type, open.direction, {
-      load: params => this.options.api.explorerDependencies(params),
+      load: params => this.canRead() ? this.options.api.explorerDependencies(params) : Promise.resolve({ ok: false, error: 'The server is unavailable.' }),
       cancel: ids => { void this.options.api.explorerCancel(ids).catch(onUnexpectedError) }
     }, () => { if (made) this.treeChanged(made) }, this.options.newId)
     made = tree
@@ -187,16 +195,38 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     tree?.dispose()
   }
 
-  private live(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+  private connection(connectionId: string): LiveConnection | undefined { return this.options.connections.getSnapshot().find(connection => connection.id === connectionId) }
+  private live(connectionId: string): boolean { return isLiveConnection(this.connection(connectionId)) }
+  private sameOwner(connection: LiveConnection | undefined): connection is LiveConnection {
+    const owner = this.owner
+    return !!owner && !!connection && connection.id === owner.id && connection.generation === owner.generation && connection.targetId === owner.targetId
+  }
+  private canRead(): boolean {
+    const open = this.current, connection = open && this.connection(open.connectionId)
+    return !this.disposed && !!open && !open.lost && !open.disconnecting && this.sameOwner(connection) && isLiveConnection(connection)
   }
 
   private connectionsChanged(): void {
     const open = this.current
-    if (!open || open.lost || this.live(open.connectionId)) return
+    if (!open || open.lost) return
+    const connection = this.connection(open.connectionId)
+    if (this.sameOwner(connection)) {
+      if (isLiveConnection(connection)) {
+        if (open.disconnecting) {
+          this.tree?.resume()
+          this.publish({ open: { ...open, disconnecting: false } })
+        }
+        return
+      }
+      if (!connection.lost && connection.lifecycle?.state === 'disconnecting') {
+        this.tree?.pause('The read was cancelled while the server was disconnecting.')
+        this.publish({ open: { ...(this.current ?? open), disconnecting: true } })
+        return
+      }
+    }
     // The reads were lost with the server: keep what the tree shows, read nothing more, and end the levels still loading.
     this.tree?.abandon('The server was disconnected.')
     // abandon published the ended levels: read the snapshot again rather than the one from before it.
-    this.publish({ open: { ...(this.current ?? open), lost: true } })
+    this.publish({ open: { ...(this.current ?? open), lost: true, disconnecting: false } })
   }
 }

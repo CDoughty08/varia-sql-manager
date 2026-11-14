@@ -473,7 +473,7 @@ internal sealed class ExplorerService : IDisposable
         {
             return failed(ExplorerErrors.From(error, phase, subject, database));
         }
-        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
+        catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY")
         {
             return failed(ExplorerErrors.SignIn(error));
         }

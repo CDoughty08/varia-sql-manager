@@ -7,6 +7,7 @@ import { explorerCatalogJson, explorerLimits } from '../src/shared/explorer/cata
 import { DependencyTree, dependencyRef, levelStatus, type DependencyLoader } from '../src/renderer/src/explorer/dependency-tree'
 import { DependenciesService, listingFolder } from '../src/renderer/src/explorer/DependenciesService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
+import type { LiveConnection } from '../src/renderer/src/services/connections'
 
 const connectionId = '00000000-0000-4000-8000-000000000001'
 const root = { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' } as const
@@ -220,6 +221,119 @@ describe('View Dependencies tree', () => {
 describe('View Dependencies service and request', () => {
   const live = { getSnapshot: () => [{ id: connectionId, lost: false }], subscribe: () => () => {} } as never
   const rootNode = { id: 7, connectionId, ref: { type: 'object', object: root }, kind: 'table', label: 'dbo.Orders', lost: false } as ExplorerMenuNode
+  const connected = (overrides: Partial<LiveConnection> = {}): LiveConnection => ({
+    id: connectionId, generation: 1, targetId: '00000000-0000-4000-8000-000000000003', server: 'server', database: 'Sales', serverVersion: '16',
+    options: { server: 'server', database: 'Sales', authentication: 'sql', trustServerCertificate: false },
+    lifecycle: { state: 'connected', handle: { id: connectionId, generation: 1 } }, ...overrides
+  })
+  function heldService() {
+    let list = [connected()], ids = 0
+    const listeners = new Set<() => void>(), pending = new Map<string, (value: ApiResult<DependenciesResult>) => void>()
+    const api = {
+      explorerDependencies: vi.fn((params: DependenciesParams) => new Promise<ApiResult<DependenciesResult>>(resolve => { pending.set(params.requestId, resolve) })),
+      explorerCancel: vi.fn((requestIds: readonly string[]) => Promise.resolve({ ok: true as const, value: { cancelled: requestIds.length } }))
+    }
+    const reveal = vi.fn(), peek = vi.fn(), select = vi.fn()
+    const service = new DependenciesService({
+      api, connections: { getSnapshot: () => list, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }, reveal, peek, newId: () => `req-${++ids}`,
+      explorer: { menuNode: id => id === rootNode.id ? rootNode : undefined, select, objectNode: vi.fn() as never }
+    })
+    return {
+      service, api, reveal, peek, select,
+      change: (next: LiveConnection | undefined, notify = true) => { list = next ? [next] : []; if (notify) for (const listener of listeners) listener() },
+      answer: async (requestId: string, items: readonly PeekDependency[]) => { pending.get(requestId)?.({ ok: true, value: { items, elapsedMs: 1 } }); pending.delete(requestId); await settle() }
+    }
+  }
+
+  it.each(['disconnecting', 'connecting', 'disconnected', 'lost'] as const)('does not open on a %s server even if its retained node is not marked lost', state => {
+    const { service, api, change } = heldService()
+    const lifecycle = state === 'disconnecting' ? { state, attemptId: 'attempt', handle: { id: connectionId, generation: 1 } } as const
+      : state === 'connecting' ? { state, attemptId: 'attempt' } as const : state === 'lost' ? { state, reason: 'backend-lost' } as const : { state } as const
+    change(connected({ lifecycle }))
+    expect(service.canOpen(rootNode)).toBe(false)
+    service.open(rootNode)
+    expect(service.current).toBeUndefined()
+    expect(api.explorerDependencies).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('pauses exact-owner teardown, preserves the tree and selection, and resumes only explicit reads after failed Disconnect', async () => {
+    const { service, api, change, answer, reveal, peek, select } = heldService()
+    service.open(rootNode)
+    await answer('req-1', [view('OrderSummary'), table('Customers')])
+    const [, child, other] = service.current!.rows
+    service.select(child!.node.id)
+    service.expand(child!.node.id)
+    const dialog = service.current!.id
+    // Admission also checks the current connection directly, before its notification reaches the service.
+    const disconnecting = connected({ lifecycle: { state: 'disconnecting', attemptId: 'attempt', handle: { id: connectionId, generation: 1 } } })
+    change(disconnecting, false)
+    service.expand(other!.node.id)
+    service.setDirection('uses')
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(2)
+    change(disconnecting)
+    expect(api.explorerCancel).toHaveBeenCalledExactlyOnceWith(['req-2'])
+    expect(service.current).toMatchObject({ id: dialog, selected: child!.node.id, direction: 'usedBy', disconnecting: true })
+    expect(service.current?.lost).not.toBe(true)
+    expect(service.current?.rows.map(row => row.node.label)).toEqual(['dbo.Orders', 'dbo.OrderSummary', 'dbo.Customers'])
+    expect(service.node(child!.node.id)).toMatchObject({ load: 'error', error: 'The read was cancelled while the server was disconnecting.' })
+    const paused = service.current
+    service.open(rootNode)
+    service.expand(other!.node.id)
+    service.retry(child!.node.id)
+    service.setDirection('uses')
+    service.reveal(0)
+    service.peek(0)
+    expect(service.canReveal(0)).toBe(false)
+    expect(service.canPeek(0)).toBe(false)
+    expect(service.current).toBe(paused)
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(2)
+    expect(reveal).not.toHaveBeenCalled()
+    expect(select).not.toHaveBeenCalled()
+    expect(peek).not.toHaveBeenCalled()
+
+    change(connected())
+    expect(service.current).toMatchObject({ id: dialog, selected: child!.node.id, disconnecting: false })
+    expect(service.current?.rows).toBe(paused?.rows)
+    expect(service.current?.lost).not.toBe(true)
+    expect(service.canPeek(0)).toBe(true)
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(2)
+    service.retry(child!.node.id)
+    expect(api.explorerDependencies).toHaveBeenLastCalledWith({ connectionId, requestId: 'req-3', target: child!.node.ref, direction: 'usedBy' })
+    // The cancelled read must not replace the explicit retry, even after that exact owner is live again.
+    await answer('req-2', [view('Late')])
+    expect(service.node(child!.node.id)?.load).toBe('loading')
+    expect(service.current?.rows.some(row => row.node.label === 'dbo.Late')).toBe(false)
+    await answer('req-3', [view('Current')])
+    expect(service.current?.rows.map(row => row.node.label)).toEqual(['dbo.Orders', 'dbo.OrderSummary', 'dbo.Current', 'dbo.Customers'])
+    service.setDirection('uses')
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(4)
+    service.dispose()
+  })
+
+  it.each(['lost', 'removed', 'generation', 'target', 'handle'] as const)('never resumes a paused tree after %s changes its owner', async reason => {
+    const { service, api, change, answer } = heldService()
+    service.open(rootNode)
+    change(connected({ lifecycle: { state: 'disconnecting', attemptId: 'attempt', handle: { id: connectionId, generation: 1 } } }))
+    const replacement = reason === 'lost' ? connected({ lost: true, lifecycle: { state: 'lost', reason: 'backend-lost' } }) : reason === 'removed' ? undefined
+      : reason === 'generation' ? connected({ generation: 2, lifecycle: { state: 'connected', handle: { id: connectionId, generation: 2 } } })
+        : reason === 'target' ? connected({ targetId: '00000000-0000-4000-8000-000000000004' }) : connected({ id: '00000000-0000-4000-8000-000000000005' })
+    change(replacement)
+    expect(service.current).toMatchObject({ lost: true, disconnecting: false })
+    const abandoned = service.current
+    // Even a later return to the original owner cannot revive a tree that observed permanent loss.
+    change(connected())
+    service.retry(0)
+    service.setDirection('uses')
+    service.expand(0)
+    await answer('req-1', [view('Late')])
+    expect(service.current?.lost).toBe(true)
+    expect(service.current?.rows).toEqual(abandoned?.rows)
+    expect(service.current?.rows.map(row => row.node.label)).toEqual(['dbo.Orders'])
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(1)
+    expect(api.explorerCancel).toHaveBeenCalledExactlyOnceWith(['req-1'])
+    service.dispose()
+  })
 
   it('opens on the kinds SSMS offers it on, cancels the old tree when the choice changes, and reveals a dependency through its folder', async () => {
     expect([...dependencyKinds].sort()).toEqual(['function', 'procedure', 'sequence', 'synonym', 'table', 'tableType', 'trigger', 'type', 'view'])

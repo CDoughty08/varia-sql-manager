@@ -222,12 +222,17 @@ try {
   await application.evaluate(({ ipcMain }, { realHealth, statics }) => {
     globalThis.variaCalls = []
     globalThis.variaConnections = {}
+    ipcMain.removeHandler('varia:connections-accept')
+    ipcMain.handle('varia:connections-accept', () => ({ ok: true, value: { accepted: true, retained: true } }))
     ipcMain.removeHandler('varia:request')
-    ipcMain.handle('varia:request', async (_event, method, params) => {
+    ipcMain.handle('varia:request', async (_event, method, params, context) => {
       globalThis.variaCalls.push({ method, params })
       if (method === 'system.health') return { ok: true, value: realHealth }
       if (method === 'connections.connect') {
-        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test' }
+        const principalId = 'sid:' + Buffer.from(params.username || 'fixture-account').toString('hex')
+        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test',
+          generation: 1, targetId: context?.targetId ?? crypto.randomUUID(), principalId,
+          authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } }
         globalThis.variaConnections[info.id] = info
         return { ok: true, value: info }
       }

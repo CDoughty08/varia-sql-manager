@@ -93,18 +93,27 @@ try {
 
   step = 'copy'
   // Copy a whole row (Shift+Space): its four values, never its tone.
+  await grid.focus()
+  await expect(grid).toBeFocused()
   await grid.press('Shift+Space')
   await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
   await grid.press(`${mod}+C`)
-  await expect.poll(clipboard).not.toBe('before')
-  const copied = (await clipboard()).split('\t')
+  // Clipboard writes are asynchronous; wait for this grid's row, not an unrelated clipboard change.
+  let copied
+  await expect.poll(async () => {
+    copied = (await clipboard()).split('\t')
+    return copied.length === 4 && /^\d+$/.test(copied[0]) && /^G\d$/.test(copied[1]) && copied[2] === `Item ${copied[0]}` && /^\d+$/.test(copied[3])
+  }).toBe(true)
   expect(copied).toHaveLength(4)
+  expect(copied[0]).toMatch(/^\d+$/)
+  expect(copied[1]).toMatch(/^G\d$/)
+  expect(copied[2]).toBe(`Item ${copied[0]}`)
+  expect(copied[3]).toMatch(/^\d+$/)
   expect(copied.some(text => ['error', 'warning', 'running'].includes(text))).toBe(false)
   // Copy with Headers (Ctrl+Shift+C, as in a results grid) puts the shown columns' names first.
   await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
   await grid.press(`${mod}+Shift+C`)
-  await expect.poll(clipboard).not.toBe('before')
-  expect((await clipboard()).split(/\r?\n/)[0]).toBe('itemId\tgroup\tname\tamount')
+  await expect.poll(async () => (await clipboard()).split(/\r?\n/)[0]).toBe('itemId\tgroup\tname\tamount')
   console.log('Copy passed: a row copies its shown columns only, and Copy with Headers names them.')
 
   step = 'save'

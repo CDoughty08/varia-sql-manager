@@ -8,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import { clipboardNotice, deliverScript } from './deliver'
 
 /** A running request; `visible` once it has run long enough to show in the status bar. */
@@ -123,6 +124,9 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     if (value.warnings.length) this.notify({ text: `Scripted ${job.label} with a warning: ${value.warnings[0]}`, title: value.warnings.join('\n'), kind: 'warning' }, scriptLimits.warningNoticeMs)
   }
 
+  /** Shows a quiet status-bar notice that is not a script's: Go to Definition's "no definition found". */
+  inform(text: string): void { this.notify({ text, kind: 'info' }, scriptLimits.noticeMs) }
+
   /** Cancels running requests by id: their results are dropped and main cancels them on the backend. */
   cancel(ids: readonly string[]): void {
     const wanted = new Set(ids), cancelled = this.jobs.filter(job => wanted.has(job.id))
@@ -151,7 +155,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
   }
 
   private isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection))
   }
   /** A disconnected or lost server's requests stop: their status goes, and the backend is told to stop them. */
   private connectionsChanged(): void {

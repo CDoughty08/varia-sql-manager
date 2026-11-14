@@ -169,16 +169,26 @@ export async function dialogLifecycle(launchOptions) {
     // A double-click on Restart (or the command twice) asks once and starts one backend; the count is taken when the
     // prompt's turn comes.
     const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').length
+    const executions = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === 'query.execute').length
     const before = await spawns()
+    const queriesBeforeRestart = await executions()
     expect(await page.evaluate(() => Promise.all([window.varia.restartBackend(), window.varia.restartBackend()]))).toEqual([{ ok: true, value: true }, { ok: true, value: true }])
     await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
     await wait(500)
     expect({ prompts: await shown(application), spawned: await spawns() - before }).toEqual({ prompts: ['Restart SQL backend'], spawned: 1 })
     await mockDialogs(application, scriptFile)
-    await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
+    const offline = lostServerRows(page)
+    await expect(offline).toHaveAccessibleName('server-a (Disconnected · Backend restarted)')
+    await expect(offline).not.toHaveAttribute('aria-expanded')
+    const retainedRoot = await offline.getAttribute('id')
+    await offline.getByRole('button', { name: 'Reconnect server-a', exact: true }).click()
     const reconnect = page.getByRole('dialog', { name: 'Connect', exact: true })
+    await expect(reconnect.getByLabel('Authentication', { exact: true })).toHaveValue('windows')
+    await expect(reconnect.getByLabel('Password', { exact: true })).toHaveCount(0)
     await reconnect.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(reconnect).toHaveCount(0)
+    await expect(await explorerRow(page, 'server-a')).toHaveAttribute('id', retainedRoot)
+    expect(await executions()).toBe(queriesBeforeRestart)
     await holdSaveWithScriptWaiting(application, page)
     // Closing while the workbench does not respond asks first, but after the open dialog; the workbench recovers.
     await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.emit('unresponsive'); window.close() })

@@ -57,9 +57,7 @@ internal sealed class VariaSessions
         foreach (var client in clients)
             foreach (var (suffix, kind) in catalog.VariaSuffixes)
             {
-                // SQL Server keeps 128 characters of a program name, as SqlService cuts it.
-                var program = client.ApplicationName + suffix;
-                if (program.Length > 128) program = program[..128];
+                var program = ActivityCatalog.ProgramName(client.ApplicationName, suffix);
                 var key = Key(program, client.Workstation);
                 // A pool's name wins over a query tab's when an application name itself ends with a pool's suffix.
                 if (!programs.TryGetValue(key, out var known) || !known.Pool) programs[key] = (catalog.VariaLabels[suffix], kind == "pool");
