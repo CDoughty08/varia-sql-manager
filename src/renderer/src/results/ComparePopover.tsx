@@ -56,6 +56,13 @@ export function placePopover(o: { readonly anchor: Box; readonly area?: Box; rea
   return { left, bottom: o.height - edge, maxHeight: above }
 }
 
+/** The card's height with all its content shown: its height less the body's visible part plus all of the body's content,
+ *  as the body scrolls (and the card is capped) once placed. */
+function naturalHeight(form: HTMLElement): number {
+  const body = form.querySelector<HTMLElement>('.compare-body')
+  return body ? form.offsetHeight - body.clientHeight + body.scrollHeight : form.scrollHeight
+}
+
 /** Popovers drawn per tab: one that goes while its picker is open (its pane hidden, another tab shown) closes the picker,
  *  unless another takes its place at once (StrictMode's replay, a re-render under a new key). */
 const drawn = new Map<string, number>()
@@ -88,22 +95,28 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const running = !!sides && !!picker && compare.isRunning(tabId, sides.old.key, sides.neu.key, picker.exact)
   const shown = sides && picker ? compare.existing(tabId, sides.old.key, sides.neu.key, picker.exact) : undefined
 
-  // Placed under its anchor when it fits, else above it; clamped to the window, scrolling inside when short.
-  useLayoutEffect(() => {
+  // Placed under its anchor when it fits, else above it; clamped to the window, scrolling inside when short. Measured
+  // after every render (any of its content can change its height; an unchanged place is not set again) and on resize and
+  // scroll.
+  const measure = useRef<() => void>(() => {})
+  measure.current = () => {
     const element = home.current, form = card.current
     if (!element || !picker || !host) return
-    const measure = () => {
-      const view = element.ownerDocument.defaultView ?? window
-      const { rect, area, button: trigger } = anchorOf(element, picker.anchor, tabId, picker.active)
-      const next: CSSProperties = { ...placePopover({ anchor: rect, ...area ? { area } : {}, trigger: !!trigger, width: view.innerWidth, height: view.innerHeight, cardWidth: Math.min(width, view.innerWidth - 2 * margin), wanted: form?.scrollHeight ?? 0 }) }
-      setPlace(current => current && JSON.stringify(current) === JSON.stringify(next) ? current : next)
-    }
-    measure()
     const view = element.ownerDocument.defaultView ?? window
-    view.addEventListener('resize', measure)
-    element.ownerDocument.addEventListener('scroll', measure, true)
-    return () => { view.removeEventListener('resize', measure); element.ownerDocument.removeEventListener('scroll', measure, true) }
-  }, [host, picker?.anchor, picker?.active, tabId, targets.length, !!sides, sides?.pairing.oldOnly.length, sides?.pairing.newOnly.length, picker?.error])
+    const { rect, area, button: trigger } = anchorOf(element, picker.anchor, tabId, picker.active)
+    const next: CSSProperties = { ...placePopover({ anchor: rect, ...area ? { area } : {}, trigger: !!trigger, width: view.innerWidth, height: view.innerHeight, cardWidth: Math.min(width, view.innerWidth - 2 * margin), wanted: form ? naturalHeight(form) : 0 }) }
+    setPlace(current => current && JSON.stringify(current) === JSON.stringify(next) ? current : next)
+  }
+  useLayoutEffect(() => { measure.current() })
+  useLayoutEffect(() => {
+    const element = home.current
+    if (!element || !picker || !host) return
+    const view = element.ownerDocument.defaultView ?? window
+    const again = () => measure.current()
+    view.addEventListener('resize', again)
+    element.ownerDocument.addEventListener('scroll', again, true)
+    return () => { view.removeEventListener('resize', again); element.ownerDocument.removeEventListener('scroll', again, true) }
+  }, [host, !!picker])
 
   // Closed, it is placed afresh (and takes the focus again) when it next opens.
   useLayoutEffect(() => { if (!picker) setPlace(undefined) }, [!!picker])
@@ -115,6 +128,10 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     const form = card.current
     // Never a disabled target (while its comparison runs): focusing one does nothing, and the keys would stay outside.
     const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked:not(:disabled)') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)') ?? button.current
+    // Opened from another window (the palette in the main window over a popped-out Results): that window comes forward,
+    // else the keys would stay where they were and the popover could not be reached or dismissed by keyboard.
+    const doc = form?.ownerDocument
+    if (doc && !doc.hasFocus()) doc.defaultView?.focus()
     into?.focus({ preventScroll: true })
   }, [placed, picker?.active, picker?.anchor])
 

@@ -188,6 +188,52 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
+  it('brings its window forward when opened from another, so the keys reach it', () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
+    const view = fixture()
+    try {
+      expect(focus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(view.button('Compare'))
+    } finally {
+      view.unmount()
+      hasFocus.mockRestore()
+      focus.mockRestore()
+    }
+  })
+
+  it('places itself by all of its content, so content that grows moves a capped card above its anchor', () => {
+    // The results sit low in a 768px window; the card, once capped, shows only part of a body that scrolls.
+    let content = 80
+    const sizes: Record<string, () => Partial<Record<'offsetHeight' | 'clientHeight' | 'scrollHeight', number>>> = {
+      'compare-popover': () => ({ offsetHeight: Math.min(content + 60, 156), scrollHeight: Math.min(content + 60, 156) }),
+      'compare-body': () => ({ clientHeight: Math.min(content, 96), scrollHeight: content })
+    }
+    const restore = (['offsetHeight', 'clientHeight', 'scrollHeight'] as const).map(name => {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, name) ?? Object.getOwnPropertyDescriptor(Element.prototype, name)
+      Object.defineProperty(HTMLElement.prototype, name, { configurable: true, get(this: HTMLElement) { for (const [cls, size] of Object.entries(sizes)) if (this.classList.contains(cls)) return size()[name] ?? 0; return 0 } })
+      return () => { if (original) Object.defineProperty(HTMLElement.prototype, name, original); else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name] }
+    })
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.matches('[data-pane]') ? { left: 0, top: 600, right: 1000, bottom: 700, width: 1000, height: 100, x: 0, y: 600, toJSON: () => ({}) } as DOMRect : new DOMRect()
+    })
+    let cleanup = () => {}
+    try {
+      const view = fixture()
+      cleanup = view.unmount
+      expect(view.popover()!.style.top).toBe('604px')
+      // More content (a section appears): the card is capped at 156px, but all of it wants 360px, so it goes above.
+      content = 300
+      view.draw()
+      expect(view.popover()!.style.top).toBe('')
+      expect(view.popover()!.style.bottom).toBe('72px')
+    } finally {
+      cleanup()
+      rect.mockRestore()
+      for (const undo of restore) undo()
+    }
+  })
+
   it('closes when its pane moves to another window, but not when another pane moves', () => {
     const view = fixture()
     act(() => { windows.adopted() })
