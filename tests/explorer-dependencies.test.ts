@@ -4,7 +4,7 @@ import { dependencyKinds, dependencyLimits, type DependenciesParams, type Depend
 import type { PeekDependency } from '../src/shared/explorer/peek.ts'
 import { dependenciesParamsSchema } from '../src/shared/explorer/schema.ts'
 import { explorerCatalogJson } from '../src/shared/explorer/catalog.ts'
-import { DependencyTree, dependencyRef, type DependencyLoader } from '../src/renderer/src/explorer/dependency-tree'
+import { DependencyTree, dependencyRef, levelStatus, type DependencyLoader } from '../src/renderer/src/explorer/dependency-tree'
 import { DependenciesService, listingFolder } from '../src/renderer/src/explorer/DependenciesService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 
@@ -118,6 +118,16 @@ describe('View Dependencies tree', () => {
     }
     expect(cut).toBeDefined()
     expect(full.tree.size).toBe(dependencyLimits.nodes)
+    expect(levelStatus(full.tree.node(cut!)!)).toBe('nodes')
+    // A level read once the tree is full keeps none of its objects, and says the tree is full rather than that there are none.
+    const next = full.tree.rows().find(row => row.node.depth === 1 && !row.node.expanded)!
+    full.tree.expand(next.node.id)
+    await settle()
+    expect(full.tree.node(next.node.id)).toMatchObject({ load: 'ready', children: [], truncated: 'nodes' })
+    expect(levelStatus(full.tree.node(next.node.id)!)).toBe('nodes')
+    const empty = plant({ Orders: [] })
+    await settle()
+    expect(levelStatus(empty.tree.node(0)!)).toBe('empty')
   })
 
   it('stops at the depth bound', async () => {
@@ -221,6 +231,9 @@ describe('View Dependencies service and request', () => {
     expect(listingFolder({ kind: 'table', database: 'd', schema: 's', name: 'n' }, 'graphEdge')).toBe('graphTables')
     expect(listingFolder({ kind: 'function', database: 'd', schema: 's', name: 'n' }, 'scalar')).toBe('scalarValuedFunctions')
     expect(listingFolder({ kind: 'trigger', database: 'd', parent: { kind: 'view', schema: 's', name: 'v' }, name: 'n' })).toBe('tableTriggers')
+    // sys.sp_executesql and the other extended procedures are listed with the system ones.
+    expect(listingFolder({ kind: 'procedure', database: 'd', schema: 'sys', name: 'sp_executesql' }, 'extended')).toBe('systemStoredProcedures')
+    expect(listingFolder({ kind: 'procedure', database: 'd', schema: 'dbo', name: 'p' }, 'sql')).toBe('storedProcedures')
     expect(listingFolder({ kind: 'login', name: 'n' })).toBeUndefined()
   })
 

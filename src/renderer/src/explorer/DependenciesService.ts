@@ -45,7 +45,7 @@ export function listingFolder(ref: ObjectRef, subtype?: NodeSubtype): FolderId |
     case 'table': return subtype === 'system' ? 'systemTables' : subtype === 'fileTable' ? 'fileTables' : subtype === 'external' ? 'externalTables'
       : subtype === 'graphNode' || subtype === 'graphEdge' ? 'graphTables' : subtype === 'droppedLedger' ? 'droppedLedgerTables' : 'tables'
     case 'view': return subtype === 'system' ? 'systemViews' : subtype === 'droppedLedger' ? 'droppedLedgerViews' : 'views'
-    case 'procedure': return subtype === 'system' ? 'systemStoredProcedures' : 'storedProcedures'
+    case 'procedure': return subtype === 'system' || subtype === 'extended' ? 'systemStoredProcedures' : 'storedProcedures'
     case 'function': return subtype === 'scalar' || subtype === 'clrScalar' ? 'scalarValuedFunctions' : subtype === 'aggregate' ? 'aggregateFunctions' : 'tableValuedFunctions'
     case 'synonym': return 'synonyms'
     case 'sequence': return 'sequences'

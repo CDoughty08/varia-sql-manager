@@ -8,7 +8,7 @@ import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
 import ExplorerIcon from './ExplorerIcon'
 import type { OpenDependencies } from './DependenciesService'
-import type { DependencyNode, DependencyRow } from './dependency-tree'
+import { levelStatus, type DependencyNode, type DependencyRow } from './dependency-tree'
 
 const iconOf = (node: DependencyNode) => node.ref ? kindSpecs[node.ref.kind].icon : node.leaf === 'linkedServer' ? 'remote' : node.leaf === 'otherDatabase' ? 'database' : 'references'
 
@@ -114,10 +114,9 @@ function TreeRow({ open, row, selected }: { open: OpenDependencies; row: Depende
   const indent = { paddingInlineStart: `calc(${node.depth} * var(--varia-space-4) + var(--varia-space-1))` }
   const expandable = !node.leaf
   const note = node.leaf ? dependencyLeafWords[node.leaf] : node.id === 0 ? undefined : node.type
-  const pending = node.expanded && node.load === 'loading'
-  const failed = node.expanded && node.load === 'error'
-  const empty = node.expanded && node.load === 'ready' && !node.children?.length
-  const cut = node.expanded && node.truncated
+  const status = levelStatus(node)
+  const pending = status === 'loading', failed = status === 'error', empty = status === 'empty'
+  const cut = status === 'level' || status === 'nodes' ? status : undefined
   return <>
     <div id={`dependency-${open.id}-${node.id}`} role="treeitem" className="dependencies-row" aria-level={node.depth + 1} aria-setsize={row.count} aria-posinset={row.index + 1}
       aria-label={note ? `${displayText(node.label)}, ${note}` : displayText(node.label)} aria-selected={selected} {...expandable ? { 'aria-expanded': node.expanded } : {}} data-leaf={node.leaf} style={indent}

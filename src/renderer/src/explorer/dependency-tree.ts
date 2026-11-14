@@ -38,7 +38,16 @@ export interface DependencyLoader {
   cancel(requestIds: readonly string[]): void
 }
 
-const kindTitle = (kind: NodeKind) => kindSpecs[kind].title
+/** The status line below an expanded node: its level loading or failed, read but empty, or cut. A level cut because the tree
+ *  was full is never called empty, since its objects were read, just not kept. */
+export function levelStatus(node: DependencyNode): 'loading' | 'error' | 'empty' | 'level' | 'nodes' | undefined {
+  if (!node.expanded) return undefined
+  if (node.load === 'loading' || node.load === 'error') return node.load
+  if (node.load !== 'ready') return undefined
+  return node.truncated ?? (node.children?.length ? undefined : 'empty')
+}
+
+const kindTitle =(kind: NodeKind) => kindSpecs[kind].title
 /** The identity of an object on a branch: two nodes with the same key are one object, so the lower one is a cycle. */
 export const objectKey = (ref: ObjectRef): string => JSON.stringify([ref.kind, ref.schema ?? null, ref.parent?.kind ?? null, ref.parent?.schema ?? null, ref.parent?.name ?? null, ref.name ?? null])
 
