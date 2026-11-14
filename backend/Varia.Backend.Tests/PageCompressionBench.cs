@@ -370,6 +370,8 @@ internal static class PageCompressionBench
         }
         set.Complete();
         StoredPage[]? pages = set.SealedSnapshot();
+        // Its pages are read through their set's accessor while it is pinned, until the raw pages are dropped below.
+        var pin = set.Pin();
         long bodyBytes = 0, lengthBytes = 0;
         foreach (var page in pages) { bodyBytes += page.Body().Length; lengthBytes += page.Lengths.MemoryBytes; }
         var detail = rows.ToString("N0", CultureInfo.InvariantCulture) + " rows, " + pages.Length.ToString("N0", CultureInfo.InvariantCulture) + " pages, " + columns.Length + " columns";
@@ -606,6 +608,7 @@ internal static class PageCompressionBench
         }
 
         // ---- Memory: drop the raw pages, keep only the compressed ones, and see what the operating system gets back.
+        pin.Dispose();
         set.Release();
         pages = null;
         sample = null;

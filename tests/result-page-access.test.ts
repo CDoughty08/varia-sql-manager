@@ -30,9 +30,11 @@ describe('result page access', () => {
     // A property pattern (page is { Stored: var bytes }) reads it as well.
     expect(lines(/\bStored\s*:(?!:)/, [accessor])).toEqual([])
   })
-  it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read', () => {
-    // The compression bench builds set-less pages from bytes it unpacked itself, as a view read does: Body() returns them.
+  it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read and the compression benchmark', () => {
+    // The compression benchmark (run by hand) builds set-less pages from bytes it unpacked itself: its own, as a view's are.
     expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs', 'backend/Varia.Backend.Tests/PageCompressionBench.cs'])).toEqual([])
+    const bench = readFileSync('backend/Varia.Backend.Tests/PageCompressionBench.cs', 'utf8')
+    expect([...bench.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
     const views = readFileSync('backend/Varia.Backend/Results/ResultViews.cs', 'utf8')
     expect([...views.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
   })
