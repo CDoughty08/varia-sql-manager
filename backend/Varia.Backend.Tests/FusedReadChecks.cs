@@ -66,8 +66,13 @@ internal static class FusedReadChecks
 
     public static void Run(Action<bool, string> check)
     {
-        Same(check);
-        Ties(check);
+        // Several workers whatever the machine, so the fused paths run in parallel on a small runner too.
+        using (ViewSorter.WorkersHere(4))
+        {
+            Same(check);
+            Mixed(check);
+            Ties(check);
+        }
         Cancelled(check);
         Refused(check);
     }
@@ -104,7 +109,11 @@ internal static class FusedReadChecks
         var packedBytes = packedStore.PackingSnapshot().PackedBytes;
         var used = packedStore.UsedBytes;
         check(packed.HasPacked && !raw.HasPacked && packed.SealedSnapshot().Length > 8 && packedBytes > 0, "the fused checks' packed copy is packed and its raw copy is not");
-        bool Kept() => packed.HasPacked && packedStore.PackingSnapshot().PackedBytes == packedBytes && packedStore.UsedBytes == used && packedStore.PackingSnapshot().CacheBytes == 0;
+        // A read that unpacked the result whole would leave it alike once repacked (the store packs every complete result
+        // as its last pin goes), but would pack its pages again: the pages packed must not move.
+        var pagesPacked = packedStore.PackingSnapshot().PagesPacked;
+        bool Kept() => packed.HasPacked && packedStore.PackingSnapshot() is { CacheBytes: 0 } counters && counters.PackedBytes == packedBytes
+            && counters.PagesPacked == pagesPacked && packedStore.UsedBytes == used;
 
         ViewKey[][] sorts =
         [
@@ -161,8 +170,12 @@ internal static class FusedReadChecks
         foreach (var spec in specs)
         {
             var expected = Pivot(rawStore, raw, spec);
+            var packedBefore = packedStore.PackingSnapshot().PagesPacked;
             var actual = Pivot(packedStore, packed, spec);
-            check(actual.Length == expected.Length && actual.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && Kept(),
+            // The pivot's own pages are packed as it completes (and go with it); the source's are not packed again.
+            var outputPacked = packedStore.PackingSnapshot().PagesPacked - packedBefore <= actual.Length;
+            pagesPacked = packedStore.PackingSnapshot().PagesPacked;
+            check(outputPacked && actual.Length == expected.Length && actual.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && Kept(),
                 "a pivot of a packed result writes the pages it writes unpacked, its rows copied from pages read together, and leaves the result packed");
         }
 
@@ -174,17 +187,6 @@ internal static class FusedReadChecks
         check(copied == ResultJobs.EstimateCopy(raw, whole, true, false) && copied > 0 && packedStore.PackingSnapshot().PagesUnpacked - unpackedBeforeCopy == packed.SealedSnapshot().Length && Kept(),
             "a plain Copy of a packed result reads each page once through a room of its own, leaves no page cached and gives the room back");
 
-        // Pages the codec kept raw beside packed ones (a result packed on request) read in place, the others fused.
-        var mixedStore = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
-        var mixed = Filled(mixedStore, "mixed");
-        var mixedPages = mixed.SealedSnapshot();
-        mixed.Pack();
-        bool partly;
-        using (mixed.Pin()) partly = mixedPages.Any(page => mixed.Raw(page) is null);
-        var mixedOrder = View(mixed, [new(3, false, SortMode.Value), new(0, true, SortMode.Value)], [new(FilterOp.In, 1, [0, 2], true, null, [])]);
-        var rawOrder = View(raw, [new(3, false, SortMode.Value), new(0, true, SortMode.Value)], [new(FilterOp.In, 1, [0, 2], true, null, [])]);
-        check(partly && mixedOrder.Order.SequenceEqual(rawOrder.Order), "a result packed on request, whose pages may be raw or packed, sorts and filters as unpacked");
-
         // Through the service: a sort, a profile and a pivot of a packed result leave it packed and the budget as it was.
         using var service = new SqlService(packedStore);
         T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
@@ -192,10 +194,81 @@ internal static class FusedReadChecks
         var viewUsed = packedStore.UsedBytes;
         packedStore.CloseViews(packed.ResultId, [viewed.ViewId]);
         Call<ResultsProfileResult>("results.profile", new { resultId = packed.ResultId, columns = new[] { 2, 3, 5 } });
+        var servicePackedBefore = packedStore.PackingSnapshot().PagesPacked;
         var pivoted = Call<ResultsPivotResult>("results.pivot", new { resultId = packed.ResultId, rows = new[] { 1 }, values = new object[] { new { aggregate = "count" }, new { aggregate = "max", column = 3 } } });
+        // Its pivot's pages are packed as it completes (a page or two); the source's would be all of them again.
+        var pivotPacked = packedStore.PackingSnapshot().PagesPacked - servicePackedBefore;
         packedStore.Release([pivoted.Descriptor.ResultId]);
+        pagesPacked += pivotPacked <= 2 ? pivotPacked : 0;
         check(viewed.Rows == Rows && viewUsed == used + 4L * Rows + ResultStore.ViewOverhead && pivoted.RowGroups == Groups.Length && Kept(),
             "results.view, results.profile and results.pivot of a packed result read it fused: it stays packed and holds only the view's order afterwards");
+    }
+
+    /// <summary>A result packed on request, whose incompressible pages stay as sealed beside packed ones: those read in
+    /// place, the others fused, and every operation gives what it gives unpacked.</summary>
+    private static void Mixed(Action<bool, string> check)
+    {
+        IReadOnlyList<ResultColumn> columns = [new("id", "int", "text", Nullable: false), new("grp", "nvarchar(20)", "text"), new("data", "varbinary(400)", "binary")];
+        IReadOnlyList<WireKind> wires = [WireKind.Text, WireKind.Text, WireKind.Binary];
+        ResultSetBuffer Fill(ResultStore store, string session)
+        {
+            var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
+            var bytes = new byte[300];
+            for (var row = 0; row < 8_000; row++)
+            {
+                set.CountRow();
+                if (set.BeginRow() is not { } builder) continue;
+                builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), row));
+                builder.AppendText(Groups[Mix(row, 2) % (ulong)Groups.Length]);
+                // Runs of 1,500 rows: noise (a page of it saves nothing), then a few repeated values (it packs).
+                if (row / 1_500 % 2 == 0)
+                    for (var k = 0; k < bytes.Length; k += 8) BitConverter.TryWriteBytes(bytes.AsSpan(k), Mix(row * 64L + k / 8, 9));
+                else
+                {
+                    Array.Clear(bytes);
+                    bytes[0] = (byte)(Mix(row, 10) % 7);
+                }
+                builder.AppendBinary(bytes);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            return set;
+        }
+        var rawStore = Raw();
+        var raw = Fill(rawStore, "raw");
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var mixed = Fill(store, "mixed");
+        mixed.Pack();
+        var used = store.UsedBytes;
+        var pagesPacked = store.PackingSnapshot().PagesPacked;
+        int packedCount, rawCount;
+        using (mixed.Pin())
+        {
+            var pages = mixed.SealedSnapshot();
+            packedCount = pages.Count(page => mixed.Raw(page) is null);
+            rawCount = pages.Length - packedCount;
+        }
+        bool Kept() => store.UsedBytes == used && store.PackingSnapshot() is { CacheBytes: 0 } counters && counters.PagesPacked == pagesPacked;
+        check(packedCount >= 1 && rawCount >= 1, "the mixed result holds packed pages and pages left as sealed: " + packedCount + " packed, " + rawCount + " not");
+        ViewKey[][] sorts = [[new(2, false, SortMode.Value)], [new(2, true, SortMode.Value)], [new(1, false, SortMode.Value), new(0, true, SortMode.Value)]];
+        foreach (var keys in sorts)
+        {
+            var narrow = new ViewSorter.KeyMemory(_ => false, _ => { });
+            check(View(mixed, keys, []).Order.SequenceEqual(View(raw, keys, []).Order) && View(mixed, keys, [], narrow).Order.SequenceEqual(View(raw, keys, []).Order) && Kept(),
+                "a sort of a partly packed result by " + keys[0].Column + " gives the order it gives unpacked, with and without room for whole keys");
+        }
+        ViewFilter[] filters = [new(FilterOp.In, 1, [0, 2], true, null, [])];
+        var filtered = View(mixed, [new(2, false, SortMode.Value)], filters);
+        var filteredRaw = View(raw, [new(2, false, SortMode.Value)], filters);
+        check(filtered.Order.SequenceEqual(filteredRaw.Order) && filtered.Filters == filteredRaw.Filters && Kept(), "a filter of a partly packed result keeps the rows it keeps unpacked");
+        var profile = Json(ColumnProfiler.Profile(mixed, mixed.SealedSnapshot(), null, [0, 1, 2], true, CancellationToken.None));
+        check(profile == Json(ColumnProfiler.Profile(raw, raw.SealedSnapshot(), null, [0, 1, 2], true, CancellationToken.None)) && Kept(), "a profile of a partly packed result is the profile of it unpacked");
+        PivotSpec spec = new([1], -1, [new(PivotAggregate.Count, -1), new(PivotAggregate.Max, 0), new(PivotAggregate.Sum, 0)]);
+        var pivot = Pivot(store, mixed, spec);
+        var pivotRaw = Pivot(rawStore, raw, spec);
+        check(pivot.Length == pivotRaw.Length && pivot.Zip(pivotRaw).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && Kept(), "a pivot of a partly packed result writes what it writes unpacked");
+        CopyPartArgs[] whole = [new([[0, 7_999]], [[0, 2]])];
+        check(ResultJobs.EstimateCopy(mixed, whole, true, false) == ResultJobs.EstimateCopy(raw, whole, true, false) && Kept(), "a plain Copy of a partly packed result is the size it is unpacked");
     }
 
     /// <summary>Ties that go back to cells read an extract of the column, made once, not a page unpacked a comparison.</summary>
@@ -223,6 +296,21 @@ internal static class FusedReadChecks
             + rooms.Made + ") are charged");
         source.Dispose();
         check(store.UsedBytes == used, "a page source gives its rooms and extracts back when disposed");
+
+        // An extract refused (here by its allowance, the budget having room) unpacks the result in place instead, as before
+        // fused reads: the sort is the same and reads the pages as sealed.
+        var raw = Filled(Raw(), "ties raw");
+        var expected = View(raw, [new(2, false, SortMode.Value)], []);
+        using (var fallback = new ViewSorter.PageSource(pages, Columns.Count) { ExtractAllowance = 0 })
+        {
+            var fallbackKey = ViewSorter.Build(set, fallback, new ViewKey(2, false, SortMode.Value), null, Rows, CancellationToken.None, ref approximate);
+            var fallbackOrder = Enumerable.Range(0, Rows).ToArray();
+            var unpackedBefore = store.PackingSnapshot().PagesUnpacked;
+            ViewSorter.Sort(fallbackOrder, 0, fallbackOrder.Length, new ViewSorter.Comparer([fallbackKey], null, CancellationToken.None));
+            check(fallbackKey.ReadsCells && !set.HasPacked && fallback.ExtractedBytes == 0 && fallbackOrder.SequenceEqual(expected.Order)
+                && store.PackingSnapshot().PagesUnpacked == unpackedBefore && Enumerable.Range(0, pages.Length).All(fallback.IsRaw),
+                "a sort whose column extract is refused unpacks the result in place, reads its pages as sealed and sorts as unpacked");
+        }
     }
 
     private static void Cancelled(Action<bool, string> check)
@@ -244,7 +332,9 @@ internal static class FusedReadChecks
         // A pivot cancelled after its groups, as it starts to read the pages in order.
         using var pivotCancel = new CancellationTokenSource();
         var pivotThrew = false;
-        try { ResultPivoter.Build(set, set.SealedSnapshot(), null, Spec, pivotCancel.Token, _ => { pivotCancel.Cancel(); return true; }); }
+        // No Min or Max: their keys would be built (and cancelled) before the in-order pass.
+        PivotSpec plain = new([1], -1, [new(PivotAggregate.Count, -1), new(PivotAggregate.Sum, 2)]);
+        try { ResultPivoter.Build(set, set.SealedSnapshot(), null, plain, pivotCancel.Token, _ => { pivotCancel.Cancel(); return true; }); }
         catch (OperationCanceledException) { pivotThrew = true; }
         check(pivotThrew && Kept(), "a pivot of a packed result cancelled as it reads its pages in order gives back its rooms and extracts and leaves the result packed");
 
@@ -255,6 +345,19 @@ internal static class FusedReadChecks
         try { ColumnProfiler.Profile(set, set.SealedSnapshot(), null, [3, 5], true, profileCancel.Token, workers: 4, gate: gate); }
         catch (OperationCanceledException) { profileThrew = true; }
         check(profileThrew && gate.Busy == 0 && Kept(), "a profile of a packed result cancelled as its workers start gives back its rooms and leaves the result packed");
+
+        // The in-order pass cancelled while it reads, with the next batch being unpacked behind it.
+        using var orderCancel = new CancellationTokenSource();
+        var read = 0;
+        var orderThrew = false;
+        using (set.Pin())
+        using (ViewSorter.WorkersHere(2))
+        {
+            using var source = new ViewSorter.PageSource(set.SealedSnapshot(), Columns.Count);
+            try { source.InOrder((index, page, view) => { if (++read == 3) orderCancel.Cancel(); }, orderCancel.Token); }
+            catch (OperationCanceledException) { orderThrew = true; }
+        }
+        check(orderThrew && read >= 3 && read < set.SealedSnapshot().Length && Kept(), "an in-order pass over a packed result cancelled while it reads waits for the batch unpacked ahead and gives back both batches' rooms: " + read);
     }
 
     private static void Refused(Action<bool, string> check)
@@ -279,6 +382,12 @@ internal static class FusedReadChecks
         check(sort == "TOO_LARGE: " + ViewSorter.SortTooLarge && filter == "TOO_LARGE: " + ViewSorter.FilterTooLarge && pivot == "TOO_LARGE: " + ResultPivoter.TooLarge && profile == "profile" && Kept(),
             "with no room for a fused read's room, a sort, a filter, a pivot and a profile of a packed result are refused with their own sentences, and nothing is held: "
             + sort + " | " + filter + " | " + pivot + " | " + profile);
+        // A plain Copy refused its room reads each page through the set's accessor, as before, and still gives its size.
+        var rawTwin = Filled(Raw(), "refused raw", 20_000);
+        CopyPartArgs[] whole = [new([[0, 19_999]], [[0, 5]])];
+        var copyRefused = ResultJobs.EstimateCopy(set, whole, true, false);
+        check(copyRefused == ResultJobs.EstimateCopy(rawTwin, whole, true, false) && copyRefused > 0 && Kept() && store.PackingSnapshot().CacheBytes == 0,
+            "a plain Copy of a packed result with no room for a page reads through the accessor and gives the size it gives unpacked");
 
         // Room for the rooms but not for a column's extract.
         store.Return(filler, filler.UsedBytes);
@@ -295,7 +404,22 @@ internal static class FusedReadChecks
             plain = View(set, [new(0, true, SortMode.Value)], []);
         }
         check(ties == "TOO_LARGE: " + ViewSorter.SortTooLarge && plain.Order.Length == 20_000 && plain.Order[0] == 19_999 && Kept(),
-            "with room for the rooms but not a column's extract, a sort whose ties compare cells is refused and one that needs no extract still sorts: " + ties);
+            "with room for the rooms but neither a column's extract nor unpacking the result, a sort whose ties compare cells is refused and one that needs no extract still sorts: " + ties);
+
+        // Room for one batch of an in-order pass's rooms but not the next, refused as the next is unpacked behind the read.
+        store.Return(filler, filler.UsedBytes);
+        store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - 3 * pageLength, false, out _);
+        used = store.UsedBytes;
+        string? ahead;
+        var pagesRead = 0;
+        using (set.Pin())
+        using (ViewSorter.WorkersHere(2))
+        {
+            using var source = new ViewSorter.PageSource(set.SealedSnapshot(), Columns.Count);
+            ahead = Code(() => source.InOrder((index, page, view) => pagesRead++, CancellationToken.None));
+        }
+        check(ahead == "TOO_LARGE: " + ViewSorter.NoRoomToRead && pagesRead <= 2 && Kept(),
+            "an in-order pass refused the rooms for the batch it unpacks ahead stops with the refusal and gives back the rooms it had: " + ahead + " after " + pagesRead + " pages");
 
         // Through the service, a fused read refused while the computer is low on memory says so, as any refusal there does.
         var low = false;
@@ -318,5 +442,8 @@ internal static class FusedReadChecks
         low = false;
         check(budgetOnly == "TOO_LARGE: " + ViewSorter.SortTooLarge && lowAnswer == "TOO_LARGE: " + SqlService.LowMemory && lowSet.HasPacked && pressed.UsedBytes == lowUsed,
             "a sort refused its rooms through the service names the budget, or the computer's memory when that is low, and holds nothing: " + budgetOnly + " | " + lowAnswer);
+        // It was the rooms that were refused: with room for them as well, the same sort is answered.
+        using (lowSet.Pin()) pressed.Return(lowFiller, Held.Rooms(lowSet));
+        check(Asked(Sorted()) is null, "the same sort is answered once there is room for its rooms too");
     }
 }

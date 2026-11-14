@@ -7,7 +7,8 @@ namespace Varia.Backend.Results;
 /// into it (<see cref="ResultSetBuffer.Read"/>), reads it and moves on, so the operation holds about one page a worker
 /// rather than the result's bytes as sealed. Each room is the size of the largest packed page, reserved from the result's
 /// budget as working memory when it is first made (refused: <see cref="Rent"/> throws the operation's refusal) and reused
-/// after; every reservation is returned when the rooms are disposed. The arrays come from the shared pool.</summary>
+/// after; every reservation is returned when the rooms are disposed. Each room is an array of its own, dropped with the
+/// rooms, so memory charged only while the operation runs is not kept by a pool after it.</summary>
 internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Func<Exception> refusal) : IDisposable
 {
     private readonly ConcurrentBag<PageRoom> free = [];
@@ -25,7 +26,12 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
     /// <summary>A room for one reader, which disposes it (it goes back to the pool) when it stops reading.</summary>
     public PageRoom Rent()
     {
-        if (free.TryTake(out var room)) return room;
+        lock (made) if (disposed) throw new ObjectDisposedException(nameof(PageRooms));
+        if (free.TryTake(out var room))
+        {
+            room.Taken();
+            return room;
+        }
         if (!set.TryReserveWork(length)) throw refusal();
         lock (made)
         {
@@ -35,7 +41,6 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
                 throw new ObjectDisposedException(nameof(PageRooms));
             }
             reserved += length;
-            // Its own array, not a pooled one: it goes with the operation, so memory charged as working memory is not kept after it.
             room = new PageRoom(this, GC.AllocateUninitializedArray<byte>(length), new int[layout]);
             made.Add(room);
         }
@@ -68,5 +73,14 @@ internal sealed class PageRoom(PageRooms owner, byte[] bytes, int[] layout) : ID
 {
     public byte[] Bytes { get; } = bytes;
     public int[] Layout { get; } = layout;
-    public void Dispose() => owner.Return(this);
+    private int returned;
+
+    /// <summary>Taken again from the free rooms: its next Dispose returns it.</summary>
+    internal void Taken() => Volatile.Write(ref returned, 0);
+
+    /// <summary>Gives the room back once: a second Dispose would put it in the free rooms twice, so that two readers shared it.</summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref returned, 1) == 0) owner.Return(this);
+    }
 }

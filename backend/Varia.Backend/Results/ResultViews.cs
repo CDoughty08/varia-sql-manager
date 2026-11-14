@@ -1199,34 +1199,77 @@ internal static partial class ViewSorter
         /// result's budget as working memory, refused: TOO_LARGE), so that comparisons going back to that column's cells
         /// (<see cref="Cell"/>) read the copy and never unpack a page again. Nothing for a source with no packed page, or a
         /// column already extracted. Not concurrent with the column's comparisons: a key extracts once it is built.</summary>
+        /// <summary>The most an extract may charge before it counts as refused (unbounded but in the checks, which use it to
+        /// refuse an extract that the budget would allow).</summary>
+        internal long ExtractAllowance { get; set; } = long.MaxValue;
+
+        /// <summary>Copies one column's cells out of every packed page, once, so that comparisons that go back to cells
+        /// (<see cref="Cell"/>) read them without unpacking a page. The copy is charged as working memory until the source
+        /// is disposed. Refused, the result is unpacked in place instead, as before fused reads (its pages' growth reserved,
+        /// <see cref="ResultSetBuffer.TryUnpackAll"/>), which can fit where the extract did not (a column that is most of
+        /// a result that packs little); refused that too, the operation's refusal.</summary>
         public void Extract(int column, CancellationToken token)
         {
             if (extracts is null || extracts[column] is not null) return;
             var cells = new ColumnCells(pages.Length);
-            using var threads = Gate.Take(Math.Min(Workers, packedPages));
-            threads.For(pages.Length, () => new Reader<object?>(null, null), (index, reader) =>
+            long charged = 0;
+            try
             {
-                if (bodies[index] is not null) return;
-                reader.Room ??= Rent();
-                var view = Read(index, reader.Room);
-                var rows = pages[index].Rows;
-                var size = rows == 0 ? 0 : (int)view.SpanBytes(column, 0, rows - 1);
-                var charge = size + 4L * (rows + 1);
-                if (!owner!.TryReserveWork(charge)) throw Refusal();
-                Interlocked.Add(ref extracted, charge);
-                var data = new byte[size];
-                var offsets = new int[rows + 1];
-                var at = 0;
-                for (var r = 0; r < rows; r++)
+                using var threads = Gate.Take(Math.Min(Workers, packedPages));
+                threads.For(pages.Length, () => new Reader<object?>(null, null), (index, reader) =>
                 {
-                    var cell = view.Span(column, r);
-                    cell.CopyTo(data.AsSpan(at));
-                    at += cell.Length;
-                    offsets[r + 1] = at;
-                }
-                cells.Set(index, data, offsets);
-            }, token);
+                    if (bodies[index] is not null) return;
+                    reader.Room ??= Rent();
+                    var view = Read(index, reader.Room);
+                    var rows = pages[index].Rows;
+                    var size = rows == 0 ? 0 : (int)view.SpanBytes(column, 0, rows - 1);
+                    var charge = size + 4L * (rows + 1);
+                    if (Interlocked.Add(ref charged, charge) > ExtractAllowance || !owner!.TryReserveWork(charge))
+                    {
+                        Interlocked.Add(ref charged, -charge);
+                        throw Refusal();
+                    }
+                    Interlocked.Add(ref extracted, charge);
+                    var data = new byte[size];
+                    var offsets = new int[rows + 1];
+                    var at = 0;
+                    for (var r = 0; r < rows; r++)
+                    {
+                        var cell = view.Span(column, r);
+                        cell.CopyTo(data.AsSpan(at));
+                        at += cell.Length;
+                        offsets[r + 1] = at;
+                    }
+                    cells.Set(index, data, offsets);
+                }, token);
+            }
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == tooLarge)
+            {
+                // The column's partial copy goes back first, so the unpacking has all the room there is.
+                owner!.ReturnWork(charged);
+                Interlocked.Add(ref extracted, -charged);
+                Rehydrate(token);
+                return;
+            }
             extracts[column] = cells;
+        }
+
+        /// <summary>Unpacks the result in place and reads every page as sealed from then on: no room or extract is needed
+        /// after it. Called only between reads (before comparisons, with no reader running). Refused: the operation's
+        /// refusal, changing nothing.</summary>
+        internal void Rehydrate(CancellationToken token)
+        {
+            if (owner is null) return;
+            if (!owner.TryUnpackAll(token)) throw Refusal();
+            for (var i = 0; i < pages.Length; i++)
+            {
+                if (bodies[i] is not null) continue;
+                var body = owner.Raw(pages[i]) ?? throw Refusal();
+                var view = PageView.Parse(body, columns);
+                layouts[i] = view.Layout;
+                blobStarts[i] = view.BlobStart;
+                bodies[i] = body;
+            }
         }
 
         public void Dispose()

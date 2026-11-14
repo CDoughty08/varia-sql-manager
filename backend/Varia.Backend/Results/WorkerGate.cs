@@ -350,8 +350,9 @@ internal static partial class ViewSorter
                 }
                 finally
                 {
-                    if (made) (own as IDisposable)?.Dispose();
-                    if (!owner && !handedBack) lease.Exit();
+                    // The lease is let go even if a state's Dispose throws, or the owner would wait for this worker forever.
+                    try { if (made) (own as IDisposable)?.Dispose(); }
+                    finally { if (!owner && !handedBack) lease.Exit(); }
                 }
             }
         }

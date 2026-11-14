@@ -131,15 +131,21 @@ internal static partial class PageCompressionBench
         int[] selected = [.. Enumerable.Range(0, columns.Length)];
         var scratch = new int[PageView.ScratchLength(columns.Length)];
         var room = new byte[pages.Length == 0 ? 0 : pages.Max(page => page.Length)];
-        writer.Begin();
-        writer.Header(selected);
-        foreach (var page in pages)
+        // Reserved as ResultJobs.ReadRoom reserves it, so the budget's peak shows it.
+        var reserved = pages.Any(page => set.Raw(page) is null) && set.TryReserveWork(room.Length) ? room.Length : 0;
+        try
         {
-            var body = set.Raw(page) ?? set.Read(page, room);
-            var view = PageView.Parse(body.AsSpan(0, page.Length), columns.Length, scratch);
-            for (var row = 0; row < view.Rows; row++) writer.Row(view, row, selected);
+            writer.Begin();
+            writer.Header(selected);
+            foreach (var page in pages)
+            {
+                var body = set.Raw(page) ?? set.Read(page, room);
+                var view = PageView.Parse(body.AsSpan(0, page.Length), columns.Length, scratch);
+                for (var row = 0; row < view.Rows; row++) writer.Row(view, row, selected);
+            }
+            writer.End();
+            return output.Written;
         }
-        writer.End();
-        return output.Written;
+        finally { set.ReturnWork(reserved); }
     }
 }

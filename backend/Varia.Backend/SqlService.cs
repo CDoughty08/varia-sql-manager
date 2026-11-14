@@ -1639,7 +1639,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
         // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
         // answers as it would anywhere else.
-        catch (RequestException error) when (error.Code == "TOO_LARGE")
+        // Only those: a limit with its own reason (too many values, rows or comparisons) is answered as it is.
+        catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message is ViewSorter.SortTooLarge or ViewSorter.FilterTooLarge or ViewSorter.NoRoomToRead)
         {
             store.Return(set.Budget, working + kept);
             if (set.IsReleased) throw Unavailable(args.ResultId);

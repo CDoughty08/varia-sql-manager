@@ -154,8 +154,9 @@ being true.
   (`ResultSetBuffer.Read`, never through the cache), so the operation holds about a page a worker. Rooms are worker
   state, given back when a worker stops (`WorkerGate` disposes an `IDisposable` state). A key whose comparisons go back to
   cells (`Key.ReadsCells`: long exact numbers that tie as doubles, text kept as 8 bytes) has its column extracted once
-  after it is built (`PageSource.Extract`, page by page on the workers, charged as working memory, `TOO_LARGE` when
-  refused), so no comparison unpacks a page; a sampled read goes page by page on the workers (`ForRows`), and a pivot's
+  after it is built (`PageSource.Extract`, page by page on the workers, charged as working memory; refused, the result
+  is unpacked in place as before fused reads, `PageSource.Rehydrate`, and only if that is refused too `TOO_LARGE`), so
+  no comparison unpacks a page; a sampled read goes page by page on the workers (`ForRows`), and a pivot's
   in-order pass unpacks the next batch of pages on the workers while it reads the one before (`InOrder`, two batches of
   rooms). A pivot's output reads the rows it copies
   from pages read together (`RowAccess.Hold`, `BodiesTogether`). Pages held as sealed read exactly as before. The other

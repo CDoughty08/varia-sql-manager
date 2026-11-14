@@ -310,7 +310,7 @@ per-result cache of decompressed pages, charged to the budget as working memory:
   **rehydrate** first (unpack every page on the workers into raw pages, after reserving their raw size; 0.15 s per GiB
   on 16 workers, 0.36 s on 3): their readers keep pages or revisit cells at random.
 
-## When a result is compressed
+### When a result is compressed
 
 Stage 1 (hidden results):
 
