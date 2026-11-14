@@ -276,6 +276,14 @@ that exact child exits; a late kill cannot affect a replacement process with the
 machine-lock and benchmark-floor checks passed 41 cases with one Linux-only case skipped on Windows. Final combined
 check, benchmark and CI outcomes are recorded in the PR.
 
+The newer merge's local results suite exposed a hover-preview sampling gap: the panel could be hidden after the
+visibility checks but before two separate geometry reads. Its screenshot confirms dismissal, but the historical
+departure event remains unknown. A controlled real-pointer departure reproduces the null second read; one renderer
+task now admits only a currently hovered, visible, expanded preview and captures both rectangles together. The exact
+alignment tolerance, text and memory readings, hover into the panel and leave-to-dismiss checks remain. Explicit
+hidden and click-pinned samples are rejected, so the check cannot pass by silently pinning the preview. No production
+component, deadline or retry policy changed.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,

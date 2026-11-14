@@ -1476,11 +1476,26 @@ try {
   const memory = memoryIndicator(page)
   const memoryDetails = memoryBreakdown(page)
   const resultsMemory = memoryUsage(page, 'results')
+  // Preview dismissal follows pointer/focus events immediately. Read its admission and both boxes in one renderer
+  // task: a visible assertion followed by separate boundingBox calls can read a panel that has already disappeared.
+  const previewGeometry = () => memory.evaluate(trigger => {
+    const details = trigger.ownerDocument.getElementById(trigger.getAttribute('aria-controls') ?? '')
+    // Nerd metrics is the panel's first button; only a preview keeps it out of the tab order.
+    const state = { hovered: trigger.matches(':hover'), expanded: trigger.getAttribute('aria-expanded') === 'true',
+      preview: details?.querySelector('button')?.tabIndex === -1,
+      visible: !!details && !details.hidden && details.checkVisibility({ visibilityProperty: true }) && details.getClientRects().length > 0 }
+    if (!state.hovered || !state.expanded || !state.preview || !state.visible || !trigger.checkVisibility({ visibilityProperty: true })) return { admitted: false, ...state }
+    return { admitted: true, triggerBox: trigger.getBoundingClientRect().toJSON(), detailsBox: details.getBoundingClientRect().toJSON() }
+  })
   await expect(memory).toHaveAttribute('data-level', 'warning')
   await expect(memory).toHaveAccessibleName(/Results 91%|Results 92%/)
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memoryDetails).toBeHidden()
   await memory.hover()
+  let geometry
+  await expect.poll(async () => { geometry = await previewGeometry(); return geometry.admitted || geometry }).toBe(true)
+  expect(geometry.detailsBox.y + geometry.detailsBox.height).toBeCloseTo(geometry.triggerBox.y, 0)
+  expect(geometry.detailsBox.x).toBeGreaterThanOrEqual(0)
   await expect(memoryDetails).toBeVisible()
   await expect(memoryDetails).toContainText('New results may be truncated.')
   // A preview keeps Nerd metrics' heading out of the tab order: the next Tab from the window's last control wraps to the
@@ -1488,14 +1503,13 @@ try {
   await expect(memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })).toHaveAttribute('tabindex', '-1')
   await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
   await expect(resultsMemory).toHaveText('236 MB / 256 MB')
-  const triggerBox = await memory.boundingBox(), detailsBox = await memoryDetails.boundingBox()
-  expect(detailsBox.y + detailsBox.height).toBeCloseTo(triggerBox.y, 0)
-  expect(detailsBox.x).toBeGreaterThanOrEqual(0)
   await memoryDetails.hover()
   await expect(memoryDetails).toBeVisible()
   await page.mouse.move(5, 80)
   await expect(memoryDetails).toBeHidden()
+  expect(await previewGeometry()).toMatchObject({ admitted: false, hovered: false, expanded: false, visible: false })
   await memory.click()
+  expect(await previewGeometry()).toMatchObject({ admitted: false, expanded: true, preview: false, visible: true })
   await page.mouse.move(5, 80)
   await expect(memoryDetails).toBeVisible()
   await page.keyboard.press('Escape')
