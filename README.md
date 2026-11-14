@@ -65,8 +65,11 @@ On Ubuntu 24.04 and later, AppArmor may block the unprivileged user namespaces n
 2. Open a new query, write SQL, and select **Execute** or press **F5**. A selection runs instead of the full document.
 3. Inspect the results and messages, or browse and script objects in Object Explorer.
 
-The Execute button says **Execute selection** with its line range when text is selected; **Entire query** means the
-whole document will run. Click the status bar's **Ln/Col** to go to a line, or **INS/OVR** to switch insert/overtype mode.
+The Execute button says **Execute selection** with its line range when text is selected. Click inside the selection
+to clear it and place the caret there. **Entire query** means the whole document will run.
+Hold **Ctrl** and scroll the mouse wheel over the editor to make the text larger or smaller in all editor tabs for this
+session. On macOS, **Cmd** and the wheel also work. Use the **View** menu's zoom commands to resize the whole workbench.
+Click the status bar's **Ln/Col** to go to a line, or **INS/OVR** to switch insert/overtype mode.
 Each editor group's **+**, or a double-click on empty tab-strip space, opens a query in that group. **Reopen Closed Query**
 (Ctrl+Shift+T; Cmd+Shift+T on macOS) restores a bounded, in-memory unsaved copy without its old connection or saved-file
 association; see [editor groups](docs/editor-groups.md).
