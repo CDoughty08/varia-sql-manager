@@ -18,7 +18,9 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a save that has
   already started writing its file finishes. The run summary and its row count do not change. Closing the last result
   leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
-  execution plans stay. Closing one view is unavailable while the query is executing, and there is no undo.
+  execution plans stay, and so does Close Results, which releases those plans. Find in Results, Find Next and Previous,
+  Save Results As, Pivot, Compare and Transpose are then unavailable, as they need a grid. Closing one view is
+  unavailable while the query is executing, and there is no undo.
 - When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
   grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
   Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or
@@ -57,7 +59,23 @@ and column widths you set on columns whose names appear once in both; its filter
 the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
 window (the builder says when one waits for the others), and a busy SQL backend is asked again after
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+is built again. Like the Compare picker, the builder goes with the results themselves: **Close Results**, a run that
+leaves no result, or closing its last result closes it, and the next run does not reopen it; each result's draft is kept
+for the next **Pivot…**. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+
+A Pivot records the filters of the result it was built from. When that result's filters change (a filter added, removed
+or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
+**Update** (in Tabs layout, on the row above the Pivot's grid, and its Pivot tab carries a dot), and its strip says so
+first. Sorting the result does not mark it, since the order of the rows changes no
+figure. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
+last used) builds the Pivot again from what it
+was built with, not from an edit in the builder not yet built, over the result as it is filtered now, and replaces it as
+**Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
+is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
+results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
+once the SQL backend has stopped. Nothing rebuilds by itself. The grid's menu shows more items than its titles have
+letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
+reach it.
 
 ## Comparisons
 

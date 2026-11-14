@@ -50,6 +50,7 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     fontFamily: editorFontFamily,
     // Cascadia Code's ligatures would join SQL's <=, <> and != into one glyph.
     fontLigatures: false,
+    mouseWheelZoom: true,
     minimap: { enabled: false },
     automaticLayout: true,
     scrollBeyondLastLine: false,

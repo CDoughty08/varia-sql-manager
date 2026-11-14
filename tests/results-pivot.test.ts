@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
+import type { ResolvedViewFilter, ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { pivotGroup, PivotService } from '../src/renderer/src/results/PivotService'
-import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotFacts, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
-import { carriedState, resultLimits, ResultsService, setKey, uniqueNames } from '../src/renderer/src/results/ResultsService'
+import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNumericColumn, outOfDateText, pivotFacts, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
+import { carriedState, pivotOutOfDate, resultLimits, ResultsService, sameFilters, setKey, uniqueNames } from '../src/renderer/src/results/ResultsService'
 import { DerivedJobs, derivedLimits } from '../src/renderer/src/results/derived-jobs'
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
@@ -112,6 +112,53 @@ describe('a rebuilt Pivot', () => {
 })
 
 describe('PivotService', () => {
+  it("closes the builder once its tab's results are gone, as the Compare picker does, and keeps its drafts for the next Pivot…", async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const open = () => { pivot.open('t1', keyAt(results, 't1', 1)); pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] }) }
+    open()
+    // A result closed while another is left keeps the builder.
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 0) })
+    // The last one closed (an emptied run, whose captured plans may stay) closes it: nothing is left to show it beside.
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(results.getSnapshot().t1).toMatchObject({ sets: [], emptied: true })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: false, running: false })
+    expect(pivot.getSnapshot().tabs.t1.source).toBeUndefined()
+    // Nothing reopens it there, and Build makes nothing.
+    pivot.open('t1')
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    await pivot.run('t1')
+    expect(first.pivot).not.toHaveBeenCalled()
+    // The next run does not bring it back; Pivot… there finds the group's draft as it was left.
+    run(2, { queryId: 'q2' })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: false, source: keyAt(results, 't1', 1), draft: { rows: [0] } })
+    open()
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    // A re-run releases the old results before its first set arrives: while it runs the builder stays.
+    run(0, { queryId: 'q3', finish: false })
+    expect(results.getSnapshot().t1).toMatchObject({ status: 'running', sets: [] })
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    // A finished run that returned no result closes it.
+    void results.finish('t1', 'q3', { summary: summaryOf([]) })
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    // And so does Close Results.
+    run(2, { queryId: 'q4' })
+    open()
+    results.closeResults('t1')
+    expect(results.getSnapshot().t1.status).toBe('closed')
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    // A comparison left alone is still a result: the builder stays, with no group to pivot.
+    run(2, { queryId: 'q5' })
+    const kept = results.getSnapshot().t1.sets.map(set => set.descriptor)
+    open()
+    expect(results.addSet('t1', descriptor(990, { index: 2, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(kept[0]), setKey(kept[1])])).toBeDefined()
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(results.getSnapshot().t1.sets.map(set => set.label)).toEqual(['Differences: Result 1 → Result 2'])
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    expect(pivot.getSnapshot().tabs.t1.source).toBeUndefined()
+  })
   it("opens on a grid's group, builds the pivot from the draft, shows it under the Table as the group's Pivot, and says what it pivoted", async () => {
     const { results, pivot, run } = fixture()
     const [, second] = run(3)
@@ -642,6 +689,8 @@ describe('PivotService', () => {
     expect(again.pivot).toHaveBeenCalledOnce()
     expect(again.close).toHaveBeenCalledOnce()
     expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ revision: 2, pivot: { filters: [{ op: 'notIn', column: 0, rows: [2], nulls: false }], inputRows: 2 } })
+    // The filters it records are those the grid shows: the Pivot built again this way is not out of date.
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(false)
     // The second try fails too: the old Pivot stays and the builder says why.
     const lost = view(4, refiltered.filters)
     lost.pivot.mockRejectedValueOnce(evicted)
@@ -811,9 +860,10 @@ describe('PivotService', () => {
     sortOf.mockRestore()
     await pivot.run('t1')
     expect(pivot.getSnapshot().info.size).toBe(1)
-    // Close Results changes no builder, but the closed pivot's strip goes.
+    // Close Results closes the builder (as it does the Compare picker), and the closed pivot's strip goes.
     results.closeResults('t1')
     expect(pivot.getSnapshot().info.size).toBe(0)
+    expect(pivot.getSnapshot().tabs.t1?.open ?? false).toBe(false)
   })
 
   it('gives up a pivot a new run replaces, releases its late answer, and keeps strips only for pivots a run still shows', async () => {
@@ -899,5 +949,281 @@ describe('PivotService', () => {
     expect(client.released()).toEqual([1, 991])
     expect(results.getSnapshot().t1.sets.map(set => set.number)).toEqual([2])
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+})
+
+describe('an out-of-date Pivot and Update', () => {
+  const view = (first: FakeHandle, viewId: number, filters: ResultView['filters']) => ({ ...first, viewId, base: first, keys: [], filters, rows: 1, baseRows: 3, complete: true, approximate: false, close: vi.fn(async () => {}), pivot: vi.fn<ResultHandle['pivot']>() }) as unknown as ResultView & { close: ReturnType<typeof vi.fn>; pivot: ReturnType<typeof vi.fn> }
+  /** Shows `shown` in the Table's grid, as a sort or filter the backend built would. */
+  const show = async (results: ResultsService, first: FakeHandle, key: string, shown: ResultView, column = 0) => {
+    vi.mocked(first.sort).mockResolvedValueOnce(shown)
+    results.sortBy('t1', key, column, 'ascending')
+    await settle()
+    results.viewShown('t1', key, shown)
+  }
+  const pivoted = (resultId: number, rows = 1) => ({ descriptor: descriptor(resultId, { index: 0, kind: 'pivot' }), rows, rowGroups: 1, columnGroups: 0, approximate: false })
+
+  it('compares resolved filters by what they keep: a groups filter by its snapshot, value rows in any order, a range in order, the list in order', () => {
+    const inRows: ResolvedViewFilter = { op: 'in', column: 0, rows: [4, 2], nulls: false }
+    expect(sameFilters([], [])).toBe(true)
+    expect(sameFilters([inRows], [{ ...inRows, rows: [2, 4] }])).toBe(true)
+    expect(sameFilters([inRows], [{ ...inRows, nulls: true }])).toBe(false)
+    expect(sameFilters([inRows], [{ ...inRows, op: 'notIn' }])).toBe(false)
+    expect(sameFilters([inRows], [{ ...inRows, column: 1 }])).toBe(false)
+    expect(sameFilters([{ op: 'between', column: 0, rows: [1, 9], nulls: false }], [{ op: 'between', column: 0, rows: [9, 1], nulls: false }])).toBe(false)
+    // A groups filter's other fields are read from its snapshot: the same snapshot is the same filter.
+    expect(sameFilters([{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false }], [{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false, row: 3 }])).toBe(true)
+    expect(sameFilters([{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false }], [{ op: 'groups', column: 1, snapshotId: 8, keep: true, values: 2, nulls: false }])).toBe(false)
+    expect(sameFilters([{ op: 'keepRows', rows: [3, 1] }], [{ op: 'keepRows', rows: [1, 3] }])).toBe(true)
+    expect(sameFilters([{ op: 'duplicates', columns: [0, 1] }, inRows], [inRows, { op: 'duplicates', columns: [0, 1] }])).toBe(false)
+    // Filters keep the rows all of them keep, so their order counts only around a duplicates filter (re-applying one moves
+    // it last).
+    const keep: ResolvedViewFilter = { op: 'keepRows', rows: [1] }, dup: ResolvedViewFilter = { op: 'duplicates', columns: [0] }
+    expect(sameFilters([inRows, keep], [keep, inRows])).toBe(true)
+    expect(sameFilters([inRows, keep, dup, keep], [keep, inRows, dup, keep])).toBe(true)
+    expect(sameFilters([inRows, dup, keep], [keep, dup, inRows])).toBe(false)
+    expect(sameFilters([inRows, inRows], [inRows, keep])).toBe(false)
+    expect(sameFilters([inRows], [inRows, { op: 'keepRows', rows: [1] }])).toBe(false)
+  })
+
+  it("marks a Pivot out of date when its Table's filters change, not when it is only sorted or its filters are named, and says so in its strip", async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const stale = () => { const tab = results.getSnapshot().t1; return pivotOutOfDate(tab, tab.groups[0]) }
+    // Built from the stored rows: no filters recorded, none shown.
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot!.filters).toEqual([])
+    expect(stale()).toBe(false)
+    // A sort alone changes no aggregate.
+    await show(results, first, one, view(first, 1, []))
+    expect(stale()).toBe(false)
+    // A filter does.
+    await show(results, first, one, view(first, 2, [{ op: 'in', column: 0, rows: [2], nulls: false }]), 1)
+    expect(stale()).toBe(true)
+    // Its label being named later (the view's filters are the same) is no change back or forth.
+    const named = results.sortOf('t1', one)!
+    expect(named.view!.filters).toEqual([{ op: 'in', column: 0, rows: [2], nulls: false }])
+    expect(stale()).toBe(true)
+    // A filter built but not yet shown does not count until it shows: the mark changes with the grid.
+    const building = deferred<ResultView>()
+    vi.mocked(first.sort).mockImplementationOnce(() => building.promise)
+    results.sortBy('t1', one, 2, 'ascending')
+    expect(results.sortOf('t1', one)!.sorting).toBe(true)
+    expect(stale()).toBe(true)
+    building.resolve(view(first, 3, []))
+    await settle()
+    expect(stale()).toBe(false)
+    // The strip says it first, and what Update does.
+    expect(outOfDateText('Result 1')).toBe("Out of date: Result 1's filters changed after this Pivot was built. Update builds it again from Result 1 as it is filtered now.")
+    const info = { source: one, sourceLabel: 'Result 1', viewed: false, rows: 1, rowGroups: 1, columnGroups: 0, approximate: false }
+    expect(pivotStrip(info, undefined, true)).toBe(`${outOfDateText('Result 1')} ${pivotText(info)}`)
+    expect(pivotStrip(info, 'Marked.', true)).toBe(`${outOfDateText('Result 1')} ${pivotText(info)} Marked.`)
+    // A group without a Pivot, or a Pivot added without provenance, is never marked.
+    expect(pivotOutOfDate(results.getSnapshot().t1, { table: results.getSnapshot().t1.groups[0].table })).toBe(false)
+  })
+
+  it("updates from the Pivot's own recipe over the Table as filtered now, keeping the old Pivot until the new one publishes, and leaves the draft alone", async () => {
+    const { client, results, pivot, run } = fixture()
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const old = results.getSnapshot().t1.groups[0].pivot!
+    // The draft is edited and not built: Update does not take it.
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    const draft = pivot.getSnapshot().tabs.t1.draft
+    const filtered = view(first, 1, [{ op: 'notIn', column: 0, rows: [5], nulls: true }])
+    await show(results, first, one, filtered)
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    filtered.pivot.mockImplementationOnce(() => building.promise)
+    const updating = pivot.update('t1', old.key)
+    expect(filtered.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // While it builds the old Pivot is the group's, readable, and the caption's state says the group is building.
+    expect(pivot.building('t1', 1)).toBe(true)
+    expect(pivot.getSnapshot().building).toEqual({ t1: [1] })
+    expect(results.getSnapshot().t1.groups[0].pivot).toBe(old)
+    expect(client.released()).toEqual([])
+    // A second Update while it builds asks for nothing more.
+    await pivot.update('t1', old.key)
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    building.resolve(pivoted(901, 4))
+    await updating
+    await settle()
+    const tab = results.getSnapshot().t1
+    expect(tab.groups[0].pivot).toMatchObject({ key: old.key, revision: 2, entry: { descriptor: { resultId: 901 } }, pivot: { recipe: { rows: [0] }, filters: [{ op: 'notIn', column: 0, rows: [5], nulls: true }], inputRows: 4 } })
+    expect(pivotOutOfDate(tab, tab.groups[0])).toBe(false)
+    expect(client.released()).toEqual([old.entry.descriptor.resultId])
+    expect(pivot.getSnapshot().building).toEqual({})
+    expect(pivot.getSnapshot().tabs.t1.draft).toBe(draft)
+    expect(tab.jobNotice).toBe('')
+    // Named from the Table's grid too: the filter removed (the grid still sorted), it is out of date again, and Update
+    // reads the sorted view, which applies no filter.
+    const sorted = view(first, 2, [])
+    await show(results, first, one, sorted, 1)
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    sorted.pivot.mockResolvedValueOnce(pivoted(902, 9))
+    await pivot.update('t1', one)
+    expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: old.key, revision: 3, pivot: { filters: [], inputRows: 9 } })
+    // With no Pivot, Update does nothing.
+    results.removeEntry('t1', old.key)
+    await pivot.update('t1', one)
+    expect(results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
+  })
+
+  it('shows the rebuilt Pivot before its build stops reading as building, so its old mark and Update never come back between', async () => {
+    const { results, pivot, run, flush } = fixture({ frames: true })
+    const [first] = run(1)
+    flush()
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    flush()
+    const old = results.getSnapshot().t1.groups[0].pivot!
+    const filtered = view(first, 1, [{ op: 'in', column: 0, rows: [1], nulls: false }])
+    vi.mocked(first.sort).mockResolvedValueOnce(filtered)
+    results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    flush()
+    results.viewShown('t1', one, filtered)
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    filtered.pivot.mockResolvedValueOnce(pivoted(941, 1))
+    // Whenever the builds change, the run the results publish says whether the Pivot is out of date: while one is in
+    // flight the caption shows Cancel; once none is, the published Pivot is already the new one, up to date. Results that
+    // publish on frames (no flush here) still publish a replacement at once (ResultsService.replaceSet).
+    const seen: string[] = []
+    const unsubscribe = pivot.subscribe(() => {
+      const tab = results.getSnapshot().t1
+      seen.push(`${pivot.building('t1', 1) ? 'building' : 'idle'} ${tab.groups[0].pivot!.entry.descriptor.resultId} ${pivotOutOfDate(tab, tab.groups[0]) ? 'stale' : 'current'}`)
+    })
+    await pivot.update('t1', old.key)
+    unsubscribe()
+    expect(seen.filter(line => line.startsWith('idle')).length).toBeGreaterThan(0)
+    expect(new Set(seen.filter(line => line.startsWith('idle')))).toEqual(new Set(['idle 941 current']))
+    expect(seen).not.toContain(`idle ${old.entry.descriptor.resultId} stale`)
+  })
+
+  it('keeps the old Pivot when Update fails, is cancelled or is refused, and says why in the toolbar and the builder', async () => {
+    const { client, results, pivot, run } = fixture()
+    const [first] = run(2)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    const kept = results.getSnapshot().t1.groups[0].pivot!
+    // The builder is closed: Update's sentences still reach the toolbar.
+    pivot.close('t1')
+    await show(results, first, one, view(first, 1, [{ op: 'in', column: 0, rows: [1], nulls: false }]))
+    const shown = results.sortOf('t1', one)!.view as ResultView & { pivot: ReturnType<typeof vi.fn> }
+    // Refused by memory: the old Pivot is never freed to make room.
+    shown.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await pivot.update('t1', kept.key)
+    const tooLarge = 'There is not enough result memory to pivot these rows. Close other results and try again, or close Pivot of Result 1 and build it again.'
+    expect(results.getSnapshot().t1.groups[0].pivot).toBe(kept)
+    expect(results.getSnapshot().t1.jobNotice).toBe(tooLarge)
+    expect(pivot.getSnapshot().tabs.t1.error).toBe(tooLarge)
+    expect(client.released()).toEqual([])
+    // Refused because the query's budget stopped: the backend's sentence.
+    shown.pivot.mockRejectedValueOnce(new ResultError('BUDGET_STOPPED', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."))
+    await pivot.update('t1', kept.key)
+    expect(results.getSnapshot().t1.jobNotice).toBe("This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.")
+    // Cancelled from the caption by the group's number, while the builder follows another group: the builder's own Cancel
+    // stops nothing of this group's, the caption's does, and the late answer is released.
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    shown.pivot.mockImplementationOnce(() => building.promise)
+    const updating = pivot.update('t1', kept.key)
+    pivot.open('t1', keyAt(results, 't1', 2))
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(keyAt(results, 't1', 2))
+    pivot.cancel('t1')
+    expect(pivot.building('t1', 1)).toBe(true)
+    pivot.cancel('t1', 1)
+    building.resolve(pivoted(911))
+    await updating
+    expect(results.getSnapshot().t1.groups[0].pivot).toBe(kept)
+    expect(client.released()).toEqual([911])
+    expect(results.getSnapshot().t1.jobNotice).toBe('Building was cancelled, so Pivot of Result 1 still shows its last build.')
+    expect(pivot.getSnapshot().building).toEqual({})
+    // Still out of date: Update stays offered.
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    // Build Pivot on the group while an Update runs gives the Update up silently; the new build takes the slot.
+    results.notify('t1', 'Earlier notice.')
+    const slow = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    let updateSignal: AbortSignal | undefined
+    shown.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { updateSignal = o?.signal; return slow.promise })
+    const superseded = pivot.update('t1', kept.key)
+    pivot.open('t1', one)
+    shown.pivot.mockResolvedValueOnce(pivoted(912, 2))
+    await pivot.run('t1')
+    expect(updateSignal?.aborted).toBe(true)
+    slow.resolve(pivoted(913))
+    await superseded
+    await settle()
+    expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: kept.key, entry: { descriptor: { resultId: 912 } } })
+    expect(client.released()).toContain(913)
+    expect(results.getSnapshot().t1.jobNotice).toBe('Earlier notice.')
+    expect(pivot.getSnapshot().building).toEqual({})
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(false)
+  })
+
+  it('updates nothing while the query runs or the backend is gone, and gives up an Update whose Table, Pivot or run goes', async () => {
+    const { client, results, pivot, run } = fixture()
+    let [first] = run(2)
+    let one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    let old = results.getSnapshot().t1.groups[0].pivot!.key
+    await show(results, first, one, view(first, 1, [{ op: 'in', column: 0, rows: [1], nulls: false }]))
+    let shown = results.sortOf('t1', one)!.view as ResultView & { pivot: ReturnType<typeof vi.fn> }
+    // Its Table closes while it builds (which closes the Pivot with it): the answer is released and recreates nothing.
+    let building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    let signal: AbortSignal | undefined
+    shown.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { signal = o?.signal; return building.promise })
+    let updating = pivot.update('t1', old)
+    results.removeEntry('t1', one)
+    expect(signal?.aborted).toBe(true)
+    building.resolve(pivoted(921))
+    await updating
+    await settle()
+    expect(client.released()).toContain(921)
+    expect(results.getSnapshot().t1.groups.map(group => group.ordinal)).toEqual([2])
+    expect(results.getSnapshot().t1.jobNotice).toBe('')
+    // A new run gives up an Update of the last one, and says nothing about it.
+    ;[first] = run(1, { queryId: 'q2' })
+    one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    old = results.getSnapshot().t1.groups[0].pivot!.key
+    await show(results, first, one, view(first, 2, [{ op: 'in', column: 0, rows: [2], nulls: false }]))
+    shown = results.sortOf('t1', one)!.view as ResultView & { pivot: ReturnType<typeof vi.fn> }
+    building = deferred()
+    shown.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { signal = o?.signal; return building.promise })
+    updating = pivot.update('t1', old)
+    run(1, { queryId: 'q3', finish: false })
+    expect(signal?.aborted).toBe(true)
+    building.resolve(pivoted(931))
+    await updating
+    await settle()
+    expect(client.released()).toContain(931)
+    expect(results.getSnapshot().t1.jobNotice).toBe('')
+    expect(pivot.getSnapshot().building).toEqual({})
+    // While a query runs nothing is updated.
+    const runningTable = keyAt(results, 't1', 0)
+    expect(pivot.canPivot('t1', runningTable)).toBe(false)
+    // The backend lost: a Table it no longer holds cannot be pivoted, so Update asks for nothing.
+    ;[first] = run(1, { queryId: 'q4' })
+    one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    old = results.getSnapshot().t1.groups[0].pivot!.key
+    await show(results, first, one, view(first, 3, [{ op: 'in', column: 0, rows: [3], nulls: false }]))
+    shown = results.sortOf('t1', one)!.view as ResultView & { pivot: ReturnType<typeof vi.fn> }
+    client.lose()
+    await settle()
+    await pivot.update('t1', old)
+    expect(shown.pivot).not.toHaveBeenCalled()
+    expect(pivot.getSnapshot().building).toEqual({})
   })
 })

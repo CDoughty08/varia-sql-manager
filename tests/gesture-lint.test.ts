@@ -85,6 +85,11 @@ describe('gesture lint', () => {
     for (const id of gestureIds) {
       const gesture = gestureDescriptor(id)
       if (gesture.kind === 'fixed' && !gesture.modifiers.length) continue
+      // Monaco owns this listener and reads its modifiers when the editor option is enabled.
+      if (id === 'editor.wheelZoom') {
+        expect(readFileSync(join(renderer, 'editor/create-editor.ts'), 'utf8')).toContain('mouseWheelZoom: true')
+        continue
+      }
       expect(sources, id).toMatch(new RegExp(`\\.matches\\('${id.replace('.', '\\.')}'`))
     }
   })
