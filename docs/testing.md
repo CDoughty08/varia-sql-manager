@@ -22,8 +22,9 @@ the rules that keep it lean.
 - `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
   --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
-- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
-  (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
+- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`, `npm run bench:grid [-- --live]` and
+  `npm run bench:startup` (Electron, need `out/`): the IPC, results grid, and startup and memory benchmarks, not part of
+  `check`. `node scripts/check-bench.mjs
   [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
 - The pivot benchmarks are run by hand and enforce nothing: `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
@@ -166,7 +167,8 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
   classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
   the roles and names stable.
-- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
+- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs`, `scripts/grid-bench.mjs` and
+  `scripts/startup-bench.mjs` only measure; a new
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.

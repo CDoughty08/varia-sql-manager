@@ -918,11 +918,11 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
   },
   'output.findNext': {
-    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', when: 'outputGridFocus' }, { mac: 'f3', when: 'outputGridFocus' }]
   },
   'output.findPrevious': {
-    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
   },
   // Filtering a grid (results.view, results PR 4): by the selected cells of one column (their values, other values, or the
@@ -1030,6 +1030,15 @@ export const commandCatalog = {
   'output.pivot': {
     title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 10, when: "outputView == 'grid' && !outputGridBare" }]
+  },
+  // A group's Pivot is out of date once its Table's filters differ from those its last build read; Update builds it again
+  // from its own recipe over the Table as filtered now, replacing it atomically (the old one stays until the new one is
+  // built). The Pivot's caption offers it beside its Out of date mark, and the grid menu under Pivot Results…. That menu
+  // shows more items than its titles have letters, so Update takes 'u' and Pivot Results… is left without an access key
+  // (arrow keys and type-ahead still reach it); every other item keeps the key it had.
+  'output.updatePivot': {
+    title: 'Update Pivot', category: 'Query', icon: 'refresh', keywords: ['pivot', 'update', 'rebuild', 'refresh', 'outdated', 'stale', 'filters', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 11, mnemonic: 'u', when: "outputView == 'grid' && !outputGridBare" }]
   },
   // Transposed is a way a grid is drawn, kept with the view and stored nowhere (ResultsService.setOrientation): the result's
   // columns as rows and its first limits.transpose.maxRows rows as columns, following its sort and filters. Transpose

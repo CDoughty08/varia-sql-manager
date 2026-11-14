@@ -346,6 +346,10 @@ describe('context keys', () => {
     expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
     expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })
     expect(computeContextKeys({ ...base, documents })).toMatchObject({ hasResults: false })
+    // Result sets a grid shows are a key of their own: captured plans alone keep hasResults but not hasResultSets.
+    expect(computeContextKeys({ ...base, documents, results: { a: true }, resultSets: { a: true } })).toMatchObject({ hasResults: true, hasResultSets: true })
+    expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true, hasResultSets: false })
+    expect(computeContextKeys({ ...base, documents, results: { a: true }, resultSets: { b: true } })).toMatchObject({ hasResultSets: false })
     // A value opened from the results is a document but not a query: Change Connection is off there.
     expect(computeContextKeys({ ...base, documents })).toMatchObject({ activeDocumentIsQuery: true })
     expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ activeDocumentIsQuery: false })

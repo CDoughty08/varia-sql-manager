@@ -17,6 +17,7 @@ import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsNeed, tabWindow,
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
+import { PivotService } from '../src/renderer/src/results/PivotService'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -69,7 +70,7 @@ function fixture() {
   }
   const reveal = (key: string) => act(() => { search = { t1: { reveal: (search.t1?.reveal ?? 0) + 1, revealEntry: key, marks: new Map() } }; for (const listener of [...listeners]) listener() })
   const commands = { execute: vi.fn(async () => true) }
-  const workbench = { results, resultsSearch, commands, gestures: gesturesFor('win32') } as unknown as Workbench
+  const workbench = { results, resultsSearch, commands, gestures: gesturesFor('win32'), pivot: new PivotService(results) } as unknown as Workbench
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -453,13 +454,46 @@ describe('results as tabs', () => {
     expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
   })
 
+  it("dot an out-of-date Pivot's view tab, and show its mark with Update on the view row while it is shown", () => {
+    const { results, one, pivot, draw, viewTabs, all } = fixture()
+    // Result 1's Pivot was built over a filter its Table no longer shows; Result 3's has no provenance, so never a mark.
+    results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'], {
+      pivot: { recipe: { rows: [0], values: [{ aggregate: 'count' }] }, filters: [{ op: 'keepRows', rows: [1] }], inputRows: 1, truncated: false, incomplete: false, approximate: false }
+    })
+    const update = () => all<HTMLButtonElement>('button[aria-label="Update Pivot of Result 1"]')
+    // Result 1's Table shown: its Pivot's view tab has the dot and says so; the row has no Update (the Pivot is not shown).
+    results.focusEntry('t1', one)
+    draw()
+    const pivotTab = () => viewTabs().find(tab => tab.getAttribute('aria-label') === 'Pivot of Result 1')!
+    expect(pivotTab().querySelector('.rt-dot')).not.toBeNull()
+    expect(pivotTab().getAttribute('aria-description')).toBe('Out of date')
+    expect(update()).toEqual([])
+    // The Pivot shown: the view row shows the chip and Update, as a Stacked caption does.
+    act(() => { pivotTab().click() })
+    draw()
+    expect(all('.rt-views .rs-caption-stale').map(element => element.textContent)).toEqual(['Out of date'])
+    expect(update()).toHaveLength(1)
+    expect(update()[0].disabled).toBe(false)
+    expect(all('.rt-facts')).toHaveLength(1)
+    // Back to the Table: the mark goes, and the row keeps one set of facts (the mark never shares the facts' key).
+    act(() => { viewTabs().find(tab => tab.getAttribute('aria-label') === 'Table')!.click() })
+    draw()
+    expect(update()).toEqual([])
+    expect(all('.rt-facts')).toHaveLength(1)
+    // Another result's Pivot, with nothing recorded: no dot, no mark.
+    results.focusEntry('t1', pivot)
+    draw()
+    expect(viewTabs().find(tab => tab.getAttribute('aria-label') === 'Pivot of Result 3')!.querySelector('.rt-dot')).toBeNull()
+    expect(all('.rt-views .rs-caption-stale')).toEqual([])
+  })
+
   it('draw at most a window of result tabs in a run of many', () => {
     const client = fakeResultClient(), events = new EventBus()
     const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
     const results = new ResultsService({ client, api, events, frame: callback => callback() }), none = {}
     results.begin('t1', 'q1')
     void results.finish('t1', 'q1', { summary: summaryOf(Array.from({ length: 200 }, (_, index) => descriptor(index + 1, { index, ...rows }))) })
-    const workbench = { results, resultsSearch: { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }, commands: { execute: vi.fn() } } as unknown as Workbench
+    const workbench = { results, resultsSearch: { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }, commands: { execute: vi.fn() }, pivot: new PivotService(results) } as unknown as Workbench
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
