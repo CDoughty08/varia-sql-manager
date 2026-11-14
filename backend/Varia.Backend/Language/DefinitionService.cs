@@ -136,8 +136,9 @@ internal sealed class DefinitionService(IExplorerHost host)
 
     /// <summary>The name's database does not exist or cannot be opened: 2812, the wrapper's database has no sys.sp_executesql
     /// because there is none; 911, 4060, 916, the database is unknown or closed to the login; 942, 945, 952, it is offline,
-    /// unavailable or in transition.</summary>
-    internal static bool Unavailable(SqlException error) => error.Number is 2812 or 911 or 916 or 4060 or 942 or 945 or 952;
+    /// unavailable or in transition; 922, 926, 927, it is recovering, suspect or restoring; 924, another session holds it in
+    /// single-user mode; 976, 978, it is an availability group secondary that is not readable.</summary>
+    internal static bool Unavailable(SqlException error) => error.Number is 2812 or 911 or 916 or 4060 or 942 or 945 or 952 or 922 or 924 or 926 or 927 or 976 or 978;
 
     private static void Add(SqlCommand command, string name, int size, string? value) =>
         command.Parameters.Add(new SqlParameter(name, SqlDbType.NVarChar, size) { Value = (object?)value ?? DBNull.Value });

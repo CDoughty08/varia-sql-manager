@@ -259,6 +259,9 @@ internal static class SqlDefinitionChecks
         var cloud = new Host(new ServerProfile(12, null, 5, null, false, true, true, 16), ConnectionFailureChecks.Sql(4060, 1, 11, "server", "Cannot open database."));
         check(await new DefinitionService(cloud).ResolveAsync(Request("SELECT * FROM Gone.dbo.T", position: new(0, 22)), default) is null && cloud.Opened.SequenceEqual(["Gone"]),
             "a cloud database the login cannot open answers null");
+        check(new[] { 922, 924, 926, 927, 976, 978 }.All(number => DefinitionService.Unavailable(ConnectionFailureChecks.Sql(number, 1, 14, "server", "Database unavailable.")))
+            && !DefinitionService.Unavailable(ConnectionFailureChecks.Sql(18456, 1, 14, "server", "Login failed.")),
+            "a recovering, suspect, restoring, single-user or unreadable secondary database is nothing to go to, a failed login is not");
         var refused = new Host(new ServerProfile(17, null, 3, null, false, true, true, 16), ConnectionFailureChecks.Sql(18456, 1, 14, "server", "Login failed."));
         var surfaced = false;
         try { await new DefinitionService(refused).ResolveAsync(Request(), default); }
