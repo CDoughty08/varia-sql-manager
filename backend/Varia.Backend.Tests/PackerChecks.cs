@@ -418,6 +418,11 @@ internal static class PackerChecks
         var second = PageCodec.Pack(page, Window);
         check(first is not null && second is not null && first.AsSpan().SequenceEqual(second) && PageCodec.Unpack(second, page.Length).AsSpan().SequenceEqual(page) && allocated is [0, 0],
             "a page compressed for the policy reads back as sealed, and nothing is allocated while its thread is lowered: " + string.Join(",", allocated));
+        // Pages of every size use the same encoder, streamed: a small page, one of exactly the window, and one larger than
+        // the window each read back as sealed, and each frame is one the one-shot reader takes.
+        byte[][] sizes = [page[..10_000], page.Length >= 1 << PageCodec.Window ? page[..(1 << PageCodec.Window)] : page, [.. page, .. page]];
+        var allRead = sizes.All(sample => PageCodec.Pack(sample, Window) is { } packedSample && PageCodec.Unpack(packedSample, sample.Length).AsSpan().SequenceEqual(sample));
+        check(allRead && allocated.All(bytes => bytes == 0), "pages smaller than, equal to and larger than the window pack and read back, allocating nothing while lowered: " + string.Join(",", allocated));
     }
 
     private static void Concurrent(Action<bool, string> check)

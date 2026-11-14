@@ -35,7 +35,7 @@ internal static class PageCodec
     /// policy lowers its thread's priority for the compression alone. Never while anything allocates or takes a lock a
     /// starved thread must not hold: the room is rented, the result copied and the room returned outside the window, and
     /// the compression itself runs on this thread's reused encoder (the one-shot TryCompress creates and frees a native
-    /// context per call).</param>
+    /// context per call), streamed so its working memory does not change with the page's size (<see cref="Stream"/>).</param>
     public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null)
     {
         var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
@@ -48,23 +48,34 @@ internal static class PageCodec
                 return ZstandardEncoder.TryCompress(page, room, out var once, Quality, Window) ? room.AsSpan(0, once).ToArray() : null;
             var encoder = QuietEncoder(room);
             encoder.Reset();
-            OperationStatus status;
-            int consumed, written;
+            int written;
             quiet(true);
-            try { status = encoder.Compress(page, room, out consumed, out written, isFinalBlock: true); }
+            try { written = Stream(encoder, page, room); }
             finally { quiet(false); }
-            return status == OperationStatus.Done && consumed == page.Length ? room.AsSpan(0, written).ToArray() : null;
+            return written < 0 ? null : room.AsSpan(0, written).ToArray();
         }
         finally { ArrayPool<byte>.Shared.Return(room); }
     }
 
-    /// <summary>This thread's encoder for the policy, made on first use and warmed with one page of zeros so its working
-    /// memory exists before any compression runs lowered.</summary>
+    /// <summary>Compresses a page as a stream of unknown length, then ends the frame: given the whole input at once with
+    /// the frame's end, zstd would choose its tables from the page's size and resize its working memory when the size
+    /// changes, which the policy must not do while lowered. With the length unknown every page uses the same tables (the
+    /// window caps them), so the working memory made by the warm-up serves every page. Returns the bytes written, or -1
+    /// when the room was too small (the page then stays raw).</summary>
+    private static int Stream(ZstandardEncoder encoder, ReadOnlySpan<byte> page, Span<byte> room)
+    {
+        if (encoder.Compress(page, room, out var consumed, out var written, isFinalBlock: false) != OperationStatus.Done || consumed != page.Length) return -1;
+        if (encoder.Compress(ReadOnlySpan<byte>.Empty, room[written..], out _, out var tail, isFinalBlock: true) != OperationStatus.Done) return -1;
+        return written + tail;
+    }
+
+    /// <summary>This thread's encoder for the policy, made on first use and warmed with one window of zeros the same way
+    /// pages are compressed, so its working memory exists before any compression runs lowered.</summary>
     private static ZstandardEncoder QuietEncoder(byte[] room)
     {
         if (quietEncoder is { } ready) return ready;
         var encoder = new ZstandardEncoder(Quality, Window);
-        encoder.Compress(new byte[1 << Window], room, out _, out _, isFinalBlock: true);
+        Stream(encoder, new byte[1 << Window], room);
         return quietEncoder = encoder;
     }
 

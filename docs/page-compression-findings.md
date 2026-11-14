@@ -384,6 +384,13 @@ with these differences, decided from the code:
   seconds a GiB), which only delays the saving. On a machine whose processors are all busy it may barely run (the
   offline stress run showed a lowest-priority thread waiting tens of seconds); the result then simply stays raw a
   while longer.
+- **One reused encoder, streamed.** The one-shot call creates and frees a native context per page, which would
+  allocate while the thread is lowered, so the thread keeps one encoder, warmed at normal priority, and compresses each
+  page as a stream of unknown length. A known length would make zstd choose its tables by size and resize its working
+  memory whenever the size changed; with the length unknown it uses level 2's tables for inputs over 256 KiB for every
+  page. Full pages are a little over 256 KiB, so they already used those tables: re-measured after the change, the
+  ratios below are unchanged (orders 506 MiB, log 464 MiB packed). Only a result's short last page, or a page of very
+  few narrow rows, may pack a few percent less.
 - **Event-driven.** The thread sleeps until the next hidden result falls due or until a result of 1 MiB or more
   completes, `results.visibility` applies a new set, or a pin, lease or operation that stopped or undid packing ends.
 - **An operation's unpack counts as a use.** A hidden result that a pivot or comparison has just unpacked waits the
