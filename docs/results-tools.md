@@ -57,7 +57,7 @@ and column widths you set on columns whose names appear once in both; its filter
 the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
 window (the builder says when one waits for the others), and a busy SQL backend is asked again after
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. A result's grid strip says when its result holds only part of its query's rows.
+is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
 
 **Compare with Previous Result** compares a result's own grid with the nearest earlier result's own grid; Pivots,
 comparisons and plan sets are never compared.

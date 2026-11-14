@@ -295,7 +295,8 @@ interface Run {
   /** Its last entry was closed by `removeEntry`. */
   emptied: boolean
 }
-interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
+/** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
+interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
 
 const emptyView = (): TabViewState => ({ stackScrollTop: 0, grids: new Map(), collapsed: new Set() })
 
@@ -814,14 +815,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const jobId = this.newId()
     // A grid drawn transposed saves as drawn: a line per column, which its progress then counts.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
-    const running: RunningJob = { tabId, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    let saved!: () => void
+    const done = new Promise<void>(resolve => { saved = resolve })
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
     try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number), ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
-    finally { this.endJob(running) }
+    finally { this.endJob(running); saved() }
     if (this.disposed) return undefined
     if (result.ok) {
       if (!result.value) return undefined
@@ -1300,7 +1303,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.view = 'results'
     // Published now, before the old result is released: no snapshot ever points a grid at a released handle.
     this.publishNow(tabId)
-    this.releaseEntries(run, [old])
+    // A save of the old Pivot may still be in its file dialog, before main checks the result is there: it is released
+    // once that save ends, so rebuilding never fails a save the user started.
+    this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
     const keys = (sort?.keys ?? []).flatMap(item => { const at = moved.get(item.column); return at === undefined ? [] : [{ ...item, column: at }] })
     if (keys.length) this.applySort(tabId, run, key, keys)
     if (sort?.filters.length) this.notify(tabId, `${entryName(entry)} was built again, so its filters were removed.`)
@@ -1604,13 +1609,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /** Releases stored results in one request and disposes their handles. A close may race a bounded XML copy: the copy
    *  owns that temporary lease and reads them first; history owns no handles. */
-  private releaseEntries(run: Run, gone: readonly ResultSetEntry[]): void {
+  private releaseEntries(run: Run, gone: readonly ResultSetEntry[], after: readonly Promise<void>[] = []): void {
     const released: ResultKey[] = gone.map(entry => entry.handle.key)
     const release = () => {
       void this.client.release(released).catch(() => {})
       for (const entry of gone) entry.handle.dispose()
     }
-    if (run.retaining) void run.retaining.then(release, release)
+    const waits = run.retaining ? [run.retaining, ...after] : after
+    if (waits.length) void Promise.allSettled(waits).then(release)
     else release()
   }
 

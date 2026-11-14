@@ -17,7 +17,7 @@ const column = (name: string, dataType: string, patch: Partial<ResultColumn> = {
 const columns = [column('Region', 'nvarchar(20)'), column('Year', 'int'), column('Amount', 'decimal(10,2)'), column('Flag', 'bit'), column('Blob', 'varbinary(max)', { wire: 'binary' })]
 
 /** `frames`: the results publish on frames the test runs (`flush`), not at once. */
-function fixture(o: { frames?: boolean } = {}) {
+function fixture(o: { frames?: boolean; jobs?: DerivedJobs } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
@@ -26,7 +26,7 @@ function fixture(o: { frames?: boolean } = {}) {
   }
   const queued: (() => void)[] = []
   const results = new ResultsService({ client, api, events, frame: o.frames ? callback => { queued.push(callback) } : callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const pivot = new PivotService(results)
+  const pivot = new PivotService(results, o.jobs ? { jobs: o.jobs } : {})
   const flush = () => { for (const frame of queued.splice(0)) frame() }
   let next = 1
   /** Runs a query of `count` complete sets of `columns`; `finish: false` leaves it running. */
@@ -38,7 +38,7 @@ function fixture(o: { frames?: boolean } = {}) {
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
   }
-  return { client, results, pivot, run, flush }
+  return { client, api, results, pivot, run, flush }
 }
 
 describe('pivot helpers', () => {
@@ -304,6 +304,28 @@ describe('PivotService', () => {
     await firstBuild
     expect(results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it('releases the old Pivot only after a save of it ends, so a rebuild during its file dialog fails no save', async () => {
+    const { client, api, results, pivot, run } = fixture()
+    const [first] = run(1)
+    pivot.open('t1', keyAt(results, 't1', 0))
+    await pivot.run('t1')
+    const old = results.getSnapshot().t1.groups[0].pivot!
+    const dialog = deferred<Awaited<ReturnType<VariaApi['saveResults']>>>()
+    api.saveResults.mockImplementationOnce(() => dialog.promise)
+    const saving = results.saveAs('t1', old.key, 'Query')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ resultId: old.entry.descriptor.resultId }))
+    vi.mocked(first.pivot).mockResolvedValueOnce({ descriptor: descriptor(851, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    await pivot.run('t1')
+    await settle()
+    // Rebuilt and shown, but the old result stays until its save ends.
+    expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: old.key, revision: 2 })
+    expect(client.released()).not.toContain(old.entry.descriptor.resultId)
+    dialog.resolve({ ok: true, value: { rows: 1, truncatedCells: 0, fileName: 'Query.csv', capped: false } } as Awaited<ReturnType<VariaApi['saveResults']>>)
+    await expect(saving).resolves.toBeUndefined()
+    await settle()
+    expect(client.released()).toContain(old.entry.descriptor.resultId)
   })
 
   it('gives up a replacement whose Pivot is closed while it is built: its late answer is released and recreates nothing', async () => {
@@ -640,6 +662,41 @@ describe('PivotService', () => {
     await settle()
     expect(newer.pivot).toHaveBeenCalledOnce()
     expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ revision: 3, pivot: { filters: [], inputRows: 3 } })
+  })
+
+  it('reads the view the grid showed at the click, even when it waits for a place while the grid is filtered again', async () => {
+    const jobs = new DerivedJobs({ limit: 1 })
+    const { results, pivot, run } = fixture({ jobs })
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    const view = (viewId: number, filters: ResultView['filters']) => ({ ...first, viewId, base: first, keys: [], filters, rows: 1, baseRows: 3, complete: true, approximate: false, close: vi.fn(async () => {}), pivot: vi.fn<ResultHandle['pivot']>() }) as unknown as ResultView & { close: ReturnType<typeof vi.fn>; pivot: ReturnType<typeof vi.fn> }
+    const filtered = view(1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    vi.mocked(first.sort).mockResolvedValueOnce(filtered)
+    results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    results.viewShown('t1', one, filtered)
+    filtered.pivot.mockResolvedValueOnce({ descriptor: descriptor(891, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    // Another derived job holds the only place.
+    const other = deferred<void>()
+    const holding = jobs.run(() => other.promise)
+    pivot.open('t1', one)
+    const pivoting = pivot.run('t1')
+    expect(pivot.getSnapshot().tabs.t1.queued).toBe('place')
+    // The grid starts building another filter, and is still building it when the place frees.
+    const refiltering = deferred<ResultView>()
+    vi.mocked(first.sort).mockImplementationOnce(() => refiltering.promise)
+    results.sortBy('t1', one, 1, 'ascending')
+    expect(results.sortOf('t1', one)?.sorting).toBe(true)
+    other.resolve()
+    await holding
+    await pivoting
+    await settle()
+    // It read the view shown at the click, never the stored rows, and that view stayed open for it.
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(first.pivot).not.toHaveBeenCalled()
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toMatchObject({ filters: [{ op: 'in', column: 0, rows: [2], nulls: false }] })
+    refiltering.resolve(view(2, []))
+    await settle()
   })
 
   it('follows the focused group with a draft per group, falls back to the first it can pivot, and keeps its group by number into the next run', async () => {

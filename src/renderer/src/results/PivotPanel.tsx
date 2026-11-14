@@ -55,7 +55,9 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
   const can = !!entry && pivot.canPivot(tabId, entry.key)
   const facts = entry ? pivotFacts(entry.descriptor.rowsStored, sort?.view?.rows) : ''
-  return <aside className="profile-panel pivot-panel" aria-label="Pivot" aria-busy={state.running || undefined}>
+  // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
+  const waiting = state.queued === 'place' ? 'Waiting for other pivots to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
+  return <aside className="profile-panel pivot-panel" aria-label="Pivot">
     <div className="profile-head">
       <span className="profile-title">Pivot</span>
       <span className="profile-facts" title={facts}>{facts}</span>
@@ -63,7 +65,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     </div>
     {/* Without the group (a new run has yet to return it) there are no columns to edit a draft over: the group's kept
         draft waits for them, and these controls take no input meanwhile. */}
-    <div className="pivot-body" inert={!entry}>
+    <div className="pivot-body" inert={!entry} aria-busy={state.running || undefined}>
       {/* The group it belongs to; a result a new run has yet to return is still named. */}
       <div className="pivot-field" role="group" aria-label="Pivot source">
         <span>Source</span>
@@ -117,8 +119,8 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {!entry ? <div className="profile-note">{state.sourceName ? `${state.sourceName} is not among these results.` : 'None of these results can be pivoted.'}</div>
         : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
-      {state.queued === 'place' && <div className="profile-note" role="status">Waiting for other pivots to finish: four build at once.</div>}
-      {state.queued === 'busy' && <div className="profile-note" role="status">The backend is busy, so the pivot is asked again in a moment.</div>}
+      {/* Mounted while the builder is, so a note added to it is announced. */}
+      <div role="status">{waiting && <div className="profile-note">{waiting}</div>}</div>
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
       {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `Pivot of ${entryName(entry)} stays as it is until the new one is built.` : `Building again replaces Pivot of ${entryName(entry)} once the new one is built.`}</div>}
       {state.running

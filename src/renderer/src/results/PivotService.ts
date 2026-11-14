@@ -157,8 +157,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
    * takes its slot and key only once it is built (ResultsService.addSet), and then the old one is released. A failure, a
    * cancellation or a refusal keeps the old Pivot and says why in the builder. Builds of other groups go on beside it; a
    * newer build of the same group gives this one up. It waits for one of the window's places (DerivedJobs), which asks
-   * again when the backend or the port is busy; it reads the Table's view as the grid shows it and keeps that view open
-   * until it ends, and once more from the grid's current view when the backend had closed it.
+   * again when the backend or the port is busy; it reads the Table's view as the grid showed it at the click (held open
+   * from then until it ends, so a sort or filter begun while it waits changes nothing it reads), and once more from the
+   * grid's current view when the backend had closed it.
    */
   async run(tabId: string): Promise<void> {
     const state = this.getSnapshot().tabs[tabId]
@@ -182,12 +183,15 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     builds.delete(group.ordinal)
     this.errors.get(tabId)?.delete(group.ordinal)
     const abort = new AbortController(), spec = draftSpec(state.draft)
+    // The rows as the grid shows them now: canPivot refused while a sort or filter was being built.
+    const shown = this.results.sortOf(tabId, entry.key)?.view
+    const hold = shown ? this.results.holdView(tabId, entry.key, shown) : undefined
     const item: Build = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, queued: undefined, cancelled: false }
     builds.set(group.ordinal, item)
     this.refresh(tabId)
     let error: string | undefined
     try {
-      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, abort.signal), {
+      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, shown, abort.signal), {
         signal: abort.signal, onWait: why => { item.queued = why; this.refresh(tabId) }, onStart: () => { item.queued = undefined; this.refresh(tabId) }
       })
       const { result, filters } = built
@@ -232,6 +236,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
           : message
       }
     } finally {
+      hold?.()
       if (this.running.get(tabId)?.get(item.ordinal) === item) {
         this.running.get(tabId)!.delete(item.ordinal)
         if (error) this.fail(tabId, item.ordinal, error)
@@ -240,13 +245,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     }
   }
 
-  /** One build in the backend: the Table's view as its grid shows it now (held open until the build ends), or its stored
-   *  rows. The backend may evict a view (it keeps eight a result): the build then runs once more, over the grid's current
+  /** One build in the backend: the Table's view the grid showed at the click (`view`, held by run), or its stored rows. The backend may evict a view (it keeps eight a result): the build then runs once more, over the grid's current
    *  view when the grid has built another since, else over the same order and filters built again for it alone (closed
    *  when the build ends; the grid keeps its own view, which it will find closed when it next reads). */
-  private async build(tabId: string, entry: ResultSetEntry, spec: PivotSpec, signal: AbortSignal): Promise<Built> {
+  private async build(tabId: string, entry: ResultSetEntry, spec: PivotSpec, view: ResultView | undefined, signal: AbortSignal): Promise<Built> {
     const shown = () => { const sort = this.results.sortOf(tabId, entry.key); return sort && !sort.sorting && !sort.stale ? sort.view : undefined }
-    const view = shown()
     const once = async (source: ResultView | undefined): Promise<Built> => {
       const hold = source ? this.results.holdView(tabId, entry.key, source) : undefined
       try { return { result: await (source ?? entry.handle).pivot(spec, { signal }), filters: source?.filters ?? [], viewed: !!source } }

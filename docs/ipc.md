@@ -1673,8 +1673,8 @@ receives a new result to read like any other, never the rows it grouped.
   and `addSet` puts the new one in the same slot under the same entry key (the slot's `revision` counts builds) before
   releasing the old one. Builds of different groups run at once through `DerivedJobs`: at most four a window (comparisons
   are to share its places with PR 16), the rest waiting in the renderer, and `BUSY` or `TOO_MANY_REQUESTS` asked again after 1, 4 and
-  16 s (a new request each time, never on `TIMEOUT`). A build holds the Table's view it reads (`ResultsService.holdView`)
-  until it ends and, when the backend evicted that view (`VIEW_NOT_FOUND`), builds once more: over the grid's current
+  16 s (a new request each time, never on `TIMEOUT`). A build reads the Table's view the grid showed at the click and holds it
+  (`ResultsService.holdView`) from then until it ends and, when the backend evicted that view (`VIEW_NOT_FOUND`), builds once more: over the grid's current
   view if it has built another, else over a view of the same order and filters built for the pivot alone and closed after. A run holds at most 1,000 results: a group's first Pivot that would pass that, counting first Pivots in flight,
   is refused before the backend is asked. A new run, the Table closed or the Pivot being replaced closed gives a build
   up, and an answer that comes anyway is released (`ResultsService.discard`). A re-run keeps the draft, which follows its

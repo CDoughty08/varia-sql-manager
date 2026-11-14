@@ -61,6 +61,8 @@ async function run(sql, timeout = 300000) {
 const arm = index => page.evaluate(({ index, stackPart }) => {
   const marks = { longTasks: [], frames: [] }
   const panel = document.querySelector('aside[aria-label="Pivot"]')
+  // The draft's controls are busy while it builds (the foot's notes stay live).
+  const building = () => !!panel.querySelector('[aria-busy]')
   const tasks = new PerformanceObserver(list => { for (const entry of list.getEntries()) marks.longTasks.push(Math.round(entry.duration)) })
   tasks.observe({ entryTypes: ['longtask'] })
   let last
@@ -68,8 +70,8 @@ const arm = index => page.evaluate(({ index, stackPart }) => {
     const check = () => {
       const now = performance.now()
       if (marks.clicked === undefined) return
-      if (marks.answered === undefined && marks.busy && !panel.hasAttribute('aria-busy')) marks.answered = now - marks.clicked
-      if (panel.hasAttribute('aria-busy')) marks.busy = true
+      if (marks.answered === undefined && marks.busy && !building()) marks.answered = now - marks.clicked
+      if (building()) marks.busy = true
       const root = document.querySelectorAll('[data-result-grid]')[index]
       if (root && marks.mounted === undefined) {
         marks.mounted = now - marks.clicked

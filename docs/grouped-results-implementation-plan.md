@@ -625,8 +625,9 @@ Outcome, accepted by the owner:
         waits to ask a busy backend again, that it is asked again in a moment). `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
         never `TIMEOUT`. Builds of different groups no longer block each other (`PivotTab.busy` is gone, `queued` is
         new); a newer build of the same group cancels the older.
-      - The view a build reads is held through `ResultsService.holdView` until the build ends, so a grid re-sorted
-        meanwhile does not close it. On `VIEW_NOT_FOUND` (the backend evicted it) the build runs once more: over the
+      - A build reads the Table's view the grid showed at the click, held through `ResultsService.holdView` from then
+        until the build ends, so a grid re-sorted or re-filtered while the build waits for a place or for a busy backend
+        changes nothing it reads, and does not close it. On `VIEW_NOT_FOUND` (the backend evicted it) the build runs once more: over the
         grid's current view when the grid has built another since, else over the same order and filters built again for
         the build alone and closed after it. The grid's own evicted view is not rebuilt here. A second failure says the
         backend's sentence and keeps the old Pivot.
@@ -635,8 +636,9 @@ Outcome, accepted by the owner:
         A replacement is never refused by it. The count reads the published snapshot, which may be a frame behind, and
         does not count comparisons in flight; `addSet` still refuses past 1,000 whoever asks, so the worst case is a
         build released unused.
-      - A Save Results As of the old Pivot in progress during a rebuild finishes under its backend lease, as for a close;
-        its strip then sits on the rebuilt Pivot's slot until it ends.
+      - A Save Results As of the old Pivot in progress during a rebuild keeps the old result until the save ends (its
+        file dialog may still be open, before main checks the result is there), then releases it; its strip sits on the
+        rebuilt Pivot's slot until it ends. A Copy of the old Pivot in progress is cancelled, as for a close.
       - Not done, as the plan chose: holding a build back by its budget estimate (the findings' `rows × (16 × keys + 16)`
         suggestion). Two large builds of one query can still refuse each other with `TOO_LARGE`, and for a replacement
         the old Pivot's own memory counts against the new one.
