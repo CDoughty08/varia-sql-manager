@@ -615,9 +615,10 @@ Outcome, accepted by the owner:
         inherits a focused ordinal from the previous run (`refocus`, PR 9) selects that group when it arrives, even
         mid-stream: "a tab the user picks stays picked" covers the pick from the last run (the owner confirmed this on 2026-11-13).
       - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
-        rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group, or
-        while a grid of the layout has the focus (the user went back to a grid during the build, where PivotService also
-        leaves the focus), selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
+        rewrites); a rebuilt Pivot already took the focus through `PivotService`. While a comparison or a plan set is selected the builder
+        works on a group it can pivot, so a Pivot built for any group is selected. A Pivot that appears for another group
+        while a group that can be pivoted is selected, or while a grid of the layout has the focus (the user went back to a
+        grid during the build, where PivotService also leaves the focus), selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
         often past the strip's edge).
       - Only the selected grid is mounted, keyed by entry key: switching unmounts the other `ResultGrid`, whose
         `GridShell` disposes its view, pool and registration; its state stays in `TabViewState.grids`. The service's
@@ -641,6 +642,9 @@ Outcome, accepted by the owner:
         grid has been used: as in Stacked, it never closes the run's first result for want of one.
       - Stacked's caption close follows the service's new rule: when the closed view had the grid focus, the caption focus
         goes to the view the service focused (the neighbour's last-shown Pivot or Table), so the two never disagree.
+      - Switching the layout while a grid has the focus (the palette and the menus give it back to the grid before the
+        command runs) gives the focus to the focused view's grid in the other layout once it is mounted (`OutputPane`'s
+        `useLayoutFocus`), instead of letting it fall to the page.
       - The strip's wheel is the fixed gesture `resultTabs.scroll` (Control+wheel still zooms), and in forced colours the
         selected tab's focus ring is HighlightText on Highlight.
       - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and

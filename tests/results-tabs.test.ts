@@ -254,6 +254,34 @@ describe('results as tabs', () => {
     expect(later).toBeDefined()
   })
 
+  it('show a Pivot built from the builder after the focus went from a grid through the Results tab and out', () => {
+    const { results, one, draw, grids, all } = fixture()
+    draw()
+    all('[data-grid]')[0].focus()
+    document.querySelector<HTMLElement>('[data-output-tab="results"]')!.focus()
+    const builder = document.createElement('button')
+    document.body.append(builder)
+    builder.focus()
+    const built = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    draw()
+    draw()
+    expect(grids()).toEqual([built])
+    expect(one).toBeDefined()
+    builder.remove()
+  })
+
+  it('show a Pivot built while a comparison is selected: the builder worked on a result it can pivot', () => {
+    const { results, diff, draw, grids, chosen, resultTabs } = fixture()
+    results.focusEntry('t1', diff)
+    draw()
+    expect(grids()).toEqual([diff])
+    const built = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    draw()
+    draw()
+    expect(grids()).toEqual([built])
+    expect(chosen(resultTabs())).toBe('Result 1')
+  })
+
   it('move along the tabs with the arrow keys, Home and End, selecting as they go', () => {
     const { results, one, three, diff, draw, resultTabs, viewTabs } = fixture()
     draw()

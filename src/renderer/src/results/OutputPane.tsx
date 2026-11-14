@@ -1,9 +1,9 @@
-import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
-import { observeResize } from '../core/windows'
+import { observeResize, windowOf } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
@@ -124,6 +124,41 @@ function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: Ta
   </div>
 }
 
+/**
+ * Switching the layout while a grid had the focus (the palette and the menus give it back to the grid before the command
+ * runs) unmounts that grid: the focus would fall to the page. Once the other layout is drawn, the focused view's grid
+ * takes it instead, as soon as it is mounted (the stack mounts its grids over a few frames), unless the focus has gone
+ * somewhere else meanwhile.
+ */
+function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
+  const mainRef = useRef<HTMLDivElement>(null)
+  const gridHeld = useRef(false)
+  const layout = useRef(tabs)
+  const onFocus = (event: FocusEvent<HTMLDivElement>) => { gridHeld.current = !!(event.target as Element).closest('[data-result-grid]') }
+  // A focused element that is removed may blur with no target: that is the switch itself, not the user moving on.
+  const onBlur = (event: FocusEvent<HTMLDivElement>) => { const to = event.relatedTarget as Node | null; if (to && !event.currentTarget.contains(to)) gridHeld.current = false }
+  useLayoutEffect(() => {
+    if (layout.current === tabs) return
+    layout.current = tabs
+    const main = mainRef.current
+    if (!gridHeld.current || !main) return
+    const doc = main.ownerDocument
+    const place = () => {
+      const active = doc.activeElement
+      if (active && active !== doc.body) return true
+      const key = focused()
+      const grid = [...main.querySelectorAll<HTMLElement>('[data-result-grid]')].find(element => key === undefined || element.getAttribute('data-result-entry') === key)
+      grid?.focus({ preventScroll: true })
+      return !!grid
+    }
+    if (place()) return
+    const observer = new (windowOf(main).MutationObserver)(() => { if (place()) observer.disconnect() })
+    observer.observe(main, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [tabs])
+  return { mainRef, onFocus, onBlur }
+}
+
 /** The output view's height, followed while it is mounted. */
 function useHeight(): [(element: HTMLDivElement | null) => void, number] {
   const [element, setElement] = useState<HTMLDivElement | null>(null)
@@ -173,6 +208,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const shown = !!tab && tab.status !== 'closed' && tab.sets.length > 0
   // One view at a time under tabs, or every view stacked (queryResults.grid.layout). Peek's bare runs are never drawn here.
   const tabs = values['queryResults.grid.layout'] === 'tabs' && !tab?.bare
+  const layoutFocus = useLayoutFocus(tabs, () => tabId ? results.focusedEntry(tabId)?.key : undefined)
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
@@ -255,7 +291,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
           {/* Siblings keyed by run: their keys must differ, or React keeps a superseded run's grids beside the new ones. */}
-          <div className="results-main" onFocus={(event: FocusEvent<HTMLDivElement>) => {
+          <div className="results-main" ref={layoutFocus.mainRef} onBlur={layoutFocus.onBlur} onFocus={(event: FocusEvent<HTMLDivElement>) => {
+            layoutFocus.onFocus(event)
             const grid = (event.target as Element).closest('[data-result-grid]')
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })

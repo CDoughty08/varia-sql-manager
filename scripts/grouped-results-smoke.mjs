@@ -169,18 +169,31 @@ try {
   await expect(resultTabPanel(page)).toBeVisible()
   console.log('Grouped results checks: the Messages strip opens beside the tabs when the pane fits both rows, a grid and the strip.')
 
-  // 8. Stacked again from the palette's Show Results as Tabs: every grid is drawn, nothing was rebuilt.
+  // 8. The palette's Show Results as Tabs from a grid switches the layout, and the grid of the same view takes the focus
+  // back; then Stacked again from the editor: every grid is drawn, nothing was rebuilt.
+  const toggleFromPalette = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('show results as tabs')
+    await expect(quickInputActive(page)).toContainText('Query: Show Results as Tabs')
+    await page.keyboard.press('Enter')
+  }
+  await resultTab(page, 'Result 1').click()
+  await gridCell(resultGrid(page, 'Result 1'), 1, 0).click()
+  await expect(resultGrid(page, 'Result 1')).toBeFocused()
+  await toggleFromPalette()
+  await expect(page.locator(part.resultStack)).toHaveCount(1)
+  await expect(resultGrid(page, 'Result 1')).toBeFocused()
+  await toggleFromPalette()
+  await expect(resultTabs(page)).toHaveCount(1)
+  await expect(resultGrid(page, 'Result 1')).toBeFocused()
   await textbox().focus()
-  await page.keyboard.press('F1')
-  await page.keyboard.type('show results as tabs')
-  await expect(quickInputActive(page)).toContainText('Query: Show Results as Tabs')
-  await page.keyboard.press('Enter')
+  await toggleFromPalette()
   await expect(page.locator(part.resultStack)).toHaveCount(1)
   await expect(resultTabs(page)).toHaveCount(0)
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
   expect(failures).toEqual([])
-  console.log('Grouped results checks passed: tabs and view tabs with one grid, state kept across switches, Find Next across tabs, closing with focus, the Messages strip, a row too long to fit and Stacked again.')
+  console.log('Grouped results checks passed: tabs and view tabs with one grid, state kept across switches, Find Next across tabs, closing with focus, the Messages strip, a row too long to fit, switching from a grid with its focus kept and Stacked again.')
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'grouped-results-failure.png') }).catch(() => {})
   throw error
