@@ -377,6 +377,7 @@ if (liveGroup is null)
         ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
+        ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
@@ -425,6 +426,14 @@ if (liveGroup is null)
             "an offline suite that does not end is named by the watchdog, which leaves the suites that end alone: " + named);
     }
     await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
+    // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
+    // job meets packed pages through the accessor. Alone, after the first pass: the default is process-wide.
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
+    Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
+    Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result");
+    try { await OfflineSuites.RunAsync([.. offlineSuites.Where(suite => packedPass.Contains(suite.Name)).Select(suite => (OfflineSuites.PackedPrefix + suite.Name, suite.Run))], serial: slowMs > 0); }
+    finally { Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off; }
     using (var offline = new SqlService())
     {
         try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }

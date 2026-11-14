@@ -533,7 +533,7 @@ internal static class ViewChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         using var service = new SqlService(store);
         var set = Fill(store);
-        var baseline = store.UsedBytes;
+        var baseline = Held.Bytes(store);
         T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         string? Code(string method, object args)
         {
@@ -542,14 +542,14 @@ internal static class ViewChecks
             catch (JsonException) { return "INVALID_PARAMS"; }
         }
         var first = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = false, mode = "value" } } });
-        var held = store.UsedBytes - baseline;
+        var held = Held.Bytes(store) - baseline;
         check(SqlService.MethodNames.Contains("results.view") && SqlService.MethodNames.Contains("results.viewClose") && first.Rows == 5 && first.Complete && !first.Approximate
             && held == 4 * 5 + ResultStore.ViewOverhead, "results.view sorts a result and keeps only its order, charged to the result's budget (" + held + " bytes)");
         var second = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 5, descending = true, mode = "value" } }, replaces = first.ViewId });
-        check(store.FindView(set.ResultId, first.ViewId) is null && store.FindView(set.ResultId, second.ViewId) is not null && store.UsedBytes - baseline == held,
+        check(store.FindView(set.ResultId, first.ViewId) is null && store.FindView(set.ResultId, second.ViewId) is not null && Held.Bytes(store) - baseline == held,
             "a view that replaces another closes it and returns its memory");
         for (var i = 0; i < ResultStore.MaxViewsPerResult; i++) Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 1, descending = false, mode = "value" } } });
-        check(store.ViewCount == ResultStore.MaxViewsPerResult && store.FindView(set.ResultId, second.ViewId) is null && store.UsedBytes - baseline == held * ResultStore.MaxViewsPerResult,
+        check(store.ViewCount == ResultStore.MaxViewsPerResult && store.FindView(set.ResultId, second.ViewId) is null && Held.Bytes(store) - baseline == held * ResultStore.MaxViewsPerResult,
             "a result keeps at most 8 views: a ninth replaces its oldest");
         var codes = new[]
         {
@@ -574,7 +574,7 @@ internal static class ViewChecks
         var closed = Call<ResultsViewCloseResult>("results.viewClose", new { resultId = other.ResultId, viewIds = new[] { foreign.ViewId, foreign.ViewId } });
         store.Release(set.ResultId);
         store.Release(other.ResultId);
-        check(closed.Closed == 1 && store.ViewCount == 0 && store.UsedBytes == 0, "closing a view or releasing its result returns every byte the views held");
+        check(closed.Closed == 1 && store.ViewCount == 0 && Held.Bytes(store) == 0, "closing a view or releasing its result returns every byte the views held");
         var tight = new ResultStore(4096, 4096);
         using var small = new SqlService(tight);
         var cramped = tight.Open(tight.BeginQuery("tight"), 0, 1, 1, "rows", [new("id", "int", "text")], [WireKind.Text])!;
@@ -585,11 +585,11 @@ internal static class ViewChecks
             cramped.TryCommitRow();
         }
         cramped.Complete();
-        var before = tight.UsedBytes;
+        var before = Held.Bytes(tight);
         string? refused;
         try { small.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = cramped.ResultId, sort = new[] { new { column = 0, descending = false, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == before, "a sort the budget has no room for answers TOO_LARGE and takes nothing");
+        check(refused == "TOO_LARGE" && Held.Bytes(tight) == before, "a sort the budget has no room for answers TOO_LARGE and takes nothing");
     }
 
     /// <summary>results.read through a view, over ProtocolHost with the real service and synthetic results.</summary>
