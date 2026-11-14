@@ -134,11 +134,15 @@ being true.
   live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
   `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
   collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
-  (`CachePages`, charged as working memory whatever the budget); a view read unpacks the base pages behind its rows 64 at
+  (`CachePages`), kept only while the budget has spare room for it (`TryReserveSpare`), so many results' caches never
+  take the budget past its figures; without room a page is unpacked for its read alone. A view read unpacks the base pages behind its rows 64 at
   a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time through the cache when
-  refused); an operation on the whole result (sort, filter, distinct values, profile, search, row identity, diff, pivot)
-  first unpacks it in place (`TryUnpackAll`, reserved as working memory; a refusal answers `TOO_LARGE` with the
-  operation's sentence). Copy and Save read page by page through the cache. `ResultStore.PackingSnapshot` holds the
+  refused); an operation on the whole result (sort, filter, distinct values, profile, row identity, diff, pivot, and a
+  search, whose slots keep the pages it reads) first
+  unpacks it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
+  then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
+  A transposed Copy or Save keeps every page it reads, so it unpacks first too (`TryUnpackAll`, `TOO_LARGE` when refused); a
+  plain Copy or Save reads page by page through the cache. `ResultStore.PackingSnapshot` holds the
   counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
   `results.memory`.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,

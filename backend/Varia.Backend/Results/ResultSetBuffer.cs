@@ -401,8 +401,9 @@ internal sealed class ResultSetBuffer
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
 
-    /// <summary>A packed page's bytes: from the cache, or unpacked and kept there, charged to the budget as working memory
-    /// whatever its figures (six pages, about 1.5 MiB, at most) so a read never fails for room.</summary>
+    /// <summary>A packed page's bytes: from the cache, or unpacked and kept there while the budget has spare room for it
+    /// (<see cref="ResultStore.TryReserveSpare"/>), so the caches of many results never take the budget past its figures.
+    /// A read never fails for room: without it the page is unpacked for the read alone.</summary>
     private byte[] Unpacked(StoredPage page)
     {
         lock (gate)
@@ -430,8 +431,11 @@ internal sealed class ResultSetBuffer
     {
         // A freed set keeps no charge; a page unpacked meanwhile needs no copy.
         if (gone || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
+        // The oldest page makes way first, so a full budget still keeps the newest read.
+        if (cache.Count >= CachePages) DropCachedLocked(cache.Count - 1);
+        if (!store.TryReserveSpare(Budget, body.Length, false)) return;
+        charged += body.Length;
         cache.Insert(0, (page, body));
-        Charge(body.Length);
         cacheBytes += body.Length;
         store.Held(0, 0, body.Length);
         while (cache.Count > CachePages) DropCachedLocked(cache.Count - 1);
@@ -502,23 +506,49 @@ internal sealed class ResultSetBuffer
     }
 
     /// <summary>Unpacks every packed page in place before an operation that reads the whole result (a sort, a filter, a
-    /// profile, a pivot, a diff, a search, row identities), on the workers, after reserving the bytes it adds from the
-    /// budget as working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from
-    /// 64 MiB, as a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and view reads still work. The caller holds a pin, so nothing
-    /// packs the pages again until it ends.</summary>
+    /// profile, a pivot, a diff, a search, row identities, a transposed Copy or Save), on the workers, after reserving the bytes it adds from the budget as
+    /// working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from 64 MiB, as
+    /// a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and
+    /// view reads still work. The caller holds a pin, so nothing packs the pages again until it ends.</summary>
     public bool TryUnpackAll(CancellationToken token = default)
     {
+        if (!HasPacked) return true;
+        var need = UnpackNeed();
+        if (need > 0 && !store.TryReserveWork(Budget, need)) return false;
+        UnpackAll(need, token);
+        return true;
+    }
+
+    /// <summary>The bytes unpacking every packed page would add (0 when none is packed). The caller holds a pin, so the
+    /// figure can only fall (another operation unpacking) until <see cref="UnpackAll"/>.</summary>
+    public long UnpackNeed()
+    {
+        lock (gate)
+        {
+            if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
+            long need = 0;
+            foreach (var page in pages)
+                if (page.Stored is PackedPage packed) need += page.Length - packed.Bytes.Length;
+            return Math.Max(0, need);
+        }
+    }
+
+    /// <summary>Unpacks every packed page in place, taking <paramref name="reserved"/> bytes already reserved from this
+    /// set's budget as working memory (<see cref="UnpackNeed"/>) as its own, and giving back what it did not need. On
+    /// failure (cancellation) the reservation is returned and nothing changes.</summary>
+    public void UnpackAll(long reserved, CancellationToken token = default)
+    {
         StoredPage[] packed;
-        long need = 0;
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
             packed = [.. pages.Where(page => page.Stored is PackedPage)];
-            foreach (var page in packed) need += page.Length - ((PackedPage)page.Stored).Bytes.Length;
         }
-        if (packed.Length == 0) return true;
-        var reserved = Math.Max(0, need);
-        if (reserved > 0 && !store.TryReserveWork(Budget, reserved)) return false;
+        if (packed.Length == 0)
+        {
+            store.Return(Budget, reserved);
+            return;
+        }
         var bodies = new byte[packed.Length][];
         try
         {
@@ -549,7 +579,6 @@ internal sealed class ResultSetBuffer
             if (added > reserved) Charge(added - reserved);
             else ReturnLocked(reserved - added);
         }
-        return true;
     }
 
     private byte[]? Cached(StoredPage page)
@@ -579,7 +608,10 @@ internal sealed class ResultSetBuffer
         }
         if (unpack.Count == 0) return bodies;
         if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
+        {
+            reserved = 0;
             throw new InvalidOperationException("A result page was read without a pin.");
+        }
         if (!store.TryReserveWork(Budget, reserved))
         {
             reserved = 0;
@@ -597,7 +629,9 @@ internal sealed class ResultSetBuffer
         }
         catch
         {
+            // Returned here, so the caller (which returns what it holds) holds nothing.
             store.Return(Budget, held);
+            reserved = 0;
             throw;
         }
         return bodies;

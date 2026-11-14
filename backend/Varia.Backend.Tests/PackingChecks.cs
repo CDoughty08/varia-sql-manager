@@ -14,9 +14,9 @@ internal static class PackingChecks
     /// <summary>A store whose one query may take the whole budget, so a check can fill what is left with another.</summary>
     private static ResultStore Store(PagePacking packing, long global = 1L << 30) => new(global, global) { Packing = packing };
 
-    private static ResultSetBuffer Filled(ResultStore store, string session, long rows)
+    private static ResultSetBuffer Filled(ResultStore store, string session, long rows, QueryBudget? query = null, int index = 0)
     {
-        var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", W1Columns, W1Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var set = store.Open(query ?? store.BeginQuery(session), index, 1, 1, "rows", W1Columns, W1Wires) ?? throw new InvalidOperationException("The result set was not kept.");
         for (var row = 0L; row < rows; row++)
         {
             set.CountRow();
@@ -152,6 +152,14 @@ internal static class PackingChecks
         var forced = Random(every, "every", 600);
         check(forced.SealedSnapshot().All(page => page.Stored is PackedPage) && every.UsedBytes - 0 == PageCharges(forced) && Bodies(forced).Length > 0,
             "the checks' mode packs every page of a complete result, even one that grows, and charges what it holds");
+        // Unpacking pages that grew needs no bytes, but they are unpacked all the same, and give back what they grew by.
+        bool grownUnpacked;
+        using (forced.Pin())
+        {
+            grownUnpacked = forced.UnpackNeed() == 0 && forced.TryUnpackAll() && forced.SealedSnapshot().All(page => page.Stored is byte[]) && !forced.HasPacked
+                && every.UsedBytes == PageCharges(forced);
+        }
+        check(grownUnpacked, "an operation unpacks a result whose packed pages grew, though unpacking needs no bytes");
     }
 
     private static void Cache(Action<bool, string> check)
@@ -214,8 +222,9 @@ internal static class PackingChecks
             refused = !big.TryUnpackAll();
             read = big.SealedSnapshot()[0].Body();
         }
-        check(filled && refused && big.HasPacked && big.SealedSnapshot().All(page => page.Stored is PackedPage) && tight.UsedBytes == used + read.Length,
-            "a refused unpack changes nothing, and the result still reads through the cache");
+        check(filled && refused && big.HasPacked && big.SealedSnapshot().All(page => page.Stored is PackedPage) && read.Length > 0 && tight.UsedBytes == used
+            && tight.PackingSnapshot().CacheBytes == 0,
+            "a refused unpack changes nothing, and the result still reads, unpacked for the read alone: a full budget keeps no cached page");
     }
 
     private static void ViewReads(Action<bool, string> check)
@@ -234,6 +243,18 @@ internal static class PackingChecks
         check(raw.Length == packed.Length && raw.Zip(packed).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && store.UsedBytes == used
             && store.PackingSnapshot().PagesUnpacked - unpacked >= set.SealedSnapshot().Length / 2,
             "a view read of a packed result unpacks its base pages together, reads the same pages, and returns the working memory");
+
+        // A cancelled group read gives back what it reserved and reports nothing held, so its caller returns nothing twice.
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        long held = -1;
+        var threw = false;
+        using (set.Pin())
+        {
+            try { set.BodiesTogether([.. set.SealedSnapshot().Take(8)], out held, cancelled.Token); }
+            catch (OperationCanceledException) { threw = true; }
+        }
+        check(threw && held == 0 && store.UsedBytes == used, "a cancelled group read returns its working memory and reports none held");
 
         var tight = Store(PagePacking.OnRequest, 64L << 20);
         var big = Filled(tight, "tight", 60_000);
@@ -259,6 +280,18 @@ internal static class PackingChecks
         var set = Filled(store, "service", 60_000);
         set.Pack();
         var packed = store.UsedBytes;
+        // A search keeps the pages it reads, so it unpacks the result first and its pages are charged.
+        Call<object>("results.search", new { resultId = set.ResultId, text = "59999", fromRow = 0, maxMatches = 1 });
+        check(!set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]) && store.UsedBytes > packed,
+            "a search unpacks a packed result first, so the pages it keeps are charged");
+        set.Pack();
+        packed = store.UsedBytes;
+
+        // A transposed Copy keeps every page it reads too: it unpacks first, and answers TOO_LARGE without room.
+        var turnedBytes = ResultJobs.EstimateCopy(set, [new CopyPartArgs([[0, 99]], [[0, 1]])], true, false, transposed: true);
+        check(turnedBytes > 0 && !set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]), "a transposed Copy unpacks a packed result first");
+        set.Pack();
+        packed = store.UsedBytes;
         var sorted = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         check(sorted.Rows == set.RowsAvailable && !set.HasPacked && store.UsedBytes > packed,
             "an operation on the whole result unpacks it first and leaves it unpacked for the stage-1 policy to pack again");
@@ -267,5 +300,30 @@ internal static class PackingChecks
         store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - 1024, false, out _);
         var code = Code("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 1, descending = false, mode = "value" } } });
         check(code == "TOO_LARGE" && set.HasPacked, "an operation whose result cannot be unpacked for want of budget answers TOO_LARGE and leaves it packed");
+        string? turnedCode = null;
+        try { ResultJobs.EstimateCopy(set, [new CopyPartArgs([[0, 99]], [[0, 1]])], true, false, transposed: true); }
+        catch (RequestException error) { turnedCode = error.Code; }
+        check(turnedCode == "TOO_LARGE" && set.HasPacked, "a transposed Copy that cannot unpack the result answers TOO_LARGE and leaves it packed");
+
+        // A diff reserves both results' unpacking together: with room for one only, it answers TOO_LARGE and both stay packed.
+        var pair = Store(PagePacking.OnRequest, 96L << 20);
+        using var pairService = new SqlService(pair);
+        var query = pair.BeginQuery("pair");
+        var left = Filled(pair, "pair", 40_000, query, 0);
+        var right = Filled(pair, "pair", 40_000, query, 1);
+        left.Pack();
+        right.Pack();
+        long leftNeed, rightNeed;
+        using (left.Pin()) leftNeed = left.UnpackNeed();
+        using (right.Pin()) rightNeed = right.UnpackNeed();
+        var pairFiller = pair.BeginQuery("filler");
+        var pairFilled = pair.TryReserve(pairFiller, pair.GlobalBytes - pair.UsedBytes - leftNeed - rightNeed / 2, false, out _);
+        var pairUsed = pair.UsedBytes;
+        string? diffCode = null;
+        try { pairService.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
+        catch (RequestException error) { diffCode = error.Code; }
+        check(pairFilled && leftNeed > 0 && rightNeed > 0 && diffCode == "TOO_LARGE" && left.HasPacked && right.HasPacked
+            && left.SealedSnapshot().All(page => page.Stored is PackedPage) && pair.UsedBytes == pairUsed,
+            "a diff with room to unpack only one of its results answers TOO_LARGE and leaves both packed");
     }
 }

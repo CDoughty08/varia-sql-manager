@@ -1574,7 +1574,9 @@ internal static class ViewPages
                 return index < 0 ? ~index - 1 : index;
             }
             var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
-            var packed = set.HasPacked;
+            // Groups are unpacked together until the budget refuses one; then pages are read one at a time through the cache.
+            var packedSource = set.HasPacked;
+            var grouping = packedSource;
             var columns = set.Wires.Count;
             var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
             var start = firstRow;
@@ -1585,28 +1587,37 @@ internal static class ViewPages
                 var page = pages[index];
                 if (!parsed.TryGetValue(index, out var layout))
                 {
-                    if (packed)
+                    if (grouping)
                     {
-                        // The next distinct pages from this row on, this one first.
+                        // The next distinct pages from this row on, this one first, looking no further ahead than the rows
+                        // so many pages hold, so a small result's scan stays short.
                         parsed.Clear();
                         set.ReturnWork(held);
                         held = 0;
                         var group = new List<int> { index };
                         var seen = new HashSet<int> { index };
-                        for (var ahead = position + 1; ahead < end && group.Count < UnpackTogether; ahead++)
+                        var horizon = Math.Min(end, position + 1 + (long)UnpackTogether * PageBuilder.MaxRows);
+                        for (var ahead = position + 1; ahead < horizon && group.Count < UnpackTogether; ahead++)
                             if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
-                        if (group.Count > 1 && set.BodiesTogether([.. group.Select(at => pages[at])], out held) is { } bodies)
-                            for (var g = 0; g < group.Count; g++)
-                            {
-                                var parse = PageView.Parse(bodies[g], columns);
-                                parsed[group[g]] = (bodies[g], parse.Layout, parse.BlobStart);
-                            }
+                        if (group.Count > 1)
+                        {
+                            if (set.BodiesTogether([.. group.Select(at => pages[at])], out held) is { } bodies)
+                                for (var g = 0; g < group.Count; g++)
+                                {
+                                    var parse = PageView.Parse(bodies[g], columns);
+                                    parsed[group[g]] = (bodies[g], parse.Layout, parse.BlobStart);
+                                }
+                            else grouping = false;
+                        }
                     }
                     if (!parsed.TryGetValue(index, out layout))
                     {
                         var body = page.Body();
                         var first = PageView.Parse(body, columns);
-                        parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                        layout = (body, first.Layout, first.BlobStart);
+                        // Once grouping is refused, a packed page's unpacked copy is not kept past its row: only the set's
+                        // cache (charged) keeps pages, so the pages of an output page never pile up uncharged.
+                        if (!packedSource || grouping) parsed[index] = layout;
                     }
                 }
                 Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
@@ -1615,7 +1626,7 @@ internal static class ViewPages
                     var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
                     // A read may wait for credit while it holds the page, so it keeps no unpacked group's working memory
                     // across the wait; Copy and Save (no wait, a lease) keep the group for the next page.
-                    if (!packed || endOnRelease)
+                    if (!grouping || endOnRelease)
                     {
                         parsed.Clear();
                         set.ReturnWork(held);

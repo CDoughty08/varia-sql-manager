@@ -1616,9 +1616,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         var complete = set.IsComplete;
         using var pin = set.Pin();
-        Unpack(set, filters.Length > 0
+        await Unpack(filters.Length > 0
             ? "There is not enough result memory to filter these rows. Close other results and try again."
-            : "There is not enough result memory to sort these rows. Close other results and try again.", token);
+            : "There is not enough result memory to sort these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1733,7 +1733,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
-        Unpack(set, "There is not enough result memory to search these rows. Close other results and try again.", token);
+        // A search keeps each page it reads in its slots (a view's order touches pages at random), so a packed result is
+        // unpacked first, its pages charged, rather than read page by page into memory nothing charges.
+        await Unpack("There is not enough result memory to search these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
@@ -1756,7 +1758,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
-        Unpack(set, "There is not enough result memory to profile these rows. Close other results and try again.", token);
+        await Unpack("There is not enough result memory to profile these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1814,7 +1816,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
-        Unpack(set, "There is not enough result memory to list this column's values. Close other results and try again.", token);
+        await Unpack("There is not enough result memory to list this column's values. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1906,7 +1908,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
         using var pin = set.Pin();
-        Unpack(set, "There is not enough result memory to tell these rows apart. Close other results and try again.", token);
+        await Unpack("There is not enough result memory to tell these rows apart. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -2001,16 +2003,43 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
     internal const string BudgetStoppedGlobal = "The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.";
-    /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
-    /// because the machine is short of memory, which closing results here may not cure.</summary>
-    /// <summary>Unpacks a packed result whole before an operation that reads all of it (ResultSetBuffer.TryUnpackAll), the
-    /// caller holding its pin; TOO_LARGE with the operation's own sentence when the budget has no room for its pages as
-    /// sealed. Plain and view reads never need this.</summary>
-    private void Unpack(ResultSetBuffer set, string tooLarge, CancellationToken token)
+    /// <summary>Unpacks packed results whole before an operation that reads all of them (ResultSetBuffer.UnpackAll), the
+    /// caller holding their pins: the bytes for all of them are reserved together first, so either every one is unpacked
+    /// or none is (TOO_LARGE with the operation's own sentence). A release stops it as it stops the operation
+    /// (<see cref="UntilReleased{T}"/>). Plain and view reads read packed pages as they are.</summary>
+    private async Task Unpack(string tooLarge, CancellationToken token, params ResultSetBuffer[] sets)
     {
-        if (!set.TryUnpackAll(token)) throw TooLarge(tooLarge);
+        // Pages that packing made larger (the checks' mode packs every page) need nothing, but are unpacked all the same.
+        if (!sets.Any(set => set.HasPacked)) return;
+        var needs = sets.Select(set => set.UnpackNeed()).ToArray();
+        var total = needs.Sum();
+        // The sets of one operation share a query's budget (a diff compares results of one query).
+        if (total > 0 && !store.TryReserveWork(sets[0].Budget, total)) throw TooLarge(tooLarge);
+        // The next set to unpack, and whether its UnpackAll began (it returns its own reservation when it fails).
+        var next = 0;
+        var began = false;
+        try
+        {
+            await UntilReleased(work =>
+            {
+                for (; next < sets.Length; next++)
+                {
+                    began = true;
+                    sets[next].UnpackAll(needs[next], work);
+                    began = false;
+                }
+                return true;
+            }, token, sets);
+        }
+        catch
+        {
+            for (var rest = began ? next + 1 : next; rest < sets.Length; rest++) store.Return(sets[0].Budget, needs[rest]);
+            throw;
+        }
     }
 
+    /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
+    /// because the machine is short of memory, which closing results here may not cure.</summary>
     private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
 
     internal const string LowMemory = "The computer is low on memory, so there is no room to do this now. Close other programs or other results and try again.";
@@ -2034,8 +2063,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
         const string compareTooLarge = "There is not enough result memory to compare these results. Close other results and try again.";
-        Unpack(left, compareTooLarge, token);
-        Unpack(right, compareTooLarge, token);
+        await Unpack(compareTooLarge, token, left, right);
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2110,7 +2138,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
         using var pin = set.Pin();
-        Unpack(set, tooLarge, token);
+        await Unpack(tooLarge, token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;

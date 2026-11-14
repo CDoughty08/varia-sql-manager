@@ -92,11 +92,38 @@ internal sealed class ResultJobs(ResultStore store)
     /// <summary>Reads a source column by column: each row's page is found once, then every line reads it there, so no rows
     /// are copied and nothing is held but the stored pages themselves.</summary>
     /// <param name="named">The fields' names are written (headers, or JSON): otherwise none are read or made.</param>
-    private sealed class Turner(Source source, int? headerColumn, bool named)
+    /// <remarks>It keeps every page it reads, so it pins the set and unpacks a packed one first, its pages charged (TOO_LARGE
+    /// without room): dispose it when the job ends.</remarks>
+    private sealed class Turner : IDisposable
     {
         /// <summary>Cells written between looks at the token and the output.</summary>
         private const int Step = 1 << 10;
-        private readonly RowAccess access = new(source.Set.SealedSnapshot(), source.Set.Columns.Count);
+        private readonly Source source;
+        private readonly int? headerColumn;
+        private readonly bool named;
+        private readonly PagePin pin;
+        private readonly RowAccess access;
+
+        public Turner(Source source, int? headerColumn, bool named, CancellationToken token = default)
+        {
+            this.source = source;
+            this.headerColumn = headerColumn;
+            this.named = named;
+            pin = source.Set.Pin();
+            try
+            {
+                if (!source.Set.TryUnpackAll(token))
+                    throw new RequestException("TOO_LARGE", "There is not enough result memory to turn these rows. Close other results and try again.");
+            }
+            catch
+            {
+                pin.Dispose();
+                throw;
+            }
+            access = new(source.Set.SealedSnapshot(), source.Set.Columns.Count);
+        }
+
+        public void Dispose() => pin.Dispose();
 
         public TurnedPlan Plan(Plan plan)
         {
@@ -161,7 +188,7 @@ internal sealed class ResultJobs(ResultStore store)
             var partial = source.View is { } view ? !view.Complete : set.IsOpen;
             var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
-            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers) : null;
+            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers, context.Token) : null;
             var turned = turner is null ? [] : plans.Select(turner.Plan).ToList();
             var estimate = turner is null ? Estimate(source, plans, args.Headers, eolBytes) : turned.Sum(plan => turner.Estimate(plan, args.Headers, eolBytes));
             if (estimate > args.MaxBytes)
@@ -220,7 +247,7 @@ internal sealed class ResultJobs(ResultStore store)
             int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
             // A JSON object always names its column and its fields; a line without headers has only its rows' values.
             var named = args.Headers || format == TextFormat.Json;
-            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named) : null;
+            using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named, token) : null;
             var turned = turner?.Plan(new Plan(source.Available > 0 ? [(0, source.Available - 1)] : [], all));
             var progress = new Progress(context, turned is null ? source.Available : all.Length, ProgressInterval);
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
@@ -397,7 +424,7 @@ internal sealed class ResultJobs(ResultStore store)
         var available = source.Available;
         var plans = parts.Select(part => Resolve(part, set.Columns, available)).ToList();
         if (!transposed) return Estimate(source, plans, headers, crlf ? 2 : 1);
-        var turner = new Turner(source, headerColumn, headers);
+        using var turner = new Turner(source, headerColumn, headers);
         return plans.Sum(plan => turner.Estimate(turner.Plan(plan), headers, crlf ? 2 : 1));
     }
 

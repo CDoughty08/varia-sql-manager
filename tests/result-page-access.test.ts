@@ -34,7 +34,8 @@ describe('result page access', () => {
     expect(lines(/\bStored\s*:(?!:)/, [accessor, 'backend/Varia.Backend.Tests/PackingChecks.cs'])).toEqual([])
   })
   it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read', () => {
-    expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs'])).toEqual([])
+    // The compression bench builds set-less pages of its own to time codecs, outside any store.
+    expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs', 'backend/Varia.Backend.Tests/PageCompressionBench.cs'])).toEqual([])
     const views = readFileSync('backend/Varia.Backend/Results/ResultViews.cs', 'utf8')
     expect([...views.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
   })

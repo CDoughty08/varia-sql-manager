@@ -27,13 +27,12 @@ internal static class PageCodec
     public static byte[]? Pack(ReadOnlySpan<byte> page)
     {
         var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
-        // One room a thread, kept: a page's worst case is above the large object heap's threshold.
-        var room = scratch is { } kept && kept.Length >= need ? kept : scratch = new byte[need];
-        if (!ZstandardEncoder.TryCompress(page, room, out var written, Quality, Window)) return null;
-        return room.AsSpan(0, written).ToArray();
+        // A page's worst case is above the large object heap's threshold, so the room is pooled (bounded per core by the
+        // shared pool) rather than allocated per page or kept on every thread that ever packs.
+        var room = System.Buffers.ArrayPool<byte>.Shared.Rent(need);
+        try { return ZstandardEncoder.TryCompress(page, room, out var written, Quality, Window) ? room.AsSpan(0, written).ToArray() : null; }
+        finally { System.Buffers.ArrayPool<byte>.Shared.Return(room); }
     }
-
-    [ThreadStatic] private static byte[]? scratch;
 
     /// <summary>The page packed into <paramref name="packed"/>, of <paramref name="length"/> bytes as sealed.</summary>
     public static byte[] Unpack(byte[] packed, int length)
