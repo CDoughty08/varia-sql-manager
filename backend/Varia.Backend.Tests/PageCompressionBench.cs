@@ -9,7 +9,7 @@ namespace Varia.Backend.Tests;
 
 /// <summary>The page compression benchmark, run by hand (docs/page-compression-findings.md holds what it measured):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench &lt;GiB&gt; &lt;shape&gt;
-/// [--codecs name,name] [--keep name] [--no-ops]</c>, one size and shape a process so each memory reading is its own.
+/// [--codecs name,name] [--keep name] [--no-ops] [--fused]</c>, one size and shape a process so each memory reading is its own.
 /// Fills one query budget of that size with rows of the shape, then measures, without changing how the product stores
 /// pages: each codec's ratio and its compress and decompress speed (one thread over a sample of pages, and the results'
 /// worker count over all of them); what the operations that read pages cost when the pages must be decompressed first
@@ -17,8 +17,9 @@ namespace Varia.Backend.Tests;
 /// Save over the whole result); and the memory the operating system gets back once the raw pages are dropped and only the
 /// kept codec's pages remain, through a non-compacting and then a compacting gen2 collection. VARIA_BENCH_CORES=n holds
 /// the process to n cores and the results' threads to what such a machine would have. Prints one JSON line per metric;
-/// measures only, no checks, and is not part of <c>npm run check</c> or CI.</summary>
-internal static class PageCompressionBench
+/// measures only, no checks, and is not part of <c>npm run check</c> or CI. <c>--fused</c> measures the fused per-page reads
+/// instead (PageCompressionBench.Fused.cs).</summary>
+internal static partial class PageCompressionBench
 {
     public const string Argument = "--page-compression-bench";
     private static readonly ResultCollation CaseInsensitive = new(1033, 0, 1252, false, 1 | 8 | 16);
@@ -350,6 +351,11 @@ internal static class PageCompressionBench
         var workers = ViewSorter.Workers;
         label = gib.ToString("0.##", CultureInfo.InvariantCulture) + "GiB." + shapeName + (cores > 0 ? "." + cores + "cores" : "");
         var shape = Build(shapeName);
+        if (args.Contains("--fused"))
+        {
+            RunFused(gib, shapeName, shape, workers);
+            return;
+        }
         ResultColumn[] columns = [.. shape.Columns.Select(column => column.Meta)];
         var none = CancellationToken.None;
 

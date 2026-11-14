@@ -256,10 +256,11 @@ internal static class ProfileChecks
             (ResultsProfileResult)host.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId, columns = all }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         var roomy = JsonSerializer.Serialize(Asked(service, set.ResultId), HostChecks.Json);
         // The same rows in a budget they nearly fill: no eighth to spare, but room for one thread's figures.
-        // As sealed: in the packed pass results.profile unpacks the rows first.
+        // Its copy stays as sealed in the packed pass too: a packed one is read through rooms, whose number depends on the
+        // threads, and the margin here is for figures (FusedReadChecks covers profiles of packed results).
         var rowsBytes = Held.AsSealed(store, set);
         var single = ColumnProfiler.WorkingBytes(rows, all.Length);
-        var snug = new ResultStore(4L << 30, rowsBytes + single + (2L << 20));
+        var snug = new ResultStore(4L << 30, rowsBytes + single + (2L << 20)) { Packing = PagePacking.Off };
         using var snugService = new SqlService(snug);
         var copy = Filled(snug.Open(snug.BeginQuery("snug"), 0, 1, 1, "rows", columns, [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)])!);
         var before = Held.Bytes(snug);
@@ -304,7 +305,8 @@ internal static class ProfileChecks
         catch (ColumnProfiler.ProfileTooLargeException) { refused = "too large"; }
         // A budget with room for four threads' figures and for what one thread keeps of the values, not for what four keep.
         var figures = ColumnProfiler.WorkingBytes(48, 1, 4, ColumnProfiler.RunRows(pages, 4));
-        var snug = new ResultStore(1L << 30, Held.AsSealed(roomy, set) + figures + between);
+        // As sealed in the packed pass too, so the margin is the threads' kept values alone and the retry always runs.
+        var snug = new ResultStore(1L << 30, Held.AsSealed(roomy, set) + figures + between) { Packing = PagePacking.Off };
         var copy = Filled(snug);
         using var service = new SqlService(snug);
         var before = Held.Bytes(snug);
