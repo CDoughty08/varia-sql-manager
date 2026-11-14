@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -91,6 +91,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
+    private readonly ResultVisibility visibility;
     private readonly ResultJobs jobs;
     private readonly bool hooks;
     private readonly Func<object, bool>? publish;
@@ -98,6 +99,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private long reportedGlobalBytes = -1;
+    /// <summary>A summary's budget counted as a report but carries no detail: the next check sends the store's detail once.</summary>
+    private bool detailPending;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
@@ -168,6 +171,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThreadPoolFloor.Ensure();
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
+        visibility = new ResultVisibility(id => this.store.Find(id) is not null);
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
@@ -314,7 +318,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -367,6 +371,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
@@ -1525,9 +1530,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         int pages = 0, rows = 0;
         foreach (var page in set.PagesFor(args.FirstRow, args.MaxRows))
         {
-            // A release ends the read after the page already sent.
-            if (set.IsReleased) throw Unavailable(args.ResultId);
-            await context.SendDataAsync(page.Body);
+            // A release ends the read after the page already sent. The pin covers taking the page's bytes, not the wait for
+            // credit to send them, so a read stalled on credit never keeps a released result's budget.
+            byte[] body;
+            using (set.Pin())
+            {
+                if (set.IsReleased) throw Unavailable(args.ResultId);
+                body = page.Body();
+            }
+            await context.SendDataAsync(body);
             next = page.FirstRow + page.Rows;
             pages++;
             rows += page.Rows;
@@ -1565,15 +1576,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         var set = view.Set;
         var pages = 0;
-        foreach (var body in ViewPages.Build(view, args.FirstRow, args.MaxRows))
+        long sent = 0;
+        foreach (var page in ViewPages.Build(view, args.FirstRow, args.MaxRows))
         {
             // A release or a closed view ends the read after the page already sent.
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (!store.HasView(view)) throw ViewClosed();
-            await context.SendDataAsync(body);
+            await context.SendDataAsync(page.Body());
             pages++;
+            sent += page.Rows;
         }
         var next = Math.Max(args.FirstRow, Math.Min(view.Rows, args.FirstRow + args.MaxRows));
+        // The pages end early when the set is released between two of them.
+        if (sent < next - args.FirstRow) throw Unavailable(args.ResultId);
         return new ResultsReadResult(next, view.Rows, true, pages, (int)(next - args.FirstRow));
     }
 
@@ -1605,6 +1620,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             });
         }
         var complete = set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1619,7 +1635,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         (int[] Order, bool Approximate, ViewFilter[] Filters) built;
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-        try { built = await Task.Run(() => ViewSorter.Build(set, pages, keys, filters, token, keyMemory), token); }
+        try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -1718,6 +1734,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
@@ -1739,6 +1756,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1764,7 +1782,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 var threads = workers;
-                var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token, charges, threads), token);
+                var result = await UntilReleased(work => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, work, charges, threads), token, set);
                 if (set.IsReleased) throw Unavailable(args.ResultId);
                 if (view is not null && !store.HasView(view)) throw ViewClosed();
                 return result;
@@ -1795,6 +1813,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1805,7 +1824,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            snapshot = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, token, keptView, keyMemory), token);
+            snapshot = await UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, set);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
             // Cancelled once built: nobody waits for it, so it is not kept.
@@ -1885,6 +1904,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.Column is { } column && (column < 0 || column >= set.Columns.Count))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1893,7 +1913,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!store.TryReserveWork(set.Budget, working + kept))
             throw TooLarge("There is not enough result memory to tell these rows apart. Close other results and try again.");
         (int Column, bool Unique, bool Approximate, long[] Ids) built;
-        try { built = await Task.Run(() => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, token), token); }
+        try { built = await UntilReleased(work => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, work), token, set); }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -2007,6 +2027,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", NotTablesSentence);
         if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
         ThrowIfStopped(left.Budget);
+        using var leftPin = left.Pin();
+        using var rightPin = right.Pin();
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2025,7 +2047,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             DiffModel model;
-            try { model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token); }
+            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, ReserveCells), token, left, right); }
             catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error, (left, args.Left), (right, args.Right)); }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
@@ -2039,7 +2061,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             try
             {
-                await Task.Run(() => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, token), token);
+                await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work), token, left, right);
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
                 var written = set.Describe();
@@ -2079,6 +2101,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -2096,7 +2119,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             PivotModel model;
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve, keyMemory), token); }
+            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, Reserve, keyMemory), token, set); }
             catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
@@ -2109,7 +2132,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             try
             {
-                await Task.Run(() => PivotOutput.Write(pivot, set, pages, spec, model, token), token);
+                await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set);
                 // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
                 if (pivot.Describe().RowsStored < model.RowGroups) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
                 var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);
@@ -2168,6 +2191,22 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>
     public const int MaxViewIds = 64;
 
+    /// <summary>Runs an operation over whole results on the thread pool, stopped by the request's cancellation or by the
+    /// release of any of <paramref name="sets"/> (<see cref="ResultSetBuffer.Released"/>), so it never holds a released
+    /// result's pinned pages, and their budget, until it finishes. A release answers RESULT_RELEASED.</summary>
+    internal async Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, params ResultSetBuffer[] sets)
+    {
+        using var work = CancellationTokenSource.CreateLinkedTokenSource([token, .. sets.Select(set => set.Released)]);
+        try { return await Task.Run(() => operation(work.Token), work.Token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.FirstOrDefault(set => set.IsReleased) is { } released)
+        {
+            throw Unavailable(released.ResultId);
+        }
+    }
+
+    internal Task UntilReleased(Action<CancellationToken> operation, CancellationToken token, params ResultSetBuffer[] sets) =>
+        UntilReleased(work => { operation(work); return true; }, token, sets);
+
     private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)
         ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")
         : new RequestException("RESULT_NOT_FOUND", "These results do not exist.");
@@ -2176,11 +2215,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
         var closed = store.Release(args.ResultIds);
+        visibility.Forget(args.ResultIds);
         // The fall goes out as an event before this answer, in order with the other results.memory events; the status bar
         // follows only those, so an answer overtaken by a newer event cannot show stale usage.
         if (closed > 0) ReportMemory();
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
+
+    /// <summary>Which results' grids are shown in any window (the whole set, replacing the last): bookkeeping only, for a
+    /// memory policy over hidden results (<see cref="ResultVisibility"/>). Ids of results not stored are ignored.</summary>
+    private ResultsVisibilityResult SetVisibility(ResultsVisibilityArgs args)
+    {
+        if (args.Visible is not { Length: <= ResultVisibility.MaxResults } ids || ids.Contains(0u) || ids.Distinct().Count() != ids.Length
+            || args.Seq is not (>= 1 and <= int.MaxValue) || args.Source is not { Length: 36 } text || !Guid.TryParseExact(text, "D", out var source))
+            throw new RequestException("INVALID_PARAMS", $"A source ID, a sequence number and at most {ResultVisibility.MaxResults} distinct result IDs are required.");
+        var applied = visibility.Set(source, args.Seq.Value, ids, out var kept);
+        return new ResultsVisibilityResult(kept, applied);
+    }
+
+    /// <summary>Which results are shown, for a memory policy over hidden ones and for the checks.</summary>
+    internal ResultVisibility Visibility => visibility;
 
     /// <summary>The most a user's limit is, in GiB, as Tools › Options allows (queryResults.grid.memoryLimitGiB).</summary>
     internal const int MaxMemoryLimitGiB = 1024;
@@ -2235,18 +2289,22 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
     /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage or the budget changes. The timer checks
-    /// once a second and results.close checks before it answers. A refused event is retried at the next check.</summary>
+    /// once a second and results.close checks before it answers. A refused event is retried at the next check. Its detail
+    /// (the Memory panel's Nerd metrics) is read only when an event goes out, so it adds no work to an unchanged check. A
+    /// query summary's budget counts as a report but has no detail, so the next check after one sends an event even when the
+    /// figures are unchanged, and the panel's results follow the query.</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            if (publish is null || used == reportedBytes && global == reportedGlobalBytes) return;
-            if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
+            if (publish is null || used == reportedBytes && global == reportedGlobalBytes && !detailPending) return;
+            if (!publish(new ResultsMemoryEvent(used, global, memorySeq + 1, store.MemoryDetail()))) return;
             memorySeq++;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = false;
         }
     }
 
@@ -2275,6 +2333,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var global = store.GlobalBytes;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = true;
             return new ResultBudget(used, global, store.QueryBytes, ++memorySeq, stoppedBytes);
         }
     }
@@ -2600,6 +2659,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         homes.Clear();
         connections.Clear();
         store.ReleaseAll();
+        visibility.Clear();
         SqlConnection.ClearAllPools();
     }
 }

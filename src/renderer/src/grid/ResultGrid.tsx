@@ -68,7 +68,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility } = useWorkbench()
   // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
   // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
   const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
@@ -138,7 +138,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
     const unsubscribe = panes.subscribe(() => view.panesChanged())
+    // The backend learns which results are shown in any window (results.visibility) while the grid lives.
+    const shown = resultVisibility.track({ generation: entry.descriptor.generation, resultId: entry.descriptor.resultId }, view.root)
     return () => {
+      shown.dispose()
       unsubscribe()
       registration.dispose()
       view.dispose()

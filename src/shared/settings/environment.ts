@@ -20,5 +20,10 @@ export const environmentSettings = [
     key: 'environment.layout.panelTabs', page: 'environment.general', label: 'Show panel tabs', type: 'boolean', default: false, varia: true, hidden: true,
     keywords: ['panel', 'tab', 'dock', 'header', 'drag'],
     description: 'Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs.'
+  },
+  {
+    key: 'environment.statusBar.memoryNerdMetrics', page: 'environment.general', label: 'Show nerd metrics in the Memory panel', type: 'boolean', default: false, varia: true, hidden: true,
+    keywords: ['memory', 'status bar', 'compression', 'heap', 'nerd'],
+    description: 'Whether the status bar\'s Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec\'s counters and the managed heap. The section\'s heading opens and closes it, and Varia remembers the choice.'
   }
 ] as const satisfies readonly SettingDef[]

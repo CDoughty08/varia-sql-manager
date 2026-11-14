@@ -118,6 +118,7 @@ internal static class ResultPivoter
 
     private static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, Func<long, bool> reserve, ViewSorter.KeyMemory? memory, PivotStages? stages, CancellationToken token)
     {
+        using var pin = set.Pin();
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to pivot.");
@@ -568,6 +569,7 @@ internal static class PivotOutput
 
     public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model)
     {
+        using var pin = source.Pin();
         var columns = new List<ResultColumn>();
         var wires = new List<WireKind>();
         var lengths = new List<ColumnLength>();
@@ -628,6 +630,7 @@ internal static class PivotOutput
     /// completes it.</summary>
     public static void Write(ResultSetBuffer set, ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model, CancellationToken token)
     {
+        using var pin = source.Pin();
         var access = new RowAccess(pages, source.Wires.Count);
         try
         {

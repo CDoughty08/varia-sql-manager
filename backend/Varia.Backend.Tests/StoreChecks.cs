@@ -28,7 +28,7 @@ internal static class StoreChecks
         }
     }
 
-    private static int StoredRows(ResultSetBuffer set) => set.PagesFor(0, int.MaxValue).Sum(page => PageReader.Read(page.Body, set.Wires).Rows.Length);
+    private static int StoredRows(ResultSetBuffer set) => set.PagesFor(0, int.MaxValue).Sum(page => PageReader.Read(PinnedPage.Body(page), set.Wires).Rows.Length);
 
     public static void Run(Action<bool, string> check)
     {
@@ -117,7 +117,7 @@ internal static class StoreChecks
         check(set.RowsAvailable == 64 && !set.HasPendingRows, "the first page is sealed at 64 rows, so the first rows are readable at once");
         Fill(set, 64, 10_000);
         var pages = set.PagesFor(0, int.MaxValue);
-        check(pages.Skip(1).All(page => page.Rows == PageBuilder.MaxRows || page.Body.Length >= PageBuilder.SealBytes) && set.SealDelay == TimeSpan.FromMilliseconds(200),
+        check(pages.Skip(1).All(page => page.Rows == PageBuilder.MaxRows || page.Length >= PageBuilder.SealBytes) && set.SealDelay == TimeSpan.FromMilliseconds(200),
             "later pages seal at 4,096 rows or 256 KiB, and idle rows after 200 ms (" + string.Join(",", pages.Select(page => page.Rows)) + ")");
         set.Complete();
         pages = set.PagesFor(0, int.MaxValue);
@@ -134,7 +134,7 @@ internal static class StoreChecks
         }
         check(lookups, "the page directory finds exactly the pages that overlap a row range");
         var descriptor = set.Describe();
-        check(descriptor is { State: "complete", RowsRead: 10_064, RowsStored: 10_064, RowsAvailable: 10_064, Truncated: null } && descriptor.BytesStored == pages.Sum(page => (long)page.Body.Length)
+        check(descriptor is { State: "complete", RowsRead: 10_064, RowsStored: 10_064, RowsAvailable: 10_064, Truncated: null } && descriptor.BytesStored == pages.Sum(page => (long)page.Length)
             && query.UsedBytes == store.UsedBytes && store.UsedBytes >= descriptor.BytesStored + pages.Count * ResultStore.PageOverhead && store.UsedBytes < descriptor.BytesStored + 256 * 1024,
             "a complete set is charged its pages plus overhead and metadata (" + store.UsedBytes + " for " + descriptor.BytesStored + " bytes)");
 
@@ -245,6 +245,7 @@ internal static class StoreChecks
 
         LimitChanges(check);
         Leases(check);
+        Pins(check);
         Collection(check);
         Events(check);
         MemoryReports(check);
@@ -491,22 +492,85 @@ internal static class StoreChecks
             && usedAfterRise > reported && usedAfterRise - reported < 64L * 1024 * 1024 && closed.Closed == 2 && Last() == 0,
             "results.memory reports a small rise and the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
 
-        // A summary counts as a report, so the same sample is deduplicated and a subsequent close still reports 0.
+        // A summary counts as a report, but has no detail: the next check sends the same sample once with it (the Memory
+        // panel's results follow the query), then nothing until a change, and a subsequent close still reports 0.
         int Count() { lock (reports) return reports.Count; }
         var third = Open(store, store.BeginQuery("s3"));
         Fill(third, 0, 1000);
         third.Complete();
-        var summary = service.SummaryBudget();
+        // The service's own timer checks once a second too: report the rise first, so the only event left to send is the
+        // one the summary owes, whichever check sends it.
+        service.ReportMemory();
         var before = Count();
+        var summary = service.SummaryBudget();
         service.ReportMemory();
         var afterSummary = Count();
+        var detailSample = Last();
+        service.ReportMemory();
+        var afterAgain = Count();
         close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId } }, HostChecks.Json);
         closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(summary.UsedBytes > 0 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
-            "results.memory deduplicates a summary's sample and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
+        check(summary.UsedBytes > 0 && afterSummary == before + 1 && detailSample == summary.UsedBytes && afterAgain == afterSummary && closed.Closed == 1 && Count() == afterSummary + 1 && Last() == 0,
+            "results.memory sends a summary's sample once more with its detail, then deduplicates it, and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + afterAgain + ", " + Count() + ", " + Last());
 
         MemoryBudgetReports(check);
         MemoryLimitMethod(check);
+        MemoryDetailReports(check);
+    }
+
+    /// <summary>The results.memory event's detail (the Memory panel's Nerd metrics): totals over the stored sets, the
+    /// largest few in order, and with nothing compressed yet, stored equal to the rows as read and the codec off.</summary>
+    private static void MemoryDetailReports(Action<bool, string> check)
+    {
+        JsonElement? last = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store, publish: value =>
+        {
+            var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (report.GetProperty("type").GetString() == "results.memory") last = report;
+            return true;
+        });
+        service.ReportMemory();
+        var empty = last!.Value;
+        var emptyDetail = empty.GetProperty("detail");
+        check(empty.GetProperty("usedBytes").GetInt64() == 0 && emptyDetail.GetProperty("logicalBytes").GetInt64() == 0 && emptyDetail.GetProperty("largest").GetArrayLength() == 0
+            && emptyDetail.GetProperty("heap").GetProperty("committedBytes").GetInt64() is var committed && committed >= 0
+            && emptyDetail.GetProperty("heap").GetProperty("freeBytes").GetInt64() is var free && free >= 0 && free <= committed
+            && empty.EnumerateObject().First().Name == "type",
+            "results.memory's detail for an empty store holds no results, names the managed heap (zeros before the first collection, free within committed), and the event still starts with its type: " + empty);
+
+        var sets = new List<ResultSetBuffer>();
+        for (var index = 0; index < ResultStore.MaxLargest + 2; index++)
+        {
+            var set = Open(store, store.BeginQuery("s" + index), index);
+            Fill(set, 0, 200 * (index + 1));
+            set.Complete();
+            sets.Add(set);
+        }
+        var live = store.Open(new QueryBudget("live", new LiveBudget(64L << 20)), 0, 1, 1, "rows", W1Columns, W1Wires)!;
+        Fill(live, 0, 100);
+        live.Complete();
+        service.ReportMemory();
+        var detail = last!.Value.GetProperty("detail");
+        var largest = detail.GetProperty("largest").EnumerateArray().ToArray();
+        var expected = sets.Select(set => (Id: set.ResultId, Bytes: set.Progress().BytesStored)).OrderByDescending(set => set.Bytes).Take(ResultStore.MaxLargest).ToArray();
+        var total = sets.Sum(set => set.Progress().BytesStored) + live.Progress().BytesStored;
+        var codec = detail.GetProperty("codec");
+        check(detail.GetProperty("logicalBytes").GetInt64() == total && detail.GetProperty("storedBytes").GetInt64() == total
+            && detail.GetProperty("compressedBytes").GetInt64() == 0 && detail.GetProperty("packedLogicalBytes").GetInt64() == 0 && detail.GetProperty("cacheBytes").GetInt64() == 0
+            && largest.Length == ResultStore.MaxLargest
+            && largest.Select(entry => (Id: entry.GetProperty("resultId").GetUInt32(), Bytes: entry.GetProperty("logicalBytes").GetInt64())).SequenceEqual(expected)
+            && largest.All(entry => entry.GetProperty("storedBytes").GetInt64() == entry.GetProperty("logicalBytes").GetInt64() && entry.GetProperty("state").GetString() == "raw"
+                && !entry.TryGetProperty("progress", out _) && !entry.TryGetProperty("live", out _))
+            && !codec.TryGetProperty("name", out _) && !codec.TryGetProperty("level", out _) && codec.GetProperty("pagesPacked").GetInt64() == 0 && codec.GetProperty("cacheLookups").GetInt64() == 0,
+            "results.memory's detail totals every stored set, live tables too, names the largest " + ResultStore.MaxLargest + " as read in order, raw with stored equal to read, and reports the codec off: " + detail);
+
+        // A live view's table is named as one when it is among the largest.
+        foreach (var set in sets) store.Release(set.ResultId);
+        service.ReportMemory();
+        var only = last!.Value.GetProperty("detail").GetProperty("largest").EnumerateArray().ToArray();
+        check(only is [var entry] && entry.GetProperty("resultId").GetUInt32() == live.ResultId && entry.GetProperty("live").GetBoolean(),
+            "results.memory's detail marks a live view's table, which no Results tab names: " + last);
     }
 
     private static void MemoryBudgetReports(Action<bool, string> check)
@@ -756,10 +820,143 @@ internal static class StoreChecks
         check(threw, "ending a lease that was never taken is a bug, not a silent no-op");
     }
 
+    /// <summary>Readers pin their result while they read its pages (ResultSetBuffer.Pin), and read bodies only through the
+    /// accessor: a release meanwhile ends reads at once but frees the pages and budget when the last pin or lease ends.</summary>
+    private static void Pins(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = Open(store, store.BeginQuery("tab"));
+        Fill(set, 0, 5000);
+        set.Complete();
+        var page = set.SealedSnapshot()[0];
+        string? refused = null;
+        try { page.Body(); } catch (InvalidOperationException error) { refused = error.Message; }
+        byte[] pinned, leased;
+        using (set.Pin()) pinned = page.Body();
+        check(set.TryLease(), "a complete result can be leased");
+        leased = page.Body();
+        set.ReleaseLease();
+        check(ResultSetBuffer.RequirePins && refused is not null && ReferenceEquals(pinned, leased) && pinned.Length == page.Length && set.Pins == 0,
+            "the checks read a page only while its result is pinned or leased, and the accessor gives the page's bytes as sealed: " + refused);
+        var other = Open(store, store.BeginQuery("other"));
+        Fill(other, 0, 10);
+        other.Complete();
+        var wrongSet = false;
+        using (other.Pin())
+        {
+            try { other.Body(page); } catch (ArgumentException) { wrongSet = true; }
+        }
+        check(wrongSet, "a page is read only through its own result's accessor");
+        store.Release(other.ResultId);
+
+        var used = store.UsedBytes;
+        var first = set.Pin();
+        var second = set.Pin();
+        check(set.Pins == 2, "pins nest");
+        var freedBefore = store.FreedSinceCollect;
+        var released = store.Release(set.ResultId);
+        var pagesKept = set.PagesFor(0, int.MaxValue).Count;
+        check(released && set.IsReleased && store.Find(set.ResultId) is null && store.WasReleased(set.ResultId) && pagesKept > 0 && store.UsedBytes == used
+            && store.FreedSinceCollect == freedBefore && !set.TryLease(),
+            "releasing a pinned result removes it from lookup but keeps its pages and budget until the read ends (" + pagesKept + " pages)");
+        var readWhileReleased = set.PagesFor(0, 1) is [var kept] && kept.Body().Length == kept.Length;
+        first.Dispose();
+        first.Dispose();
+        check(readWhileReleased && set.Pins == 1 && store.UsedBytes == used && set.PagesFor(0, int.MaxValue).Count == pagesKept,
+            "a read still pinned reads its pages after a release, and disposing a pin twice unpins once");
+        second.Dispose();
+        check(store.UsedBytes == 0 && set.PagesFor(0, int.MaxValue).Count == 0 && store.FreedSinceCollect > freedBefore,
+            "the last pin frees the pages, returns every byte and counts them toward the next collection");
+        var threw = false;
+        try { set.Unpin(); } catch (InvalidOperationException) { threw = true; }
+        check(threw, "ending a pin that was never taken is a bug, not a silent no-op");
+
+        // An operation over the whole result stops when the result is released, rather than holding its pinned pages (and
+        // budget) until it finishes, and answers RESULT_RELEASED.
+        var running = Open(store, store.BeginQuery("running"));
+        Fill(running, 0, 5000);
+        running.Complete();
+        using (var service = new SqlService(store))
+        {
+            var started = new ManualResetEventSlim();
+            RequestException? stopped = null;
+            var operation = Task.Run(async () =>
+            {
+                try
+                {
+                    await service.UntilReleased(work =>
+                    {
+                        using var held = running.Pin();
+                        started.Set();
+                        work.WaitHandle.WaitOne(TimeSpan.FromSeconds(30));
+                        work.ThrowIfCancellationRequested();
+                    }, CancellationToken.None, running);
+                }
+                catch (RequestException error) { stopped = error; }
+            });
+            started.Wait(TimeSpan.FromSeconds(15));
+            var heldBytes = store.UsedBytes;
+            store.Release(running.ResultId);
+            var ended = operation.Wait(TimeSpan.FromSeconds(15));
+            check(heldBytes > 0 && ended && stopped?.Code == "RESULT_RELEASED" && running.Pins == 0 && running.PagesFor(0, int.MaxValue).Count == 0 && store.UsedBytes == 0
+                && running.Released.IsCancellationRequested,
+                "releasing a result stops an operation over it at once, which answers RESULT_RELEASED and frees the pages it pinned");
+        }
+
+        // A view's pages (results.read with a view) pin the set while one is built, not while the reader holds it: a read
+        // waiting for credit keeps no pin, and a release meanwhile frees the set and ends a read's pages. Copy and Save lease
+        // the set and build every page whatever the release.
+        var viewed = Open(store, store.BeginQuery("viewed"));
+        Fill(viewed, 0, 20_000);
+        viewed.Complete();
+        var order = Enumerable.Range(0, (int)viewed.RowsAvailable).Reverse().ToArray();
+        var reversed = store.AddView(viewed, order, [], false, true, 0, null);
+        var saved = Open(store, store.BeginQuery("saved"));
+        Fill(saved, 0, 20_000);
+        saved.Complete();
+        var savedView = store.AddView(saved, order, [], false, true, 0, null);
+        check(saved.TryLease(), "a complete result can be leased for a Save");
+        long savedRows = 0;
+        var savedPages = 0;
+        foreach (var built in ViewPages.Stored(savedView, 0, order.Length))
+        {
+            if (++savedPages == 1) store.Release(saved.ResultId);
+            savedRows += built.Rows;
+        }
+        var keptForLease = saved.PagesFor(0, int.MaxValue).Count > 0;
+        saved.ReleaseLease();
+        check(savedPages > 1 && savedRows == order.Length && keptForLease && saved.PagesFor(0, int.MaxValue).Count == 0,
+            "a Copy or Save through a view, leased, builds every page though its result is released mid-way, and the lease's end frees it");
+        using (var reading = ViewPages.Build(reversed, 0, order.Length).GetEnumerator())
+        {
+            var gotFirst = reading.MoveNext();
+            var heldBetween = viewed.Pins;
+            store.Release(viewed.ResultId);
+            var freedBetween = viewed.PagesFor(0, int.MaxValue).Count == 0;
+            var more = reading.MoveNext();
+            check(gotFirst && heldBetween == 0 && freedBetween && !more && viewed.Pins == 0,
+                "a view's pages keep no pin between pages, so a release while the reader waits frees the set and ends them");
+        }
+
+        // A lease and a pin together: whichever ends last frees the set.
+        var both = Open(store, store.BeginQuery("both"));
+        Fill(both, 0, 5000);
+        both.Complete();
+        var pin = both.Pin();
+        check(both.TryLease(), "a pinned result can be leased");
+        store.Release(both.ResultId);
+        both.ReleaseLease();
+        var keptAfterLease = store.UsedBytes > 0 && both.PagesFor(0, int.MaxValue).Count > 0;
+        pin.Dispose();
+        check(keptAfterLease && store.UsedBytes == 0 && both.PagesFor(0, int.MaxValue).Count == 0,
+            "a released result's last lease leaves it to the pin still held, and the pin's end frees it");
+    }
+
     /// <summary>results.read and results.close through ProtocolHost with the real service and synthetic results.</summary>
     private static void HostReads(Action<bool, string> check)
     {
-        using var host = new HostHarness(dispatcher: () => new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true));
+        var hostStore = new ResultStore(1L << 30, 1L << 29);
+        using var host = new HostHarness(dispatcher: () => new SqlService(hostStore, hooks: true));
         var hello = host.Hello();
         check(hello.GetProperty("methods").EnumerateArray().Any(method => method.GetString() == SqlService.SynthesizeMethod), "test hooks announce debug.results.synthesize");
         host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
@@ -796,6 +993,27 @@ internal static class StoreChecks
         }
         check(Code(4, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }) == "INVALID_REQUEST" && Code(5, "results.read", new { resultId = 999, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_NOT_FOUND"
             && Code(6, "results.read", new { resultId = id, firstRow = 0, maxRows = 65_537 }, 65_536) == "INVALID_PARAMS", "results.read needs credit, an existing result, and a bounded range");
+        // A read waiting for credit holds no pin: closing its result frees the result at once, and the read then ends.
+        var usedBefore = hostStore.UsedBytes;
+        host.Request(20, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var stalledId = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result").GetProperty("resultId").GetUInt32();
+        var stalledSet = hostStore.Find(stalledId)!;
+        host.Request(21, "results.read", new { resultId = stalledId, firstRow = 0, maxRows = 10_000 }, credit: 64 * 1024);
+        var firstStalled = host.Next(FrameKind.Data, 15_000) is not null;
+        while (host.Next(FrameKind.Data, 300) is not null) { }
+        host.Request(22, "results.close", new { resultIds = new[] { stalledId } });
+        // The read may answer before or after the close, whichever ends first.
+        Frame? stalledEnd = null, closeEnd = null;
+        while (closeEnd is null && host.Next(FrameKind.Response, 15_000) is { } answered)
+            if (answered.Header.Id == 21) stalledEnd = answered;
+            else closeEnd = answered;
+        var freedWhileStalled = closeEnd is not null && stalledSet.Pins == 0 && stalledSet.PagesFor(0, int.MaxValue).Count == 0 && hostStore.UsedBytes == usedBefore;
+        host.Send(FrameKind.Credit, 21, 16 * 1024 * 1024, []);
+        stalledEnd ??= host.Next(FrameKind.Response, 15_000);
+        var stalledBody = JsonBridge.ParseControl(stalledEnd!.Value.Body);
+        while (host.Next(FrameKind.Data, 0) is not null) { }
+        check(firstStalled && freedWhileStalled && stalledBody.TryGetProperty("error", out var stalledError) && stalledError.GetProperty("code").GetString() == "RESULT_RELEASED",
+            "a read stalled on credit keeps no pin, so closing its result frees it at once, and the read answers RESULT_RELEASED");
         host.Request(7, "results.close", new { resultIds = new[] { id, 12345u } });
         var closed = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result");
         check(closed.GetProperty("closed").GetInt32() == 1 && closed.GetProperty("usedBytes").GetInt64() == 0 && Code(8, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_RELEASED",

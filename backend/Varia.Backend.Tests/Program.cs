@@ -32,6 +32,14 @@ if (args is [PivotBench.Argument, ..])
     PivotBench.Run(args);
     return;
 }
+// The page compression benchmark, run by hand (docs/page-compression-findings.md), one size and shape a process:
+// measures only, no checks.
+if (args is [PageCompressionBench.Argument, _, _, ..])
+{
+    PageCompressionBench.Run(args);
+    return;
+}
+
 // How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
 if (args is [FairnessBench.Argument, ..])
 {
@@ -47,6 +55,9 @@ if (args is [ResultWorkBench.Argument, ..])
 }
 
 var passed = 0;
+// Every check reads result pages as the product must: through ResultSetBuffer.Body, with the set pinned or leased. A reader
+// that forgets the pin fails whichever check reaches it.
+Varia.Backend.Results.ResultSetBuffer.RequirePins = true;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 // VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
 // waits that make the run slow (docs/ci.md).
@@ -364,6 +375,7 @@ if (liveGroup is null)
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
+        ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),

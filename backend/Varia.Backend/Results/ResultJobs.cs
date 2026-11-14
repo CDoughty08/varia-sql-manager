@@ -392,6 +392,7 @@ internal sealed class ResultJobs(ResultStore store)
     /// <summary>Copy's size estimate for parts of a set (the checks compare it with the text written).</summary>
     internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf, bool transposed = false, int? headerColumn = null, ResultView? view = null)
     {
+        using var pin = set.Pin();
         var source = new Source(set, view);
         var available = source.Available;
         var plans = parts.Select(part => Resolve(part, set.Columns, available)).ToList();
@@ -419,7 +420,7 @@ internal sealed class ResultJobs(ResultStore store)
     }
 
     private static long EstimatePage(StoredPage page, int from, int to, int[] columns, int eolBytes, int[] scratch, int columnCount) =>
-        ResultTextWriter.EstimateCopyRows(PageView.Parse(page.Body, columnCount, scratch), from, to, columns, eolBytes);
+        ResultTextWriter.EstimateCopyRows(PageView.Parse(page.Body(), columnCount, scratch), from, to, columns, eolBytes);
 
     /// <summary>The pages holding rows [first, last], fetched a bounded batch at a time; a view's are built in its order.</summary>
     private static IEnumerable<StoredPage> Pages(Source source, long first, long last)
@@ -430,6 +431,7 @@ internal sealed class ResultJobs(ResultStore store)
             yield break;
         }
         var set = source.Set;
+        using var pin = set.Pin();
         for (var row = first; row <= last;)
         {
             var pages = set.PagesFor(row, (int)Math.Min(last - row + 1, 1 << 24));
@@ -484,7 +486,7 @@ internal sealed class ResultJobs(ResultStore store)
 
     private static void WritePage(StoredPage page, int columnCount, ResultTextWriter writer, int[] columns, int from, int to, int[] scratch)
     {
-        var view = PageView.Parse(page.Body, columnCount, scratch);
+        var view = PageView.Parse(page.Body(), columnCount, scratch);
         for (var row = from; row <= to; row++) writer.Row(view, row, columns);
     }
 

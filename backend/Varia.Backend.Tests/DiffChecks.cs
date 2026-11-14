@@ -64,7 +64,7 @@ internal static class DiffChecks
         var rows = new List<string>();
         foreach (var page in set.SealedSnapshot())
         {
-            var view = PageView.Parse(page.Body, set.Wires.Count);
+            var view = PageView.Parse(PinnedPage.Body(page), set.Wires.Count);
             for (var r = 0; r < page.Rows; r++)
             {
                 var cells = new string[set.Wires.Count];
@@ -149,8 +149,8 @@ internal static class DiffChecks
         var b = Fill(store, budget, 1, [["APPLE", "2.00"], ["Apples", "2.01"]], [collated[0], new("Price", "decimal", "text")]);
         var left2 = new CellHasher(a.Columns, a.Wires);
         var right2 = new CellHasher(b.Columns, b.Wires);
-        var va = PageView.Parse(a.SealedSnapshot()[0].Body, 2);
-        var vb = PageView.Parse(b.SealedSnapshot()[0].Body, 2);
+        var va = PageView.Parse(PinnedPage.Body(a.SealedSnapshot()[0]), 2);
+        var vb = PageView.Parse(PinnedPage.Body(b.SealedSnapshot()[0]), 2);
         check(left2.Same(va, 0, 0, right2, vb, 0, 0) && left2.Same(va, 1, 0, right2, vb, 1, 0) && !left2.Same(va, 0, 0, right2, vb, 0, 1) && !left2.Same(va, 1, 0, right2, vb, 1, 1)
             , "values compare by value (collation, trailing spaces, numeric form), so a hash collision cannot make different values equal");
     }
