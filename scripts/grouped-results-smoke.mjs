@@ -7,6 +7,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import {
   anyResultGrid, backendReady, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel,
   resultTabs, tabClose, toolbarButton, viewTab, viewTabs
@@ -48,6 +49,9 @@ try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; clicks and focus wait for frames.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
+  // Wide enough for the results toolbar's Tabs, which gives way below 1,180 pixels (CI's Windows display is narrower).
+  await resizeContent(application, page, 1280, 900)
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThanOrEqual(1180)
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
