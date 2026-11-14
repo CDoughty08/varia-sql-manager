@@ -82,32 +82,16 @@ internal static class RowIdentity
 
     internal delegate void PageRead(CellHasher hasher, StoredPage page, PageView view);
 
-    /// <summary>Reads the pages in runs on several threads (one per <see cref="MinSlice"/> rows, up to the sort's threads),
-    /// each with a hasher of its own.</summary>
+    /// <summary>Reads the pages on several threads (one per <see cref="MinSlice"/> rows, up to the sort's threads), each
+    /// thread with a hasher of its own. Each page is an item, so the threads move between this and other operations
+    /// between pages; what a page writes is its own rows', so the order they are read in changes nothing.</summary>
     internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read)
     {
         using var threads = ViewSorter.Gate.Take((int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers));
-        var runs = threads.Count;
-        void Run(int run)
-        {
-            var own = run == 0 ? hasher : hasher.Fork();
-            var scratch = new int[PageView.ScratchLength(own.Count)];
-            for (int index = (int)((long)pages.Length * run / runs), end = (int)((long)pages.Length * (run + 1) / runs); index < end; index++)
-            {
-                token.ThrowIfCancellationRequested();
-                read(own, pages[index], PageView.Parse(pages[index].Body(), own.Count, scratch));
-            }
-        }
-        if (runs == 1)
-        {
-            Run(0);
-            return;
-        }
-        try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, Run); }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-        }
+        // The first thread to start uses the caller's hasher (results.identify reserves for no more), the others forks.
+        var given = 0;
+        threads.For(pages.Length, () => (Hasher: Interlocked.Exchange(ref given, 1) == 0 ? hasher : hasher.Fork(), Scratch: new int[PageView.ScratchLength(hasher.Count)]),
+            (index, own) => read(own.Hasher, pages[index], PageView.Parse(pages[index].Body(), own.Hasher.Count, own.Scratch)), token);
     }
 
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row), the pages in runs on
@@ -175,14 +159,15 @@ internal static class RowIdentity
         return (Distinct(ids, working.Spread, token), cut != 0);
     }
 
-    /// <summary>Whether no two identities are equal. They are hashes, so their high bits spread them evenly over as many
-    /// parts as there are threads; each part is sorted on its own, and equal ones end side by side.</summary>
+    /// <summary>Whether no two identities are equal. They are hashes, so their high bits spread them evenly over up to four
+    /// parts a thread (more items than threads, so threads move between operations between parts); each part is sorted on
+    /// its own, and equal ones end side by side.</summary>
     internal static bool Distinct(long[] ids, long[] spread, CancellationToken token)
     {
         if (ids.Length < 2) return true;
-        using var threads = ViewSorter.Gate.Take(Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice)));
+        var wanted = Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice));
         var bits = 0;
-        while (2 << bits <= threads.Count && ids.Length >> (bits + 1) >= MinSlice) bits++;
+        while (2 << bits <= 4 * wanted && ids.Length >> (bits + 1) >= MinSlice) bits++;
         var parts = 1 << bits;
         var shift = 53 - bits;
         var starts = new int[parts + 1];
@@ -201,13 +186,8 @@ internal static class RowIdentity
             for (var i = 1; i < span.Length; i++)
                 if (span[i] == span[i - 1]) { Volatile.Write(ref repeated, 1); return; }
         }
-        if (parts == 1) Part(0);
-        else
-            try { Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, Part); }
-            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-            }
+        // Taken only now: the passes above run on this thread alone, and threads held through them would sit idle.
+        using (var threads = ViewSorter.Gate.Take(wanted)) threads.For(parts, Part);
         return repeated == 0;
     }
 

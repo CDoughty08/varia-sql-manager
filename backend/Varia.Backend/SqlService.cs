@@ -164,6 +164,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
     public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
     {
+        // Before any session opens: the checks host the service in their own process, so the floor is the service's, not Program's.
+        ThreadPoolFloor.Ensure();
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
         this.hooks = hooks;

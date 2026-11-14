@@ -32,6 +32,12 @@ if (args is [PivotBench.Argument, ..])
     PivotBench.Run(args);
     return;
 }
+// How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
+if (args is [FairnessBench.Argument, ..])
+{
+    FairnessBench.Run(args);
+    return;
+}
 
 // The result-work benchmark (pivot Distinct Count, Compare Results, distinct value lists), run by hand: measures only.
 if (args is [ResultWorkBench.Argument, ..])
@@ -352,6 +358,7 @@ if (liveGroup is null)
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
         ("View", Sync(() => ViewChecks.Run(Check))),
+        ("WorkerGate", Sync(() => WorkerGateChecks.Run(Check))),
         ("Filter", Sync(() => FilterChecks.Run(Check))),
         ("Identity", Sync(() => IdentityChecks.Run(Check))),
         ("Diff", Sync(() => DiffChecks.Run(Check))),
@@ -755,6 +762,23 @@ try
             finally { await Call<object>("query.session.close", new SessionArgs(tab)); }
         }));
         Check(inStep.All(failure => failure is null), "a script timeout leaves its tab's session in step with its requests: " + string.Join(" | ", inStep.Where(failure => failure is not null)));
+        // Timers fire through the thread pool, a script's deadline among them, and managed SNI's opens hold pool threads in
+        // socket calls while they log in: the check above failed on CI's Linux runners when its 24 opens left the 1 s deadline
+        // to fire after the 5 s WAITFOR had finished (completedWithErrors at 5 s). Half of ThreadPoolFloor's threads held in
+        // Thread.Sleep stand in for them: the pool adds threads at once for a thread blocked in Monitor.Wait or Task.Wait, but
+        // not for one in a socket call or a sleep.
+        {
+            var holders = ThreadPoolFloor.Threads / 2;
+            var started = 0;
+            var released = false;
+            for (var held = 0; held < holders; held++)
+                ThreadPool.UnsafeQueueUserWorkItem(_ => { Interlocked.Increment(ref started); while (!Volatile.Read(ref released)) Thread.Sleep(10); }, null);
+            QueryResult heldResult;
+            try { heldResult = await Run("WAITFOR DELAY '00:00:05';", timeout: 1); }
+            finally { Volatile.Write(ref released, true); }
+            Check(heldResult.Status == "timedOut" && heldResult.ElapsedMs < 4000,
+                "a script's deadline fires on time while session opens hold pool threads (" + heldResult.Status + " after " + heldResult.ElapsedMs + " ms, " + Volatile.Read(ref started) + " of " + holders + " holders started)");
+        }
         // RAISERROR WITH NOWAIT flushes the buffered error to the client before the batch waits.
         result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", timeout: 1);
         Check(result.Status == "timedOut" && result.Error?.Message.Contains("Msg 8134") == true, "errors raised before a timeout are still reported");

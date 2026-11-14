@@ -724,8 +724,9 @@ internal static class LiveResultChecks
         var table = "##varia_skip_" + Guid.NewGuid().ToString("N");
         await run("CREATE TABLE " + table + " (id int PRIMARY KEY, doc nvarchar(max)); INSERT " + table + " SELECT TOP (1500) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'x' FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;");
         var locker = Guid.NewGuid().ToString();
-        // More readers than the pool has threads, so that blocking them would need many new ones.
-        var readers = Enumerable.Range(0, ThreadPool.ThreadCount + 2 * Environment.ProcessorCount).Select(_ =>
+        // More readers than the pool has threads or makes at once (ThreadPoolFloor), so that blocking them would need many new ones.
+        ThreadPool.GetMinThreads(out var minimum, out _);
+        var readers = Enumerable.Range(0, Math.Max(ThreadPool.ThreadCount, minimum) + 2 * Environment.ProcessorCount).Select(_ =>
         {
             var opened = new List<uint>();
             var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, value, _) =>
