@@ -88,7 +88,7 @@ main/renderer lifecycle, Explorer/menu behavior and backend identity/binding pat
 | Late Connect publication | A closed session could throw while reading provider properties after its logical handle was registered, leaving a handle that main never received. All physical-session facts are captured before registration; a failed initialization publishes no handle. |
 | Dropped Connect replies | Native protocol cancellation or response serialization failure could hide a successful registration from main. Connect now supplies idempotent exact-ID Dropped/Unsent cleanup. Actual protocol tests gate a successful dispatch before cancellation and exercise an oversized reply while retaining a separate accepted target. |
 | Activity Monitor pool protection | Long application names were truncated differently by the factory and its own-pool name matcher. Both use one prefix/suffix rule, so Kill cannot miss the application's own pool because its name is long. Offline parity and actual session-action tests cover the boundary. |
-| CI fixtures | Exact scripting command budgets include the account preflight. Intentional owned opens in native live fixtures use the central opener. Electron recovery checks use the current credential-update action and wait for exact attachment/focus. Activity Monitor retries only opening a non-mutating confirmation after a live sample changes, never the Kill action. |
+| CI fixtures | Exact scripting command budgets include the account preflight. Intentional owned opens in native live fixtures use the central opener. Electron recovery checks use the current credential-update action and wait for exact attachment/focus. Activity Monitor retries only opening a non-mutating confirmation after a live sample changes, never the Kill action. The overview metric fixture owns a retained user query session rather than depending on an idle pool that cleanup tests can retire; its CPU, rates and user-session assertions remain unchanged. |
 
 A proposed extra database-binding refresh API was investigated and retracted. Database-only mutation settlement
 publishes synchronously; password and database receipt producers are disjoint, and reload projects current main pins.
@@ -106,7 +106,10 @@ backend scopes. The full pre-base-update check passed with 2,714 offline .NET ch
 configuration-dependent Vitest cases were skipped. The 178 focused native checks and actual SQL Server regressions
 cover the added security boundaries. Live group 2 passed 475 checks; the other live groups' failures were resolved and
 their affected suites rerun serially, including scripting, login/password pools, exact SID replacement, cancellation,
-restore, own-pool protection and SSIS Stop. Current Electron and cross-platform CI results are recorded in the PR.
+restore, own-pool protection and SSIS Stop. All 31 Electron suites then passed locally with live SQL authentication,
+including sticky menu parity/placement, SQL results, live plans and hot exit. The unique temporary SQL login was removed
+afterward. Cross-platform CI results are recorded in the PR; its first follow-up run passed all three platform checks,
+all six Electron shards and live groups 2/3 and 3/3, and exposed only the overview fixture dependency described above.
 After the clean merge with current main `e9e68ee2`, the full check passed again in 110.1 seconds: 2,722 offline .NET
 checks and 5,075 Vitest tests. A separate integration-impact review found no connection, cancellation or result-lease
 issues from main's fair worker gate.
