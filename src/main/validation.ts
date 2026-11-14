@@ -5,7 +5,7 @@ import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
-import { explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
+import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -54,6 +54,7 @@ export const requestSchemas = {
   'explorer.peek': peekParamsSchema,
   'explorer.peekDependencies': peekDependenciesParamsSchema,
   'explorer.peekDefinition': peekDefinitionParamsSchema,
+  'explorer.dependencies': dependenciesParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
   'actions.script': actionScriptRequestSchema,

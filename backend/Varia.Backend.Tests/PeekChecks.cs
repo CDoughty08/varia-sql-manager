@@ -74,11 +74,11 @@ internal static partial class PeekChecks
             && peek.Kinds["index"].OptionalGroup == "usage" && peek.Kinds["index"].Facts.Where(fact => fact.Optional).Select(fact => fact.Id).First() == "userSeeks"
             && peek.Kinds.Values.Count(kind => kind.OptionalGroup is not null) == 1 && peek.ListRows == 1024 && peek.MappingDatabases == 256,
             "each peek kind declares its tabs: no dependencies for a database, a login, an index or a DDL trigger, its lists, and an index's usage as its one optional group");
-        check(peek.Dependencies == 200, "Peek lists 200 dependencies each way");
+        check(peek.Dependencies == 200 && peek.DependencyLevel == 500, "Peek lists 200 dependencies each way, and a level of View Dependencies' tree 500");
         // Top rows runs Select Top Rows' script through query.execute: the catalogue gives the backend no rows of its own to read.
         JsonObject embedded;
         using (var stream = typeof(ExplorerCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Explorer.explorer-catalog.json")!) embedded = JsonNode.Parse(stream)!["peek"]!.AsObject();
-        check(embedded.Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["budgetMs", "definitionMaxChars", "definitionPageChars", "dependencies", "kinds", "listRows", "mappingDatabases"])
+        check(embedded.Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["budgetMs", "definitionMaxChars", "definitionPageChars", "dependencies", "dependencyLevel", "kinds", "listRows", "mappingDatabases"])
             && embedded["kinds"]!.AsArray().All(kind => kind!.AsObject().Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["definition", "dependencies", "facts", "kind", "lists", "optionalGroup"])),
             "the catalogue's peek block holds kinds, the definition's page and longest length, the budget, the dependencies and the lists' limits, and nothing for rows: " + embedded.ToJsonString());
         var table = peek.Kinds["table"];
@@ -208,6 +208,36 @@ internal static partial class PeekChecks
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
                 if (PeekSql.Render(spec, new SqlRender(band), peek.DefinitionPageChars, parent).Text.Contains("sql_expression_dependencies", StringComparison.OrdinalIgnoreCase)) dependencyProblems.Add(spec.Kind + " " + band + ": the facts read dependencies");
         }
+        // View Dependencies reads one of the tab's two listings per level: the same text, after the same lookup.
+        var levelProblems = new List<string>();
+        var levels = 0;
+        foreach (var (spec, parent) in Variants(peek))
+        {
+            if (!spec.Dependencies) continue;
+            for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
+            {
+                var render = new SqlRender(band);
+                var both = PeekSql.Dependencies(spec.Kind, render, parent);
+                var lookup = PeekSql.Lookup(spec.Kind, parent);
+                foreach (var usedBy in new[] { false, true })
+                {
+                    levels++;
+                    var text = PeekSql.Level(spec.Kind, render, parent, usedBy);
+                    levelProblems.AddRange(CatalogSql.Lint(text, render, list: true, mayCheckAccess: false).Select(problem => spec.Kind + " " + band + ": " + problem));
+                    var listing = text[lookup.Length..];
+                    if (!text.StartsWith(lookup, StringComparison.Ordinal) || System.Text.RegularExpressions.Regex.Matches(text, @"SELECT TOP \(@take\) x\.server_name").Count != 1
+                        || (usedBy ? !both.EndsWith(listing, StringComparison.Ordinal) : !both.StartsWith(lookup + listing, StringComparison.Ordinal)))
+                        levelProblems.Add(spec.Kind + " " + band + (usedBy ? " used by" : " uses") + ": it is not the lookup and one of the tab's listings");
+                }
+            }
+        }
+        var uses17 = PeekSql.Uses(new SqlRender(17));
+        check(levels == 10 * 6 * 2 && levelProblems.Count == 0 && uses17.Contains("d.is_schema_bound_reference AS bound", StringComparison.Ordinal)
+            && uses17.Contains("GROUP BY r.server_name", StringComparison.Ordinal) && uses17.Contains("o.type IN ('TR', 'TA')", StringComparison.Ordinal)
+            && PeekSql.ParentKindOf("U ") == "table" && PeekSql.ParentKindOf("V") == "view" && PeekSql.ParentKindOf("TT") is null,
+            "explorer.dependencies' batch is, for each kind with the tab (a trigger below a table and a view) and bands 12-17, the peek's lookup and one of the tab's two listings, "
+            + "a TOP (@take) listing that passes the lint, grouped so schema-bound and not stays one row, naming a trigger's table or view (" + levels + " renders"
+            + (levelProblems.Count > 0 ? "; first problem: " + levelProblems[0] : ")"));
         var synonymUses = PeekSql.Dependencies("synonym", new SqlRender(17));
         var typeUses = PeekSql.Dependencies("type", new SqlRender(17));
         check(dependencyProblems.Count == 0 && synonymUses.Contains("PARSENAME(sy.base_object_name, 1)", StringComparison.Ordinal) && typeUses.Contains("d.referenced_class = 6", StringComparison.Ordinal)
@@ -332,6 +362,25 @@ internal static partial class PeekChecks
             };
             check(dependencies.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "NOT_CONNECTED", "NOT_CONNECTED"]),
                 "explorer.peekDependencies refuses the kinds without the tab (a login, a database, an index) and takes a synonym and a sequence: " + string.Join(", ", dependencies));
+            async Task<string> Level(string target, string direction)
+            {
+                var body = "{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"target\":" + target + direction + "}";
+                try { await sql.DispatchAsync("explorer.dependencies", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
+            var trigger = "{\"kind\":\"trigger\",\"database\":\"Sales\",\"parent\":{\"kind\":\"view\",\"schema\":\"dbo\",\"name\":\"V\"},\"name\":\"tr\"}";
+            var tree = new[]
+            {
+                await Level(Ref("table"), ",\"direction\":\"uses\""), await Level(Ref("type"), ",\"direction\":\"usedBy\""), await Level(trigger, ",\"direction\":\"usedBy\""),
+                await Level(Ref("table"), ",\"direction\":\"sideways\""), await Level(Ref("table"), ",\"direction\":\"" + new string('u', 5000) + "\""), await Level(Ref("table"), ""),
+                await Level("{\"kind\":\"login\",\"name\":\"sa\"}", ",\"direction\":\"uses\""), await Level(Ref("view", name: new string('v', 129)), ",\"direction\":\"uses\""),
+                await Level(Ref("table"), ",\"direction\":\"uses\",\"depth\":2")
+            };
+            check(sql.Methods.Contains("explorer.dependencies") && sql.LaneOf("explorer.dependencies") == RequestLane.Explorer
+                && tree.SequenceEqual(["NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]),
+                "HELLO lists explorer.dependencies on the explorer lane; it takes a table, a type and a trigger below a view each way, and refuses another or a missing direction, "
+                + "a kind without the Dependencies tab, a name past sysname and any other field before the connection: " + string.Join(", ", tree));
             async Task<string> Page(string target, string offset)
             {
                 var body = "{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"target\":" + target + offset + "}";

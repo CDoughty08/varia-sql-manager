@@ -394,6 +394,7 @@ if (liveGroup is null)
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
+        ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
@@ -423,7 +424,8 @@ if (liveGroup is null)
         ("ActivityQuery", Sync(() => ActivityQueryChecks.Run(Check))),
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
-        ("Updater", Sync(() => UpdaterChecks.Run(Check)))
+        ("Updater", Sync(() => UpdaterChecks.Run(Check))),
+        ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)

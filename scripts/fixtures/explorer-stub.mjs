@@ -180,6 +180,12 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       })
       case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }
         : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
+      // View Dependencies: what depends on dbo.Orders is a view (which depends on Orders again: a cycle) and a foreign key; Orders
+      // depends on another database's table.
+      case 'explorer.dependencies': return ok(params.direction === 'uses'
+        ? { items: params.target.name === 'Orders' ? [{ name: 'Customers', schema: 'dbo', database: 'Crm' }] : [{ name: 'Orders', schema: 'dbo', kind: 'table', type: 'U' }], elapsedMs: 1 }
+        : { items: params.target.name === 'Orders' ? [{ name: 'OrderLines', schema: 'dbo', kind: 'table', type: 'U', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view', type: 'V', schemaBound: true }]
+          : params.target.name === 'vOrders' ? [{ name: 'Orders', schema: 'dbo', kind: 'table', type: 'U' }] : [], elapsedMs: 1 })
       case 'tables.columns': return ok({ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })

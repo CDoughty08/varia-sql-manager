@@ -122,6 +122,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDefinition': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
+  'explorer.dependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },

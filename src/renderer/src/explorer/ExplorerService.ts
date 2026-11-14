@@ -2,6 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
+import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
@@ -47,13 +48,14 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerSelectionServerEngine: '' | ServerEngine
   readonly explorerSelectionServerLinux: boolean
   readonly explorerSelectionPeekable: boolean
+  readonly explorerSelectionDependencies: boolean
   readonly explorerLoading: boolean
   /** Group by Schema is on (`objectExplorer.groupBySchema`). */
   readonly explorerGroupBySchema: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
+  explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
   explorerLoading: false, explorerGroupBySchema: false
 }
 /** The selection's keys, without the pane's own (loading, Group by Schema). */
@@ -76,6 +78,7 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
     explorerSelectionServerEngine: target?.engine ?? '',
     explorerSelectionServerLinux: !!target?.linux,
     explorerSelectionPeekable: !!target && target.kind !== 'folder' && isPeekKind(target.kind),
+    explorerSelectionDependencies: !!target && target.kind !== 'folder' && isDependencyKind(target.kind),
     ...scriptContextValues(scriptMenuState(target && { kind: target.kind, subtype: target.subtype, parentKind: target.ref.type === 'object' ? target.ref.object.parent?.kind : undefined })),
     ...actionContextValues(actionMenuState(target)),
     ...ssisVerbContextValues(ssisVerbMenuState(target?.kind))

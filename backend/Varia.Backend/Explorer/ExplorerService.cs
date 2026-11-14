@@ -187,6 +187,19 @@ internal sealed class ExplorerService : IDisposable
             error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", token);
     }
 
+    /// <summary>explorer.dependencies: one level of View Dependencies' tree, one of the Dependencies tab's listings
+    /// (<see cref="PeekSql.Level"/>) on Peek's slot and budget; the renderer asks for a level when its node is expanded.</summary>
+    public Task<DependenciesResult> DependenciesAsync(DependenciesArgs args, CancellationToken token)
+    {
+        var spec = ExplorerRefs.ValidateDependencies(args, catalog);
+        var profile = PeekProfile(args.ConnectionId);
+        var max = catalog.Peek.DependencyLevel;
+        // One more object than a level lists tells the tree there were more.
+        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.Level(spec.Kind, new SqlRender(profile.Band), args.Target.Parent?.Kind, args.Direction == "usedBy"), max + 1,
+            async (_, _, reader, ct) => await PeekSql.ReadLevelAsync(reader, max, ct),
+            error => new DependenciesResult([], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", token);
+    }
+
     /// <summary>explorer.peekDefinition: a page of a module's text after explorer.peek's first (<see cref="PeekSql.DefinitionPage"/>),
     /// on the peek's slot and budget; the renderer asks for the next page only once it has this one.</summary>
     public Task<PeekDefinitionResult> PeekDefinitionAsync(PeekDefinitionArgs args, CancellationToken token)

@@ -314,6 +314,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
+/* View Dependencies: the two choices, the tree (a row per node, indented by depth), and the selected node's facts. */
+.dependencies-dialog { width: min(720px, calc(100vw - 40px)); }
+.dependencies-body { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.dependencies-choice { display: flex; flex-direction: column; gap: var(--varia-space-1); border: 0; margin: 0; padding: 0; }
+.dependencies-choice .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.dependencies-tree { height: min(320px, 45vh); overflow: auto; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: var(--varia-space-0) 0; }
+.dependencies-tree:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.dependencies-row { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; height: var(--varia-row); padding-inline-end: var(--varia-space-2); white-space: nowrap; cursor: default; }
+.dependencies-row:hover { background: var(--varia-list-hoverBackground); }
+.dependencies-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.dependencies-tree:focus .dependencies-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.dependencies-row[data-leaf="cycle"] .peek-item-note { color: var(--varia-warningForeground); }
+.dependencies-twisty { display: grid; place-items: center; flex: none; width: 16px; height: 16px; }
+.dependencies-status { display: flex; align-items: center; gap: var(--varia-space-1); min-height: var(--varia-row); padding-inline-end: var(--varia-space-2); color: var(--varia-descriptionForeground); }
+.dependencies-status.error { color: var(--varia-errorForeground); }
 .connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
 .about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
 .about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }

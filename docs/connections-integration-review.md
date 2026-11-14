@@ -258,8 +258,8 @@ were unchanged. No newly reviewed main, renderer or smoke finding remained after
 
 ## Current-main integration review
 
-The merge through main `f9699653` combines the new result-set context, Pivot updates, editor mouse behavior,
-welcome-query startup optimization, discard-results status and memory accounting with connection restoration.
+The merge through main `6b01947e` combines the new result-set context, Pivot updates, editor mouse behavior,
+welcome-query startup optimization, discard-results status, fused page reads and View Dependencies with connection restoration.
 Both the real workbench and its fixture subscribe to
 result-set availability while retaining live-connection admission, visible-only recovery candidates, exact target
 restoration and the startup readiness barrier. Memory-limit synchronization after a successful settings read retains
@@ -283,6 +283,25 @@ task now admits only a currently hovered, visible, expanded preview and captures
 alignment tolerance, text and memory readings, hover into the panel and leave-to-dismiss checks remain. Explicit
 hidden and click-pinned samples are rejected, so the check cannot pass by silently pinning the preview. No production
 component, deadline or retry policy changed.
+
+The final stable-base review found two additional integration issues. View Dependencies used only `!lost`, admitting
+metadata reads while a handle was disconnecting. It now uses the shared liveness gate, cancels pending reads and keeps
+loaded rows and selection while paused. Only a connected rollback of the exact target, handle and generation can
+re-enable explicit actions; it starts no read automatically. True loss, removal or replacement permanently abandons
+the tree. Held replies cannot overwrite a later retry, and the dialog keeps radio focus with temporary wording.
+The existing Getting Started sequences and fictional samples remain accurate; the additional interaction is documented
+in the Object Explorer guide and does not change a setting, shortcut or automatic query behavior.
+
+Fused reads returned their working reservation but retained the free room arrays through the disposed owner during
+fallback unpacking. Disposal now clears that bag under the ownership lock before returning its reservation. A
+NoInlining weak-reference regression keeps the owner reachable while proving its returned buffer can be collected,
+checks exact accounting and repeated disposal, and refuses a new rental. Forced collection runs with Store's isolated
+suite, leaving the fused-operation suite parallel; the fix enforces the existing documented scratch-memory lifetime.
+
+The full validation also caught generated Explorer guidance edited outside its producer and a second real-replacement
+test spy using raw rename on Windows. The guidance now comes from the shared documentation producer. Both inspecting
+replacement spies delegate to the production replacement helper; intentional failure injection, permission/setup
+mutations and exact path/content assertions remain. Production replacement policy and test deadlines are unchanged.
 
 ## Initial local validation and limits
 
