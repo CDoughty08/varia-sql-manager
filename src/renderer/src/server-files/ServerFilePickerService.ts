@@ -9,6 +9,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 
 /** What a dialog's "…" button asks for: a file or folder on the server of `connectionId`. */
 export interface ServerFilePick {
@@ -166,7 +167,7 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
   /** Opens the picker; refused (undefined) while another is open or when the server is not connected. */
   pick(request: ServerFilePick): Promise<string | undefined> {
     if (this.disposed || this.current) return Promise.resolve(undefined)
-    const connection = this.options.connections.getSnapshot().find(item => item.id === request.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === request.connectionId && isLiveConnection(item))
     if (!connection) return Promise.resolve(undefined)
     if (request.initialPath !== undefined && serverPathProblem(request.initialPath)) request = { ...request, initialPath: undefined }
     const open: OpenServerFilePicker = {
@@ -486,7 +487,7 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
   /** A server that disconnects leaves only Cancel; its listings are cancelled. */
   private connectionsChanged(): void {
     const open = this.current
-    if (!open || open.disconnected || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost)) return
+    if (!open || open.disconnected || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && isLiveConnection(item))) return
     this.cancelRequests()
     this.loads.clear()
     this.loadRequests.clear()

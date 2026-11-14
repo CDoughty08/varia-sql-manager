@@ -1,4 +1,5 @@
 import type { ApiResult, ExplorerNode, VariaApi } from '../../../shared/contracts'
+import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
 import { isPeekKind, type PeekKind, type PeekResult } from '../../../shared/explorer/peek.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
@@ -87,7 +88,7 @@ export interface SearchDetailsSnapshot {
 export interface SearchDetailsOptions {
   readonly api: Pick<VariaApi, 'scriptObjects' | 'cancelScripting' | 'explorerChildren' | 'explorerCancel'>
   readonly peek: { read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader }
-  readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
+  readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** The search documents, so a closed tab's details go with it. */
   readonly searches: ExternalStore<{ readonly documents: Readonly<Record<string, unknown>> }>
   readonly scriptingOptions: ExternalStore<{ readonly options: ScriptingOptions }>
@@ -192,7 +193,7 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
   }
 
   private isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection))
   }
 
   private load(documentId: string, connectionId: string, hit: ObjectSearchHit, fresh: boolean, settle: boolean): void {

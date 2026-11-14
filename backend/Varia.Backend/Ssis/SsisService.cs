@@ -179,7 +179,7 @@ internal sealed class SsisService : IDisposable
                 {
                     await using var connection = host.SsisServerConnection(args.ConnectionId);
                     try { await host.OpenAsync(connection, source.Token); }
-                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return Failed(SsisErrors.Create(catalog, error.Code, error.Message)); }
+                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { return Failed(SsisErrors.Create(catalog, error.Code, error.Message)); }
                     catch (SqlException error) when (!source.IsCancellationRequested) { return Failed(SsisErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
                     try
                     {
@@ -259,7 +259,7 @@ internal sealed class SsisService : IDisposable
                 var name = Options.CatalogDatabase;
                 await using var connection = host.SsisConnection(connectionId, name);
                 try { await host.OpenAsync(connection, token); }
-                catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return (null, SsisErrors.Create(catalog, error.Code, error.Message)); }
+                catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { return (null, SsisErrors.Create(catalog, error.Code, error.Message)); }
                 // 4060 says the login cannot open the database, whether it is gone, offline, restoring or closed to the login: a
                 // read outside it tells which.
                 catch (SqlException error) when (!token.IsCancellationRequested && SsisErrors.CodeOf(error, null) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE")

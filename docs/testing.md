@@ -66,6 +66,9 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
 - An exclusive run that is waiting goes ahead of shared runs that arrive after it; it then waits for the shared runs already
   going. Each smoke suite takes the lock as it starts, so another session's check can run between two suites of
   `test:smoke`.
+- The shard runner takes each suite's lock before spawning it and starting its execution watchdog. Waiting for the
+  machine does not spend the suite's test budget. Interrupting a queued suite releases only its own reservation and
+  launches no test process; a running suite keeps the existing whole-process-tree cleanup.
 - Each check plans for its share of the machine: the CPUs divided among the shared slots (12 of 24 with the default),
   which picks its lane layout and caps each vitest lane's workers (`vitestWorkers` in `scripts/check.mjs`: the main lane
   leaves room for the build and .NET lanes beside it, the Release-backend files get two), so two checks about fill the
@@ -143,6 +146,10 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
 
 ## Testing expectations
 
+- The existing connections Electron suite includes `scripts/fixtures/connection-lifecycle.mjs`, which uses the actual
+  main request/credential owners with an isolated fake backend and test-only cipher. It covers reuse and distinct
+  credentials, all details-dialog choices, dirty-close cancellation, retained results, selective close and mixed
+  startup reconnect outcomes without automatic query execution. Its sample secrets are never real credentials.
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when

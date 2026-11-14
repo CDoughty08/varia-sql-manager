@@ -15,6 +15,7 @@ export const settingPages = [
   { id: 'environment.productUpdates', title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.' },
   { id: 'environment.objectExplorer', title: 'Object Explorer', parent: 'environment', layout: 'form' },
+  { id: 'environment.connections', title: 'Connections', parent: 'environment', layout: 'form', description: 'How remembered connection targets reconnect when the workspace opens. Not in SSMS.' },
   { id: 'textEditor', title: 'Text Editor' },
   { id: 'textEditor.general', title: 'General', parent: 'textEditor', layout: 'form' },
   { id: 'textEditor.editorTabAndStatusBar', title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },

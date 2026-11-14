@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
-import { advancedDefaults, advancedToStore, canRememberPassword, connectContextSchema, connectionDefaults, connectionKey, credentialBinding, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, rememberedProfile, savedConnection, type ConnectionProfile } from '../src/shared/connections'
+import { advancedDefaults, advancedToStore, canRememberPassword, connectContextSchema, connectionDefaults, connectionKey, credentialBinding, defaultAuthentication, connectionLibrarySchema, connectionOptionsSchema, connectionProfileInputSchema, rememberedProfile, savedConnection, type ConnectionProfile } from '../src/shared/connections'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { authenticationModes } from '../src/shared/auth'
 
@@ -92,6 +92,47 @@ describe('per-platform authentication defaults', () => {
   })
 })
 describe('saved connection library', () => {
+  it('persists reconnect policy as profile metadata and preserves it through unrelated edits and ordinary history', async () => {
+    const { store: library, path } = await store()
+    const options = { ...connectionDefaults('win32'), server: 'policy-server' }
+    const saved = await library.save({ options, favorite: true, autoReconnect: 'off' })
+    const id = saved.profiles[0].id
+    const other = await library.save({ options: { ...options, server: 'other-alias' }, favorite: true, autoReconnect: 'on' })
+    const untouched = other.profiles.find(profile => profile.id !== id)!
+    await library.rememberEntry(options)
+    await library.setEnvironment({ options, environment: 'Production' })
+    await library.save({ id, options: { ...options, displayName: 'Named server', environment: 'Production' }, favorite: false })
+    let profiles = (await new ConnectionStore(path).load()).library.profiles
+    expect(profiles.find(profile => profile.id === id)).toMatchObject({ autoReconnect: 'off', favorite: false, options: { environment: 'Production', displayName: 'Named server' } })
+    expect(profiles.find(profile => profile.id === untouched.id)).toEqual(untouched)
+    await library.rememberEntry(options, true, 'inherit', id)
+    profiles = (await new ConnectionStore(path).load()).library.profiles
+    expect(profiles.find(profile => profile.id === id)?.autoReconnect).toBe('inherit')
+    expect(profiles.find(profile => profile.id === untouched.id)).toEqual(untouched)
+    expect(profiles.every(profile => !('autoReconnect' in profile.options))).toBe(true)
+  })
+  it('accepts older profiles without reconnect metadata, defaults new profiles to inherit and bounds explicit choices', async () => {
+    const { store: library, path } = await store()
+    const options = connectionDefaults('win32'), id = crypto.randomUUID()
+    await writeFile(path, JSON.stringify({ version: 1, profiles: [{ id, options, favorite: true, registered: false }] }))
+    expect((await library.load()).warning).toBeUndefined()
+    await library.rememberEntry(options)
+    expect((await library.load()).library.profiles[0].autoReconnect).toBeUndefined()
+    const fresh = await library.rememberEntry({ ...options, server: 'new-server' })
+    expect(fresh.library.profiles.find(profile => profile.id === fresh.id)?.autoReconnect).toBe('inherit')
+    for (const autoReconnect of ['inherit', 'on', 'off'] as const) {
+      expect(connectionProfileInputSchema.safeParse({ options, autoReconnect }).success).toBe(true)
+      expect(connectContextSchema.safeParse({ autoReconnect }).success).toBe(true)
+      expect(connectionOptionsSchema.safeParse({ ...options, autoReconnect }).success).toBe(false)
+      expect(connectionKey(connectionProfileInputSchema.parse({ options, autoReconnect }).options)).toBe(connectionKey(options))
+      expect(credentialBinding(connectionProfileInputSchema.parse({ options, autoReconnect }).options)).toBe(credentialBinding(options))
+    }
+    for (const autoReconnect of ['auto', true, null, 'on'.repeat(1000)]) {
+      expect(connectionProfileInputSchema.safeParse({ options, autoReconnect }).success).toBe(false)
+      expect(connectContextSchema.safeParse({ autoReconnect }).success).toBe(false)
+      expect(connectionLibrarySchema.safeParse({ version: 1, profiles: [{ id, options, favorite: true, registered: false, autoReconnect }] }).success).toBe(false)
+    }
+  })
   it('persists favorites, registered servers, and recent connections without credentials', async () => {
     const { store: library, path } = await store()
     const options = { ...connectionDefaults('win32'), authentication: 'sql' as const, username: 'reader', password: 'secret-marker', displayName: 'Development', color: '#e66b73', advanced: { commandTimeout: 12 } }
@@ -204,6 +245,9 @@ describe('remembered password bindings', () => {
   })
   it('accepts only an entry id, the Remember password choice and the request id Stop cancels by as the connect context', () => {
     const profileId = crypto.randomUUID(), requestId = crypto.randomUUID()
+    const selectedProfileId = crypto.randomUUID()
+    expect(connectContextSchema.parse({ profileId, selectedProfileId })).toEqual({ profileId, selectedProfileId })
+    expect(connectContextSchema.safeParse({ selectedProfileId: 'not-a-profile-uuid' }).success).toBe(false)
     expect(connectContextSchema.parse({ profileId, remember: true })).toEqual({ profileId, remember: true })
     expect(connectContextSchema.parse({ requestId })).toEqual({ requestId })
     expect(connectContextSchema.safeParse({ requestId: 'stop-1' }).success).toBe(false)

@@ -8,6 +8,7 @@ import { CommandHistory } from '../quickinput/history'
 import type { QuickInputAnchor, QuickInputMessage, QuickPickAnswerItem, QuickPickItem, QuickPickOptions } from '../quickinput/QuickInputService'
 import { hitIcon } from '../search/hit-actions'
 import { quickSearchId, serverGroups, serverHitKey } from '../search/ObjectSearchService'
+import { queryConnectionPresentation } from '../query-connection'
 
 /**
  * Quick access modes by prefix: commands, help, and no prefix, which is Go to Query, or Search when the header's search
@@ -23,7 +24,7 @@ const recentLimit = 10
  */
 const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'anchor' | 'onDidChangeValue' | 'onDidHide'>
-export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch'>>
+export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch' | 'targets'>>
 /** What no prefix searches: open queries (Go to Query), or open queries, commands and the servers' objects (Search). */
 type Scope = 'queries' | 'search'
 /** The groups Search lists, in this order. */
@@ -71,7 +72,8 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
     const ordered = [...recentDocuments.flatMap(id => open.filter(document => document.id === id)), ...open.filter(document => !recentDocuments.includes(document.id))]
     return ordered.map(document => {
       const connection = live.find(value => value.id === document.connectionId)
-      const server = connection ? connection.displayName || connection.server : 'Disconnected'
+      const presentation = queryConnectionPresentation(document, connection, workbench.targets?.getSnapshot().find(target => target.id === document.targetId))
+      const server = presentation.disconnected ? presentation.label : presentation.displayName || presentation.server || 'Disconnected'
       return { id: document.id, label: document.name, icon: 'go-to-file', description: [...document.dirty ? ['unsaved'] : [], server, document.database].join(' · '), tooltip: document.file?.path }
     })
   }

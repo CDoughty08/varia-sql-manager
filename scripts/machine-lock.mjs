@@ -83,7 +83,8 @@ const describe = record => `${record.label} (pid ${record.pid}, ${record.cwd}, s
  * Waits for the lock in `mode` ('shared' or 'exclusive') and holds it until `release()` or the process exits. Returns
  * `{ release, others }`, where `others` is how many shared holders were running when it was taken.
  */
-export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'), env = process.env, dir = env.VARIA_LOCK_DIR || defaultDir(), slots = sharedSlots(env), pollMs = 1000, beatMs = heartbeatMs, log = text => process.stderr.write(text + '\n'), isAlive = alive } = {}) {
+export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'), env = process.env, dir = env.VARIA_LOCK_DIR || defaultDir(), slots = sharedSlots(env), pollMs = 1000, beatMs = heartbeatMs, log = text => process.stderr.write(text + '\n'), isAlive = alive, signal } = {}) {
+  signal?.throwIfAborted()
   if (!lockEnabled(env) || env.VARIA_LOCK_HELD) return { release() {}, others: 0 }
   mkdirSync(dir, { recursive: true })
   // The token tells this hold's files from any other's, including another hold in the same process (the tests).
@@ -134,36 +135,40 @@ export async function acquire(mode, { label = basename(process.argv[1] ?? 'node'
   }
   const sharedHolders = () => allSlots().map(file => holder(file, isAlive)).filter(Boolean)
 
-  for (;;) {
-    for (const file of leftovers) drop(file)
-    if (mode === 'exclusive') {
-      if (!owned.includes(exclusive) && create(exclusive, record)) owned.push(exclusive)
-      if (owned.includes(exclusive)) {
-        const running = sharedHolders()
-        if (!running.length) break
-        report(running)
+  try {
+    for (;;) {
+      signal?.throwIfAborted()
+      for (const file of leftovers) drop(file)
+      if (mode === 'exclusive') {
+        if (!owned.includes(exclusive) && create(exclusive, record)) owned.push(exclusive)
+        if (owned.includes(exclusive)) {
+          const running = sharedHolders()
+          if (!running.length) break
+          report(running)
+        } else {
+          const other = holder(exclusive, isAlive)
+          if (other) report([other])
+        }
       } else {
-        const other = holder(exclusive, isAlive)
-        if (other) report([other])
+        const writer = holder(exclusive, isAlive)
+        if (writer) report([writer])
+        else {
+          const free = slotFiles.find(file => !holder(file, isAlive) && create(file, record))
+          if (free) {
+            // An exclusive run that arrived meanwhile goes first: give the slot back rather than both waiting on each other.
+            if (!holder(exclusive, isAlive)) { owned.push(free); break }
+            drop(free)
+          } else report(sharedHolders())
+        }
       }
-    } else {
-      const writer = holder(exclusive, isAlive)
-      if (writer) report([writer])
-      else {
-        const free = slotFiles.find(file => !holder(file, isAlive) && create(file, record))
-        if (free) {
-          // An exclusive run that arrived meanwhile goes first: give the slot back rather than both waiting on each other.
-          if (!holder(exclusive, isAlive)) { owned.push(free); break }
-          drop(free)
-        } else report(sharedHolders())
-      }
+      await delay(pollMs, undefined, { signal })
     }
-    await delay(pollMs)
-  }
-  if (reported) log(`Took the machine lock (${mode}) after ${Math.round((Date.now() - waitedSince) / 1000)} s.`)
-  env.VARIA_LOCK_HELD = mode
-  const others = mode === 'shared' ? allSlots().filter(file => !owned.includes(file) && holder(file, isAlive)).length : 0
-  return { release, others }
+    signal?.throwIfAborted()
+    if (reported) log(`Took the machine lock (${mode}) after ${Math.round((Date.now() - waitedSince) / 1000)} s.`)
+    env.VARIA_LOCK_HELD = mode
+    const others = mode === 'shared' ? allSlots().filter(file => !owned.includes(file) && holder(file, isAlive)).length : 0
+    return { release, others }
+  } catch (error) { release(); throw error }
 }
 
 /** Takes the lock an entry script needs (see entryMode): the smoke and benchmark fixtures call this as they load. */

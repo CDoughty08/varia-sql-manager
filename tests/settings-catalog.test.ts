@@ -23,6 +23,7 @@ const expectedTree = [
   '  Product Updates (environment.productUpdates)',
   '  Live Data (environment.liveData)',
   '  Object Explorer (environment.objectExplorer)',
+  '  Connections (environment.connections)',
   'Text Editor',
   '  General (textEditor.general)',
   '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',

@@ -39,6 +39,7 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
   useEffect(() => { tree.current?.focus() }, [])
   useEffect(() => { tree.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }) }, [open.selected])
   const name = displayText(open.root.label)
+  const unavailable = !!open.lost || !!open.disconnecting
   const rows = open.rows
   const at = Math.max(0, rows.findIndex(row => row.node.id === open.selected))
   const selected = rows[at]?.node
@@ -81,15 +82,16 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
       <fieldset className="property-section dependencies-choice">
         <legend className="visually-hidden">Dependencies</legend>
         {dependencyDirections.map(direction => <label key={direction} className="checkbox-label">
-          {/* aria-disabled rather than disabled once the server is lost: disabling a focused radio would drop focus out of the dialog. */}
-          <input type="radio" name="dependencies-direction" checked={open.direction === direction} aria-disabled={open.lost || undefined} onChange={() => dependencies.setDirection(direction)} />
+          {/* Keep focus on the choice while unavailable: disabling a focused radio would drop focus out of the dialog. */}
+          <input type="radio" name="dependencies-direction" checked={open.direction === direction} aria-disabled={unavailable || undefined} onChange={() => dependencies.setDirection(direction)} />
           {dependencyDirectionLabels[direction](name)}
         </label>)}
       </fieldset>
       {open.lost && <p className="connect-error" role="alert">The server was disconnected. Reconnect, then open View Dependencies again.</p>}
+      {open.disconnecting && <p className="connect-error" role="alert">The server is disconnecting. Dependency reads are paused.</p>}
       <div ref={tree} className="dependencies-tree" role="tree" aria-label="Dependencies" tabIndex={0} onKeyDown={treeKeys}
         aria-activedescendant={selected ? `dependency-${open.id}-${selected.id}` : undefined}>
-        {rows.map(row => <TreeRow key={row.node.id} dialog={open.id} lost={!!open.lost} node={row.node} index={row.index} count={row.count} selected={row.node.id === open.selected} />)}
+        {rows.map(row => <TreeRow key={row.node.id} dialog={open.id} lost={unavailable} node={row.node} index={row.index} count={row.count} selected={row.node.id === open.selected} />)}
       </div>
       {selected && <section className="property-section" aria-label="Selected object">
         <h3 className="peek-group">Selected object</h3>
@@ -103,7 +105,7 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
     </div>
     <div className="connection-footer">
       <button type="button" disabled={!selected || !dependencies.canPeek(selected.id)} onClick={() => selected && dependencies.peek(selected.id)}>Peek</button>
-      <button type="button" disabled={!selected || open.lost || !dependencies.canReveal(selected.id)} onClick={() => selected && dependencies.reveal(selected.id)}>Show in Object Explorer</button>
+      <button type="button" disabled={!selected || unavailable || !dependencies.canReveal(selected.id)} onClick={() => selected && dependencies.reveal(selected.id)}>Show in Object Explorer</button>
       <span />
       <button type="button" className="primary" onClick={close}>OK</button>
     </div>

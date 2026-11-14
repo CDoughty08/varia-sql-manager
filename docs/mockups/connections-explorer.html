@@ -1,0 +1,354 @@
+<div id="connection-explorer-preview" aria-label="Connection and explorer design">
+  <div class="ce-scenarios">
+    <label for="ce-scene">Preview state</label>
+    <select id="ce-scene">
+      <option value="connected">Connected</option>
+      <option value="reconnecting">Reload · reconnecting</option>
+      <option value="reload">Reload · reconnect failed</option>
+      <option value="credentials">Reload · credentials required</option>
+      <option value="disconnected">Disconnected by you</option>
+      <option value="lost">Connection lost</option>
+      <option value="running">Running query</option>
+    </select>
+  </div>
+  <div class="ce-window" aria-label="Varia connection and Object Explorer proposal">
+    <div class="ce-titlebar"><strong>Varia</strong><span>File</span><span>Edit</span><span>View</span><span>Query</span><button type="button" data-action="options">Tools · Options</button><span>Help</span></div>
+    <div class="ce-shell">
+      <aside class="ce-explorer" aria-label="Object Explorer">
+        <div class="ce-panehead"><strong>Object Explorer</strong><span id="ce-count"></span></div>
+        <div class="ce-explorer-tools" aria-label="Object Explorer toolbar">
+          <button type="button" data-action="picker"><i data-lucide="plug" aria-hidden="true"></i><span>Connect…</span></button>
+          <button type="button" data-action="disconnect" data-tooltip="Disconnect selected server" aria-label="Disconnect selected server"><i data-lucide="unplug" aria-hidden="true"></i><span class="ce-tool-label">Disconnect</span></button>
+          <button type="button" data-action="remove" data-tooltip="Disconnect and remove selected server from Object Explorer" aria-label="Disconnect and remove selected server from Object Explorer"><i data-lucide="circle-x" aria-hidden="true"></i><span class="ce-tool-label">Remove</span></button>
+        </div>
+        <div id="ce-roots"></div>
+        <div id="ce-context" class="ce-menu" hidden></div>
+        <div class="ce-explorer-foot"><span id="ce-explorer-state"></span></div>
+      </aside>
+      <main class="ce-workbench">
+        <div class="ce-querybar">
+          <button type="button" class="ce-primary" data-action="execute"><i data-lucide="play" aria-hidden="true"></i>Execute <kbd>F5</kbd></button>
+          <button type="button" data-action="reconnect" id="ce-query-reconnect" hidden><i data-lucide="plug" aria-hidden="true"></i>Reconnect</button>
+          <div class="ce-target"><span class="ce-env">PRODUCTION</span><span id="ce-server-picker"></span><i data-lucide="chevron-down" aria-hidden="true"></i><span class="ce-db">Sales</span></div>
+        </div>
+        <div id="ce-tabs" class="ce-tabs" aria-label="Query tabs"></div>
+        <div id="ce-notice" class="ce-notice" role="status" hidden></div>
+        <div class="ce-editor" aria-label="SQL editor preview">
+          <div class="ce-code"><span class="ce-number">1</span><code><b>SELECT</b> TOP (100) *</code></div>
+          <div class="ce-code"><span class="ce-number">2</span><code><b>FROM</b> dbo.Orders</code></div>
+          <div class="ce-code"><span class="ce-number">3</span><code><b>ORDER BY</b> OrderDate <b>DESC</b>;</code></div>
+        </div>
+        <div class="ce-results"><div class="ce-result-head"><strong>Results</strong><span>Messages</span><span id="ce-results-label"></span></div><div id="ce-result-body"></div></div>
+        <div id="ce-query-status" class="ce-query-status"></div>
+      </main>
+    </div>
+    <div id="ce-status" class="ce-bottom" role="status" aria-live="polite">Ready</div>
+    <div id="ce-overlay" class="ce-overlay" hidden></div>
+  </div>
+</div>
+<style>
+#connection-explorer-preview { --ce-bg:light-dark(#f9f9fc,#15171c); --ce-pane:light-dark(#f0f1f5,#111318); --ce-raised:light-dark(#fff,#20232b); --ce-text:light-dark(#252735,#d9dbe5); --ce-muted:light-dark(#5d6272,#a2a7b7); --ce-line:light-dark(#d7dae4,#30343e); --ce-hover:light-dark(#e8eaf2,#292d38); --ce-iris:light-dark(#5651bc,#b4afff); --ce-iris-fill:light-dark(#e9e7ff,#363253); --ce-prod:light-dark(#99354c,#efa5b6); --ce-prod-fill:light-dark(#f7dfe6,#4b2834); --ce-ok:light-dark(#24754e,#8ed8b2); --ce-warn:light-dark(#805b15,#e8c17a); color:var(--ce-text); font-family:system-ui,sans-serif; font-size:12px; line-height:1.45 }
+#connection-explorer-preview * { box-sizing:border-box }
+#connection-explorer-preview [hidden] { display:none!important }
+#connection-explorer-preview button,#connection-explorer-preview select,#connection-explorer-preview input { font:inherit; color:inherit }
+#connection-explorer-preview button { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid transparent; border-radius:4px; background:transparent; min-height:28px; padding:4px 8px; cursor:var(--cursor-interaction,pointer); text-align:left }
+#connection-explorer-preview button:hover { background:var(--ce-hover) }
+#connection-explorer-preview button:disabled { opacity:.45; cursor:default }
+#connection-explorer-preview select,#connection-explorer-preview input { border:1px solid var(--ce-line); border-radius:4px; background:var(--ce-bg); padding:6px 8px; min-height:30px; min-width:0; max-width:100% }
+#connection-explorer-preview strong,#connection-explorer-preview b { font-weight:600 }
+#connection-explorer-preview svg { width:15px; height:15px; flex-shrink:0 }
+#connection-explorer-preview .ce-scenarios { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; padding-right:94px }
+#connection-explorer-preview .ce-scenarios select { background:var(--ce-raised) }
+#connection-explorer-preview .ce-window { background:var(--ce-bg); border:1px solid var(--ce-line); border-radius:8px; overflow:clip; position:relative }
+#connection-explorer-preview .ce-titlebar { display:flex; gap:18px; flex-wrap:wrap; align-items:center; border-bottom:1px solid var(--ce-line); min-height:37px; padding:4px 12px; background:var(--ce-pane) }
+#connection-explorer-preview .ce-titlebar strong { color:var(--ce-iris) }
+#connection-explorer-preview .ce-titlebar button { padding:3px 0; min-height:26px }
+#connection-explorer-preview .ce-shell { display:grid; grid-template-columns:300px minmax(0,1fr); min-height:510px }
+#connection-explorer-preview .ce-explorer { display:flex; flex-direction:column; background:var(--ce-pane); border-right:1px solid var(--ce-line); position:relative; min-width:0 }
+#connection-explorer-preview .ce-panehead { padding:10px 10px 5px; display:flex; gap:8px; justify-content:space-between; align-items:center }
+#connection-explorer-preview #ce-count { color:var(--ce-muted); font-size:11px }
+#connection-explorer-preview .ce-explorer-tools { display:flex; gap:2px; flex-wrap:wrap; padding:3px 6px 9px; border-bottom:1px solid var(--ce-line) }
+#connection-explorer-preview .ce-explorer-tools button { padding:4px 6px; font-size:11px }
+#connection-explorer-preview .ce-root { padding:6px 7px 5px; border-bottom:1px solid var(--ce-line) }
+#connection-explorer-preview .ce-root.ce-selected { background:var(--ce-hover) }
+#connection-explorer-preview .ce-root-line { display:flex; align-items:center; gap:3px }
+#connection-explorer-preview .ce-root-name { flex:1; justify-content:flex-start; min-width:0; padding:1px 2px; flex-wrap:wrap; gap:4px }
+#connection-explorer-preview .ce-root-name strong { overflow-wrap:anywhere }
+#connection-explorer-preview .ce-root-name .ce-prod-tag { margin-left:auto }
+#connection-explorer-preview .ce-prod-tag,#connection-explorer-preview .ce-env { color:var(--ce-prod); background:var(--ce-prod-fill); border-radius:3px; padding:1px 5px; font-size:10px; font-weight:600 }
+#connection-explorer-preview .ce-root-detail { color:var(--ce-muted); font-size:11px; padding-left:22px; overflow-wrap:anywhere }
+#connection-explorer-preview .ce-root-state { display:flex; gap:5px; align-items:center; flex-wrap:wrap; padding-left:22px; font-size:11px; color:var(--ce-muted); margin-top:2px }
+#connection-explorer-preview .ce-root-state button { padding:0 3px; min-height:23px; color:var(--ce-iris); font-size:11px }
+#connection-explorer-preview .ce-dot { width:6px; height:6px; border-radius:50%; background:var(--ce-ok); display:inline-block; flex-shrink:0 }
+#connection-explorer-preview .ce-off { background:transparent; border:1px solid var(--ce-muted) }
+#connection-explorer-preview .ce-folders { color:var(--ce-muted); padding:6px 0 3px 25px; display:grid; gap:6px }
+#connection-explorer-preview .ce-folder { display:flex; gap:8px; align-items:center }
+#connection-explorer-preview .ce-folder svg { color:var(--ce-warn) }
+#connection-explorer-preview .ce-explorer-foot { margin-top:auto; padding:8px 10px; color:var(--ce-muted); font-size:11px }
+#connection-explorer-preview .ce-workbench { display:flex; flex-direction:column; min-width:0 }
+#connection-explorer-preview .ce-querybar { display:flex; flex-wrap:wrap; gap:7px; padding:7px; align-items:center; border-bottom:1px solid var(--ce-line) }
+#connection-explorer-preview button.ce-primary { background:var(--ce-iris); color:light-dark(#fff,#181527); border-color:transparent }
+#connection-explorer-preview kbd { opacity:.8; font:inherit; border:1px solid currentColor; border-radius:3px; padding:0 3px; font-size:10px }
+#connection-explorer-preview .ce-target { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-left:auto; min-width:0; border:1px solid var(--ce-line); border-radius:4px; padding:4px 7px; font-size:11px }
+#connection-explorer-preview .ce-db { border-left:1px solid var(--ce-line); padding-left:7px }
+#connection-explorer-preview .ce-tabs { display:flex; flex-wrap:wrap; gap:1px; border-bottom:1px solid var(--ce-line); background:var(--ce-pane) }
+#connection-explorer-preview .ce-tab { display:flex; flex-direction:column; gap:3px; align-items:stretch; padding:8px 10px; min-width:0; max-width:100%; border-top:2px solid transparent }
+#connection-explorer-preview .ce-tab.ce-tab-active { border-top-color:var(--ce-iris); background:var(--ce-bg) }
+#connection-explorer-preview .ce-tab-line { display:flex; align-items:center; gap:8px; min-width:0 }
+#connection-explorer-preview .ce-tab-line button { min-height:20px; padding:0; font-size:11px; color:var(--ce-muted) }
+#connection-explorer-preview .ce-tab-sub { color:var(--ce-muted); font-size:11px; overflow-wrap:anywhere }
+#connection-explorer-preview .ce-notice { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:7px 12px; background:var(--ce-iris-fill); border-bottom:1px solid var(--ce-line); font-size:11px }
+#connection-explorer-preview .ce-notice button { color:var(--ce-iris); padding:1px 4px; min-height:22px }
+#connection-explorer-preview .ce-editor { flex:1; min-height:205px; padding:16px 0 }
+#connection-explorer-preview .ce-code { display:flex; gap:18px; padding:1px 15px; font-family:Consolas,monospace; font-size:13px }
+#connection-explorer-preview .ce-code code { white-space:pre-wrap; overflow-wrap:anywhere; min-width:0; background:transparent; color:var(--ce-text); padding:0; border:0; border-radius:0; font:inherit }
+#connection-explorer-preview .ce-code b { color:var(--ce-iris); font-weight:400 }
+#connection-explorer-preview .ce-number { color:var(--ce-muted); min-width:12px }
+#connection-explorer-preview .ce-results { border-top:3px solid var(--ce-line); min-height:115px }
+#connection-explorer-preview .ce-result-head { display:flex; gap:18px; flex-wrap:wrap; padding:7px 10px; border-bottom:1px solid var(--ce-line); color:var(--ce-muted); font-size:11px }
+#connection-explorer-preview .ce-result-head strong { color:var(--ce-text) }
+#connection-explorer-preview #ce-results-label { margin-left:auto }
+#connection-explorer-preview .ce-results table { border-collapse:collapse; font-size:11px; margin:6px 10px; max-width:calc(100% - 20px) }
+#connection-explorer-preview .ce-results th,#connection-explorer-preview .ce-results td { border:1px solid var(--ce-line); padding:4px 14px; text-align:left; font-weight:400 }
+#connection-explorer-preview .ce-results th { color:var(--ce-muted) }
+#connection-explorer-preview .ce-results-empty { color:var(--ce-muted); padding:16px 12px; font-size:11px }
+#connection-explorer-preview .ce-query-status { border-top:1px solid var(--ce-line); padding:6px 10px; color:var(--ce-muted); font-size:11px; overflow-wrap:anywhere }
+#connection-explorer-preview .ce-bottom { border-top:1px solid var(--ce-line); padding:5px 10px; color:var(--ce-muted); background:var(--ce-pane); font-size:11px; min-height:27px }
+#connection-explorer-preview .ce-menu { position:absolute; z-index:3; left:14px; right:10px; top:151px; border:1px solid var(--ce-line); background:var(--ce-raised); border-radius:6px; box-shadow:0 6px 20px #0003; padding:5px }
+#connection-explorer-preview .ce-menu button { display:flex; justify-content:flex-start; width:100%; min-height:30px; font-size:11px; white-space:normal }
+#connection-explorer-preview .ce-menu hr { border:0; border-top:1px solid var(--ce-line); margin:4px 0 }
+#connection-explorer-preview .ce-overlay { position:absolute; inset:0; display:flex; justify-content:center; align-items:flex-start; padding:58px 20px 20px; z-index:5; background:light-dark(#15172535,#08090d80); overflow:auto }
+#connection-explorer-preview .ce-dialog { width:530px; max-width:100%; background:var(--ce-raised); border:1px solid var(--ce-line); border-radius:8px; box-shadow:0 12px 40px #0004; padding:20px; display:flex; flex-direction:column; gap:14px; font-size:12px }
+#connection-explorer-preview .ce-dialog h2 { font-size:16px; font-weight:600; margin:0; line-height:1.4 }
+#connection-explorer-preview .ce-dialog p { margin:0 }
+#connection-explorer-preview .ce-dialog .ce-dim { color:var(--ce-muted); font-size:11px }
+#connection-explorer-preview .ce-dialog-row { display:grid; grid-template-columns:145px minmax(0,1fr); align-items:center; gap:8px }
+#connection-explorer-preview .ce-dialog label { color:var(--ce-text) }
+#connection-explorer-preview .ce-dialog-footer { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; border-top:1px solid var(--ce-line); padding-top:13px }
+#connection-explorer-preview .ce-dialog-footer button { border-color:var(--ce-line) }
+#connection-explorer-preview .ce-warning { color:var(--ce-warn); padding-left:10px; border-left:2px solid var(--ce-warn) }
+#connection-explorer-preview .ce-doclist { color:var(--ce-muted); margin:0; padding-left:18px }
+#connection-explorer-preview .ce-picker-entry { border:1px solid var(--ce-line); border-radius:4px; padding:9px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:var(--ce-bg) }
+#connection-explorer-preview .ce-picker-entry .ce-dim { margin-left:auto }
+#connection-explorer-preview .ce-inlinecheck { display:flex; align-items:flex-start; gap:8px }
+#connection-explorer-preview .ce-inlinecheck input { min-height:0; margin:4px 0 0 }
+#connection-explorer-preview .ce-dialog-note { color:var(--ce-iris); background:var(--ce-iris-fill); padding:8px; border-radius:4px; font-size:11px }
+#connection-explorer-preview.ce-hide-identities .ce-root-detail { display:none }
+#connection-explorer-preview.ce-compact-tools .ce-tool-label { display:none }
+@media(max-width:760px) { #connection-explorer-preview .ce-shell { grid-template-columns:265px minmax(0,1fr) } #connection-explorer-preview .ce-target { margin-left:0 } #connection-explorer-preview .ce-env { display:none } #connection-explorer-preview .ce-code { font-size:12px; gap:12px } #connection-explorer-preview .ce-results th,#connection-explorer-preview .ce-results td { padding:4px 7px } }
+@media(max-width:570px) { #connection-explorer-preview .ce-shell { display:flex; flex-direction:column } #connection-explorer-preview .ce-explorer { border-right:0; border-bottom:1px solid var(--ce-line) } #connection-explorer-preview .ce-explorer-foot { display:none } #connection-explorer-preview .ce-folders { display:none } #connection-explorer-preview .ce-root { padding:4px 7px } #connection-explorer-preview .ce-titlebar { gap:10px } #connection-explorer-preview .ce-editor { min-height:155px } #connection-explorer-preview .ce-overlay { padding:42px 8px 8px } #connection-explorer-preview .ce-dialog { padding:14px; gap:12px } #connection-explorer-preview .ce-dialog-row { grid-template-columns:1fr; gap:4px } #connection-explorer-preview .ce-dialog-footer { justify-content:flex-start } #connection-explorer-preview .ce-menu { top:125px; max-width:290px } #connection-explorer-preview .ce-scenarios { padding-right:0 } }
+@media(pointer:coarse) { #connection-explorer-preview button { min-height:44px } #connection-explorer-preview .ce-root-state button,#connection-explorer-preview .ce-tab-line button { min-height:44px } #connection-explorer-preview select,#connection-explorer-preview input { font-size:16px } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('connection-explorer-preview')
+  const q = id => root.querySelector('#' + id)
+  const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`
+  const appearance = { identities: true, toolbarLabels: true }
+  const saved = window.openai?.widgetState
+  let scene = saved?.modelContent?.scene || 'disconnected'
+  if (![...q('ce-scene').options].some(option => option.value === scene)) scene = 'connected'
+  let entries, tabs, selected, activeTab, notice, results, retainedResults, pendingRemove = false
+  let globalReconnect = saved?.modelContent?.globalReconnect ?? true
+  const policies = { prod: saved?.modelContent?.connectionReconnect || 'inherit', reader: 'inherit' }
+  const names = { prod: 'alex', reader: 'report_reader', deployment: 'deployment_admin' }
+  const overlay = q('ce-overlay')
+  function save() {
+    window.openai?.setWidgetState?.({ modelContent: { scene, globalReconnect, connectionReconnect: policies.prod }, privateContent: { identities: appearance.identities, toolbarLabels: appearance.toolbarLabels } }).catch(() => {})
+  }
+  function applyAppearance() {
+    root.classList.toggle('ce-hide-identities', !appearance.identities)
+    root.classList.toggle('ce-compact-tools', !appearance.toolbarLabels)
+  }
+  function initialize(value) {
+    scene = value
+    entries = [{ id:'prod', state:'connected', reason:'', visible:true }, { id:'reader', state:'connected', reason:'', visible:true }]
+    tabs = [{ id:1, name:'Sales review.sql', entry:'prod', dirty:true }, { id:2, name:'Reconciliation.sql', entry:'prod', dirty:false }, { id:3, name:'Daily report.sql', entry:'reader', dirty:false }]
+    selected = 'prod'; activeTab = 1; notice = ''; results = true; retainedResults = false
+    if (scene !== 'connected' && scene !== 'running') {
+      entries.forEach(entry => entry.state = scene === 'reconnecting' ? 'connecting' : 'disconnected')
+      if (scene === 'disconnected' || scene === 'lost') entries[1].state = 'connected'
+      entries[0].reason = scene === 'reconnecting' ? 'Reconnecting…' : scene === 'reload' ? 'Reconnect failed · timed out' : scene === 'credentials' ? 'Credentials required' : scene === 'lost' ? 'Connection lost' : 'Disconnected'
+      entries[1].reason = 'Disconnected'
+      if (scene === 'reconnecting') entries[1].reason = 'Reconnecting…'
+      results = scene === 'disconnected' || scene === 'lost'
+      retainedResults = results
+      notice = scene === 'reconnecting' ? 'Reconnecting to 2 previously connected servers…' : scene === 'reload' ? 'Automatic reconnect failed for sql-prod-01. Your queries remain open.' : scene === 'credentials' ? 'sql-prod-01 needs credentials. Sign in when you are ready.' : scene === 'lost' ? 'Connection lost. Queries were not retried.' : ''
+    }
+    if (scene === 'running') notice = 'Sales review.sql is running.'
+    q('ce-scene').value = scene
+    closeOverlay(); render()
+  }
+  const entryBy = id => entries.find(entry => entry.id === id)
+  const selectedEntry = () => entryBy(selected)
+  const active = () => tabs.find(tab => tab.id === activeTab)
+  const isConnected = id => entryBy(id)?.state === 'connected'
+  const tabState = tab => isConnected(tab.entry) ? 'PRODUCTION · SID —' : 'sql-prod-01 · Disconnected'
+  function render() {
+    applyAppearance()
+    const visible = entries.filter(entry => entry.visible)
+    q('ce-count').textContent = `${visible.length} connections`
+    q('ce-roots').innerHTML = visible.map(entry => `<div class="ce-root ${selected === entry.id ? 'ce-selected' : ''}" data-entry="${entry.id}">
+      <div class="ce-root-line"><button class="ce-root-name" type="button" data-select="${entry.id}" aria-pressed="${selected === entry.id}">${icon(isConnected(entry.id) ? 'chevron-down' : 'chevron-right')}${icon('server')}<strong>sql-prod-01</strong><span class="ce-prod-tag">PROD</span></button><button type="button" data-menu="${entry.id}" aria-label="Actions for sql-prod-01, ${names[entry.id]}">${icon('ellipsis')}</button></div>
+      <div class="ce-root-detail">SQL login · ${names[entry.id]} · Sales · ${entry.id === 'reader' ? 'Read only' : 'Read/write'}</div>
+      <div class="ce-root-state"><span class="ce-dot ${isConnected(entry.id) ? '' : 'ce-off'}"></span><span>${isConnected(entry.id) ? 'Connected' : entry.reason || 'Disconnected'}</span>${isConnected(entry.id) ? '' : entry.state === 'connecting' ? `<button type="button" data-cancel-entry="${entry.id}">Cancel</button>` : `<button type="button" data-reconnect="${entry.id}">${scene === 'credentials' && entry.id === 'prod' ? 'Sign in…' : 'Reconnect'}</button>`}</div>
+      ${isConnected(entry.id) ? `<div class="ce-folders"><div class="ce-folder">${icon('chevron-right')}${icon('folder')}Databases</div><div class="ce-folder">${icon('chevron-right')}${icon('folder')}Security</div><div class="ce-folder">${icon('chevron-right')}${icon('folder')}Server Objects</div></div>` : ''}</div>`).join('') || '<div class="ce-results-empty">No servers in Object Explorer.</div>'
+    q('ce-explorer-state').textContent = `${visible.filter(entry => isConnected(entry.id)).length} connected · ${visible.filter(entry => !isConnected(entry.id)).length} disconnected`
+    q('ce-tabs').innerHTML = tabs.map(tab => `<div class="ce-tab ${activeTab === tab.id ? 'ce-tab-active' : ''}"><div class="ce-tab-line">${icon('database')}<button type="button" data-tab="${tab.id}">${tab.name}</button>${tab.dirty ? '<span aria-label="Unsaved changes">●</span>' : ''}</div><div class="ce-tab-sub">${tabState(tab)}</div></div>`).join('')
+    const tab = active(), connected = !!tab && isConnected(tab.entry)
+    q('ce-server-picker').textContent = tab ? `sql-prod-01${connected ? '' : ' · Disconnected'}` : 'Disconnected'
+    q('ce-query-reconnect').hidden = !tab || connected
+    root.querySelector('[data-action="execute"]').disabled = !connected
+    root.querySelector('[data-action="disconnect"]').disabled = !selectedEntry()?.visible || !isConnected(selected)
+    const removeButton = root.querySelector('[data-action="remove"]')
+    removeButton.disabled = !selectedEntry()?.visible
+    removeButton.setAttribute('aria-label', isConnected(selected) ? 'Disconnect and remove selected server from Object Explorer' : 'Remove selected server from Object Explorer')
+    removeButton.setAttribute('data-tooltip', isConnected(selected) ? 'Disconnect and remove from Object Explorer' : 'Remove from Object Explorer')
+    q('ce-notice').hidden = !notice
+    q('ce-notice').textContent = notice
+    q('ce-results-label').textContent = results ? retainedResults ? 'Retained results · previous session' : 'Completed · 2 rows' : ''
+    q('ce-result-body').innerHTML = results ? '<table aria-label="Retained query results"><thead><tr><th>OrderId</th><th>OrderDate</th><th>Total</th></tr></thead><tbody><tr><td>10421</td><td>2026-11-12</td><td>920.00</td></tr><tr><td>10420</td><td>2026-11-12</td><td>156.00</td></tr></tbody></table>' : '<div class="ce-results-empty">No results in this session.</div>'
+    q('ce-query-status').textContent = tab ? `sql-prod-01 · ${connected ? 'Connected' : 'Disconnected'} | ${names[tab.entry]} | Sales | SID —` : 'No query selected'
+    q('ce-status').textContent = tabs.length ? 'Ready' : 'Queries closed'
+    if (globalThis.lucide) lucide.createIcons({ attrs: { width:16, height:16 } })
+  }
+  function closeMenu() { q('ce-context').hidden = true }
+  function closeOverlay() { overlay.hidden = true; overlay.innerHTML = ''; closeMenu() }
+  function showDialog(title, body, footer, kind) {
+    closeMenu(); overlay.hidden = false
+    overlay.innerHTML = `<section class="ce-dialog" role="dialog" aria-modal="true" aria-labelledby="ce-dialog-title"><h2 id="ce-dialog-title">${title}</h2>${body}<div class="ce-dialog-footer">${footer}</div></section>`
+    const cancel = overlay.querySelector('[data-action="cancel"]')
+    ;(cancel || overlay.querySelector('button,input,select'))?.focus()
+  }
+  const cancelButton = '<button type="button" data-action="cancel">Cancel</button>'
+  function openPicker(reconnectId) {
+    if (reconnectId) selected = reconnectId
+    const target = reconnectId || selected
+    showDialog(reconnectId ? 'Reconnect to sql-prod-01' : 'Connect to Server', `
+      <div class="ce-picker-entry">${icon('server')}<strong>sql-prod-01</strong><span class="ce-prod-tag">PRODUCTION</span><span class="ce-dim">${isConnected(target) ? 'Already in Object Explorer' : 'Disconnected'}</span></div>
+      <div class="ce-dialog-row"><label for="ce-login">Authentication</label><select id="ce-login"><option value="prod" ${target === 'prod' ? 'selected' : ''}>SQL Server · alex</option><option value="reader" ${target === 'reader' ? 'selected' : ''}>SQL Server · report_reader</option><option value="deployment" ${target === 'deployment' ? 'selected' : ''}>SQL Server · deployment_admin</option></select></div>
+      <div class="ce-dialog-row"><label>Database</label><span>Sales</span></div>
+      <div class="ce-dialog-row"><label>Connection settings</label><span id="ce-picker-settings">Encrypt Mandatory · Read/write</span></div>
+      <div id="ce-credentials" ${scene === 'credentials' ? '' : 'hidden'}><div class="ce-dialog-row"><label for="ce-password">Password</label><input id="ce-password" type="password" placeholder="Enter a sample password" autocomplete="off"></div><label class="ce-inlinecheck ce-dim" style="margin-top:9px"><input type="checkbox">Remember password using OS-protected storage</label></div>
+      <div class="ce-dialog-row"><label for="ce-auto">Reconnect on startup</label><select id="ce-auto"><option value="inherit">Use global default (On)</option><option value="on">On</option><option value="off">Off</option></select></div>
+      <div class="ce-dialog-note" id="ce-match-note">${isConnected(target) ? 'This exact connection is already open. Its existing explorer tree will be selected.' : 'Reconnect this explorer entry. Its query tabs keep their individual databases.'}</div>`, `${cancelButton}<button class="ce-primary" type="button" data-action="connect-now">${isConnected(target) ? 'Use Existing Connection' : 'Reconnect'}</button>`, 'picker')
+    q('ce-auto').value = policies[target] || 'inherit'
+    q('ce-auto').options[0].textContent = `Use global default (${globalReconnect ? 'On' : 'Off'})`
+    updatePicker()
+  }
+  function updatePicker() {
+    const id = q('ce-login').value
+    q('ce-auto').value = policies[id] || 'inherit'
+    q('ce-picker-settings').textContent = `Encrypt Mandatory · ${id === 'reader' ? 'Read only' : 'Read/write'}`
+    const existing = entryBy(id)
+    q('ce-match-note').textContent = existing ? isConnected(id) ? 'This exact connection is already open. Its existing explorer tree will be selected.' : 'Reconnect this explorer entry. Its query tabs keep their individual databases.' : 'Different credentials create a separate connection, even on the same server.'
+    overlay.querySelector('[data-action="connect-now"]').textContent = existing ? isConnected(id) ? 'Use Existing Connection' : 'Reconnect' : 'Connect'
+    overlay.querySelector('[data-action="connect-now"]').disabled = !q('ce-credentials').hidden && !q('ce-password').value
+  }
+  function reconnect(id) {
+    selected = id
+    if (scene === 'credentials' && id === 'prod') { openPicker(id); return }
+    const entry = entryBy(id)
+    if (entry) { entry.state = 'connected'; entry.reason = ''; entry.visible = true }
+    notice = 'Reconnected to sql-prod-01. Queries are ready; nothing has been executed.'
+    closeOverlay(); render(); save()
+  }
+  function disconnect(remove) {
+    const attached = tabs.filter(tab => tab.entry === selected)
+    pendingRemove = remove
+    if (!attached.length) { completeDisconnect(false); return }
+    showDialog(`${remove ? 'Disconnect and remove' : 'Disconnect from'} sql-prod-01?`, `
+      <p>${attached.length} query tabs use this connection (${names[selected]} · Sales).</p>
+      <ul class="ce-doclist">${attached.map(tab => `<li>${tab.name}${tab.dirty ? ' · unsaved' : ''}</li>`).join('')}</ul>
+      ${scene === 'running' && selected === 'prod' ? '<p class="ce-warning">1 query is running. Disconnecting will cancel it. Its outcome may be uncertain.</p>' : ''}
+      <p class="ce-dim">${remove ? 'The server will leave Object Explorer. Saved connection profiles remain.' : 'The server will remain collapsed in Object Explorer.'} Keeping tabs preserves their text, database and available results.</p>`, `${cancelButton}<button type="button" data-action="disconnect-close">Disconnect and Close Tabs…</button><button class="ce-primary" type="button" data-action="disconnect-keep">Disconnect and Keep Tabs</button>`, 'disconnect')
+  }
+  function completeDisconnect(closeTabs) {
+    const entry = selectedEntry()
+    if (entry) { entry.state = 'disconnected'; entry.reason = 'Disconnected'; if (pendingRemove) entry.visible = false }
+    if (results) retainedResults = true
+    if (closeTabs) { tabs = tabs.filter(tab => tab.entry !== selected); activeTab = tabs[0]?.id; results = false }
+    notice = pendingRemove ? 'Removed from Object Explorer. The saved connection profile is unchanged.' : 'Disconnected. Reconnect from the server row, query toolbar or connection picker.'
+    closeOverlay(); render(); save()
+  }
+  function closeTabsChoice() {
+    const dirty = tabs.filter(tab => tab.entry === selected && tab.dirty)
+    if (!dirty.length) { completeDisconnect(true); return }
+    showDialog('Save changes before closing query tabs?', `<p>${dirty.map(tab => tab.name).join(', ')} has unsaved changes.</p><p class="ce-dim">Cancel leaves the connection and all query tabs open.</p>`, `${cancelButton}<button type="button" data-action="discard-close">Don’t Save and Close</button><button class="ce-primary" type="button" data-action="save-close">Save and Close</button>`, 'save')
+  }
+  function options() {
+    showDialog('Options · Environment · Connections', `<label class="ce-inlinecheck"><input id="ce-global-auto" type="checkbox" ${globalReconnect ? 'checked' : ''}><span>Automatically reconnect previously connected servers on startup and reload</span></label><p class="ce-dim">Individual connections can use this default or override it. Servers you explicitly disconnected stay disconnected. Missing credentials and sign-in failures leave the server available to reconnect.</p><p class="ce-dim">Queries are never executed automatically.</p>`, `${cancelButton}<button class="ce-primary" type="button" data-action="save-options">OK</button>`, 'options')
+  }
+  root.addEventListener('change', event => {
+    if (event.target.id === 'ce-scene') { initialize(event.target.value); save() }
+    if (event.target.id === 'ce-login') updatePicker()
+  })
+  root.addEventListener('input', event => {
+    if (event.target.id === 'ce-password') overlay.querySelector('[data-action="connect-now"]').disabled = !event.target.value
+  })
+  root.addEventListener('click', event => {
+    const button = event.target.closest('button')
+    if (!button) return
+    if (button.dataset.select) { selected = button.dataset.select; closeMenu(); render(); return }
+    if (button.dataset.tab) { activeTab = Number(button.dataset.tab); render(); return }
+    if (button.dataset.reconnect) { reconnect(button.dataset.reconnect); return }
+    if (button.dataset.cancelEntry) {
+      const entry = entryBy(button.dataset.cancelEntry)
+      entry.state = 'disconnected'; entry.reason = 'Reconnect cancelled'
+      notice = 'Reconnect cancelled. This server stays disconnected.'
+      render(); save(); return
+    }
+    if (button.dataset.menu) {
+      selected = button.dataset.menu; render()
+      const connected = isConnected(selected)
+      q('ce-context').innerHTML = `${connected ? '<button type="button" data-action="disconnect">Disconnect…</button><button type="button" data-action="remove">Disconnect and Remove from Object Explorer…</button>' : '<button type="button" data-action="reconnect-selected">Reconnect</button><button type="button" data-action="remove">Remove from Object Explorer</button>'}<hr><button type="button" data-action="details">Connection Settings…</button><button type="button" data-action="dismiss-menu">Close menu</button>`
+      q('ce-context').hidden = false; q('ce-context').querySelector('button').focus(); return
+    }
+    switch (button.dataset.action) {
+      case 'picker': openPicker(); break
+      case 'details': openPicker(selected); break
+      case 'dismiss-menu': closeMenu(); break
+      case 'cancel': closeOverlay(); break
+      case 'disconnect': disconnect(false); break
+      case 'remove': if (isConnected(selected)) disconnect(true); else { pendingRemove = true; completeDisconnect(false) } break
+      case 'disconnect-keep': completeDisconnect(false); break
+      case 'disconnect-close': closeTabsChoice(); break
+      case 'discard-close': case 'save-close': completeDisconnect(true); break
+      case 'reconnect-selected': reconnect(selected); break
+      case 'reconnect': if (active()) reconnect(active().entry); break
+      case 'options': options(); break
+      case 'save-options': globalReconnect = q('ce-global-auto').checked; closeOverlay(); save(); break
+      case 'connect-now': {
+        let id = q('ce-login').value
+        policies[id] = q('ce-auto').value
+        if (!entryBy(id)) entries.push({ id, state:'disconnected', visible:true, reason:'' })
+        const already = isConnected(id)
+        selected = id; const entry = entryBy(id); entry.state = 'connected'; entry.visible = true
+        closeOverlay(); notice = already ? 'Existing connection selected. No duplicate explorer tree was added.' : 'Connected to sql-prod-01. Queries have not been executed.'; render(); save(); break
+      }
+      case 'execute': notice = 'Query execution preview · no SQL was sent.'; render(); break
+    }
+  })
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeOverlay(); closeMenu() }
+    if (event.key === 'Tab' && !overlay.hidden) {
+      const focusable = [...overlay.querySelectorAll('button:not(:disabled), input, select')].filter(element => !element.closest('[hidden]'))
+      const first = focusable[0], last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) { last?.focus(); event.preventDefault() }
+      if (!event.shiftKey && document.activeElement === last) { first?.focus(); event.preventDefault() }
+    }
+  })
+  window.addEventListener('openai:set_globals', event => {
+    const updated = event.detail?.globals?.widgetState
+    if (updated?.modelContent?.scene && [...q('ce-scene').options].some(option => option.value === updated.modelContent.scene)) initialize(updated.modelContent.scene)
+  })
+  initialize(scene)
+  if (saved?.privateContent) Object.assign(appearance, saved.privateContent)
+  applyAppearance()
+  if (globalThis.Tweak) {
+    const tweak = new Tweak({ container:root, onChange:() => { applyAppearance(); save() } })
+    tweak.addToggle(appearance, 'identities', { label:'Show account and connection settings' })
+    tweak.addToggle(appearance, 'toolbarLabels', { label:'Show toolbar action labels' })
+  }
+})()
+</script>

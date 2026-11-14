@@ -63,6 +63,7 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
         {
             if (disposed) return;
             disposed = true;
+            free.Clear();
             made.Clear();
             set.ReturnWork(reserved);
             reserved = 0;

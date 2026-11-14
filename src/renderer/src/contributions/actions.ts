@@ -32,14 +32,14 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   const objectOf = (args?: CommandArgs): ObjectMenuNode | undefined => args?.target ? objectNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // Integration Services Catalogs on a live server; the dialog itself says when the server cannot have a catalog.
   const catalogs = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && node.folder === 'integrationServicesCatalogs'
-    && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
+    && connections.isLive(node.connectionId)
   // New Login: a live SQL Server's Security or Logins folder, or a login on it.
   const loginsOf = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && !!newLoginTarget(node)
-    && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
+    && connections.isLive(node.connectionId)
   // New Database… on the Databases folder or a database of a live SQL Server box (the menu hides it on Azure and Managed Instance).
   const databases = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && !!node.engine && actionServes('createDatabase', node.engine)
     && (node.ref.type === 'folder' ? node.ref.folder === 'databases' : node.ref.type === 'object' && node.ref.object.kind === 'database')
-    && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
+    && connections.isLive(node.connectionId)
   const newDatabaseOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return newDatabase.get(id) ? id : undefined }
   const onNew = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
     when: (args?: CommandArgs) => { const id = newDatabaseOf(args); return !!id && when(id) },

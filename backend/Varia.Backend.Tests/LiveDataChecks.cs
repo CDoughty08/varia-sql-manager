@@ -83,9 +83,18 @@ internal static class LiveDataChecks
         // reports without values by design.
         async Task<((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) View, bool Sampled, List<LiveTickEvent> Ticks)> Overview()
         {
-            var view = Subscribe(info.Id, 2000);
-            var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
-            return (view, sampled, view.Recorder.Ticks.Take(3).ToList());
+            // The overview excludes its own monitor session. Own the user session this assertion requires rather than
+            // relying on an incidental idle connection in a pool (which an earlier check may legitimately clear).
+            var session = Guid.NewGuid().ToString();
+            try
+            {
+                var held = await Execute("SELECT @@SPID;", session);
+                check(held is { Status: "completed", Spid: > 0 }, "the overview measurement holds an explicit user query session through its baseline and rate samples");
+                var view = Subscribe(info.Id, 2000);
+                var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
+                return (view, sampled, view.Recorder.Ticks.Take(3).ToList());
+            }
+            finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
         }
         var measured = await Overview();
         var reset = measured.Ticks.Skip(1).Any(tick => tick.Samples.Any(sample => sample.Gap == "reset"));
