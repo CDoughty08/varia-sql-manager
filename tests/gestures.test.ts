@@ -105,6 +105,7 @@ describe('GestureService', () => {
       // New with the catalogue: Shift+click on a header's sort button adds its column to the sort.
       'grid.addSortKey': event => !!event.shiftKey,
       'global.wheelZoom': event => !!event.ctrlKey,
+      'editor.wheelZoom': event => !!event.ctrlKey,
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with the catalogue: Ctrl+click (⌘-click) on a row opens it in a Peek tab.
       'explorer.openPeekTab': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),

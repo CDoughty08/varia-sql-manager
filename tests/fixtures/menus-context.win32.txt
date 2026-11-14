@@ -374,7 +374,8 @@ output.context, for a results grid with selected cells
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
   Com&pare…  ++++
-  Pivot Res&ults…  ++++
+  Pivot Results…  ++++
+  &Update Pivot  ----
   Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ++++
@@ -431,7 +432,8 @@ output.context, for a results grid without
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
   Com&pare…  ++++
-  Pivot Res&ults…  ++++
+  Pivot Results…  ++++
+  &Update Pivot  ----
   Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ----

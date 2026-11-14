@@ -6,6 +6,7 @@ import type { BackendSnapshot } from '../src/renderer/src/services/backend'
 import type { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs, sqlDiagnosticOwner } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
+import { welcomeQueryText } from '../src/renderer/src/services/documents'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import { deferred, documentFixture } from './fixtures/documents'
 
@@ -53,6 +54,20 @@ function fixture() {
 }
 
 describe('versioned SQL diagnostics markers', () => {
+  // A first launch opened the welcome query and analysed it half a second later, which started a SQL Tools process
+  // (about 110 MB of working set, for a minute) to report nothing.
+  it('does not analyse the untouched welcome query, with either line ending, and analyses its first edit', async () => {
+    const f = fixture(), tab = f.documents.create('SQLQuery1.sql', welcomeQueryText, 'master')
+    const windows = f.documents.create('SQLQuery2.sql', welcomeQueryText.replace(/\n/g, '\r\n'), 'master')
+    await f.tick()
+    expect(f.language.diagnostics).not.toHaveBeenCalled()
+    expect(f.service.getSnapshot().documents.get(tab.id)).toEqual({ phase: 'ready', errors: 0, warnings: 0 })
+    expect(f.service.getSnapshot().documents.get(windows.id)).toEqual({ phase: 'ready', errors: 0, warnings: 0 })
+    f.model(tab.id).edit(welcomeQueryText + 'SELECT Missing')
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledOnce()
+    expect(f.markers(tab.id)).toHaveLength(2)
+  })
   it('yields held analysis to foreground requests and rechecks when they finish', async () => {
     const f = fixture(), tab = f.documents.create('foreground.sql', 'SELECT Missing', 'master'), old = deferred<LanguageDiagnosticResult | undefined>()
     f.language.diagnostics.mockReturnValueOnce(old.promise)

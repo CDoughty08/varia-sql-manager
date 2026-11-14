@@ -407,6 +407,8 @@ describe('menu state', () => {
       'output.find', 'output.findNext', 'output.findPrevious',
       // The results toolbar's Profile and Row size toggles, also in the grid's menu.
       'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.compare', 'output.pivot', 'output.closeResult',
+      // An out-of-date Pivot's caption offers Update, also in the grid's menu.
+      'output.updatePivot',
       // The grid menu's Transpose submenu, also the results toolbar's Transposed and Headers.
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
