@@ -4,6 +4,7 @@ import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/s
 import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { definitionScheme, pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import { definitionErrors } from '../src/renderer/src/languages/definition'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
@@ -339,8 +340,29 @@ describe('SQL language editor integration', () => {
     // Definition needs no SQL Tools Service (no backend document to close), but it needs a connection.
     expect(f.api.languageClose).not.toHaveBeenCalled()
     const offline = f.documents.create('b.sql', 'SELECT * FROM dbo.Customer', 'master')
-    expect(await f.service.definition(f.model(offline.id), at)).toBeUndefined()
+    await expect(f.service.definition(f.model(offline.id), at)).rejects.toThrow(definitionErrors.connectFirst)
+    expect(await f.getDefinition(offline.id, at)).toBeNull()
     expect(f.api.languageDefinition).toHaveBeenCalledTimes(5)
+  })
+
+  it('lets a newer Go to Definition on a document supersede one still waiting, and refuses a query too large to send', async () => {
+    const f = await fixture(); f.addConnection('connection-a')
+    const tab = f.documents.create('a.sql', 'SELECT * FROM dbo.Customer', 'Sales', 'connection-a')
+    const found: LanguageDefinition = { database: 'Sales', schema: 'dbo', name: 'Customer', kind: 'table', range: { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } } }
+    const first = deferred<ApiResult<LanguageDefinition>>()
+    f.api.languageDefinition.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ok: true, value: found })
+    const at = { lineNumber: 1, column: 20 } as Monaco.Position
+    const slow = f.service.definition(f.model(tab.id), at)
+    await vi.waitFor(() => expect(f.api.languageDefinition).toHaveBeenCalledTimes(1))
+    // A second press is not dropped: it waits for the first request to settle, then asks again; the first answers nothing.
+    const fresh = f.service.definition(f.model(tab.id), at)
+    first.resolve({ ok: true, value: found })
+    expect(await slow).toBeUndefined()
+    expect(await fresh).toEqual({ connectionId: 'connection-a', definition: found })
+    expect(f.api.languageDefinition).toHaveBeenCalledTimes(2)
+    const large = f.documents.create('c.sql', 'x'.repeat(languageLimits.documentCharacters + 1), 'Sales', 'connection-a')
+    await expect(f.service.definition(f.model(large.id), at)).rejects.toThrow(definitionErrors.tooLarge)
+    expect(f.api.languageDefinition).toHaveBeenCalledTimes(2)
   })
 
   it('serves definition without a configured SQL Tools Service, and drops an answer an edit made stale', async () => {

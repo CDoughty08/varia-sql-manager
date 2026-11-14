@@ -9,9 +9,9 @@ namespace Varia.Backend.Language;
 /// so the lookup honours that isolation (CatalogSql.Lint).</summary>
 internal static class DefinitionSql
 {
-    /// <summary>One object or user-defined type named @name: in schema @schema, or with no schema in the user's default schema
-    /// and then dbo, as SQL Server resolves a one-part name; with @column, only a table or view that has that column.
-    /// Objects before types (a function and a type may share a name).</summary>
+    /// <summary>One object or user-defined type named @name: in schema @schema, or with no schema in the user's default schema,
+    /// then dbo, then sys (sp_who, sys's views), as SQL Server resolves a one-part name; with @column, only a table or view that
+    /// has that column. Objects before types (a function and a type may share a name).</summary>
     public const string Lookup = """
         DECLARE @default sysname = (SELECT p.default_schema_name FROM sys.database_principals AS p WHERE p.principal_id = DATABASE_PRINCIPAL_ID());
         SELECT TOP (1) DB_NAME() AS database_name, x.schema_name, x.object_name, x.object_type
@@ -25,11 +25,11 @@ internal static class DefinitionSql
             FROM sys.types AS t INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
             WHERE t.is_user_defined = 1 AND t.name = @name AND @column IS NULL
         ) AS x
-        WHERE x.schema_name = @schema OR @schema IS NULL AND (x.schema_name = @default OR x.schema_name = N'dbo')
-        ORDER BY x.rank_kind, CASE WHEN x.schema_name = @default THEN 0 ELSE 1 END;
+        WHERE x.schema_name = @schema OR @schema IS NULL AND (x.schema_name = @default OR x.schema_name = N'dbo' OR x.schema_name = N'sys')
+        ORDER BY CASE WHEN x.schema_name = N'sys' AND @schema IS NULL THEN 1 ELSE 0 END, x.rank_kind, CASE WHEN x.schema_name = @default THEN 0 ELSE 1 END;
         """;
     /// <summary>The literals <see cref="Lookup"/> may hold besides type letters.</summary>
-    internal static readonly IReadOnlySet<string> Literals = new HashSet<string>(StringComparer.Ordinal) { "N'dbo'" };
+    internal static readonly IReadOnlySet<string> Literals = new HashSet<string>(StringComparer.Ordinal) { "N'dbo'", "N'sys'" };
     /// <summary>The declarations <see cref="Lookup"/> takes inside the wrapper.</summary>
     public const string Declarations = "@schema sysname, @name sysname, @column sysname";
     /// <summary>Runs <see cref="Lookup"/> in database @db without a connection per database (CatalogSql.ModuleCall's way): the name

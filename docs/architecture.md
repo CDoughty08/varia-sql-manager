@@ -37,10 +37,15 @@ being true.
   cover a backend that main kills, so only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send the
   one signal, which has no stopped state.
   Go To Definition (`language.definition`, `DefinitionService`) never goes through SQL Tools: ScriptDom finds the name under
-  the caret and, from the caret's batch only, whether it is a column (whose table is the target) and which tables its aliases
-  name (`DefinitionNames`, at most 8 candidates); constant `DefinitionSql.Lookup` resolves them on the Object Explorer pool,
-  names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, within a 10 s budget. A missing object
-  or a database the login cannot open is `null`, which the renderer shows as a status-bar notice, never an error banner.
+  the caret and, from the caret's batch only (or, when that does not parse, the caret's statement between semicolons),
+  whether it is a column (whose table is the target) and which tables its aliases name (`DefinitionNames`, at most 8
+  candidates). Each query level's tables are its own FROM clause and DML target, never a subquery's; an alias hides an object
+  of its name; a CTE, derived table, table variable or PIVOT names no object; a table-valued function's alias stands for the
+  function, and MERGE's target alias for its target. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
+  Explorer pool, names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, a one-part name in the
+  default schema, then dbo, then sys, within a 10 s budget. A missing object or a database that is gone or closed to the
+  login is `null`, which the renderer shows as a status-bar notice, never an error banner; a server or login that cannot be
+  reached is an error. A newer F12 on a document supersedes one still waiting, and a query with no connection says so.
   F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
   `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions (loaded with hover), and each
   editor drops Monaco's Ctrl+hover link, which would ask the backend for every word under a Ctrl-held pointer (`create-editor.ts`).

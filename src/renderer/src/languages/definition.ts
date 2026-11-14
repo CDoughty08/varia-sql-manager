@@ -3,13 +3,20 @@ import { displayText, type NodeSubtype } from '../../../shared/explorer/refs.ts'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { FoundDefinition } from './SqlLanguageService'
 
+/** Why Go to Definition cannot ask at all (`SqlLanguageService.definition` throws them); shown as they are. */
+export const definitionErrors = {
+  connectFirst: 'Connect this query to a SQL Server first.',
+  tooLarge: 'This query is too large to look up a definition in.'
+} as const
+const ownErrors: readonly string[] = Object.values(definitionErrors)
+
 /** Go to Definition's status-bar words: every outcome but a script or a Peek tab is one of these, never an error banner. */
 export const definitionMessages = {
   unavailable: 'Put the caret on an object name in a SQL editor.',
   notFound: (word?: string) => word ? `No definition found for ${word}.` : 'No definition found at the caret.',
   notScriptable: (label: string) => `${label} cannot be scripted.`,
   notPeekable: (label: string) => `Peek cannot open ${label}.`,
-  failed: (detail?: string) => detail ? `Could not find the definition: ${detail}` : 'Could not find the definition.'
+  failed: (detail?: string) => detail && ownErrors.includes(detail) ? detail : detail ? `Could not find the definition: ${detail}` : 'Could not find the definition.'
 } as const
 
 /** `schema.name`, with hidden characters made visible, as Script As's status lines name an object. */

@@ -146,6 +146,8 @@ internal static class SqlLanguageLiveChecks
             check(await Definition("EXEC dbo.LoadFixture;", "LoadFixture") is { Schema: "dbo", Name: "LoadFixture", Kind: "procedure", Subtype: "sql" }, "a procedure resolves with its subtype");
             check(await Definition("SELECT * FROM FixtureAlias", "FixtureAlias") is { Schema: "dbo", Name: "FixtureAlias", Kind: "synonym" }, "a one-part synonym resolves in the default schema");
             check(await Definition("DECLARE @ids dbo.FixtureList;", "FixtureList") is { Schema: "dbo", Name: "FixtureList", Kind: "tableType" }, "a user-defined table type resolves");
+            check(await Definition("EXEC sp_who;", "sp_who") is { Schema: "sys", Name: "sp_who", Kind: "procedure" }, "a one-part system procedure falls back to sys, as SQL Server resolves it");
+            check(await Definition("WITH LanguageFixture AS (SELECT 1 AS x) SELECT * FROM LanguageFixture", "LanguageFixture") is null, "a CTE hides the table of its name");
             var crossDatabase = await Definition("SELECT * FROM [" + secondDatabase + "].dbo.LanguageFixture", "LanguageFixture");
             check(crossDatabase is { Schema: "dbo", Name: "LanguageFixture", Kind: "table" } && crossDatabase.Database == secondDatabase, "a three-part name resolves in its own database");
             check(await Definition("SELECT * FROM dbo.NoSuchFixture", "NoSuchFixture") is null

@@ -4,6 +4,7 @@ import { definitionMessages, definitionNode } from '../src/renderer/src/language
 import type { FoundDefinition } from '../src/renderer/src/languages/SqlLanguageService'
 import { commandCatalog } from '../src/shared/commands/catalog'
 import { gestureCatalog } from '../src/shared/commands/gestures'
+import { bindDefinitionClick, monacoDefinitionLink } from '../src/renderer/src/editor/create-editor'
 
 type Handler = { when?: () => boolean; unavailable?: () => string; run: () => Promise<void> | void }
 const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } }
@@ -95,6 +96,48 @@ describe('Go To Definition', () => {
     expect(json.handlers['edit.goToDefinition']!.when!()).toBe(false)
     json.contribution.dispose()
     expect(json.handlers['edit.goToDefinition']).toBeUndefined()
+  })
+
+  it('follows a plain Ctrl+click on a name, never a cursor-adding, selecting, double or margin click', () => {
+    type Up = { event: { leftButton: boolean; detail: number; browserEvent: Partial<MouseEvent> }; target: { type: number } }
+    let up: ((event: Up) => void) | undefined
+    const link = { dispose: vi.fn() }
+    const state = { cursor: 'altKey' as 'altKey' | 'ctrlKey' | 'metaKey', empty: true, matches: true }
+    const instance = {
+      getContribution: (id: string) => id === monacoDefinitionLink ? link : null,
+      onMouseUp: (listener: (event: Up) => void) => { up = listener; return { dispose: () => { up = undefined } } },
+      getOption: () => state.cursor, getSelection: () => ({ isEmpty: () => state.empty })
+    }
+    const execute = vi.fn(async () => true)
+    const matches = vi.fn(() => state.matches)
+    const binding = bindDefinitionClick({
+      gestures: { matches } as never, commands: { execute } as never,
+      monaco: { editor: { MouseTargetType: { CONTENT_TEXT: 6 }, EditorOption: { multiCursorModifier: 80 } } } as never
+    }, instance as never)
+    // Monaco's own Ctrl+hover link would ask the backend for every word under a Ctrl-held pointer.
+    expect(link.dispose).toHaveBeenCalledTimes(1)
+    const click = (browserEvent: Partial<MouseEvent>, extra: Partial<Up['event']> = {}, type = 6) => up!({ event: { leftButton: true, detail: 1, browserEvent, ...extra }, target: { type } })
+    click({ ctrlKey: true })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenLastCalledWith('edit.goToDefinition', undefined, 'keybinding')
+    expect(matches).toHaveBeenLastCalledWith('editor.goToDefinition', { ctrlKey: true })
+    // Ctrl+Alt+click adds a cursor (Alt is Monaco's multi-cursor key): never a definition too.
+    click({ ctrlKey: true, altKey: true })
+    // With Ctrl+click as multi-cursor (Tools › Options), Ctrl+click is Monaco's.
+    state.cursor = 'ctrlKey'
+    click({ ctrlKey: true })
+    state.cursor = 'altKey'
+    click({ ctrlKey: true }, { detail: 2 })
+    click({ ctrlKey: true }, { leftButton: false })
+    click({ ctrlKey: true }, {}, 2)
+    state.empty = false
+    click({ ctrlKey: true })
+    state.empty = true
+    state.matches = false
+    click({})
+    expect(execute).toHaveBeenCalledTimes(1)
+    binding.dispose()
+    expect(up).toBeUndefined()
   })
 
   it('binds F12, Alt+F12 and Ctrl+click (⌘-click) only through the catalogues, in query and Peek editors alike', () => {

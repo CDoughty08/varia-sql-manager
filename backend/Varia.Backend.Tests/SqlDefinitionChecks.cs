@@ -47,9 +47,9 @@ internal static class SqlDefinitionChecks
         check(At("SELECT * FROM 'dbo|.Customer'") is null && At("-- dbo.Cus|tomer") is null, "names inside literals and comments are not names");
 
         // Columns: the table behind an alias or table name, or the statement's tables for a bare column.
-        check(Candidates("SELECT c.Na|me FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer", Column: null }, { Schema: null, Name: "c" }],
-            "a qualified column's alias stands for its table");
-        check(Candidates("SELECT c|.Name FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer" }, { Name: "c" }], "a caret on the alias finds its table too");
+        check(Candidates("SELECT c.Na|me FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer", Column: null }],
+            "a qualified column's alias stands for its table, and hides any object called c");
+        check(Candidates("SELECT c|.Name FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer" }], "a caret on the alias finds its table too");
         check(Candidates("SELECT Customer.Na|me FROM dbo.Customer") is [{ Schema: "dbo", Name: "Customer" }, ..], "a column qualified by its table's name finds that table");
         check(Candidates("SELECT Na|me FROM dbo.Customer") is [{ Schema: "dbo", Name: "Customer", Column: null }], "a bare column of one table is that table's");
         check(Candidates("SELECT Na|me FROM dbo.Customer AS c INNER JOIN Sales.dbo.Orders AS o ON o.Id = c.Id")
@@ -64,6 +64,37 @@ internal static class SqlDefinitionChecks
         check(Candidates("SELECT c.Na|me FROM dbo.Customer AS c WHERE") is [{ Schema: "c", Name: "Name" }, { Schema: null, Name: "c" }],
             "an unparsable batch tries the name as an object and then its qualifier");
         check(Candidates("SELECT a.b.c.d.Na|me") is [], "a five-part name has no candidates");
+
+        // A level's tables are its own FROM clause and target: never a subquery's, a CTE's or a derived table's.
+        check(Candidates("SELECT (SELECT TOP 1 a.x FROM dbo.Z AS a) AS z, a.I|d FROM dbo.T AS a") is [{ Schema: "dbo", Name: "T" }],
+            "a subquery's alias of the same name does not shadow the outer query's");
+        check(Candidates("SELECT (SELECT MAX(v) FROM dbo.Z) AS m, Na|me FROM dbo.T") is [{ Schema: "dbo", Name: "T", Column: null }],
+            "a subquery's tables are not the outer query's bare column's");
+        check(Candidates("SELECT a.Id FROM dbo.T AS a WHERE EXISTS (SELECT 1 FROM dbo.Z AS a WHERE a.I|d = 1)") is [{ Schema: "dbo", Name: "Z" }],
+            "inside a subquery, its own alias wins");
+        check(Candidates("MERGE dbo.Target AS t USING dbo.Src AS s ON t.I|d = s.Id WHEN MATCHED THEN DELETE;") is [{ Schema: "dbo", Name: "Target" }]
+            && Candidates("MERGE dbo.Target AS t USING dbo.Src AS s ON t.Id = s.Id WHEN MATCHED THEN UPDATE SET t.Na|me = s.Name;") is [{ Name: "Target" }]
+            && Candidates("MERGE dbo.Target AS t USING dbo.Src AS s ON t.Id = s.I|d WHEN MATCHED THEN DELETE;") is [{ Name: "Src" }],
+            "MERGE's target alias and its source's resolve");
+        check(At("WITH Orders AS (SELECT * FROM dbo.Sales) SELECT * FROM Ord|ers") is null
+            && At("WITH Orders AS (SELECT Id FROM dbo.Sales) SELECT I|d FROM Orders") is null
+            && At("WITH Orders AS (SELECT Id FROM dbo.Sales) SELECT o.I|d FROM Orders AS o") is null,
+            "a CTE is no object, so neither it nor its columns are looked up as one");
+        check(Candidates("WITH o AS (SELECT I|d FROM dbo.Sales) SELECT * FROM o") is [{ Schema: "dbo", Name: "Sales", Column: null }],
+            "a CTE's own query resolves its tables");
+        check(Candidates("SELECT f.Va|l FROM dbo.fn(1) AS f") is [{ Schema: "dbo", Name: "fn" }]
+            && Candidates("SELECT f.Va|l FROM dbo.T AS a CROSS APPLY dbo.fn(a.x) AS f") is [{ Schema: "dbo", Name: "fn" }],
+            "a table-valued function's alias, in FROM or APPLY, stands for the function");
+        check(At("SELECT d.To|tal FROM (SELECT 1 AS Total) AS d") is null && At("DECLARE @t TABLE (x int); SELECT v.|x FROM @t AS v") is null
+            && At("SELECT p.[1] FROM dbo.T PIVOT (MAX(v) FOR k IN ([1])) AS p WHERE p|.[1] = 1") is null,
+            "a derived table's, a table variable's and a PIVOT's alias have no object");
+        check(Candidates("SELECT To|tal FROM (SELECT 1 AS Total) AS d CROSS JOIN dbo.T") is [{ Schema: "dbo", Name: "T", Column: "Total" }],
+            "beside a derived table, a bare column's table must have the column");
+        // A batch that does not parse still has a caret statement that may.
+        check(Candidates("SELECT c.Na|me FROM dbo.C c; SELECT * FROM") is [{ Schema: "dbo", Name: "C" }]
+            && Candidates("SELECT Na|me FROM dbo.C; SELECT * FROM") is [{ Schema: "dbo", Name: "C", Column: null }]
+            && Candidates("SELECT * FROM; SELECT c.Na|me FROM dbo.C c;") is [{ Schema: "dbo", Name: "C" }],
+            "a broken statement before or after the caret's does not hide its aliases");
 
         var lookup = At("SELECT 1;\r\nSELECT * FROM [dbo].Cust|omer\r\n");
         check(lookup?.Range == new LanguageRange(new(1, 14), new(1, 28)), "the range spans the whole name in UTF-16 positions, CRLF counted once");

@@ -8,6 +8,7 @@ import { peekModelContext } from '../explorer/peek-editor'
 import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
+import { definitionErrors } from './definition'
 
 type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition'>>
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
@@ -26,6 +27,25 @@ export function definitionUri(found: FoundDefinition): { scheme: string; authori
   return { scheme: definitionScheme, authority: found.connectionId, path: '/' + [database, schema, name].map(encodeURIComponent).join('/'), query: subtype ? `${kind}.${subtype}` : kind }
 }
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
+/** A token cancelled by `token` or by `cancel()`, whichever comes first. */
+function cancellable(token: Monaco.CancellationToken): { token: Monaco.CancellationToken; cancel: () => void; dispose: () => void } {
+  let cancelled = false
+  const listeners = new Set<() => void>()
+  const cancel = () => { if (cancelled) return; cancelled = true; for (const listener of [...listeners]) listener() }
+  const outer = token.onCancellationRequested(cancel)
+  return {
+    token: {
+      get isCancellationRequested() { return cancelled || token.isCancellationRequested },
+      onCancellationRequested: (listener: (event: unknown) => unknown) => {
+        const run = () => { listener(undefined) }
+        listeners.add(run)
+        return { dispose: () => { listeners.delete(run) } }
+      }
+    } as Monaco.CancellationToken,
+    cancel,
+    dispose: () => { outer.dispose(); listeners.clear() }
+  }
+}
 // Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
 // their own here: a burst of them on a slow server never fills the renderer's slots for query tabs. On the backend they
 // still share the metadata slots with every other metadata request.
@@ -47,6 +67,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly pending = new Map<string, PendingRequest>()
   private readonly inFlight = new Map<string, Set<Promise<unknown>>>()
   private readonly waiters = new Set<() => void>()
+  /** Each document's Go to Definition still waiting, cancelled by the next press on that document. */
+  private readonly definitionCancels = new Map<string, () => void>()
   private readonly closing = new Map<string, Promise<void>>()
   private readonly closeQueue: (() => void)[] = []
   private readonly urgentCloses: (() => void)[] = []
@@ -312,24 +334,37 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   }
   /**
    * Go to Definition: the object the name at `position` stands for, from `language.definition` on the model's own connection
-   * and database (a query document's or a Peek model's). Null when nothing matches; undefined when there is nothing to ask
-   * (no connection, too large), the same request is still running, or an edit or context change made the answer stale.
-   * A failure throws its message. It needs no SQL Tools Service, so it serves every connection, and opens no backend document.
+   * and database (a query document's or a Peek model's). Null when nothing matches; undefined when it was superseded (a newer
+   * request for the same document, or `token`), Peek's in-flight cap is full, or an edit or context change made the answer
+   * stale. A query with no live connection, one too large to send, and a failure throw their message. It needs no SQL Tools
+   * Service, so it serves every connection, and opens no backend document.
    */
   async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
+    if (!this.api.languageDefinition || token.isCancellationRequested) return
+    if (model.getValueLength() > languageLimits.documentCharacters) throw new Error(definitionErrors.tooLarge)
     const capture = this.capture(model, position)
     const connectionId = capture?.request.context.connectionId
-    if (!capture || !connectionId || token.isCancellationRequested || !this.api.languageDefinition) return
-    const pending = this.begin(`${capture.request.documentId}:definition`, token, capture.peek)
-    if (!pending) return
+    if (!capture || !connectionId) throw new Error(definitionErrors.connectFirst)
+    // The newest press wins: an earlier one still waiting on the backend is cancelled here, and answers nothing.
+    const key = `${capture.request.documentId}:definition`
+    this.definitionCancels.get(key)?.()
+    const own = cancellable(token)
+    this.definitionCancels.set(key, own.cancel)
+    const pending = this.begin(key, own.token, capture.peek)
     try {
-      if (pending.previous && !await this.waitFor(pending.previous, token)) return
-      if (!this.current(capture, token)) return
-      const result = await this.track(capture.request.documentId, this.api.languageDefinition(capture.request))
-      if (!this.current(capture, token)) return
-      if (!result.ok) throw new Error(result.error)
-      return result.value && validRange(model, result.value.range) ? { connectionId, definition: result.value } : null
-    } finally { pending.finish() }
+      if (!pending) return
+      try {
+        if (pending.previous && !await this.waitFor(pending.previous, own.token)) return
+        if (!this.current(capture, own.token)) return
+        const result = await this.track(capture.request.documentId, this.api.languageDefinition(capture.request))
+        if (!this.current(capture, own.token)) return
+        if (!result.ok) throw new Error(result.error)
+        return result.value && validRange(model, result.value.range) ? { connectionId, definition: result.value } : null
+      } finally { pending.finish() }
+    } finally {
+      if (this.definitionCancels.get(key) === own.cancel) this.definitionCancels.delete(key)
+      own.dispose()
+    }
   }
   diagnosticsEpoch(documentId: string): number {
     const key = this.context(documentId)?.key
