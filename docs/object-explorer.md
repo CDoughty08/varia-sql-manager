@@ -492,9 +492,10 @@ dialog. Its two choices list the objects that depend on the object, or the objec
 object. Each level is one of the Dependencies tab's listings, the same SQL (`explorer.dependencies`, one direction per request,
 on Peek's slot and budget), read the first time its node is expanded and never before; a failed level says why and offers
 Retry. A level lists at most 500 objects in name order, the tree at most
-10,000 in all and 32 levels deep, and a level cut by either says so. A node is a leaf, and says
-why, when it is on a linked server or in another database (named, never read), unresolved, of a kind the tree cannot read (a
-constraint), or already above it on its branch: a cycle is marked rather than followed. Below the tree the selected node shows
+10,000 in all, and a level cut by either says so. A node is a leaf, and says why, when
+it is on a linked server or in another database (named, never read), unresolved, of a kind the tree cannot read (a constraint),
+32 levels down, or already above it on its branch: a cycle is marked rather than followed. A table's or view's own DML
+triggers depend on it, as SSMS lists them, though the server records no reference for a trigger's ON clause. Below the tree the selected node shows
 its name, type and dependency type (foreign key, schema-bound or non-schema-bound). Enter, a double-click or Show in Object
 Explorer selects the node in the tree (walking and paging to it as Search Objects' Reveal does) and closes the dialog; Peek
 opens the node's Peek tab. A trigger is named below its table or view, so it can be read, selected and peeked too.

@@ -3,7 +3,7 @@ import type { ApiResult } from '../src/shared/contracts'
 import { dependencyKinds, dependencyLimits, type DependenciesParams, type DependenciesResult } from '../src/shared/explorer/dependencies.ts'
 import type { PeekDependency } from '../src/shared/explorer/peek.ts'
 import { dependenciesParamsSchema } from '../src/shared/explorer/schema.ts'
-import { explorerCatalogJson } from '../src/shared/explorer/catalog.ts'
+import { explorerCatalogJson, explorerLimits } from '../src/shared/explorer/catalog.ts'
 import { DependencyTree, dependencyRef, levelStatus, type DependencyLoader } from '../src/renderer/src/explorer/dependency-tree'
 import { DependenciesService, listingFolder } from '../src/renderer/src/explorer/DependenciesService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
@@ -169,6 +169,28 @@ describe('View Dependencies tree', () => {
     expect(tree.node(0)?.load).toBe('loading')
   })
 
+  it('cancels in batches explorer.cancel accepts, and ends the loading levels when abandoned', async () => {
+    const levels: Record<string, readonly PeekDependency[]> = { Orders: Array.from({ length: explorerLimits.cancelBatch + 5 }, (_, index) => view(`v${index}`)) }
+    const wide = plant(levels)
+    await settle()
+    const held = fakeLoader({}, true)
+    // Every child expands on a loader that never answers: more reads queued than one cancel takes.
+    const batches: string[][] = []
+    const tree = new DependencyTree(connectionId, root, 'dbo.Orders', 'Table', 'usedBy', { load: params => params.target.name === 'Orders' ? wide.loader.load(params) : held.loader.load(params), cancel: ids => { batches.push([...ids]) } }, () => {}, held.newId)
+    await settle()
+    for (const row of tree.rows().slice(1)) tree.expand(row.node.id)
+    tree.dispose()
+    expect(batches.map(batch => batch.length)).toEqual([explorerLimits.cancelBatch, 5])
+
+    const lost = plant({ Orders: [view('a')] }, 'usedBy', true)
+    lost.tree.abandon('The server was disconnected.')
+    expect(lost.tree.node(0)).toMatchObject({ load: 'error', error: 'The server was disconnected.' })
+    expect(lost.cancelled).toEqual(['req-1'])
+    lost.release()
+    await settle()
+    expect(lost.tree.node(0)?.load).toBe('error')
+  })
+
   it('names a dependency in the root database only when the tree can read it there', () => {
     expect(dependencyRef(table('T'), 'Sales')).toEqual({ kind: 'table', database: 'Sales', schema: 'dbo', name: 'T' })
     expect(dependencyRef(table('T', { database: 'Other' }), 'Sales')).toBeUndefined()
@@ -227,7 +249,45 @@ describe('View Dependencies service and request', () => {
     service.dispose()
   })
 
+  it('reveals a plain dependency in its own folder whatever the root is, keeps the tree when the server is lost, and offers no reveal of a history table', async () => {
+    const graphRoot = { ...rootNode, subtype: 'graphNode' } as ExplorerMenuNode
+    const answers: Record<string, ApiResult<DependenciesResult>> = {
+      uses: { ok: true, value: { items: [table('Customers'), table('OrdersHistory', { subtype: 'history' })], elapsedMs: 1 } },
+      usedBy: { ok: true, value: { items: [view('OrderSummary')], elapsedMs: 1 } }
+    }
+    const connections = { list: [{ id: connectionId, lost: false }], listeners: [] as (() => void)[] }
+    const live = { getSnapshot: () => connections.list, subscribe: (listener: () => void) => { connections.listeners.push(listener); return () => {} } } as never
+    const reveal = vi.fn()
+    const service = new DependenciesService({
+      api: { explorerDependencies: vi.fn((params: DependenciesParams) => Promise.resolve(answers[params.direction]!)), explorerCancel: vi.fn(() => Promise.resolve({ ok: true as const, value: undefined })) } as never,
+      connections: live, reveal, peek: vi.fn(),
+      explorer: { menuNode: () => undefined, select: vi.fn(), objectNode: vi.fn() as never }
+    })
+    service.open(graphRoot)
+    service.setDirection('uses')
+    await settle()
+    const [, customers, history] = service.current!.rows
+    expect(service.canReveal(history!.node.id)).toBe(false)
+    // The root's own row, when its Object Explorer node is gone, walks to its own folder.
+    expect(service.canReveal(0)).toBe(true)
+    connections.list = [{ id: connectionId, lost: true }]
+    for (const listener of connections.listeners) listener()
+    service.setDirection('usedBy')
+    expect(service.current).toMatchObject({ direction: 'uses', lost: true })
+    expect(service.current?.rows).toHaveLength(3)
+    connections.list = [{ id: connectionId, lost: false }]
+    service.close()
+    service.open(graphRoot)
+    service.setDirection('uses')
+    await settle()
+    service.reveal(service.current!.rows[1]!.node.id)
+    expect(reveal).toHaveBeenCalledWith(connectionId, { object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customers' }, folder: 'tables', label: 'dbo.Customers' })
+    expect(customers!.node.label).toBe('dbo.Customers')
+    service.dispose()
+  })
+
   it('finds the folder Reveal walks to for each kind', () => {
+    expect(listingFolder({ kind: 'table', database: 'd', schema: 's', name: 'n' }, 'history')).toBeUndefined()
     expect(listingFolder({ kind: 'table', database: 'd', schema: 's', name: 'n' }, 'graphEdge')).toBe('graphTables')
     expect(listingFolder({ kind: 'function', database: 'd', schema: 's', name: 'n' }, 'scalar')).toBe('scalarValuedFunctions')
     expect(listingFolder({ kind: 'trigger', database: 'd', parent: { kind: 'view', schema: 's', name: 'v' }, name: 'n' })).toBe('tableTriggers')

@@ -313,13 +313,16 @@ internal static class PeekSql
         + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.object_id, CONVERT(bit, 1), CONVERT(bit, 0) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
         + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id";
 
-    /// <summary>The objects whose code references the object (resolved references only), and the tables whose foreign keys point
-    /// at it, in <see cref="UsesRows"/>' columns.</summary>
+    /// <summary>The objects whose code references the object (resolved references only), the tables whose foreign keys point
+    /// at it, and its own DML triggers (as SSMS lists them: a trigger's ON clause is not a reference the server records), in
+    /// <see cref="UsesRows"/>' columns.</summary>
     private const string UsedByRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, s.name AS schema_name, o.name AS entity_name, o.object_id AS id, "
         + "CONVERT(bit, 0) AS via, d.is_schema_bound_reference AS bound FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE d.referenced_id = @object_id AND d.referencing_class = 1 AND d.referencing_id <> @object_id "
         + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 1), CONVERT(bit, 0) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS o ON o.object_id = fk.parent_object_id "
-        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id";
+        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id "
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0), CONVERT(bit, 0) FROM sys.triggers AS tr JOIN sys.all_objects AS o ON o.object_id = tr.object_id "
+        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE tr.parent_class = 1 AND tr.parent_id = @object_id";
 
     /// <summary>A synonym's base object, in <see cref="UsesRows"/>' columns: when it names no server, and no database or this one,
     /// the object of that name in its schema (dbo when it names none, as SQL Server falls back to) takes its current names and no

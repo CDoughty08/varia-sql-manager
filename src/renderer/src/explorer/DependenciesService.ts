@@ -42,7 +42,8 @@ export interface DependenciesServiceOptions {
 /** The Object Explorer folder that lists an object of a kind and subtype, as Search Objects' Reveal walks to it. */
 export function listingFolder(ref: ObjectRef, subtype?: NodeSubtype): FolderId | undefined {
   switch (ref.kind) {
-    case 'table': return subtype === 'system' ? 'systemTables' : subtype === 'fileTable' ? 'fileTables' : subtype === 'external' ? 'externalTables'
+    // A temporal or ledger history table is listed below its table, which a dependency does not name: it cannot be revealed.
+    case 'table': return subtype === 'history' || subtype === 'ledgerHistory' ? undefined : subtype === 'system' ? 'systemTables' : subtype === 'fileTable' ? 'fileTables' : subtype === 'external' ? 'externalTables'
       : subtype === 'graphNode' || subtype === 'graphEdge' ? 'graphTables' : subtype === 'droppedLedger' ? 'droppedLedgerTables' : 'tables'
     case 'view': return subtype === 'system' ? 'systemViews' : subtype === 'droppedLedger' ? 'droppedLedgerViews' : 'views'
     case 'procedure': return subtype === 'system' || subtype === 'extended' ? 'systemStoredProcedures' : 'storedProcedures'
@@ -96,7 +97,8 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
 
   setDirection(direction: DependencyDirection): void {
     const open = this.current
-    if (!open || open.direction === direction) return
+    // Once the server is lost the tree stays as it was: the other choice could not be read.
+    if (!open || open.direction === direction || open.lost) return
     this.dropTree()
     const next = { ...open, direction, rows: [], selected: 0 }
     this.publish({ open: next })
@@ -115,7 +117,7 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
   /** Whether a node can be shown in Object Explorer: the root, or a dependency named in the root's database. */
   canReveal(id: number): boolean {
     const node = this.tree?.node(id)
-    return !!node && (id === 0 || !!node.ref && listingFolder(node.ref, node.item?.subtype) !== undefined)
+    return !!node && !!node.ref && (id === 0 && !!this.options.explorer.menuNode(this.current?.root.id) || listingFolder(node.ref, id === 0 ? this.current?.root.subtype : node.item?.subtype) !== undefined)
   }
   /** Selects the node in Object Explorer and closes the dialog. */
   reveal(id: number): void {
@@ -123,8 +125,10 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     if (!open || !node || !this.canReveal(id) || open.lost) return
     this.close()
     if (id === 0 && this.options.explorer.menuNode(open.root.id)) { this.options.explorer.select(open.root.id, { reveal: true }); return }
-    const ref = node.ref!, folder = listingFolder(ref, node.item?.subtype ?? open.root.subtype)!
-    this.options.reveal(open.connectionId, { object: ref, folder, label: node.label, ...(node.item?.subtype ? { subtype: node.item.subtype } : {}) })
+    // The root's own subtype only for the root: a dependency without one is a plain object, whatever the root is.
+    const subtype = id === 0 ? open.root.subtype : node.item?.subtype
+    const ref = node.ref!, folder = listingFolder(ref, subtype)!
+    this.options.reveal(open.connectionId, { object: ref, folder, label: node.label, ...(subtype ? { subtype } : {}) })
   }
 
   /** Whether a node can be peeked: an object of a kind Peek describes, named in the root's database. */
@@ -184,8 +188,9 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
   private connectionsChanged(): void {
     const open = this.current
     if (!open || open.lost || this.live(open.connectionId)) return
-    // The reads were lost with the server: keep what the tree shows, read nothing more.
-    this.tree?.dispose()
-    this.publish({ open: { ...open, lost: true } })
+    // The reads were lost with the server: keep what the tree shows, read nothing more, and end the levels still loading.
+    this.tree?.abandon('The server was disconnected.')
+    // abandon published the ended levels: read the snapshot again rather than the one from before it.
+    this.publish({ open: { ...(this.current ?? open), lost: true } })
   }
 }

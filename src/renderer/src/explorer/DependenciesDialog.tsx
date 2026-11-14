@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { memo, useEffect, useRef, type KeyboardEvent } from 'react'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { dependencyDirectionLabels, dependencyDirections, dependencyLeafWords, dependencyLimits } from '../../../shared/explorer/dependencies.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
@@ -8,7 +8,7 @@ import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
 import ExplorerIcon from './ExplorerIcon'
 import type { OpenDependencies } from './DependenciesService'
-import { levelStatus, type DependencyNode, type DependencyRow } from './dependency-tree'
+import { levelStatus, type DependencyNode } from './dependency-tree'
 
 const iconOf = (node: DependencyNode) => node.ref ? kindSpecs[node.ref.kind].icon : node.leaf === 'linkedServer' ? 'remote' : node.leaf === 'otherDatabase' ? 'database' : 'references'
 
@@ -80,14 +80,14 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
       <fieldset className="property-section dependencies-choice">
         <legend className="visually-hidden">Dependencies</legend>
         {dependencyDirections.map(direction => <label key={direction} className="checkbox-label">
-          <input type="radio" name="dependencies-direction" checked={open.direction === direction} onChange={() => dependencies.setDirection(direction)} />
+          <input type="radio" name="dependencies-direction" checked={open.direction === direction} disabled={open.lost} onChange={() => dependencies.setDirection(direction)} />
           {dependencyDirectionLabels[direction](name)}
         </label>)}
       </fieldset>
       {open.lost && <p className="connect-error" role="alert">The server was disconnected. Reconnect, then open View Dependencies again.</p>}
       <div ref={tree} className="dependencies-tree" role="tree" aria-label="Dependencies" tabIndex={0} onKeyDown={treeKeys}
         aria-activedescendant={selected ? `dependency-${open.id}-${selected.id}` : undefined}>
-        {rows.map(row => <TreeRow key={row.node.id} open={open} row={row} selected={row.node.id === open.selected} />)}
+        {rows.map(row => <TreeRow key={row.node.id} dialog={open.id} lost={!!open.lost} node={row.node} index={row.index} count={row.count} selected={row.node.id === open.selected} />)}
       </div>
       {selected && <section className="property-section" aria-label="Selected object">
         <h3 className="peek-group">Selected object</h3>
@@ -108,9 +108,11 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
   </div></div>
 }
 
-function TreeRow({ open, row, selected }: { open: OpenDependencies; row: DependencyRow; selected: boolean }) {
+interface TreeRowProps { readonly dialog: number; readonly lost: boolean; readonly node: DependencyNode; readonly index: number; readonly count: number; readonly selected: boolean }
+/** One row and its status line. Memoised: nodes are replaced, never changed, so a move of the selection renders two rows, not the
+ *  whole tree (up to `dependencyLimits.nodes`). */
+const TreeRow = memo(function TreeRow({ dialog, lost, node, index, count, selected }: TreeRowProps) {
   const { dependencies } = useWorkbench()
-  const { node } = row
   const indent = { paddingInlineStart: `calc(${node.depth} * var(--varia-space-4) + var(--varia-space-1))` }
   const expandable = !node.leaf
   const note = node.leaf ? dependencyLeafWords[node.leaf] : node.id === 0 ? undefined : node.type
@@ -118,7 +120,7 @@ function TreeRow({ open, row, selected }: { open: OpenDependencies; row: Depende
   const pending = status === 'loading', failed = status === 'error', empty = status === 'empty'
   const cut = status === 'level' || status === 'nodes' ? status : undefined
   return <>
-    <div id={`dependency-${open.id}-${node.id}`} role="treeitem" className="dependencies-row" aria-level={node.depth + 1} aria-setsize={row.count} aria-posinset={row.index + 1}
+    <div id={`dependency-${dialog}-${node.id}`} role="treeitem" className="dependencies-row" aria-level={node.depth + 1} aria-setsize={count} aria-posinset={index + 1}
       aria-label={note ? `${displayText(node.label)}, ${note}` : displayText(node.label)} aria-selected={selected} {...expandable ? { 'aria-expanded': node.expanded } : {}} data-leaf={node.leaf} style={indent}
       onClick={() => dependencies.select(node.id)} onDoubleClick={() => dependencies.reveal(node.id)}>
       <span className="dependencies-twisty" aria-hidden="true" onClick={event => { event.stopPropagation(); dependencies.select(node.id); if (node.expanded) dependencies.collapse(node.id); else dependencies.expand(node.id) }}>
@@ -130,10 +132,11 @@ function TreeRow({ open, row, selected }: { open: OpenDependencies; row: Depende
     </div>
     {pending && <div className="dependencies-status" role="status" style={indent}><Icon name="loading" className="object-dialog-spinner" /> Loading dependencies…</div>}
     {failed && <div className="dependencies-status error" role="alert" style={indent}>{node.error}{' '}
-      {!open.lost && <button type="button" className="peek-action" onClick={() => dependencies.retry(node.id)}>Retry</button>}</div>}
+      {/* The button goes with the error row: focus the tree first, so Escape and Tab stay in the dialog. */}
+      {!lost && <button type="button" className="peek-action" onClick={event => { event.currentTarget.closest<HTMLElement>('[role="tree"]')?.focus(); dependencies.retry(node.id) }}>Retry</button>}</div>}
     {empty && <div className="dependencies-status" style={indent}>No dependencies.</div>}
     {cut && <div className="dependencies-status" style={indent}>{cut === 'level'
       ? `There are more than ${dependencyLimits.perLevel.toLocaleString('en-US')}; only those are listed.`
       : `The tree holds at most ${dependencyLimits.nodes.toLocaleString('en-US')} objects; open View Dependencies on a deeper object to see more.`}</div>}
   </>
-}
+})

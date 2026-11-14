@@ -1,5 +1,5 @@
 import type { ApiResult } from '../../../shared/contracts'
-import { kindSpecs, type NodeKind } from '../../../shared/explorer/catalog.ts'
+import { explorerLimits, kindSpecs, type NodeKind } from '../../../shared/explorer/catalog.ts'
 import {
   dependencyKindWord, dependencyLimits, dependencyTypeWord, isDependencyKind, type DependenciesParams, type DependenciesResult, type DependencyDirection, type DependencyLeaf
 } from '../../../shared/explorer/dependencies.ts'
@@ -137,7 +137,20 @@ export class DependencyTree {
     this.disposed = true
     const ids = [...this.running.values()]
     this.running.clear()
-    if (ids.length) this.loader.cancel(ids)
+    // explorer.cancel takes at most `explorerLimits.cancelBatch` ids a call; queued expansions can outnumber that.
+    for (let at = 0; at < ids.length; at += explorerLimits.cancelBatch) this.loader.cancel(ids.slice(at, at + explorerLimits.cancelBatch))
+  }
+
+  /** Stops the tree for good (the server was lost): the levels still loading show `message`, and nothing more is read. */
+  abandon(message: string): void {
+    if (this.disposed) return
+    const loading = [...this.running.keys()]
+    this.dispose()
+    for (const id of loading) {
+      const node = this.nodes.get(id)
+      if (node?.load === 'loading') this.nodes.set(id, { ...node, load: 'error', error: message })
+    }
+    if (loading.length) this.onChange()
   }
 
   private set(node: DependencyNode): void {
