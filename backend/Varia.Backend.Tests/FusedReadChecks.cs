@@ -317,6 +317,51 @@ internal static class FusedReadChecks
                 && earlier > 0 && fallback.Rooms!.Reserved == 0 && store.UsedBytes == used + growth,
                 "a sort whose column extract is refused gives back its rooms and earlier extracts, unpacks the result in place, reads its pages as sealed and sorts as unpacked");
         }
+
+        // An extract asks the system's memory load as it grows (once for every ExtractCheckBytes taken, here every byte):
+        // while it is high the extract is refused and the result unpacked in place instead.
+        var lowNow = false;
+        var busy = new ResultStore(1L << 30, 1L << 30, () => (lowNow ? 100 : 0, 50)) { Packing = PagePacking.EveryComplete };
+        var busySet = Filled(busy, "busy", 20_000);
+        using (busySet.Pin())
+        {
+            long calm;
+            using (var asked = new ViewSorter.PageSource(busySet.SealedSnapshot(), Columns.Count) { ExtractCheckBytes = 1 })
+            {
+                asked.Extract(2, CancellationToken.None);
+                calm = asked.ExtractedBytes;
+            }
+            using var pressedSource = new ViewSorter.PageSource(busySet.SealedSnapshot(), Columns.Count) { ExtractCheckBytes = 1 };
+            lowNow = true;
+            pressedSource.Extract(2, CancellationToken.None);
+            lowNow = false;
+            check(calm > 0 && pressedSource.ExtractedBytes == 0 && !busySet.HasPacked && Enumerable.Range(0, pressedSource.Count).All(pressedSource.IsRaw),
+                "an extract asks the system's memory load as it grows, and refused for it unpacks the result in place instead");
+        }
+
+        // A pivot's output refused room to hold the pages its rows lie on unpacks the result in place instead, which adds
+        // only what packing saved; refused that too, TOO_LARGE.
+        var holdStore = Packed(64L << 20);
+        var holdSet = Filled(holdStore, "hold", 20_000);
+        var holdFiller = holdStore.BeginQuery("filler");
+        using (holdSet.Pin())
+        {
+            var holdPages = holdSet.SealedSnapshot();
+            var firsts = holdPages.Select(page => (int)page.FirstRow).ToArray();
+            var need = Held.Unpacking(holdSet);
+            var whole = holdPages.Sum(page => (long)page.Length);
+            check(holdStore.TryReserve(holdFiller, holdStore.GlobalBytes - holdStore.UsedBytes - 1024, false, out _), "the hold checks fill the budget");
+            var holdUsed = holdStore.UsedBytes;
+            string? neither = null;
+            try { new RowAccess(holdPages, Columns.Count).Hold(holdSet, firsts, "no room", CancellationToken.None); }
+            catch (RequestException error) { neither = error.Code + ": " + error.Message; }
+            check(neither == "TOO_LARGE: no room" && holdSet.HasPacked && holdStore.UsedBytes == holdUsed, "rows held with room neither to hold their pages nor to unpack the result are refused and nothing is held");
+            holdStore.Return(holdFiller, need);
+            holdUsed = holdStore.UsedBytes;
+            var held = new RowAccess(holdPages, Columns.Count).Hold(holdSet, firsts, "no room", CancellationToken.None);
+            check(whole > need + 1024 && held == 0 && !holdSet.HasPacked && holdStore.UsedBytes == holdUsed + need,
+                "rows held with room to unpack the result but not to hold their pages whole unpack it in place, charging only what packing saved");
+        }
     }
 
     private static void Cancelled(Action<bool, string> check)
@@ -429,6 +474,9 @@ internal static class FusedReadChecks
 
         // Through the service, a fused read refused while the computer is low on memory says so, as any refusal there does.
         var low = false;
+        // Two workers whatever the machine, so the rooms Held.Rooms allows for are the rooms the service's sort makes even
+        // while another suite changes ViewSorter.Workers (the scope flows into the service's operation).
+        using var workersHere = ViewSorter.WorkersHere(2);
         var pressed = new ResultStore(64L << 20, 64L << 20, () => (low ? 100 : 0, 50)) { Packing = PagePacking.EveryComplete };
         var lowSet = Filled(pressed, "low", 20_000);
         var room = ViewSorter.WorkingBytes(20_000, 1) + 4L * 20_000 + ResultStore.ViewOverhead + 1024;
@@ -451,5 +499,23 @@ internal static class FusedReadChecks
         // It was the rooms that were refused: with room for them as well, the same sort is answered.
         using (lowSet.Pin()) pressed.Return(lowFiller, Held.Rooms(lowSet));
         check(Asked(Sorted()) is null, "the same sort is answered once there is room for its rooms too");
+
+        // A profile refused its rooms even on one thread says so the same way.
+        pressed.Return(lowFiller, lowFiller.UsedBytes);
+        var profileRoom = ColumnProfiler.WorkingBytes(20_000, 1) + 1024;
+        check(pressed.TryReserve(lowFiller, pressed.GlobalBytes - pressed.UsedBytes - profileRoom, false, out _), "the profile's low-memory check fills the budget but its figures' room");
+        var profileUsed = pressed.UsedBytes;
+        string? Profiled()
+        {
+            try { service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = lowSet.ResultId, columns = new[] { 3 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var profileBudget = Profiled();
+        low = true;
+        var profileLow = Profiled();
+        low = false;
+        check(profileBudget is not null && profileBudget.StartsWith("TOO_LARGE: There is not enough result memory to profile", StringComparison.Ordinal) && profileLow == "TOO_LARGE: " + SqlService.LowMemory
+            && pressed.UsedBytes == profileUsed && lowSet.HasPacked,
+            "a profile refused its rooms on one thread names the budget, or the computer's memory when that is low, and holds nothing: " + profileBudget + " | " + profileLow);
     }
 }

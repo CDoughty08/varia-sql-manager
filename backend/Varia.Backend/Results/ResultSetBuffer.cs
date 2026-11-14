@@ -429,6 +429,11 @@ internal sealed class ResultSetBuffer
     /// rooms and column extracts. Give it back with <see cref="ReturnWork"/>.</summary>
     public bool TryReserveWork(long bytes) => store.TryReserveWork(Budget, bytes);
 
+    /// <summary>Reserves working memory taken in pieces (a column extract's pages), asking the system's memory load when
+    /// <paramref name="checkSystem"/>: once for every <see cref="ResultStore.WorkCheckBytes"/> taken, as one reservation
+    /// of that size would.</summary>
+    public bool TryReserveWork(long bytes, bool checkSystem) => store.TryReserve(Budget, bytes, checkSystem, out _);
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;

@@ -1808,7 +1808,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             catch (ColumnProfiler.ProfileTooLargeException)
             {
-                throw new RequestException("TOO_LARGE", tooLarge);
+                throw TooLarge(tooLarge);
             }
             finally { store.Return(set.Budget, working + charges.Extra); }
         }

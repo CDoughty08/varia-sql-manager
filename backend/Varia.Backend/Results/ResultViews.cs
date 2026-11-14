@@ -1199,6 +1199,10 @@ internal static partial class ViewSorter
         /// refuse an extract that the budget would allow).</summary>
         internal long ExtractAllowance { get; set; } = long.MaxValue;
 
+        /// <summary>How much of an extract is taken between asks of the system's memory load (its pages are reserved one by
+        /// one, each far below <see cref="ResultStore.WorkCheckBytes"/>); smaller only in the checks.</summary>
+        internal long ExtractCheckBytes { get; set; } = ResultStore.WorkCheckBytes;
+
         /// <summary>Copies one column's cells out of every packed page, once, so that comparisons that go back to cells
         /// (<see cref="Cell"/>) read them without unpacking a page. The copy is charged as working memory until the source
         /// is disposed. Refused, the result is unpacked in place instead, as before fused reads (its pages' growth reserved,
@@ -1221,7 +1225,10 @@ internal static partial class ViewSorter
                     var rows = pages[index].Rows;
                     var size = rows == 0 ? 0 : (int)view.SpanBytes(column, 0, rows - 1);
                     var charge = size + 4L * (rows + 1);
-                    if (Interlocked.Add(ref charged, charge) > ExtractAllowance || !owner!.TryReserveWork(charge))
+                    var total = Interlocked.Add(ref charged, charge);
+                    // Under high system memory load an extract is refused as one reservation of its size would be.
+                    var ask = charge >= ResultStore.WorkCheckBytes || total / ExtractCheckBytes != (total - charge) / ExtractCheckBytes;
+                    if (total > ExtractAllowance || !owner!.TryReserveWork(charge, ask))
                     {
                         Interlocked.Add(ref charged, -charge);
                         throw Refusal();

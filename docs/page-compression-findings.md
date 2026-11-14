@@ -315,7 +315,7 @@ per-result cache of decompressed pages, charged to the budget as working memory:
   fused (step 6 below): each worker unpacks the page it is about to read into a room of its own, reserved as working
   memory, so the operation holds about a page a worker and the result stays packed. A sort whose ties compare cells
   extracts that column once. Distinct values, row identity, diff, search and a transposed Copy or Save still
-  **rehydrate** first (unpack every page on the workers into raw pages, after reserving their raw size; 0.15 s per GiB
+  **rehydrate** first (unpack every page on the workers into raw pages, after reserving what that adds, raw less packed; 0.15 s per GiB
   on 16 workers, 0.36 s on 3): their readers keep pages or revisit cells at random.
 
 ### When a result is compressed

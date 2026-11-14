@@ -111,8 +111,9 @@ internal sealed class RowAccess
     /// <summary>Reads the packed pages behind <paramref name="rows"/> (negative ones skipped) together
     /// (<see cref="ResultSetBuffer.BodiesTogether"/>: unpacked on the workers, charged as working memory) and keeps them, so
     /// a writer that visits those rows at random reads no packed page that nothing charges, and unpacks none twice. Returns
-    /// the bytes reserved, which the caller gives back (<see cref="ResultSetBuffer.ReturnWork"/>); TOO_LARGE with
-    /// <paramref name="tooLarge"/> when the budget refuses them.</summary>
+    /// the bytes reserved, which the caller gives back (<see cref="ResultSetBuffer.ReturnWork"/>). Refused, the result is
+    /// unpacked in place (<see cref="ResultSetBuffer.TryUnpackAll"/>, 0 returned); TOO_LARGE with <paramref name="tooLarge"/>
+    /// when that is refused too. The caller holds a pin.</summary>
     public long Hold(ResultSetBuffer set, IEnumerable<int> rows, string tooLarge, CancellationToken token)
     {
         if (!set.HasPacked) return 0;
@@ -121,7 +122,10 @@ internal sealed class RowAccess
             if (row >= 0 && PageOf(row, out _) is var page && !Keeps(page)) wanted.Add(page);
         if (wanted.Count == 0) return 0;
         int[] list = [.. wanted];
-        var bodies = set.BodiesTogether([.. list.Select(page => pages[page])], out var reserved, token) ?? throw new RequestException("TOO_LARGE", tooLarge);
+        var bodies = set.BodiesTogether([.. list.Select(page => pages[page])], out var reserved, token);
+        // Refused, the result is unpacked in place instead, as before fused reads: that adds only what packing saved,
+        // where holding the pages charges their whole length (the packed copies stay).
+        if (bodies is null) return set.TryUnpackAll(token) ? 0 : throw new RequestException("TOO_LARGE", tooLarge);
         for (var i = 0; i < list.Length; i++) Keep(list[i], bodies[i]);
         return reserved;
     }
