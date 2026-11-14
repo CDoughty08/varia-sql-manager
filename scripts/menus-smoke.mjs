@@ -25,6 +25,7 @@ const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !=
 const appearanceFile = join(profile, 'appearance.json'), savedPath = join(profile, 'menus-saved.sql')
 let application
 let page
+let lastNativeInput
 const failures = []
 const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 540000)
 
@@ -73,11 +74,21 @@ const nativeItem = id => application.evaluate(({ Menu }, itemId) => {
   return item ? { checked: item.checked, enabled: item.enabled } : null
 }, id)
 async function nativeKey(keyCode, modifiers = []) {
-  await application.evaluate(({ BrowserWindow }, key) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents
-    contents.sendInputEvent({ type: 'keyDown', ...key })
-    contents.sendInputEvent({ type: 'keyUp', ...key })
-  }, { keyCode, modifiers })
+  const target = await application.browserWindow(page)
+  try {
+    lastNativeInput = { windowId: await target.evaluate(window => window.id), keyCode, modifiers }
+    // Electron requires the containing BrowserWindow to be focused; DOM focus alone does not admit native input.
+    await target.evaluate(window => { if (!window.isVisible()) window.show(); window.focus(); window.webContents.focus() })
+    await expect.poll(() => target.evaluate(window => window.isFocused() && window.webContents.isFocused()), 'the native input window has keyboard focus').toBe(true)
+    const admitted = await target.evaluate((window, key) => {
+      const focused = window.isFocused(), contentsFocused = window.webContents.isFocused()
+      if (!focused || !contentsFocused) throw new Error('The native input window lost keyboard focus before injection.')
+      window.webContents.sendInputEvent({ type: 'keyDown', ...key })
+      window.webContents.sendInputEvent({ type: 'keyUp', ...key })
+      return { focused, contentsFocused }
+    }, { keyCode, modifiers })
+    Object.assign(lastNativeInput, admitted)
+  } finally { await target.dispose() }
 }
 async function typeSql(sql) {
   await textbox().focus()
@@ -1217,6 +1228,15 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show())
   await toolbarButton(page, 'Connect').focus()
   for (const [key, modifiers, level] of [['=', ['control'], 0.5], ['=', ['control', 'shift'], 1], ['-', ['control'], 0.5], ['0', ['control'], 0]]) {
+    if (key === '-') {
+      const target = await application.browserWindow(page)
+      try {
+        // Hiding removes native focus on every platform; BrowserWindow.blur is unsupported on Wayland.
+        await target.evaluate(window => window.hide())
+        await expect.poll(() => target.evaluate(window => window.isVisible())).toBe(false)
+        await expect.poll(() => target.evaluate(window => window.isFocused())).toBe(false)
+      } finally { await target.dispose() }
+    }
     await nativeKey(key, modifiers)
     await expect.poll(zoomLevel, `${modifiers.join('+')}+${key}`).toBe(level)
   }
@@ -1447,6 +1467,10 @@ try {
   expect(failures).toEqual([])
   console.log('Menus checks passed: title-bar menus by mouse, keyboard, F10, and Alt; submenus and theme choices; editing and zoom roles; the inactive title bar; the results pane toggle; context menus for the editor, query tabs, panel tabs, text fields, Object Explorer, and Query Output; results grid cell selection; every surface opened and closed twice; native context menus; main\'s dialogs across a restart, a crash and a quit; open-transaction and running-query prompts; and a live server when configured.')
 } catch (error) {
+  if (lastNativeInput) console.log('Native input focus:', { input: lastNativeInput, current: await application?.evaluate(({ BrowserWindow }, id) => {
+    const window = BrowserWindow.fromId(id)
+    return window && { focused: window.isFocused(), contentsFocused: window.webContents.isFocused(), visible: window.isVisible(), zoom: window.webContents.getZoomLevel() }
+  }, lastNativeInput.windowId).catch(() => null) })
   await page?.screenshot({ path: resolve('artifacts', 'menus-failure.png') }).catch(() => {})
   console.log(await page?.evaluate(() => ({ focused: document.activeElement?.outerHTML.slice(0, 300), menus: document.querySelectorAll('[role="menu"]').length, errors: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent) })).catch(() => 'no page'))
   throw error

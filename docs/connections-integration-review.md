@@ -191,6 +191,24 @@ in queue cancellation, environment isolation, exact lease release or the existin
 Its full check passed in 106.2 seconds while sharing the permitted check tier with one other run: 2,805 offline .NET
 checks, 5,215 Vitest tests, TypeScript and the production build, with 24 configuration-dependent skips.
 
+The menu suite passed all 54 surface checks but locally missed native Ctrl-minus after two successful zoom keys;
+the application commit's Windows/Linux CI suites passed. Electron's installed API contract requires native window
+focus for sendInputEvent, whereas this helper only proved DOM focus. It now focuses the exact test window, asserts
+native/content focus and injects each key once. The Ctrl-minus regression deliberately hides the window first; failure diagnostics
+include the native window/input state. This closes a concrete test admission gap without raising any timeout or
+weakening the zoom assertion. The original local focus-loss cause remains unproven.
+Once shown for native F10, that window stays visible through the screenshot phases: hiding it immediately after F10
+prevented a later capture from completing. The deliberate final hide is immediately followed by the focus admission.
+The application commit `2b3b9984` passed CI run `43618421935`: all three platform checks, all six Electron shards,
+all three live SQL groups, Linux benchmarks and the aggregate result. The runner/focus corrections retain separate
+local coverage and are validated again on the final PR head.
+The final focus-source check passed in 98.5 seconds with 2,805 offline .NET checks, 5,215 Vitest tests, TypeScript and
+the production build; 24 configuration-dependent cases were skipped. The complete menu Electron rerun passed,
+including the focus regression, unchanged zoom assertions, native context menus, transaction/running-query prompts and
+real-server menus. Chart and live-grid reruns also passed; the corrected chart runner waited 379 seconds for admission
+without spending its unchanged execution budget. Explorer and results also hit the old collection's queue-inclusive
+watchdog and require corrected reruns; final collection/rerun outcomes are recorded in the PR.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,
