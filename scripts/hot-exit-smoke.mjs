@@ -3,7 +3,7 @@
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
 // disk, the editor groups as they were, and no Recover dialog; a renderer crash after a restore reopens it, and a Windows
 // session end keeps the tabs. Native message boxes are stubbed in main and recorded; files live under artifacts/.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { closeMs, electron, expect, within } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -20,12 +20,18 @@ const chromiumSandbox = process.getuid?.() !== 0
 const orders = join(folder, 'orders.sql')
 await writeFile(orders, 'SELECT 1 AS orders')
 let application, page
+let phase = 'starting'
 const failures = []
-const watchdog = setTimeout(() => { console.error('Hot exit suite exceeded its time limit.'); application?.process()?.kill(); process.exit(1) }, 180_000)
+const watchdog = setTimeout(() => { console.error(`Hot exit suite exceeded its time limit while ${phase}.`); application?.process()?.kill(); process.exit(1) }, 180_000)
 
 /** Launches on the suite's profile, with main's message boxes recorded (and answered Cancel) and its Save dialog cancelled. */
 async function launch(args, holdPath) {
+  phase = 'launching the workbench'
   application = await electron.launch({ args: ['.', ...args], env, chromiumSandbox })
+  // Crash recovery can replace the BrowserWindow. Electron owns unload dialogs in every replacement too.
+  application.context().on('dialog', () => {})
+  application.context().on('weberror', error => failures.push(error.error().message))
+  phase = 'configuring the launched workbench'
   await application.evaluate(({ dialog }, holdPath) => {
     const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1, crashAnswer: 1, savePath: '' }
     dialog.showMessageBox = async (_window, options) => {
@@ -61,11 +67,18 @@ async function launch(args, holdPath) {
     }
   }, holdPath)
   page = await application.firstWindow()
-  page.on('pageerror', error => failures.push(error.message))
-  // Electron owns beforeunload and its native Reload dialog. Do not let Playwright dismiss it first.
-  page.on('dialog', () => {})
+  phase = 'waiting for the launched workbench'
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   if (!holdPath) await expect(page.locator('.monaco-editor[role=code]').first()).toBeVisible({ timeout: 30000 })
+}
+async function quit(reason) {
+  phase = reason
+  const exited = new Promise(done => application.process().once('exit', done))
+  await within((async () => {
+    // Let the inspector reply before a fast quit can end its main-process connection.
+    await application.evaluate(({ app }) => { setImmediate(() => app.quit()) })
+    await exited
+  })(), closeMs, () => { throw new Error(`The workbench did not quit within ${closeMs / 1000} s while ${reason}.`) })
 }
 const tabNames = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
 // Monaco draws spaces as no-break spaces.
@@ -94,19 +107,30 @@ const holdNextRead = path => application.evaluate((_electron, path) => globalThi
 const waitForRead = () => expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.releaseRead)).toBe(true)
 const releaseRead = () => application.evaluate(() => globalThis.variaHotExit.restoreOpen())
 // Playwright's Page stays attached to a crashed renderer. Read the current renderer through main.
-const recoveredPins = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript(`({
+// A dead window can retain an unanswered script while main's grace period replaces it. Retry with the current window.
+const recoveredPins = () => within(application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript(`({
   pins: Array.from(document.querySelectorAll('[data-tab-id][data-pinned]'), tab => tab.closest('[role=tab]')?.getAttribute('aria-label')),
   active: document.querySelector('[role=tablist][aria-label="Query documents"] [role=tab][aria-selected=true]')?.getAttribute('aria-label'),
   text: document.querySelector('.monaco-editor .view-lines')?.textContent
-})`).catch(() => undefined))
-async function crashWhileRestoringPins() {
+})`).catch(() => undefined)), 1000)
+async function crashWhileRestoringPins(replaceWindow = false) {
+  phase = 'waiting for the held restore read'
   await waitForRead()
   expect(await tabNames()).toEqual([])
+  // Force the supported grace-period path even when Chromium reports the crash immediately on this platform.
+  const previousWindow = replaceWindow ? await application.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.webContents.isCrashed = () => false
+    return window.id
+  }) : undefined
+  phase = 'crashing the renderer during restore'
   await crashRenderer(application)
+  phase = 'waiting for the restored pins after a crash'
   await expect.poll(prompts, { timeout: 30000 }).toContain('The workbench stopped unexpectedly.')
   await expect.poll(recoveredPins, { timeout: 30000 }).toMatchObject({
     pins: ['Totals', 'Orders report', 'large-pin.xml'], active: 'Totals', text: expect.stringContaining('before_renderer_crash')
   })
+  if (previousWindow !== undefined) expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id)).not.toBe(previousWindow)
 }
 
 try {
@@ -185,9 +209,7 @@ try {
   await tabMenuItem('Orders report', 'Increase Tab Stack Height')
   await expect.poll(() => tabShelfRows(editorGroups(page).nth(1))).toBe('2')
   await selectOpenDocument(page, 'Month end')
-  const exited = new Promise(done => application.process().once('exit', done))
-  await application.evaluate(({ app }) => app.quit())
-  await exited
+  await quit('keeping the original tabs')
   const kept = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(kept.documents.map(document => [document.name, document.baseName, document.dirty, document.text])).toEqual([
     ['Totals', 'SQLQuery3.sql', true, 'SELECT 3 AS totals'], ['Welcome', 'SQLQuery1.sql', false, expect.stringContaining('@@SERVERNAME')],
@@ -235,9 +257,7 @@ try {
   await page.keyboard.press('Control+Alt+ArrowRight')
   await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
   await expect(floatingEditorGroups(page)).toHaveCount(4)
-  const floated = new Promise(done => application.process().once('exit', done))
-  await application.evaluate(({ app }) => app.quit())
-  await floated
+  await quit('keeping the floating groups')
   const floating = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8')).groups
   expect(floating.root.children).toEqual([])
   expect(floating.floating.map(group => group.root.views.length).sort()).toEqual([1, 1, 1, 2])
@@ -259,7 +279,7 @@ try {
   if (await tabShelfRows(editorGroups(page).first()) === '1') await tabMenuItem('Welcome', 'Increase Tab Stack Height')
   await expect.poll(() => tabShelfRows(editorGroups(page).first())).toBe('2')
   console.log('Hot exit checks: every query floating survives a relaunch, and joining them leaves no empty group.')
-  // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
+  // A canceled reload leaves the page intact. With startup restore On, an accepted reload reopens all eligible tabs.
   await selectOpenDocument(page, 'Orders report')
   await pinDocumentButton(page, 'Orders report').click()
   await page.evaluate(() => window.__variaRecovery.flush())
@@ -283,7 +303,7 @@ try {
   await tabMenuItem('Totals', 'Increase Tab Stack Height')
   await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
   await page.evaluate(() => window.__variaRecovery.flush())
-  // Hold the saved pin's read so the replacement page can issue another reload during the restore.
+  // Hold the saved pin's read so the replacement page can issue another reload during the all-tab restore.
   await application.evaluate(() => {
     globalThis.variaHotExit.reloadAnswer = 0
     globalThis.variaHotExit.holdConfirmation = true
@@ -311,7 +331,7 @@ try {
     await reload()
     await expect(page.getByRole('alert').filter({ hasText: 'Wait for the current document operation to finish before reloading.' })).toBeVisible()
     expect(await page.evaluate(() => window.varia.runRole('reload'))).toMatchObject({
-      ok: false, error: 'Wait for the pinned tabs to reopen before reloading.'
+      ok: false, error: 'Wait for the saved tabs to reopen before reloading.'
     })
   } finally {
     await application.evaluate(() => {
@@ -320,17 +340,26 @@ try {
     })
     await releaseRead()
   }
-  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql'])
+  const reloadedNames = ['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql', 'Month end']
+  await expect.poll(tabNames).toEqual(reloadedNames)
+  await expect(editorGroups(page)).toHaveCount(1)
+  expect(await groupNames(0)).toEqual(reloadedNames)
+  expect(await activeDocumentName(page)).toBe('Orders report')
   const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recover.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await expect(recover.getByRole('checkbox', { name: 'Recover Totals', exact: true })).toHaveCount(0)
-  await recover.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await page.evaluate(() => window.varia.listRecovery())).toMatchObject({ ok: true, value: [] })
+  await expect(recover).toHaveCount(0)
   await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
+  for (const name of ['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql']) await expect(pinDocumentButton(page, name, true)).toBeVisible()
+  await selectOpenDocument(page, 'Month end')
+  await expect.poll(text).toContain('SELECT 2 AS month_end')
+  await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
+  await expect(pinDocumentButton(page, 'Month end')).toBeVisible()
+  await expect(documentTab(page, 'Month end')).toHaveCount(1)
   for (const name of ['Welcome', 'SQLQuery4.sql']) {
     await pinDocumentButton(page, name, true).click()
     await tabMenuItem(name, 'Close')
   }
-  await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'Month end'])
   await selectOpenDocument(page, 'Orders report')
   expect(await activeDocumentName(page)).toBe('Orders report')
   await expect.poll(text).toContain('SELECT 2 AS orders')
@@ -338,7 +367,7 @@ try {
   await expect.poll(text).toContain('SELECT 3 AS totals')
   await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
-  console.log('Hot exit checks: canceling Reload Window keeps the page, edits before confirmation survive, and a second reload during restore preserves both pins.')
+  console.log('Hot exit checks: canceling Reload Window keeps the page; all eligible tabs, groups and active state survive acceptance; edits before confirmation survive; and a second reload cannot replace an unfinished restore.')
 
   expect(await page.evaluate(() => window.varia.updateSettings({
     'environment.documents.hotExit': false, 'environment.documents.detectExternalChanges': true
@@ -379,9 +408,7 @@ try {
   await pinDocumentButton(page, 'large-pin.xml').click()
   // Close the unpinned test query without saving it. The close stub chooses Don't Save for a query prompt below.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  const restarted = new Promise(done => application.process().once('exit', done))
-  await application.evaluate(({ app }) => app.quit())
-  await restarted
+  await quit('keeping the pinned tabs')
   const pinnedRecord = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(pinnedRecord.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   expect(pinnedRecord.documents[1]).toMatchObject({
@@ -399,8 +426,10 @@ try {
   console.log('Hot exit checks: a saved XML pin above 5 MB reopens with startup restore off.')
 
   const recoverAgain = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recoverAgain.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await recoverAgain.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await page.evaluate(() => window.varia.listRecovery())).toMatchObject({ ok: true, value: [] })
+  await expect(recoverAgain).toHaveCount(0)
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  await expect(documentTab(page, 'Month end')).toHaveCount(0)
 
   // Save from the restored dirty pin sees the disk change made while the app was closed.
   await selectOpenDocument(page, 'Orders report')
@@ -417,10 +446,11 @@ try {
     globalThis.variaHotExit.reloadAnswer = 0
     BrowserWindow.getAllWindows()[0].webContents.once('did-start-navigation', () => app.quit())
   })
+  phase = 'quitting during a pinned reload'
   const quitDuringReload = new Promise(done => application.process().once('exit', done))
   await menubar(page).getByRole('menuitem', { name: 'View', exact: true }).click()
   await page.getByRole('menu', { name: 'View', exact: true }).getByRole('menuitem', { name: 'Reload Window', exact: true }).click()
-  await quitDuringReload
+  await within(quitDuringReload, closeMs, () => { throw new Error('The workbench did not quit during the pinned reload.') })
   const afterReloadQuit = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(afterReloadQuit.documents).toEqual(pinnedRecord.documents)
   console.log('Hot exit checks: quitting during a pinned reload keeps the pins for the next start.')
@@ -429,8 +459,7 @@ try {
   await launch([])
   await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   const recoverBeforeCrash = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recoverBeforeCrash.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await recoverBeforeCrash.getByRole('button', { name: 'Later', exact: true }).click()
+  await expect(recoverBeforeCrash).toHaveCount(0)
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.autoRecover.enabled': false }))).toMatchObject({ ok: true })
   await selectOpenDocument(page, 'Totals')
   await editorTextbox(page).focus()
@@ -443,15 +472,13 @@ try {
     const reloaded = page.waitForEvent('domcontentloaded')
     await reload()
     await reloaded
-    await crashWhileRestoringPins()
+    await crashWhileRestoringPins(true)
   } finally {
     await releaseRead()
   }
-  console.log('Hot exit checks: the crash dialog’s Reload retries an unfinished pin restore and keeps fresh unsaved text.')
+  console.log('Hot exit checks: the crash dialog’s Reload retries an unfinished pin restore in a replacement window and keeps fresh unsaved text.')
 
-  const quitAfterCrash = new Promise(done => application.process().once('exit', done))
-  await application.evaluate(({ app }) => app.quit())
-  await quitAfterCrash
+  await quit('quitting after crash recovery')
   await launch([], xmlPath)
   try {
     await crashWhileRestoringPins()
@@ -476,13 +503,14 @@ try {
 
   // Windows ends its session (shut down, restart, log off) without before-quit: main holds the end, the close keeps the
   // tabs, and the app quits so Windows can go on.
+  phase = 'ending the Windows session'
   const ended = new Promise(done => application.process().once('exit', done))
   expect(await application.evaluate(({ BrowserWindow }) => {
     let held = false
     BrowserWindow.getAllWindows()[0].emit('query-session-end', { reasons: ['shutdown'], preventDefault: () => { held = true } })
     return held
   })).toBe(true)
-  await ended
+  await within(ended, closeMs, () => { throw new Error('The workbench did not quit at Windows session end.') })
   const atSessionEnd = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(atSessionEnd.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   expect(atSessionEnd.documents[0].text).toContain('before_renderer_crash')

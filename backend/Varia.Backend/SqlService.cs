@@ -176,8 +176,27 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         language = new LanguageServiceBroker([new SqlToolsLanguageService(LanguageConnectionString)]);
         Open = async (connection, token) =>
         {
-            await entra.OpenPooledAsync(connection, token, OpenConnection);
-            Record(connection);
+            CommandTracker.ThrowIfRejected(connection);
+            var expected = owners.TryGetValue(connection, out var owner) ? owner.PrincipalId : null;
+            if (owner is not null && (!connections.ContainsKey(owner.ConnectionId) || !profiles.ContainsKey(owner.ConnectionId)))
+                throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+            using var scope = new EntraConnectScope(token, expected?.StartsWith("entra:", StringComparison.Ordinal) == true ? expected : null);
+            if (owner is not null) owner.Opening = true;
+            try
+            {
+                await entra.OpenPooledAsync(connection, token, OpenConnection);
+                if (expected?.StartsWith("sid:", StringComparison.Ordinal) == true)
+                    ConnectionPrincipal.Match(expected, await ProbePrincipal(connection, token));
+                Record(connection);
+            }
+            catch (Exception error)
+            {
+                // A rejected physical session must never return to a pool, nor reach a caller's SQL.
+                if (expected is not null) { SqlConnection.ClearPool(connection); await connection.DisposeAsync(); }
+                if (error is RequestException { Code: "AUTH_IDENTITY" } && owner is not null) await language.ForgetConnectionAsync(owner.ConnectionId);
+                throw;
+            }
+            finally { if (owner is not null) owner.Opening = false; }
         };
         explorer = new ExplorerService(this);
         search = new ObjectSearchService(this);
@@ -246,15 +265,56 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
     /// pooled connection is recorded only for freeing a database.</summary>
-    private sealed record Owner(string ConnectionId, bool Pooled, bool Own);
+    private sealed record Owner(string ConnectionId, bool Pooled, string? PrincipalId)
+    {
+        internal bool Own;
+        internal bool Opening;
+        internal Task? RejectedCleanup;
+    }
 
     /// <summary>Marks a connection made for a connection id under one of Varia's own program names (a pool's, Object
     /// Actions'), or a plain pooled one (<paramref name="own"/> false), so <see cref="Open"/> records the session it is given.
     /// Every such connection must be made through here.</summary>
     private SqlConnection Owned(SqlConnection connection, string connectionId, bool own = true)
     {
-        owners.AddOrUpdate(connection, new(connectionId, new SqlConnectionStringBuilder(connection.ConnectionString).Pooling, own));
-        return connection;
+        lock (owners)
+        {
+            // A factory may have captured its settings immediately before Disconnect removed the target. Absence is not
+            // the explicit identity-free profile used by offline seams: never downgrade it into an unguarded owner.
+            if (!connections.ContainsKey(connectionId) || !profiles.TryGetValue(connectionId, out var profile))
+                throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
+            if (owners.TryGetValue(connection, out var existing))
+            {
+                if (existing.ConnectionId != connectionId) throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                // A plain factory can be promoted to an own-session role (isolated estimated plans), but its
+                // identity and the single state-change guard must keep the same Owner that Open marks as opening.
+                existing.Own |= own;
+                return connection;
+            }
+            // Session recovery can authenticate again during a later command, outside the guarded Open above.
+            var principal = profile.PrincipalId;
+            if (principal is not null)
+                connection.ConnectionString = new SqlConnectionStringBuilder(connection.ConnectionString) { ConnectRetryCount = 0 }.ConnectionString;
+            var pooled = new SqlConnectionStringBuilder(connection.ConnectionString).Pooling;
+            var owner = new Owner(connectionId, pooled, principal) { Own = own };
+            owners.AddOrUpdate(connection, owner);
+            if (principal is not null)
+                connection.StateChange += (sender, change) =>
+                {
+                    if (change.CurrentState != System.Data.ConnectionState.Open || owner.Opening) return;
+                    // A library must not silently authenticate this target again after central preflight has returned.
+                    CommandTracker.RejectConnection(connection);
+                    // Close waits for OpenAsync's completion, so calling it from that open's callback waits on itself.
+                    // Refuse all commands first, remove its pool's unverified physical session, then close after unwinding.
+                    SqlConnection.ClearPool(connection);
+                    owner.RejectedCleanup ??= CloseRejectedConnection(connection);
+                    _ = owner.RejectedCleanup.ContinueWith(static task => { _ = task.Exception; }, CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                };
+            if (pooled && pools.TryGetValue(connectionId, out var used)) used.TryAdd(connection.ConnectionString, 0);
+            return connection;
+        }
     }
 
     /// <summary>Records the session id an owned connection was given as it opened (a pooled connection keeps its physical
@@ -345,7 +405,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             SmoVersion = typeof(Server).Assembly.GetName().Version?.ToString(),
             SqlClientVersion = typeof(SqlConnection).Assembly.GetName().Version?.ToString()
         },
-        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json), Token(context)),
+        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json), Token(context), context),
         "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
@@ -418,26 +478,75 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return value;
     }
 
-    internal async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token)
+    internal async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token, RequestContext? context = null)
     {
+        using var background = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (options.NonInteractive) background.CancelAfter(EntraConnectScope.BackgroundLimit);
+        token = background.Token;
+        using var providerScope = new EntraConnectScope(token);
         if (!EntraModes.IsKnown(options.Authentication))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
         entra.Refuse(options);
         var builder = ConnectBuilder(options);
+        if (options.NonInteractive) builder.ConnectTimeout = builder.ConnectTimeout == 0 ? 15 : Math.Min(builder.ConnectTimeout, 15);
         // For MFA without a user name, the connection string kept names the account its token is for.
-        var (opened, connectionString) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
+        var (opened, connectionString, providerPrincipal) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
         await using var connection = opened;
-        var profile = await ServerProfile.ProbeAsync(connection, token);
-        var id = Register(connectionString, profile, connection.Database);
-        // The connect's own session waits in the plain pool, in the connection's database, until the pool prunes it.
-        if (new SqlConnectionStringBuilder(connectionString).Pooling)
+        // Entra group/login names and SQL SIDs cannot identify the actual token account. Never fall back to them.
+        var principalId = EntraModes.IsEntra(options.Authentication) ? ConnectionPrincipal.Require(providerPrincipal) : null;
+        ServerProfile profile;
+        try
         {
-            poolSessions.Opened(id, connection.ServerProcessId, pooled: true);
-            poolSessions.Closed(id, connection.ServerProcessId);
+            profile = await ProbeProfile(connection, token);
+            principalId ??= ConnectionPrincipal.Require(profile.PrincipalId ?? await ProbePrincipal(connection, token));
+        }
+        catch (Exception error) when (!token.IsCancellationRequested && error is not (RequestException or OperationCanceledException)
+            && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
+        {
+            // A pooled server can reject authentication when its first command resets the session. Preserve that SQL
+            // error with Connect's details, just as a failure during Open, instead of hiding it behind metadata fallback.
+            throw EntraFailures.WithClearHint(failure, options.Authentication);
+        }
+        profile = profile with { PrincipalId = principalId };
+        token.ThrowIfCancellationRequested();
+        string database, serverVersion;
+        int? pooledSession;
+        try
+        {
+            // Snapshot every physical-session property before publishing a logical target. A loss here must not leave
+            // an id that main never received and therefore cannot disconnect.
+            database = connection.Database;
+            serverVersion = connection.ServerVersion;
+            pooledSession = new SqlConnectionStringBuilder(connection.ConnectionString).Pooling ? connection.ServerProcessId : null;
+        }
+        catch (InvalidOperationException) when (connection.State != System.Data.ConnectionState.Open)
+        {
+            throw new RequestException("CONNECTION_LOST", "The connection closed before sign-in completed. Reconnect and try again.");
+        }
+        var id = Register(connectionString, profile, database);
+        if (context is not null)
+        {
+            var released = 0;
+            void Release()
+            {
+                if (Interlocked.Exchange(ref released, 1) != 0) return;
+                // Disconnect retires the exact unpublished id and its pools synchronously before its first await. Any
+                // asynchronous language cleanup is observed; no document could have learned this dropped receipt's id.
+                var cleanup = DisconnectAsync(new ConnectionArgs(id));
+                _ = cleanup.ContinueWith(static task => { _ = task.Exception; }, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+            context.Unsent = context.Dropped = Release;
+        }
+        // The connect's own session waits in the plain pool, in the connection's database, until the pool prunes it.
+        if (pooledSession is { } session)
+        {
+            poolSessions.Opened(id, session, pooled: true);
+            poolSessions.Closed(id, session);
         }
         var probed = profile.ProductVersion is not null;
-        return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
-            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null);
+        return new(id, options.Server, database, serverVersion, options.DisplayName, options.Color, builder.CommandTimeout,
+            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null, principalId, BindingRevisionOf(id));
     }
 
     /// <summary>Records a connected profile under a new id: its settings, the server's profile, and the database its session
@@ -445,10 +554,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal string Register(string connectionString, ServerProfile profile, string database)
     {
         var id = Guid.NewGuid().ToString();
-        profiles[id] = profile;
-        homes[id] = database;
-        connections[id] = connectionString;
-        pools[id] = new() { [connectionString] = 0 };
+        if (profile.PrincipalId?.StartsWith("entra:", StringComparison.Ordinal) == true)
+            connectionString = ConnectionPrincipal.IsolatePool(connectionString, id);
+        lock (bindingGate)
+        {
+            profiles[id] = profile;
+            homes[id] = database;
+            connections[id] = connectionString;
+            pools[id] = new() { [connectionString] = 0 };
+            bindingRevisions[id] = 0;
+        }
         return id;
     }
 
@@ -471,16 +586,29 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>The open inside <see cref="Open"/>; the live checks replace it to fail as a revoked Entra sign-in does, so the
     /// mapping around it is the production one.</summary>
     internal Func<SqlConnection, CancellationToken, Task> OpenConnection { get; set; } = ConnectionFailures.OpenAsync;
+    /// <summary>The identity-only authenticated SQL/Windows probe; the offline checks replace network I/O.</summary>
+    internal Func<SqlConnection, CancellationToken, Task<string?>> ProbePrincipal { get; set; } = ConnectionPrincipal.ProbeSidAsync;
+    /// <summary>The optional metadata stage; checks model a server rejecting a pooled login at its first command.</summary>
+    internal Func<SqlConnection, CancellationToken, Task<ServerProfile>> ProbeProfile { get; set; } = ServerProfile.ProbeAsync;
+    /// <summary>Close outside SqlClient's StateChange callback. Live checks hold this to verify the command fence while
+    /// an unapproved synchronous open still has a physical session; cleanup exceptions are always observed.</summary>
+    internal Func<SqlConnection, Task> CloseRejectedConnection { get; set; } = static connection => Task.Run(connection.Dispose);
+    internal Task RejectedOpenCleanupAsync(SqlConnection connection) => owners.TryGetValue(connection, out var owner) ? owner.RejectedCleanup ?? Task.CompletedTask : Task.CompletedTask;
 
     internal async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
+        using var background = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (options.NonInteractive) background.CancelAfter(EntraConnectScope.BackgroundLimit);
+        token = background.Token;
+        using var providerScope = new EntraConnectScope(token);
         // Use the login's default database to discover choices, even if the typed database is stale.
         var builder = ConnectionSettings.Build(options with { Database = "", Advanced = (options.Advanced ?? new()) with { AttachDbFilename = "" } });
+        if (options.NonInteractive) builder.ConnectTimeout = builder.ConnectTimeout == 0 ? 15 : Math.Min(builder.ConnectTimeout, 15);
         builder.Pooling = false;
         entra.Refuse(options);
         // One budget for the opens and the read; an MFA sign-in in the browser between two opens has its own 3 minutes.
         var budget = new OpenBudget(DiscoveryLimit);
-        var (opened, _) = await OpenForUserAsync(builder.ConnectionString, options, budget, token);
+        var (opened, _, _) = await OpenForUserAsync(builder.ConnectionString, options, budget, token);
         await using var connection = opened;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(budget.Remaining);
@@ -509,13 +637,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// Microsoft Entra MFA signs in through the browser when it must (EntraService). A cancelled or timed-out attempt is
     /// left to the host, which answers it CANCELLED or TIMEOUT; Stop answers at once, even while SqlClient still waits.</summary>
     /// <param name="budget">The opens' deadline, if any (the sign-in between two opens is not counted).</param>
-    private async Task<(SqlConnection Connection, string ConnectionString)> OpenForUserAsync(string connectionString, ConnectOptions options, OpenBudget? budget, CancellationToken token)
+    private async Task<(SqlConnection Connection, string ConnectionString, string? PrincipalId)> OpenForUserAsync(string connectionString, ConnectOptions options, OpenBudget? budget, CancellationToken token)
     {
         try
         {
             return await entra.OpenForUserAsync(connectionString, options.Server,
                 (text, cancel) => budget is null ? OpenUser(text, null, cancel) : budget.SpendAsync(remaining => OpenUser(text, remaining, cancel)),
-                static connection => connection.ClientConnectionId, token);
+                static connection => connection.ClientConnectionId, token, allowInteractive: !options.NonInteractive);
         }
         catch (Exception error) when (!token.IsCancellationRequested && error is not (RequestException or OperationCanceledException)
             && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
@@ -592,7 +720,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
-        var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
+        bool removed;
+        string? connectionString;
+        lock (bindingGate)
+        {
+            removed = connections.TryRemove(args.ConnectionId, out connectionString);
+            bindingRevisions.Remove(args.ConnectionId);
+        }
         profiles.TryRemove(args.ConnectionId, out _);
         serverScopeInMaster.TryRemove(args.ConnectionId, out _);
         homes.TryRemove(args.ConnectionId, out _);
@@ -638,7 +772,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             builder.Pooling = false;
         }
         else if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
-        return stateful ? new SqlConnection(builder.ConnectionString) : Owned(new SqlConnection(builder.ConnectionString), id, own: false);
+        return Owned(new SqlConnection(builder.ConnectionString), id, own: false);
     }
 
     ServerProfile IExplorerHost.Profile(string connectionId) => Profile(connectionId);
@@ -652,8 +786,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = "master" };
-        var name = builder.ApplicationName + ActionsProgram;
-        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
+        builder.ApplicationName = Program(builder.ApplicationName, ActionsProgram);
         return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
@@ -701,8 +834,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private static string Program(string application, string suffix)
     {
-        var name = application + suffix;
-        return name.Length > 128 ? name[..128] : name;
+        return ActivityCatalog.ProgramName(application, suffix);
     }
 
     IReadOnlyList<string> IActionHost.SameServer(string connectionId) => SameServer(connectionId);
@@ -745,15 +877,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// or to master after a drop, and the old database's pools are cleared.</summary>
     public void DatabaseChanged(string connectionId, string database, string? newName)
     {
-        foreach (var id in SameServer(connectionId))
+        lock (bindingGate)
         {
-            // First: a pool whose settings name no database is in the home, which changes below.
-            ClearPoolsFor(id, database);
-            if (!connections.TryGetValue(id, out var current) || !string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)) continue;
-            var builder = new SqlConnectionStringBuilder(current) { InitialCatalog = newName ?? "master" };
-            if (!connections.TryUpdate(id, builder.ConnectionString, current)) continue;
-            homes[id] = builder.InitialCatalog;
-            if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
+            foreach (var id in SameServer(connectionId))
+            {
+                // First: a pool whose settings name no database is in the home, which changes below.
+                ClearPoolsFor(id, database);
+                if (!connections.TryGetValue(id, out var current) || !string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)) continue;
+                var builder = new SqlConnectionStringBuilder(current) { InitialCatalog = newName ?? "master" };
+                var revision = NextBindingRevision(id);
+                if (!connections.TryUpdate(id, builder.ConnectionString, current)) continue;
+                homes[id] = builder.InitialCatalog;
+                if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
+                BindingChanged(new(id, revision, NewDatabase: builder.InitialCatalog));
+            }
         }
     }
 
@@ -762,13 +899,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// similar name) keeps the new password for its later sessions. Sessions already open stay signed in.</summary>
     public void PasswordChanged(string connectionId, string login, string password)
     {
-        foreach (var id in SameServer(connectionId))
+        lock (bindingGate)
         {
-            if (!connections.TryGetValue(id, out var current) || !profiles.TryGetValue(id, out var profile) || profile.Contained || !string.Equals(profile.Login, login, StringComparison.Ordinal)) continue;
-            var builder = new SqlConnectionStringBuilder(current);
-            if (builder.IntegratedSecurity || builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword)) continue;
-            builder.Password = password;
-            connections.TryUpdate(id, builder.ConnectionString, current);
+            foreach (var id in SameServer(connectionId))
+            {
+                if (!connections.TryGetValue(id, out var current) || !profiles.TryGetValue(id, out var profile) || profile.Contained || !string.Equals(profile.Login, login, StringComparison.Ordinal)) continue;
+                var builder = new SqlConnectionStringBuilder(current);
+                if (builder.IntegratedSecurity || builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword)) continue;
+                // An idle old-password session is still authenticated: a later explicit Connect must not borrow it and
+                // falsely prove the retired password. ClearPool retires idle sessions and busy ones on return; it does
+                // not close accepted query sessions or interrupt active work.
+                if (pools.TryGetValue(id, out var used))
+                    foreach (var pooled in used.Keys)
+                    {
+                        using var stale = new SqlConnection(pooled);
+                        SqlConnection.ClearPool(stale);
+                    }
+                builder.Password = password;
+                var revision = NextBindingRevision(id);
+                if (connections.TryUpdate(id, builder.ConnectionString, current)) BindingChanged(new(id, revision, PasswordChanged: true));
+            }
         }
     }
 
@@ -812,9 +962,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = catalogDatabase };
-        var name = builder.ApplicationName + SsisActionsProgram;
-        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
-        return new SqlConnection(builder.ConnectionString);
+        builder.ApplicationName = Program(builder.ApplicationName, SsisActionsProgram);
+        return Owned(new SqlConnection(builder.ConnectionString), connectionId, own: false);
     }
 
     /// <summary>How a connection signed in, from its settings: Windows (Kerberos off Windows), Microsoft Entra ID, or SQL Server authentication.</summary>
@@ -1079,7 +1228,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     try
                     {
                         var observer = CreateConnection(args.ConnectionId, database, stateful: true);
-                        capture = new ActualPlanCapture(observer, profile.EngineEdition == 5);
+                        capture = new ActualPlanCapture(observer, profile.EngineEdition == 5, open: Open);
                         await Open(observer, setup.Token);
                         if (await capture.StartAsync(captureSpid, connection.ClientConnectionId, profile.Major, args.TimeoutSeconds, setup.Token) is { } unavailable)
                             messages.Add(unavailable);
@@ -2592,7 +2741,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         profiles.Clear();
         serverScopeInMaster.Clear();
         homes.Clear();
-        connections.Clear();
+        lock (bindingGate) { connections.Clear(); bindingRevisions.Clear(); }
         store.ReleaseAll();
         SqlConnection.ClearAllPools();
     }

@@ -1,6 +1,7 @@
 // The Object Explorer tree as rows: flattening, windowing, keyboard navigation, type-ahead and the `*` plan. Pure
 // functions over the node table, so they run (and are measured) in Node.
 import type { ExplorerErrorCode } from '../../../shared/contracts'
+import type { ConnectionLifecycle } from '../../../shared/connection-targets'
 import { explorerLimits, folderSpecs, kindSpecs, type ExplorerIcon, type FolderId, type NodeKind, type NodeStatus, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
 import type { DatabaseRuntime } from '../../../shared/explorer/status.ts'
@@ -23,7 +24,12 @@ export interface TreeNode {
   readonly id: number
   /** 0 for a server. */
   readonly parent: number
-  readonly connectionId: string
+  /** The current backend handle; a reconnect replaces it only after discarding the previous handle's children. */
+  connectionId: string
+  /** A retained server's durable identity, independent of its backend handle. */
+  targetId?: string
+  /** The target registry's lifecycle, projected on server rows for progress and recovery text. */
+  connectionLifecycle?: ConnectionLifecycle
   readonly ref: ExplorerNodeRef
   readonly kind: NodeKind | 'folder'
   readonly folder: FolderId | undefined
@@ -55,7 +61,7 @@ export interface TreeNode {
   connectionError: NodeError | undefined
   /** A folder with a filter. */
   filtered: boolean
-  /** A server whose connection was lost with its backend generation. */
+  /** A server without a live connection, including intentional disconnect and backend loss. */
   lost: boolean
   /** The first page took longer than the loading-row delay. */
   showLoading: boolean

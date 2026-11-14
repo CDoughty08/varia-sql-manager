@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Connection restoration:** remember Object Explorer connections and each query's exact target, database and attachment preference across hot exit and reload. Previously connected servers attempt reconnect by default, with a global option and per-connection override; an explicit Disconnect stays respected. Background reconnect preserves credential choices and the previous account, leaves failures disconnected, and never opens browser sign-in or runs query text.
+- **Connection targets in Object Explorer:** retain collapsed disconnected roots, reconnect in place, and use separate Disconnect, Disconnect and Remove from Explorer, and Remove from Explorer actions. Equivalent connections reuse one root; changed presentation or startup reconnect details receive an explicit confirmation.
+- **Disconnect with query tabs:** choose whether to keep tabs, close query tabs, or cancel. Save and transaction decisions are resolved before tabs close, running-query cancellation is explicit, and retained results keep their original session provenance. Dependent document drafts remain open and follow only their exact connection target.
 - **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
@@ -32,6 +35,11 @@
 - **Results:** a pivot's Distinct Count is many times faster on large results (about 4 seconds down to a fraction of a second for 4 million rows), and Compare Results' matching and a column's value list with many different values now use several processor cores as well.
 
 ### Fixed
+
+- **Object Explorer:** pinned server shortcuts above and below the tree, including entries in More servers, offer the same full context menu as the server row in view.
+- **Connection recovery:** Connect's deferred Explorer focus yields to newer keyboard or pointer input. Rejected native opens fail without blocking cleanup, and cancelled or lost database/password changes cannot leave unverified settings eligible for connection reuse.
+- **Connection safety:** Database Properties, Table Designer, SSIS, Activity Monitor and other dependent documents no longer follow a replacement connection by server name alone. Drafts stay open, and operations require their original connection target. Legacy documents without that identity must be reopened explicitly after a connection is replaced.
+- **Disconnect prompts:** cancelling a running query names the server disconnect action and explains that cancellation cannot undo committed work and may have an unknown outcome. Server transaction prompts default to Cancel.
 
 - **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.

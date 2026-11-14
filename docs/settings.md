@@ -19,6 +19,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
   - Object Explorer (`environment.objectExplorer`)
+  - Connections (`environment.connections`)
 - Text Editor
   - General (`textEditor.general`)
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
@@ -68,7 +69,7 @@ Copies of queries with unsaved changes, offered after Varia SQL Manager closes u
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names and tab order, in your profile folder. The next start reopens them disconnected. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, connections and passwords are never kept. |
+| `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query's database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept. |
 | `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
 | `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
 | `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
@@ -116,6 +117,14 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | When switching query tabs, bring the server into view if its header is off-screen. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+
+### Environment › Connections
+
+How remembered connection targets reconnect when the workspace opens. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.connections.autoReconnect` | Automatically reconnect on startup | Boolean | True |  | All | At once | Makes one background attempt to reconnect remembered targets that were left connected. Each connection can use this default, turn automatic reconnect On, or turn it Off. Explicitly disconnected targets stay disconnected. Reconnect uses existing credentials or silent sign-in, never opens browser sign-in, and never runs query text. Not in SSMS. |
 
 ### Text Editor › General
 
@@ -309,4 +318,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (114 today).
+A patch holds at most one entry per setting (115 today).

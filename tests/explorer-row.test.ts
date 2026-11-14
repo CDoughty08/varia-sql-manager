@@ -11,6 +11,7 @@ import { stylesheetRules } from './fixtures/css-rules'
 import { selectorParts } from './fixtures/css-cascade'
 import { colorKeys, cssVariable } from '../src/shared/theme/registry'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
+import { serverConnectionStatus } from '../src/renderer/src/explorer/connection-state'
 
 // A server row draws its connection colour through the theme, which server rendering has no store for.
 vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({ ...await original<object>(), useConnectionAccent: () => undefined }))
@@ -64,7 +65,7 @@ describe('Object Explorer rows', () => {
     expect(rowName(node({ kind: 'trigger', label: 'trg', status: 'disabled' }))).toBe('trg, disabled')
     expect(rowName(node({ kind: 'database', label: 'Archive', sublabel: '(Read-Only)', status: 'readOnly' }))).toBe('Archive (Read-Only)')
     expect(rowName(node({ load: 'error', error: { code: 'PERMISSION_DENIED', message: 'Denied.', retryable: true } }))).toBe('dbo.Orders, could not load')
-    expect(rowName(node({ kind: 'server', label: 'crash-server', sublabel: '(SQL Server 16.0)', lost: true }))).toBe('crash-server (connection lost)')
+    expect(rowName(node({ kind: 'server', label: 'crash-server', sublabel: '(SQL Server 16.0)', lost: true }))).toBe('crash-server (Disconnected)')
     // Characters that are invisible or reorder text are shown as markers, never acted on.
     expect(rowName(node({ label: 'dbo.‮sredro' }))).toBe('dbo.⟨U+202E⟩sredro')
   })
@@ -74,7 +75,7 @@ describe('Object Explorer rows', () => {
       .toBe('Audits\nCould not load: You do not have permission to view Audits.')
     expect(rowTooltip(node({ kind: 'database', label: 'Legacy', status: 'unavailable' }))).toBe('Legacy\nDatabase\nThe database is not available. Bring it online, then refresh Databases.')
     expect(rowTooltip(node({ kind: 'server', label: 'crash-server', sublabel: '(SQL Server 16.0)', lost: true })))
-      .toBe('crash-server (connection lost)\nServer\nThe connection was lost when the SQL backend restarted. Reconnect, or remove the server.')
+      .toBe('crash-server (Disconnected)\nServer\n(SQL Server 16.0)\nThis server is disconnected. Reconnect to browse fresh metadata, or remove it from Object Explorer.')
     expect(rowTooltip(node({ load: 'error', error: { code: 'NOT_FOUND', message: 'dbo.a\u202eb\nc no longer exists.', retryable: false } })))
       .toBe('dbo.Orders\nTable\nCould not load: dbo.a⟨U+202E⟩b⟨U+000A⟩c no longer exists.')
     const long = rowTooltip(node({ detail: 'x'.repeat(2000) }))
@@ -87,6 +88,20 @@ describe('Object Explorer rows', () => {
       .toBe('Database\nThe database is not available. Bring it online, then refresh Databases.')
     expect(rowDescription(node({ kind: 'folder', folder: 'tables', label: 'Tables' }))).toBeUndefined()
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
+  })
+  it('shows automatic reconnect progress and actionable failure reasons from the target lifecycle', () => {
+    const pending = node({ kind: 'server', label: 'Reporting', lost: true, connectionLifecycle: { state: 'connecting', attemptId: '00000000-0000-4000-8000-000000000001' } })
+    expect(rowName(pending)).toBe('Reporting (Connecting…)')
+    expect(connectionState(pending)).toBe('connecting')
+    expect(rowDescription(pending)).toContain('A connection attempt is in progress.')
+    const missing = { ...pending, connectionLifecycle: { state: 'disconnected' as const, reason: 'credentials-required' as const } }
+    expect(shownSublabel(missing)).toBe('(Disconnected · Credentials required)')
+    expect(rowTooltip(missing)).toContain('Choose Reconnect to enter credentials')
+    expect(serverConnectionStatus(missing)?.action).toBe('Enter credentials')
+    const signin = { ...missing, connectionLifecycle: { state: 'disconnected' as const, reason: 'sign-in-required' as const } }
+    expect(rowName(signin)).toContain('Sign-in required')
+    expect(serverConnectionStatus(signin)?.action).toBe('Sign in')
+    expect(serverConnectionStatus({ ...pending, lost: false, connectionLifecycle: { state: 'disconnecting', attemptId: '00000000-0000-4000-8000-000000000002', handle: { id: '00000000-0000-4000-8000-000000000003', generation: 1 } } })?.label).toBe('Disconnecting…')
   })
   it('show a note another service keeps on a node after its sublabel, and its sentence in the tooltip and description', () => {
     const noted = node({ kind: 'ssisCatalog', label: 'SSISDB', note: { label: '(not updating)', sentence: 'Live updates stopped. This login cannot read the SSIS Catalog.' } })
@@ -156,7 +171,7 @@ describe('Object Explorer row visuals', () => {
   })
   it('show a server\'s version and login in brief, keeping SSMS\'s text for its name and tooltip, and end with its connection', () => {
     expect(shownSublabel(server())).toBe('17.0 · sa')
-    expect(shownSublabel(server({ lost: true }))).toBe('(connection lost)')
+    expect(shownSublabel(server({ lost: true }))).toBe('(Disconnected)')
     expect(shownSublabel(node({ sublabel: '(int, not null)' }))).toBe('(int, not null)')
     expect(rowName(server())).toBe('localhost (SQL Server 17.0.1000.7 - sa)')
     expect(rowTooltip(server())).toBe('localhost (SQL Server 17.0.1000.7 - sa)\nServer')
@@ -166,7 +181,7 @@ describe('Object Explorer row visuals', () => {
     expect(end({ connection: 'error' })).toContain('data-state="error" title="Connection failed"')
     // Later indicators come first, then the count and dot, then a lost server's buttons.
     expect(end({ connection: 'lost', count: 3, children: createElement('i', null, 'PROD'), actions: createElement('b', null, 'Reconnect') }))
-      .toBe('<span class="oe-end"><i>PROD</i><span class="oe-count" aria-hidden="true">3</span><span class="oe-dot" data-state="lost" title="Connection lost" aria-hidden="true"></span><b>Reconnect</b></span>')
+      .toBe('<span class="oe-end"><i>PROD</i><span class="oe-count" aria-hidden="true">3</span><span class="oe-dot" data-state="lost" title="Disconnected" aria-hidden="true"></span><b>Reconnect</b></span>')
     // The active query's server is marked by a glyph before its dot, not by a fill that would pass for a selection.
     expect(end({ connection: 'online', active: true })).toBe('<span class="oe-end"><span class="oe-active" title="Server of the active query" aria-hidden="true"><span class="codicon codicon-file-code" data-icon="file-code" aria-hidden="true"></span></span><span class="oe-dot" data-state="online" title="Connected" aria-hidden="true"></span></span>')
   })

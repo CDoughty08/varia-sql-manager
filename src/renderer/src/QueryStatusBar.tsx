@@ -8,6 +8,7 @@ import Icon from './Icon'
 import { queryStatusModel } from './results/query-status'
 import type { LiveConnection } from './services/connections'
 import { liveQuerySession } from './services/queries'
+import { queryConnectionPresentation } from './query-connection'
 
 interface Props {
   readonly tab: QueryTab
@@ -30,24 +31,27 @@ interface Props {
  * is left out, because the window's status bar already shows it just before, after the backend's state.
  */
 export default function QueryStatusBar({ tab, connection, versions, variant = 'segment' }: Props) {
-  const { settings, queries, results } = useWorkbench()
+  const { settings, queries, results, targets } = useWorkbench()
+  const rememberedTargets = useServiceSnapshot(targets)
+  const presentation = queryConnectionPresentation(tab, connection, rememberedTargets.find(target => target.id === tab.targetId))
   const values = useServiceSnapshot(settings).values
   const query = useServiceSnapshot(queries)[tab.id]
   const run = useServiceSnapshot(results)[tab.id]
   const running = !!query?.running
   const now = useTicker(running && variant === 'bar')
-  const accent = useConnectionAccent(connection?.color)
+  const accent = useConnectionAccent(presentation.color)
   const bar = variant === 'bar', top = values['textEditor.statusBar.location'] === 'top'
   const className = bar ? 'query-context query-status-bar' : 'query-status'
   const location = bar ? top ? 'top' : 'bottom' : undefined
   const edge: CSSProperties | undefined = bar && accent ? top ? { borderBottom: `3px solid ${accent}` } : { borderTop: `3px solid ${accent}` } : undefined
   const kind = documentKind(tab)
   if (kind !== 'sql') return <div className={className} role="status" aria-label="Query status" data-tone="value" data-location={location}><span>{kindInfo[kind].label}</span></div>
-  const session = liveQuerySession(query, connection)
-  const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values, variant })
+  const session = liveQuerySession(query, presentation.disconnected ? undefined : connection)
+  const statusConnection = presentation.server ? { ...connection, server: presentation.server, displayName: presentation.displayName, disconnected: presentation.disconnected } : undefined
+  const model = queryStatusModel({ connection: statusConnection, database: tab.database, session, run, running, now, settings: values, variant })
   return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
     <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
-    <span className="query-status-segments">{bar && environmentTag(connection?.options.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={connection?.options.environment} place="queryStatus" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
+    <span className="query-status-segments">{bar && environmentTag(presentation.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={presentation.environment} place="queryStatus" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
       <span className="visually-hidden">{segment.label}: </span>{segment.key === 'login' ? <span className="status-session">{segment.text}</span> : segment.text}
     </span>)}</span>
   </div>

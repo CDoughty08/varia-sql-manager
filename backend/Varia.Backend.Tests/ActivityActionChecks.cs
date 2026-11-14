@@ -80,6 +80,19 @@ internal static class ActivityActionChecks
         check(names.Count == 7 && names.Contains("Varia SQL Manager - Object Explorer") && names.Contains("Varia SQL Manager - Object Search") && names.Contains("Varia SQL Manager - Activity Monitor")
             && names.Contains("Varia SQL Manager - Object Actions") && !names.Contains("Varia SQL Manager") && long128.All(name => name.Length == 128),
             "Kill refuses this backend's pool sessions by their program names (cut to 128 characters as SqlService names its pools), never its query tabs");
+        using (var sql = new SqlService())
+        {
+            var id = sql.Register("Data Source=offline;Integrated Security=true;Application Name=" + new string('a', 120), ServerProfile.Fallback("16.0.1000"), "master");
+            foreach (var suffix in SqlService.OwnSuffixes)
+            {
+                var actual = ActivityCatalog.ProgramName(new string('a', 120), suffix);
+                check(actual.Length == 128 && actual.EndsWith(suffix, StringComparison.Ordinal) && Catalog.PoolProgramNames(new string('a', 120)).Contains(actual),
+                    "long pool names preserve the complete role suffix in the same 128-character form used by Kill's refusal list");
+            }
+            using var connection = ((ILiveHost)sql).PoolConnection(id, null, LiveConnections.ServerSuffix);
+            check(Catalog.PoolProgramNames(new string('a', 120)).Contains(new SqlConnectionStringBuilder(connection.ConnectionString).ApplicationName),
+                "Kill's long-name refusal list includes the actual native live-pool factory's program name");
+        }
         // Every connection may set its own Application Name: Kill's @pools holds the pool names of all of them, not only the
         // requesting connection's, each between line feeds so CHARINDEX matches whole names only.
         var host = new ActivityFixtureHost(Guid.NewGuid().ToString(), new ServerProfile(17, null, 3, null, false, true, true, 16),

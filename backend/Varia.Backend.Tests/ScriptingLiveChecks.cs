@@ -95,11 +95,11 @@ internal static partial class ScriptingLiveChecks
             && !plain.Text.Contains("/******", StringComparison.Ordinal) && plain.Text.Contains("CREATE TABLE [sysjobs](", StringComparison.Ordinal), "the USE, GO, header and schema options turn their parts off");
         var exists = await client.Script(sysjobs, "create", client.Options with { CheckExistence = true });
         check(Ok(exists) && exists.Text!.Contains("IF NOT EXISTS", StringComparison.Ordinal), "Check for object existence guards the CREATE");
-        // SSMS's templates (spec B9): one preflight round trip after the prologue, no SMO.
+        // SSMS's templates (spec B9): authenticated SID, prologue, then one preflight round trip, no SMO.
         var select = await client.Script(sysjobs, "select");
         check(Ok(select) && select.Text!.StartsWith("USE [msdb]" + NL + "GO" + NL + NL + "SELECT [job_id]" + NL + "      ,[originating_server_id]" + NL, StringComparison.Ordinal)
-            && select.Text.EndsWith(NL + "  FROM [dbo].[sysjobs]" + NL + "GO" + NL + NL, StringComparison.Ordinal) && select.Commands == 2 && Framed(select.Text),
-            "Script Table as SELECT lists sysjobs' columns after USE, in two commands (" + select.Commands + ")");
+            && select.Text.EndsWith(NL + "  FROM [dbo].[sysjobs]" + NL + "GO" + NL + NL, StringComparison.Ordinal) && select.Commands == 3 && Framed(select.Text),
+            "Script Table as SELECT lists sysjobs' columns after USE, in three commands including account verification (" + select.Commands + ")");
         var insert = await client.Script(sysjobs, "insert");
         check(Ok(insert) && insert.Text!.Contains("INSERT INTO [dbo].[sysjobs]" + NL + "           ([job_id]" + NL, StringComparison.Ordinal)
             && insert.Text.Contains("     VALUES" + NL + "           (<job_id, uniqueidentifier,>" + NL + "           ,<originating_server_id, int,>" + NL + "           ,<name, sysname,>", StringComparison.Ordinal)
@@ -130,7 +130,7 @@ internal static partial class ScriptingLiveChecks
         var execute = await client.Script(procedure, "execute");
         check(Ok(execute) && execute.Text!.StartsWith("USE [msdb]" + NL + "GO" + NL + NL + "DECLARE @RC int" + NL + "DECLARE @job_name sysname" + NL, StringComparison.Ordinal)
             && execute.Text.Contains(NL + NL + "-- TODO: Set parameter values here." + NL + NL + "EXECUTE @RC = [dbo].[sp_add_job] " + NL + "   @job_name" + NL + "  ,@enabled" + NL, StringComparison.Ordinal)
-            && execute.Text.Contains(NL + "  ,@job_id OUTPUT" + NL + "  ,@originating_server" + NL + "GO" + NL, StringComparison.Ordinal) && execute.Commands == 2, "Script Stored Procedure as EXECUTE declares and passes every parameter");
+            && execute.Text.Contains(NL + "  ,@job_id OUTPUT" + NL + "  ,@originating_server" + NL + "GO" + NL, StringComparison.Ordinal) && execute.Commands == 3, "Script Stored Procedure as EXECUTE declares and passes every parameter after account verification");
         var function = new ObjectRefDto("function", "msdb", "dbo", "agent_datetime");
         var functionDrop = await client.Script(function, "drop");
         check(Ok(functionDrop) && functionDrop.Text!.Contains("DROP FUNCTION [dbo].[agent_datetime]", StringComparison.Ordinal), "a scalar function's DROP");
@@ -155,7 +155,7 @@ internal static partial class ScriptingLiveChecks
         check(extended.Error is { Code: "NOT_SUPPORTED" } && extended.Error.Message == "CREATE scripts are not available for Stored Procedure sys.xp_cmdshell. Refresh Object Explorer and try again.",
             "an extended procedure listed as a system procedure is refused by the backend's own subtype");
         var missing = await client.Script(new ObjectRefDto("table", "msdb", "dbo", "VariaNoSuchTable"), "create");
-        check(missing.Error is { Code: "NOT_FOUND", Retryable: false } && missing.Error.Message.StartsWith("dbo.VariaNoSuchTable no longer exists", StringComparison.Ordinal) && missing.Commands == 2,
+        check(missing.Error is { Code: "NOT_FOUND", Retryable: false } && missing.Error.Message.StartsWith("dbo.VariaNoSuchTable no longer exists", StringComparison.Ordinal) && missing.Commands == 3,
             "a missing object is NOT_FOUND after the prologue and the preflight, without SMO");
         var gone = await client.Script(new ObjectRefDto("table", "VariaNoSuchDatabase", "dbo", "t"), "create");
         check(gone.Error?.Code == "NOT_FOUND", "an object in a missing database is NOT_FOUND" + gone.Error?.Code + gone.Error?.Message);
@@ -389,13 +389,13 @@ internal static partial class ScriptingLiveChecks
         var secret = Schema("procedure", "dbo", "usp_Secret");
         var encrypted = await client.Script(secret, "create");
         check(encrypted.Error is { Code: "ENCRYPTED", Retryable: false } && encrypted.Error.Message == "dbo.usp_Secret is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work."
-            && encrypted.Commands == 2, "an encrypted module is refused before SMO runs");
+            && encrypted.Commands == 3, "an encrypted module is refused after account verification, before SMO runs");
         check((await client.Script(secret, "alter")).Error?.Code == "ENCRYPTED" && Ok(await client.Script(secret, "drop")), "an encrypted module still scripts DROP");
 
         var bytes = (await sql("SELECT DATALENGTH(definition) FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo.usp_Large');", db)).Scalar;
         var tooLarge = await client.Script(Schema("procedure", "dbo", "usp_Large"), "create");
         check(long.Parse(bytes!, CultureInfo.InvariantCulture) > 8_000_000 && tooLarge.Error is { Code: "TOO_LARGE" }
-            && tooLarge.Error.Message == "The definition of dbo.usp_Large is larger than 8 MB, which Varia cannot open." && tooLarge.Commands <= 2,
+            && tooLarge.Error.Message == "The definition of dbo.usp_Large is larger than 8 MB, which Varia cannot open." && tooLarge.Commands <= 3,
             "a module over 8,000,000 bytes is refused before SMO loads it (" + bytes + " bytes, " + tooLarge.Commands + " commands)");
 
         // Names that would end SMO's header comment early, or split it over lines (scripting-extra.sql).

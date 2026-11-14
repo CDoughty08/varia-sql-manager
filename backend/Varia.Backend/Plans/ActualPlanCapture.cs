@@ -7,7 +7,8 @@ using Microsoft.Data.SqlClient;
 namespace Varia.Backend.Plans;
 
 /// <summary>Collects completed plans through a separate connection. The executing session receives only the user's SQL.</summary>
-internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped, string? recoveryName = null)
+internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped, string? recoveryName = null,
+    Func<SqlConnection, CancellationToken, Task>? open = null)
 {
     private const string PlanEvent = ActualPlanSql.PlanEvent;
     private const string BatchEvent = ActualPlanSql.BatchEvent;
@@ -126,7 +127,9 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
                 if (observer.State != ConnectionState.Open)
                 {
                     observer.Close();
-                    await observer.OpenAsync(token);
+                    // Native observers retain their target principal across a cleanup-only reconnect.
+                    if (open is not null) await open(observer, token);
+                    else await observer.OpenAsync(token);
                 }
                 await using var command = observer.CreateCommand();
                 command.CommandTimeout = 0;
@@ -136,14 +139,14 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
             }
         }
         catch (SqlException error) when (!Started && error.Number == 15151) { }
-        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
+        catch (Exception error) when (error is SqlException or RequestException or InvalidOperationException or OperationCanceledException or IOException)
         {
             notice = $"Actual plan capture could not remove its Extended Events session ({name}).";
         }
         finally
         {
             try { await observer.DisposeAsync(); }
-            catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
+            catch (Exception error) when (error is SqlException or RequestException or InvalidOperationException or OperationCanceledException or IOException)
             { notice ??= "Actual plan capture could not close its observer connection."; }
         }
         return notice;

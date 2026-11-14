@@ -800,6 +800,8 @@ export const actionErrorRetryable = {
   // The action's connection could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure
   // that may pass.
   AUTH_ENTRA: true,
+  // The account differs from this target's verified identity; an explicit reconnect must resolve it.
+  AUTH_IDENTITY: false,
   // The server's password policy refused the password (15114-15118, or 33062-33064 on Linux): another password can pass.
   PASSWORD_POLICY: true
 } as const satisfies Record<string, boolean>

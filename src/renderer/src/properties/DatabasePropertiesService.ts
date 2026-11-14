@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseIdentity, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
@@ -70,7 +71,7 @@ export interface PropertiesState {
 }
 export interface PropertiesSnapshot { readonly documents: Readonly<Record<string, PropertiesState>> }
 
-export interface DatabasePropertiesServiceOptions {
+export interface DatabasePropertiesServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
@@ -128,17 +129,19 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   private readonly unsubscribe: (() => void)[]
   private readonly contextStore = new (class extends SnapshotStore<PropertiesContextState> { set(value: PropertiesContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   /** Each document's request in flight (describe or apply), so Stop, a close and a disconnect can cancel it. */
-  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'apply'; dropped: boolean }>()
+  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'apply'; readonly connectionId?: string; dropped: boolean }>()
   /** Each document's Script preview request, apart from the others: a preview never holds Apply back. */
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   /** Each preview in flight by its request id, so one that a newer preview replaces can resolve to the newer one's script. */
   private readonly previewRuns = new Map<string, Promise<string | undefined>>()
   private readonly applies = new Map<string, Promise<boolean>>()
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: DatabasePropertiesServiceOptions) {
     super({ documents: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
@@ -156,7 +159,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('Database Properties is not available.')
     const target = node.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!target) throw new Error('Select a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
     const documents = Object.values(this.getSnapshot().documents).filter(state => state.target.name === target.name)
@@ -164,12 +167,12 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     // An orphan whose name a new database has taken since reads that one.
     if (existing?.gone) this.revive(existing.id)
     if (existing) { this.options.documents.activate(existing.id); return existing.id }
-    // A document whose server was disconnected (or lost) is the one Properties on that database brings back, moved to the
-    // new connection: connecting again makes a new connection, and nothing else would ever move it there.
-    const orphan = documents.find(state => !this.live(state.id) && this.follows(state.id, connection.server))
+    // Reopening Properties can reuse a disconnected draft only after the registry proves the exact original target.
+    const orphan = documents.find(state => !this.live(state.id) && this.targetBindings.matchesConnection(state.id, connection.id))
     if (orphan) { this.rebind(orphan.id, connection); return orphan.id }
     const label = scriptObjectLabel(target)
     const document = this.options.documents.openCustom('databaseProperties', dialogTitle('databaseProperties', label), connection.id, target.name ?? 'master')
+    this.targetBindings.bind(document.id, connection.id)
     const listingFolder = this.options.explorer.listingFolderOf(node.id)
     this.put({
       id: document.id, target, label, server: connection.server, ...connection.login ? { login: connection.login } : {}, ...listingFolder === undefined ? {} : { listingFolder },
@@ -298,9 +301,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
    * with changes keeps them, marked offline until the database is online again or read again.
    */
   databaseStateChanged(connectionId: string, database: string, offline: boolean): void {
-    const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (state.gone || state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      if (state.gone || state.target.name !== database || (this.connectionOf(state.id) !== connectionId && !this.targetBindings.matchesConnection(state.id, connectionId))) continue
       if (!state.changed && this.canRefresh(state.id)) { this.patch(state.id, { offline: undefined }); this.refresh(state.id) }
       else if (!!state.offline !== offline) this.patch(state.id, { offline: offline || undefined })
     }
@@ -313,11 +315,10 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
    * database's. `connections` are the backend's to the same server (the describe's), which match whatever name each was opened with.
    */
   databaseRenamed(connectionId: string, database: string, newName: string, connections: readonly string[] = [], identity?: DatabaseIdentity): void {
-    const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
     const named = new Set([connectionId, ...connections])
     for (const state of Object.values(this.getSnapshot().documents)) {
       const owner = this.connectionOf(state.id)
-      if (state.target.name !== database || (!(owner !== undefined && named.has(owner)) && (server === undefined || !this.follows(state.id, server)))) continue
+      if (state.target.name !== database || (!(owner !== undefined && named.has(owner)) && !this.targetBindings.matchesConnection(state.id, connectionId))) continue
       const target = { ...state.target, name: newName }, label = scriptObjectLabel(target)
       this.options.documents.update(state.id, { name: dialogTitle('databaseProperties', label), database: newName })
       const read = state.model, model = read && { ...read, general: { ...read.general, name: newName, ...identity && identity.id === read.general.id ? { created: identity.created } : {} } }
@@ -362,6 +363,10 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     this.publishContext()
     // A disconnect while it ran has already said that the outcome is unknown.
     if (this.disposed || !this.get(id) || request?.dropped) return false
+    if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+      this.patch(id, { phase: 'ready', stale: true, error: error('CONNECTION_LOST', propertiesMessages.connectionLost) })
+      return false
+    }
     state = this.get(id)!
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
@@ -475,7 +480,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     // and is current, otherwise nothing (a close or a disconnect dropped it).
     if (newer !== requestId) return newer ? this.previewRuns.get(newer) ?? undefined : this.currentScript(id)
     this.previews.delete(id)
-    if (this.disposed || !this.get(id)) return undefined
+    if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return undefined
     const failure = !result.ok ? { message: result.error, ...result.code ? { code: result.code } : {} } : result.value.error ? { message: result.value.error.message, code: result.value.error.code } : undefined
     const text = result.ok ? result.value.text : undefined
     if (failure || text === undefined) { this.patch(id, { script: { state: 'failed', error: failure ?? { message: 'No script was produced.' } }, scriptRevision: revision }); return undefined }
@@ -492,9 +497,12 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   canClose(id: string): string | undefined { const phase = this.get(id)?.phase; return phase === 'applying' || phase === 'confirming' ? propertiesMessages.applying : undefined }
   revision(id: string): number { return this.get(id)?.edits ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  /** A document stays with its server, as its title names it: a reconnect moves it only to a connection to that server. */
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id), timer = this.previewTimers.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
     this.requests.delete(id)
@@ -507,6 +515,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     this.cancel([...this.requests.values()].map(request => request.id).concat([...this.previews.values()]))
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     this.requests.clear()
@@ -564,7 +573,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     this.options.documents.update(id, { connectionId: connection.id })
     const state = this.get(id)
     if (!state) return
-    // The login can differ from the one it was read with; a message that only said the server went no longer applies.
+    // The registry preserved the expected account; refresh the displayed login and clear only the disconnected notice.
     this.patch(id, { login: connection.login, ...!state.stale && state.error?.code === 'CONNECTION_LOST' ? { error: undefined } : {} })
     // Only Properties brings a document here: on an orphan, it is asked for the database that has the name now.
     if (state.gone) this.patch(id, { gone: undefined, error: undefined })
@@ -574,18 +583,18 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'apply'): string {
     const requestId = this.newId()
-    this.requests.set(id, { id: requestId, kind, dropped: false })
+    this.requests.set(id, { id: requestId, kind, connectionId: this.connectionOf(id), dropped: false })
     return requestId
   }
   /** Whether an answer still matters: its document is open and the request was not dropped. */
   private end(id: string, requestId: string): boolean {
     const request = this.requests.get(id)
     if (request?.id === requestId) this.requests.delete(id)
-    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped
+    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped && request.connectionId === this.connectionOf(id) && this.live(id)
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

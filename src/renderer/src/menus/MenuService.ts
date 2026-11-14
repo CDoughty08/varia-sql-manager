@@ -387,7 +387,11 @@ export class MenuService implements Disposable {
   private keyboardAnchor(hit: TargetHit, widget?: Element): Anchor {
     const caret = hit.target.kind === 'editor' ? this.options.editorCaret?.() : undefined
     if (caret) return { kind: 'below', rect: caret }
-    let { left, top, right, bottom } = (hit.anchor ?? hit.element).getBoundingClientRect()
+    const element = hit.anchor ?? hit.element
+    let rect = element.getBoundingClientRect()
+    // An overflow entry can dismiss its popover while resolving the target. Its visible invoker remains the anchor.
+    if (rect.left === rect.right && rect.top === rect.bottom && hit.focus && hit.focus !== element) rect = hit.focus.getBoundingClientRect()
+    let { left, top, right, bottom } = rect
     if (widget) {
       const box = widget.getBoundingClientRect()
       top = Math.min(Math.max(top, box.top), box.bottom)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
+import type { BackendHealth, BackendState, ConnectionOptions } from '../../shared/contracts'
+import type { ConnectionDetails } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { documentKind, isCustomKind, isQueryDocument, type QueryTab } from './documents'
@@ -29,6 +30,13 @@ import { lostHint } from './query-context'
 import EditorArea from './editor-groups/EditorArea'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
+import ConnectionDetailsDialog from './ConnectionDetailsDialog'
+import DisconnectDialog from './disconnect/DisconnectDialog'
+import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, type OpenedConnection } from './services/connection-opening'
+import { acceptConnectionReceipt } from './services/connection-receipts'
+import { focusWhenDrawn } from './core/modal'
+import { nextFrame } from './core/frame'
 import EnvironmentDialog from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
 import { environmentTag } from '../../shared/environments'
@@ -39,7 +47,6 @@ import Toasts from './kit/Toasts'
 import { connectionDefaults } from '../../shared/connections'
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
-function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function errorText(error: unknown): string { return error instanceof Error ? error.message : 'The operation failed.' }
 /** The status bar's backend segment: Ready (the runtime is in its tooltip), or what the backend is doing. */
 function backendStatusText(state: BackendState): string {
@@ -79,6 +86,7 @@ export default function App() {
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
+  const [detailsReview, setDetailsReview] = useState<OpenedConnection>()
   // The connected server whose Environment dialog is open.
   const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
@@ -116,10 +124,11 @@ export default function App() {
     const tabId = documents.getSnapshot().activeId
     return outputViewOf(workbench.results.getSnapshot()[tabId], workbench.queries.getSnapshot()[tabId]?.estimated, !!workbench.queryPlans.getSnapshot()[tabId])
   })
-  const disconnectServer = useStableCallback((id: string) => disconnect(id))
+  const disconnectServer = useStableCallback((id: string, remove?: boolean) => disconnect(id, remove))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({
     disconnect: disconnectServer,
+    removeConnection: id => { void disconnectServer(id, true) },
     reveal: (pane, options) => workspaceRef.current?.reveal(pane, options),
     revealOutput: options => workspaceRef.current?.revealOutput(activeOutputView(), options),
     toggleOutput: () => workspaceRef.current?.toggleOutput(activeOutputView()) ?? 'shown',
@@ -130,7 +139,12 @@ export default function App() {
     showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(true) },
     reconnect: id => {
       const lost = workbench.connections.get(id)
-      if (!lost?.lost) return
+      if (!lost) return
+      const tab = documents.active
+      if (workbench.connections.isLive(lost.id)) {
+        if (tab && tab.targetId === lost.targetId && isQueryDocument(tab)) void targets.changeConnection(tab.id, lost.id)
+        return
+      }
       setReconnecting(id)
       setPendingExecute(undefined)
       setPendingMonitor(false)
@@ -171,7 +185,12 @@ export default function App() {
       if (event.type === 'query.estimateStarted' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput('plan')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
-      if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }
+      if (event.type === 'query.connectRequested') {
+        const tab = documents.get(event.tabId), remembered = tab?.targetId ? workbench.connections.get(tab.targetId) : undefined
+        setReconnecting(remembered?.targetId)
+        if (remembered) setOptions(remembered.options)
+        setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true)
+      }
       if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
       if (event.type === 'help.aboutRequested') setShowAbout(true)
     })
@@ -180,55 +199,62 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
+  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal) {
+    const opened = await acceptConnectionReceipt({ api: window.varia, connections: workbench.connections, info, options: chosen, details: detailsOf(chosen, preference), attempt, requestId,
+      current: () => !signal.aborted && !documents.getSnapshot().busy, explicitlyCancelled: () => signal.aborted })
+    if (!opened) { setExplorerError('This connection changed while connecting. Select it again to reconnect.'); return }
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
+    if (needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
+    await finishConnected(opened, 'current')
+  }
+  async function finishConnected(opened: OpenedConnection, choice: 'selected' | 'current' | 'cancel') {
+    setDetailsReview(undefined)
+    if (choice === 'cancel') return
+    const info = finishConnectionDetails(workbench.connections, opened, choice)
+    if (!info) { setExplorerError('This connection changed while reviewing its details. Select it again to reconnect.'); return }
     setShowConnect(false)
     setReconnecting(undefined)
     setPendingExecute(undefined)
     setPendingMonitor(false)
-    // Only this explicit reconnect moves a lost connection's queries to a new session.
-    if (reconnecting && workbench.connections.get(reconnecting)?.lost) {
-      workbench.connections.replace(reconnecting, info, chosen)
-      targets.retarget(reconnecting, info.id)
-      return
+    // Main has proved exact equivalence. Migrate only those remembered associations, preserving each query's database.
+    if (info.targetId) {
+      if (opened.sourceTargetId && opened.sourceTargetId !== info.targetId) {
+        targets.coalesceTarget(opened.sourceTargetId, info.targetId, info.id, true)
+        workbench.connectionTargets.removeFromExplorer(opened.sourceTargetId)
+      }
+      targets.rememberConnection(info.id, info.targetId)
+      targets.attachTarget(info.targetId, info.id, true)
     }
-    workbench.connections.add(info, chosen)
+    const root = workbench.explorer.rootIds.find(id => workbench.explorer.node(id)?.connectionId === info.id)
+    if (root !== undefined) workbench.explorer.select(root, { reveal: true })
     if (pendingMonitor) {
       try { workbench.activity.open(info.id) } catch (error) { setExplorerError(errorText(error)) }
       return
     }
-    const waiting = pendingExecute ? documents.get(pendingExecute) : undefined
-    if (waiting && !workbench.connections.isLive(waiting.connectionId ?? '') && isQueryDocument(waiting) && !queries.isRunning(waiting.id)) {
-      targets.update(waiting.id, { connectionId: info.id, database: info.database })
-      void queries.execute(waiting.id)
+    if (pendingExecute) {
+      await executePendingQuery({ tabId: pendingExecute, opened, connections: workbench.connections, documents, targets, queries })
       return
     }
+    // A provisional root can appear while Connect still holds focus. Transfer it only after the picker has unmounted.
+    focusWhenDrawn(nextFrame, () => workspaceRef.current?.reveal('explorer', { focus: true }), { preserveUserInput: true })
+    // Ordinary reuse only selects the existing root. New Query remains an explicit independent command.
+    if (opened.reused) return
     const tab = documents.active
     // Connecting a second server must not silently retarget an existing query, and a value's document never connects.
-    if (tab && !tab.connectionId && isQueryDocument(tab) && !queries.isRunning(tab.id)) targets.update(tab.id, { connectionId: info.id, database: info.database })
+    if (tab && !tab.connectionId && !tab.targetId && isQueryDocument(tab) && !queries.isRunning(tab.id)) await targets.changeConnection(tab.id, info.id)
     else documents.newQuery('', undefined, info.id, info.database)
   }
 
-  async function disconnect(id: string) {
-    if (queries.isConnectionRunning(id)) return
-    // A long run on it (a restore, Create Catalog), or a document's Apply or Save, would be cancelled partway without asking
-    // (its menu item is greyed for the same reason).
-    const busy = workbench.longRuns.disconnectRefusal(id) ?? documents.connectionBusy(id)
-    if (busy) { setExplorerError(busy); return }
-    try {
-      await documents.runTask(async () => {
-        // Its queries' open transactions are asked about once, then each is committed or rolled back in its own session;
-        // disconnecting closes every session of the connection, so the rest end with it.
-        const plan = await queries.confirmSessions('disconnect', documents.getSnapshot().documents.filter(tab => tab.connectionId === id).map(tab => tab.id))
-        if (!plan) return
-        for (const [tabId, transaction] of plan) await documents.endSession(tabId, transaction)
-        unwrap(await window.varia.disconnect(id))
-        workbench.connections.remove(id)
-        for (const tab of documents.getSnapshot().documents) if (tab.connectionId === id) targets.update(tab.id, { connectionId: undefined })
-        setExplorerError('')
-      })
-    } catch (error) { setExplorerError(errorText(error)) }
+  async function disconnect(id: string, remove = false) {
+    const connection = workbench.connections.get(id)
+    if (!connection) return
+    if (connection.targetId && workbench.connectionTargets.get(connection.targetId)) {
+      const outcome = await workbench.disconnectCoordinator.disconnect(connection.targetId, remove ? 'remove-from-explorer' : 'disconnect')
+      setExplorerError('error' in outcome ? outcome.error : 'warning' in outcome ? outcome.warning ?? '' : '')
+      return
+    }
+    setExplorerError('This connection has no verified target. Reconnect it before changing its state.')
   }
 
   return <div className="app">
@@ -262,7 +288,9 @@ export default function App() {
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><MemoryIndicator /><UpdateStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
-    {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
+    {showConnect && <ConnectDialog initial={options} reviewOpen={!!detailsReview} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { setDetailsReview(undefined); setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
+    {detailsReview && <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} />}
+    <DisconnectDialog service={workbench.disconnectPrompts} />
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
     <ObjectDialog />

@@ -240,6 +240,7 @@ try {
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
   await connect('server-a', { keyboard: true })
+  const serverAQuery = await activeDocumentName(page)
   await expect(tree()).toBeFocused()
   const serverA = await explorerRow(page, 'server-a')
   await expect(serverA).toHaveAttribute('aria-level', '1')
@@ -251,6 +252,7 @@ try {
   await tree().focus()
   expect(await active()).toMatchObject({ label: 'server-a', selected: 'true', level: 1, expanded: 'true' })
   await connect('server-b')
+  const serverBQuery = await activeDocumentName(page)
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
   console.log('Object Explorer checks: the ARIA tree, focused after the first server is connected by keyboard, two servers expanded on connect, and nothing loaded below their folders.')
 
@@ -384,7 +386,8 @@ try {
   await page.keyboard.press('Shift+Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
-  for (let step = 0; step < 6 && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
+  const toolCount = await explorerToolbar(page).getByRole('button').count()
+  for (let step = 0; step < toolCount && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
   expect(await focusedTool()).toBe('Stop')
   await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
@@ -1673,12 +1676,28 @@ try {
   await expect(tree()).toHaveAttribute('aria-busy', 'true')
   await press('Home', 'server-a')
   const cancelledBefore = (await cancels()).length
+  const tabsBeforeDisconnect = await tabs().count()
   await toolbarButton('Disconnect').click()
+  const disconnectA = page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })
+  await expect(disconnectA).toBeVisible()
+  await expect(disconnectA.getByRole('list', { name: 'Affected query tabs', exact: true })).toContainText(serverAQuery)
+  await disconnectA.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
+  await expect(disconnectA).toHaveCount(0)
+  await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
+  await expect(serverRows(page)).toHaveCount(2)
+  const disconnected = serverRows(page).filter({ hasText: 'server-a' })
+  await expect(disconnected).toHaveAttribute('aria-label', 'server-a (Disconnected)')
+  await expect(disconnected).not.toHaveAttribute('aria-expanded')
+  await expect(toolbarButton('Reconnect…')).toBeEnabled()
+  await toolbarButton('Remove from Explorer').click()
+  // Removing the already-disconnected root needs no tab/session preflight; Keep Tabs retained its target offscreen.
+  await expect(page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })).toHaveCount(0)
+  await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
   await expect(serverRows(page)).toHaveCount(1)
   await expect(explorerLabel(serverRows(page))).toHaveText('server-b')
   await expect.poll(async () => (await cancels()).length).toBeGreaterThan(cancelledBefore)
   await setStub({ pageDelayMs: 0 })
-  console.log('Object Explorer checks: Disconnect during streaming cancels the load and removes the server\'s rows.')
+  console.log('Object Explorer checks: Disconnect during streaming cancels the load, retains a collapsed root, and removes it only explicitly.')
 
   // 12. Robustness: 200 quick expansions and collapses, then a rendering fault and Reload.
   await select('server-b', 'Databases')
@@ -1747,14 +1766,23 @@ try {
   expect(layout.clipped).toEqual([])
   for (const name of ['Connect Object Explorer', 'Disconnect', 'Stop', 'Filter Settings', 'Refresh', 'Collapse All']) await expect(toolbarButton(name)).toBeInViewport()
   await page.screenshot({ path: resolve('artifacts', 'explorer-1024.png') })
-  // Disconnecting the last server from its menu by keyboard leaves focus in the pane, on the empty state's Connect button.
+  // Disconnect-and-remove of the last server leaves focus in the pane, on the empty state's Connect button.
   await select('server-b')
   await page.keyboard.press('Shift+F10')
   const serverMenu = menu('Object Explorer')
   await expect(serverMenu.getByRole('menuitem', { name: 'Connect…', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(serverMenu.getByRole('menuitem', { name: 'Disconnect', exact: true })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(serverMenu.getByRole('menuitem', { name: 'Disconnect and Remove from Explorer', exact: true })).toBeFocused()
   await page.keyboard.press('Enter')
+  const disconnectB = page.getByRole('dialog', { name: 'Disconnect server-b?', exact: true })
+  await expect(disconnectB).toBeVisible()
+  await expect(disconnectB.getByRole('list', { name: 'Affected query tabs', exact: true })).toContainText(serverBQuery)
+  await disconnectB.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
+  await expect(disconnectB).toHaveCount(0)
+  await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
+  await expect(serverRows(page)).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Connect to server', exact: true })).toBeFocused()
   expect(failures).toEqual([])
   console.log('Object Explorer checks: 200 quick toggles, a rendering fault reloaded with focus kept, Dark and Light screenshots, the toolbar and rows at 1024×768, and focus after the last server goes.')
@@ -1856,6 +1884,38 @@ try {
   await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   checkGeometry(await scrollGeometry())
+  // Sticky shortcuts keep the full canonical server menu, including when their real rows are offscreen. Commands
+  // must use the shortcut's server instead of the selected tree row, and opening/closing a menu must not jump there.
+  const canonicalServer = await revealExplorerRow(page, 'pin-c')
+  await canonicalServer.click({ button: 'right' })
+  const fullServerMenu = await menuItemNames(menu('Object Explorer'))
+  const disabledServerItems = await menuItemNames(menu('Object Explorer'), { disabled: true })
+  await page.keyboard.press('Escape')
+  await scrollToMiddle()
+  const checkPinnedMenu = async (button, server, keyboard, restore, overflow) => {
+    const before = await tree().evaluate(element => element.scrollTop)
+    if (keyboard) { await button.focus(); await page.keyboard.press('Shift+F10') }
+    else await button.click({ button: 'right' })
+    await expect(menu('Object Explorer')).toBeVisible()
+    expect(await menuItemNames(menu('Object Explorer'))).toEqual(fullServerMenu)
+    expect(await menuItemNames(menu('Object Explorer'), { disabled: true })).toEqual(disabledServerItems)
+    if (overflow) await expect(overflow).toBeHidden()
+    if (keyboard && overflow) {
+      const invoker = await restore.boundingBox(), opened = await menu('Object Explorer').boundingBox()
+      // The menu can flip or scroll to fit, but remains adjacent to its visible invoker rather than the hidden entry.
+      const distance = Math.min(Math.abs(opened.y - invoker.y - invoker.height), Math.abs(opened.y + opened.height - invoker.y))
+      expect(distance).toBeLessThanOrEqual(2)
+    }
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
+    await expect.poll(clipboard).toBe(server)
+    await expect(restore).toBeFocused()
+    expect(await tree().evaluate(element => element.scrollTop)).toBe(before)
+  }
+  for (const band of [upper, lower]) {
+    const button = band.getByRole('button', { name: /^Jump to/ }).first()
+    const server = (await button.getAttribute('aria-label')).match(/^Jump to (pin-[a-f])\b/)[1]
+    for (const keyboard of [false, true]) await checkPinnedMenu(button, server, keyboard, button)
+  }
   // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
   // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
   await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
@@ -1885,6 +1945,14 @@ try {
     await moreAbove.focus()
     await page.keyboard.press('Enter')
     await expect(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ })).toBeFocused()
+  }
+  for (const keyboard of [false, true]) {
+    await openAbove()
+    await checkPinnedMenu(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ }), 'pin-a', keyboard, moreAbove, aboveMenu)
+    const moreBelow = lower.getByRole('button', { name: /1 more below/ })
+    await moreBelow.click()
+    const belowMenu = menu('More servers below')
+    await checkPinnedMenu(belowMenu.getByRole('menuitem', { name: /^Jump to pin-f/ }), 'pin-f', keyboard, moreBelow, belowMenu)
   }
   await openAbove()
   await page.keyboard.press('Shift+Tab')

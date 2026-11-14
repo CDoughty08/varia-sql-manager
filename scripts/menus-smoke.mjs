@@ -845,7 +845,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await openExplorerRowMenu('server-a')
-  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Refresh'])
+  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Refresh'])
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
@@ -971,7 +971,7 @@ try {
   await expect.poll(() => loads('tables')).toBe(listed.tables + 2)
   expect(await loads('databases')).toBe(listed.databases)
   await expect(tree).toBeFocused()
-  // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker.
+  // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker and keeps its offline root.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await openExplorerRowMenu('server-a', 'Security', 'Logins', 'sa')
   // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
@@ -980,8 +980,17 @@ try {
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[sa]')
   await openExplorerRowMenu('server-a')
+  const tabsBeforeDisconnect = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
-  await expect(tree).toHaveCount(0)
+  const disconnectPrompt = page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })
+  await expect(disconnectPrompt).toBeVisible()
+  await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
+  await expect(disconnectPrompt).toHaveCount(0)
+  const offlineServer = await explorerRow(page, 'server-a')
+  await expect(offlineServer).toHaveAccessibleName('server-a (Disconnected)')
+  await expect(offlineServer).not.toHaveAttribute('aria-expanded', 'true')
+  await expect(tabs()).toHaveCount(tabsBeforeDisconnect)
+  await expect(page.getByLabel('Query server', { exact: true }).getByRole('option', { selected: true })).toHaveText('server-a Disconnected')
   await expect(quickInput(page)).toHaveCount(0)
   expect(await calls('connections.disconnect')).toHaveLength(1)
   console.log('Menus checks: Object Explorer menus for the empty area, a server, a database, a table, Tables, and a login, by mouse and keyboard.')
@@ -1307,7 +1316,7 @@ try {
   // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
   await (await explorerRow(page, 'server-a')).click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(4)
-  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', '---', 'Copy Name', '---', 'Refresh'])
+  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', '---', 'Copy Name', '---', 'Refresh'])
   const queriesBefore = await tabs().count()
   await application.evaluate(() => { globalThis.variaPopups[2].menu.getMenuItemById('explorer.copyName').click() })
   await pick('explorer.newQuery')

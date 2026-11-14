@@ -37,6 +37,62 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('collects session choices without cancelling an execution until the complete preflight is applied', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    const prepared = await f.queries.prepareSessions('disconnect', [f.tab.id])
+    expect(prepared?.plan.get(f.tab.id)).toBe('rollback')
+    expect(f.queryApi.cancel).not.toHaveBeenCalled()
+    f.queryApi.cancel.mockImplementationOnce(async () => { pending.resolve({ ok: true, value: output({ status: 'cancelled' }) }); return { ok: true, value: { cancelled: true } } })
+    await f.queries.cancelPreparedSessions(prepared!)
+    await run
+    expect(f.queryApi.cancel).toHaveBeenCalledTimes(1)
+    expect(f.queries.isRunning(f.tab.id)).toBe(false)
+  })
+  it.each(['response', 'rejection'] as const)('fails strict cancellation on %s without treating acknowledgement as completion', async kind => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    const prepared = await f.queries.prepareSessions('disconnect', [f.tab.id])
+    if (kind === 'response') f.queryApi.cancel.mockResolvedValueOnce({ ok: false, error: 'Cancel transport failed.' })
+    else f.queryApi.cancel.mockRejectedValueOnce(new Error('Cancel transport failed.'))
+    await expect(f.queries.cancelPreparedSessions(prepared!)).rejects.toThrow('outcome may be unknown')
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    pending.resolve({ ok: true, value: output() })
+    await run
+  })
+  it('retains tabs when cancellation settles without execution completion and rejects a superseded preflight', async () => {
+    const f = fixture(undefined, ms => ms === cancelSettleMs ? Promise.resolve() : new Promise(() => {})), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    const prepared = await f.queries.prepareSessions('disconnect', [f.tab.id])
+    await expect(f.queries.cancelPreparedSessions(prepared!)).rejects.toThrow('has not reported completion')
+    expect(f.documents.get(f.tab.id)).toBeDefined()
+    pending.resolve({ ok: true, value: output() })
+    await run
+    await f.queries.execute()
+    expect(prepared?.current()).toBe(false)
+    await expect(f.queries.cancelPreparedSessions(prepared!)).rejects.toThrow('session changed')
+  })
+  it('preserves original result provenance after disconnect and reconnect until another execution replaces it', async () => {
+    const f = fixture()
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 53 }) })
+    await f.queries.execute()
+    const before = f.queries.getSnapshot()[f.tab.id], provenance = before.provenance
+    f.queries.sessionEnded(f.tab.id)
+    Object.assign(f.connection, { generation: 2 })
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary: before.summary, provenance })
+    expect(f.queries.getSnapshot()[f.tab.id].session).toBeUndefined()
+    expect(provenance).toMatchObject({ generation: 1, connectionId: 'server-a', database: 'master' })
+    expect(f.results.finish).toHaveBeenCalledTimes(1)
+    await f.queries.execute()
+    expect(f.queries.getSnapshot()[f.tab.id].provenance).toMatchObject({ generation: 2 })
+    expect(f.queries.getSnapshot()[f.tab.id].provenance?.queryId).not.toBe(provenance?.queryId)
+  })
   it('requests session estimation explicitly, publishes its SPID and preserves grids, toggles and statistics', async () => {
     const f = fixture()
     f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true, includeLivePlan: true })
@@ -367,10 +423,10 @@ describe('query orchestration', () => {
     const partial = output({ status: 'failed', messages: [{ text: 'Earlier batch output', kind: 'info' }], error: { code: 'SQL_ERROR', message: 'Bad SQL', batchNumber: 2, iteration: 1 } })
     queryApi.execute.mockResolvedValueOnce({ ok: true, value: partial })
     await queries.execute()
-    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: partial, error: undefined, session: undefined })
+    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: partial, error: undefined, session: undefined, provenance: expect.objectContaining({ connectionId: 'server-a', generation: 1, database: 'master' }) })
     queryApi.execute.mockResolvedValueOnce({ ok: false, error: 'Backend unavailable', code: 'BACKEND_LOST' })
     await queries.execute()
-    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: undefined, error: 'Backend unavailable' })
+    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: undefined, error: 'Backend unavailable', session: undefined, provenance: expect.objectContaining({ connectionId: 'server-a', generation: 1 }) })
   })
   it('does not let a late cancel failure overwrite a completed result', async () => {
     const { queries, queryApi, tab } = fixture()
@@ -418,7 +474,7 @@ describe('query orchestration', () => {
     expect(queries.getSnapshot()[tab.id].running).toEqual({ queryId: expect.any(String), connectionId: 'server-a', startedAt: 1000 })
     pending.resolve({ ok: true, value: output() })
     await execution
-    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: output(), error: undefined, session: undefined })
+    expect(queries.getSnapshot()[tab.id]).toEqual({ summary: output(), error: undefined, session: undefined, provenance: expect.objectContaining({ connectionId: 'server-a', generation: 1 }) })
   })
   it('keeps the SPID and login the summary reports, for the connection it ran on, and reads no transaction while executing', async () => {
     const { queries, queryApi, tab, documents, bus } = fixture()

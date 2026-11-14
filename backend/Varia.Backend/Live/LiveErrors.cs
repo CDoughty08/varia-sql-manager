@@ -11,9 +11,6 @@ internal static class LiveErrors
     private static readonly int[] Permission = [297, 300, 229, 262];
     private static readonly int[] Unsupported = [207, 208];
     private static readonly int[] Unavailable = [4060, 911, 942, 952, 922, 924, 926, 927, 945, 976, 978];
-    /// <summary>Login failed, locked out, password expired or must change, untrusted domain: retrying alone would only count
-    /// more failures against the login (and lock it out), so the probe stops until the user acts.</summary>
-    private static readonly int[] LoginFailed = [18456, 18486, 18487, 18488, 18452];
     private static readonly int[] Lost = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060];
 
     public const string BlockedMessage = "Another session held a lock this view needed for more than a second. It tries again.";
@@ -55,7 +52,7 @@ internal static class LiveErrors
         _ when Permission.Contains(number) => "PERMISSION_DENIED",
         _ when Unsupported.Contains(number) => "NOT_SUPPORTED",
         _ when Unavailable.Contains(number) => "DATABASE_UNAVAILABLE",
-        _ when LoginFailed.Contains(number) => "LOGIN_FAILED",
+        _ when ConnectionFailures.LoginFailed(number) => "LOGIN_FAILED",
         -2 => "TIMEOUT",
         _ when severity >= 20 || Lost.Contains(number) => "CONNECTION_LOST",
         _ => "SQL_ERROR"
@@ -63,7 +60,7 @@ internal static class LiveErrors
 
     /// <summary>A missing SSISDB catalog (CATALOG_MISSING) or a missing object the view follows (NOT_FOUND, such as an execution
     /// that was cleaned up) will not come back by retrying either.</summary>
-    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND";
+    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND" or "AUTH_IDENTITY";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>
     public static bool Breaks(string code) => code is "CONNECTION_LOST" or "TIMEOUT";
@@ -93,7 +90,7 @@ internal static class LiveErrors
     /// <summary>A sign-in that failed while the view reconnected (Kerberos or Entra): the sign-in's own message, which says
     /// what to fix; it retries with back-off.</summary>
     public static LiveProbeError SignIn(string probe, RequestException error, int maxCharacters = 2000) =>
-        Create(probe, error.Code == "AUTH_ENTRA" ? "AUTH_ENTRA" : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed. It tries again.", null, maxCharacters);
+        Create(probe, error.Code is "AUTH_ENTRA" or "AUTH_IDENTITY" ? error.Code : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed. It tries again.", null, maxCharacters);
 
     private static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
 }

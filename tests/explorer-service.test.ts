@@ -4,9 +4,10 @@ import { folderSpecs, kindSpecs, type FolderId, type NodeSubtype } from '../src/
 import type { ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { explorerChildrenParamsSchema } from '../src/shared/explorer/schema'
 import { EventBus } from '../src/renderer/src/core/events'
+import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
-import { ConnectionService } from '../src/renderer/src/services/connections'
+import { ConnectionService, type LiveConnection } from '../src/renderer/src/services/connections'
 import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
@@ -1253,6 +1254,63 @@ describe('ExplorerService: stop, budget and eviction', () => {
 })
 
 describe('ExplorerService: connections', () => {
+  it('retains the exact target root through disconnect and a fresh handle, rejecting metadata from its old handle', async () => {
+    class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
+    const backend = fakeBackend(), connections = new Connections([])
+    // Cancellation can race a successful catalog reply. Leave the old promise pending until after reconnect.
+    backend.api.explorerCancel.mockImplementation(async ids => ({ ok: true, value: { cancelled: ids.length } }))
+    const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => callback() })
+    disposals.push(() => explorer.dispose())
+    const first: LiveConnection = { ...info('server-a'), targetId: uuid(900), options: connectionOptions, login: 'sa', productVersion: '16.0.1' }
+    const other: LiveConnection = { ...info('server-b'), targetId: uuid(901), options: connectionOptions }
+    connections.set([first, other])
+    await settle()
+    const root = explorer.rootIds[0], sibling = explorer.rootIds[1]
+    const security = explorer.node(root)!.children!.find(node => node.label === 'Security')!
+    backend.hold(params => params.connectionId === first.id && isFolder('serverSecurity')(params))
+    explorer.expand(security.id)
+    await settle()
+    explorer.select(security.id)
+    connections.set([{ ...first, lost: true }, other])
+    await settle()
+    expect(explorer.getSnapshot().selected).toBe(root)
+    expect(explorer.node(root)).toMatchObject({ lost: true, expanded: false, children: undefined, hasChildren: false })
+    expect(explorer.rootIds).toEqual([root, sibling])
+    expect(explorer.queryTarget(root)).toBeUndefined()
+    expect(backend.api.explorerCancel).toHaveBeenCalled()
+    const fresh = { ...first, id: cid('server-c'), generation: 2 }
+    connections.set([fresh, other])
+    await settle()
+    expect(explorer.rootIds).toEqual([root, sibling])
+    expect(explorer.queryTarget(root)).toEqual({ connectionId: fresh.id })
+    expect(explorer.getSnapshot().selected).toBe(root)
+    const children = explorer.node(root)!.children!
+    backend.release()
+    await settle()
+    expect(explorer.node(root)!.children).toBe(children)
+    expect(explorer.menuNode(security.id)).toBeUndefined()
+    expect(explorer.node(root)).toMatchObject({ expanded: true, lost: false, connectionId: fresh.id })
+  })
+  it('updates target details in place and hides only Explorer membership while keeping other targets in order', async () => {
+    class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
+    const backend = fakeBackend(), connections = new Connections([])
+    const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => callback() })
+    disposals.push(() => explorer.dispose())
+    const first: LiveConnection = { ...info('server-a'), targetId: uuid(900), options: connectionOptions }
+    const other: LiveConnection = { ...info('server-b'), targetId: uuid(901), options: connectionOptions }
+    connections.set([first, other])
+    await settle()
+    const root = explorer.rootIds[0], sibling = explorer.rootIds[1], children = explorer.node(root)!.children
+    connections.set([{ ...first, displayName: 'Production' }, other])
+    expect(explorer.node(root)).toMatchObject({ label: 'Production', lower: 'production' })
+    expect(explorer.node(root)!.children).toBe(children)
+    connections.set([{ ...first, inExplorer: false, lost: true }, other])
+    expect(explorer.rootIds).toEqual([sibling])
+    expect(explorer.menuNode(root)).toBeUndefined()
+    connections.set([{ ...first, lost: true }, other])
+    expect(explorer.rootIds[1]).toBe(sibling)
+    expect(explorer.node(explorer.rootIds[0])).toMatchObject({ targetId: first.targetId, lost: true, expanded: false })
+  })
   it('drops a disconnected server at once, deletes its nodes in slices, and moves the selection on', async () => {
     const f = fixture({ deleteSlice: 4 })
     f.connect('server-a')
@@ -1299,7 +1357,8 @@ describe('ExplorerService: connections', () => {
     await settle()
     expect(f.labels()).toEqual(['server-c.example', '  Databases', '  Security', '  Server Objects', 'server-b.example'])
     expect(f.explorer.getSnapshot().selected).toBe(f.find('server-c.example'))
-    expect(f.explorer.queryTarget(a)).toBeUndefined()
+    expect(f.find('server-c.example')).toBe(a)
+    expect(f.explorer.queryTarget(a)).toEqual({ connectionId: cid('server-c') })
   })
   it('rebuilds the tree from the connections on reset, keeping filters', async () => {
     const f = fixture()

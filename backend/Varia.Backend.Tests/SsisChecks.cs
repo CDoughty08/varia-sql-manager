@@ -43,7 +43,7 @@ internal static class SsisChecks
         check(catalog.Features.SequenceEqual(SsisFeatures.Names) && catalog.Limit("packageName") == explorer.KindOf("ssisPackage").MaxName && catalog.Limit("name") == ExplorerRefs.MaxIdentifier,
             "the profile's feature names and the name bounds are the catalogue's");
         check(SsisErrors.Numbers.Keys.All(code => catalog.ErrorCodes.Contains(code)) && catalog.ErrorCodes.Contains("SQL_ERROR") && catalog.ErrorCodes.Contains("NOT_FOUND")
-            && catalog.ErrorCodes.Contains("NOT_SUPPORTED") && catalog.ErrorCodes.Contains("AUTH_ENTRA") && !catalog.Retryable("CATALOG_MISSING") && catalog.Retryable("BLOCKED")
+            && catalog.ErrorCodes.Contains("NOT_SUPPORTED") && catalog.ErrorCodes.Contains("AUTH_ENTRA") && catalog.ErrorCodes.Contains("AUTH_IDENTITY") && !catalog.Retryable("AUTH_IDENTITY") && !catalog.Retryable("CATALOG_MISSING") && catalog.Retryable("BLOCKED")
             && catalog.Retryable("DATABASE_UNAVAILABLE") && !catalog.Retryable("NO_DB_ACCESS"),
             "every code the error mapping and the service answer is in the catalogue, with its retryability");
         check(catalog.OperationStatuses[7] == "Succeeded" && catalog.OperationTypes[200] == "Create and start execution" && catalog.OperationTypes[102] == "Export project" && catalog.LoggingLevels[100] == "Custom"

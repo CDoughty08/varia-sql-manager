@@ -3,16 +3,19 @@ import type { RestoredSession, SessionWrite, SqlFile, VariaApi } from '../src/sh
 import { sessionLimits } from '../src/shared/files/session'
 import { FileService } from '../src/renderer/src/services/files'
 import type { QueryService } from '../src/renderer/src/services/queries'
-import { keptSession, restoreSession } from '../src/renderer/src/services/session'
+import { keptSession, reloadSession, restoreSession } from '../src/renderer/src/services/session'
 import { TabRenameService } from '../src/renderer/src/services/tab-rename'
 import { TargetService } from '../src/renderer/src/services/targets'
+import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
+import { connectionDefaults } from '../src/shared/connections'
+import { connectionWorkspaceSchema } from '../src/shared/connection-targets'
 import { documentFixture } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const file = (name: string, id = name): SqlFile => ({ id, name, path: `C:/q/${name}`, encoding: 'utf8', readOnly: false })
 
-function fixture(options: { hotExit?: boolean; budget?: number } = {}) {
+function fixture(options: { hotExit?: boolean; budget?: number; connectionTargets?: ConnectionTargetService } = {}) {
   const doc = documentFixture()
   const kept: SessionWrite[] = []
   const api = {
@@ -28,7 +31,7 @@ function fixture(options: { hotExit?: boolean; budget?: number } = {}) {
   const servers: Record<string, string> = { 'server-a': 'sql01' }
   const state = { hotExit: options.hotExit ?? true }
   const files = new FileService(doc.documents, queries, api, { hotExit: () => state.hotExit || doc.documents.getSnapshot().documents.some(tab => tab.pinned)
-    ? keptSession(doc.documents, id => servers[id], { budget: options.budget, pinnedOnly: !state.hotExit }) : undefined })
+    ? keptSession(doc.documents, id => servers[id], { budget: options.budget, pinnedOnly: !state.hotExit, connectionTargets: options.connectionTargets }) : undefined })
   cleanups.push(() => { files.dispose(); doc.documents.dispose() })
   return { ...doc, api, files, kept, state, queries }
 }
@@ -77,6 +80,101 @@ describe('Rename Tab', () => {
 })
 
 describe('hot exit', () => {
+  it('keeps the window open if connection intent changes while the checkpoint write is pending', async () => {
+    const connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
+    connectionTargets.add({ id: targetId, options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
+    const f = fixture({ connectionTargets })
+    f.documents.create('Draft.sql', 'SELECT 1', 'Sales')
+    f.api.keepSession.mockImplementationOnce(async session => {
+      f.kept.push(session)
+      connectionTargets.removeFromExplorer(targetId)
+      return { ok: true, value: undefined }
+    })
+    await f.files.closeWindow(async () => {})
+    expect(f.files.getSnapshot().error).toContain('A connection target changed while closing the window')
+    expect(f.api.closeWindow).not.toHaveBeenCalled()
+    expect(f.api.closeWindowCancelled).toHaveBeenCalled()
+    expect(f.documents.getSnapshot().documents).toHaveLength(1)
+  })
+  it('revalidates captured query associations and target details by value after a checkpoint write', () => {
+    const { documents } = fixture(), connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
+    const details = { displayName: 'Production', autoReconnect: 'inherit' as const }
+    connectionTargets.add({ id: targetId, options: { ...connectionDefaults('win32'), server: 'sql01' }, details, inExplorer: true, resumeWanted: true })
+    const tab = documents.create('Draft.sql', 'SELECT 1', 'Sales', 'handle-a')
+    documents.update(tab.id, { targetId, attachWanted: true })
+    const checkpoint = keptSession(documents, () => 'sql01', { connectionTargets })
+    expect(checkpoint.checkpointCurrent()).toBe(true)
+    // Registry exports are immutable new values; unchanged data does not invalidate the checkpoint.
+    expect(connectionTargets.exportWorkspace()).not.toBe(checkpoint.session.workspace)
+    expect(checkpoint.checkpointCurrent()).toBe(true)
+    connectionTargets.setDetails(targetId, { ...details, displayName: 'Renamed production' })
+    expect(checkpoint.checkpointCurrent()).toBe(false)
+    connectionTargets.setDetails(targetId, details)
+    expect(checkpoint.checkpointCurrent()).toBe(true)
+    for (const patch of [{ database: 'Reports' }, { attachWanted: false }, { connectionId: 'handle-b' }, { targetId: crypto.randomUUID() }]) {
+      documents.update(tab.id, patch)
+      expect(checkpoint.checkpointCurrent()).toBe(false)
+      documents.update(tab.id, { database: 'Sales', targetId, attachWanted: true, connectionId: 'handle-a' })
+      expect(checkpoint.checkpointCurrent()).toBe(true)
+    }
+  })
+
+  it('uses hot-exit eligibility for Reload Window, including unpinned queries only while query restore is enabled', () => {
+    const { documents } = fixture()
+    const first = documents.create('Draft.sql', 'SELECT 1', 'Sales')
+    const pinned = documents.create('Pinned.sql', 'SELECT 2', 'Reports')
+    documents.setPinned(pinned.id, true)
+    const recoveryId = (id: string) => id === first.id ? 'draft-copy' : undefined
+    const enabled = reloadSession(documents, () => undefined, { restoreQueries: true, recoveryId })!
+    expect(enabled.session).toEqual(keptSession(documents, () => undefined).session)
+    expect(enabled.session.documents.map(tab => tab.name)).toEqual(['Pinned.sql', 'Draft.sql'])
+    expect(enabled.recoveryIds).toEqual([null, 'draft-copy'])
+    const disabled = reloadSession(documents, () => undefined, { restoreQueries: false, recoveryId })!
+    expect(disabled.session.documents.map(tab => tab.name)).toEqual(['Pinned.sql'])
+    documents.setPinned(pinned.id, false)
+    expect(reloadSession(documents, () => undefined, { restoreQueries: false, recoveryId })).toBeUndefined()
+  })
+
+  it('captures a target-only reload checkpoint and rejects a pin left outside the byte budget', () => {
+    const { documents } = fixture(), connectionTargets = new ConnectionTargetService()
+    connectionTargets.add({ id: crypto.randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: false })
+    const checkpoint = reloadSession(documents, () => undefined, { restoreQueries: false, recoveryId: () => undefined, connectionTargets })!
+    expect(checkpoint.session.documents).toEqual([])
+    expect(checkpoint.session.workspace?.targets).toHaveLength(1)
+    const pinned = documents.create('Large.sql', 'x'.repeat(1000), 'Sales')
+    documents.setPinned(pinned.id, true)
+    expect(() => reloadSession(documents, () => undefined, { restoreQueries: true, recoveryId: () => undefined, budget: 100 })).toThrow('Pinned tab “Large.sql”')
+  })
+
+  it('keeps and restores exact targets before queries, with each database and attachment preference unchanged', async () => {
+    const { documents, files } = fixture(), connectionTargets = new ConnectionTargetService()
+    const workspace = connectionWorkspaceSchema.parse({ version: 1, targets: [
+      { id: crypto.randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { environment: 'Production' }, inExplorer: true, resumeWanted: true },
+      { id: crypto.randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: {}, inExplorer: false, resumeWanted: false }
+    ] })
+    const restored: RestoredSession = { activeIndex: 1, problems: [], workspace, documents: [
+      { name: 'sales.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', targetId: workspace.targets[0].id, database: 'Sales', attachWanted: true },
+      { name: 'reports.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 2', targetId: workspace.targets[0].id, database: 'Reports', attachWanted: false },
+      { name: 'default.sql', kind: 'sql', eol: 'lf', dirty: false, text: 'SELECT 3', targetId: workspace.targets[1].id, database: '', attachWanted: true }
+    ] }
+    const original = documents.reopen.bind(documents)
+    vi.spyOn(documents, 'reopen').mockImplementation(document => {
+      expect(connectionTargets.get(document.targetId!)?.lifecycle.state).toBe('disconnected')
+      return original(document)
+    })
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: restored })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
+    expect(await restoreSession({ api, documents, files, connectionTargets })).toBe(3)
+    expect(documents.getSnapshot().documents.map(tab => [tab.targetId, tab.database, tab.attachWanted, tab.connectionId, tab.sessionNotice])).toEqual([
+      [workspace.targets[0].id, 'Sales', true, undefined, 'restarted'],
+      [workspace.targets[0].id, 'Reports', false, undefined, 'restarted'],
+      [workspace.targets[1].id, '', true, undefined, 'restarted']
+    ])
+    const kept = keptSession(documents, () => undefined, { connectionTargets })
+    expect(kept.session.workspace).toEqual(workspace)
+    expect(kept.session.documents.map(tab => [tab.targetId, tab.database, tab.attachWanted])).toEqual(restored.documents.map(tab => [tab.targetId, tab.database, tab.attachWanted]))
+    expect(JSON.stringify(kept.session)).not.toMatch(/connectionId|sessionNotice|lifecycle/)
+  })
+
   it('keeps every text tab in order, with text unless a clean file reopens it, its rename, and the server it was on', () => {
     const { documents, model } = fixture()
     const untitled = documents.create('SQLQuery2.sql', '', 'Sales', 'server-a')
@@ -281,15 +379,15 @@ describe('hot exit', () => {
     expect(await restoreSession({ api, documents, files })).toBe(0)
     expect(files.getSnapshot().error).toBe('The queries open when Varia SQL Manager last closed could not be reopened: Access is denied.')
   })
-  it('keeps a reopened query\'s database when it first connects to the server it was on', async () => {
+  it('does not infer a legacy query target or database from a matching server name', async () => {
     const { documents, files } = fixture()
     const connections: Record<string, { server: string }> = { a: { server: 'SQL01 ' }, b: { server: 'other' } }
     const targets = new TargetService(documents, { isRunning: () => false, mayHaveTransaction: async () => false, confirmSessions: async () => new Map() }, { get: id => connections[id] as never }, files)
     const kept = documents.reopen({ name: 'SQLQuery2.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', server: 'sql01', database: 'Sales' })
     targets.update(kept.id, { connectionId: 'a', database: 'master' })
-    expect(documents.get(kept.id)).toMatchObject({ connectionId: 'a', database: 'Sales', lastServer: undefined })
+    expect(documents.get(kept.id)).toMatchObject({ connectionId: 'a', database: 'master' })
     const other = documents.reopen({ name: 'SQLQuery3.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', server: 'sql01', database: 'Sales' })
     targets.update(other.id, { connectionId: 'b', database: 'master' })
-    expect(documents.get(other.id)).toMatchObject({ connectionId: 'b', database: 'master', lastServer: undefined })
+    expect(documents.get(other.id)).toMatchObject({ connectionId: 'b', database: 'master' })
   })
 })

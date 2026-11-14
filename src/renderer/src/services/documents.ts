@@ -21,7 +21,7 @@ export interface TextDocument { readonly name: string; readonly text: string; re
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
 interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -41,6 +41,9 @@ export interface CustomDocumentProvider {
   closed(id: string): void
   /** Whether the document moves with a reconnect to a connection on `server`. */
   follows(id: string, server: string): boolean
+  canFollowTarget?(id: string, targetId: string): boolean
+  /** Main proved these target identities equivalent; migrate only this provider's existing binding. */
+  coalesceTarget?(id: string, fromTargetId: string, toTargetId: string): boolean
 }
 /** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
 export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
@@ -54,6 +57,8 @@ export interface DocumentOptions {
   readonly newLineEnding?: LineEnding
   /** A closed query remembers its server's name, never its live connection or SQL session. */
   readonly server?: (connectionId: string) => string | undefined
+  /** Resolves only an exact current backend handle, never a server-name match. */
+  readonly target?: (connectionId: string) => string | undefined
 }
 /** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
 export function settingsDocumentOptions(values: () => SettingsValues): Required<Pick<DocumentOptions, 'modelOptions' | 'matchBrackets'>> {
@@ -139,7 +144,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   openCustom(kind: CustomDocumentKind, name: string, connectionId: string | undefined, database: string): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     if (!this.providers.has(kind)) throw new Error(`No ${kind} provider is registered.`)
-    const document: QueryDocument = { id: crypto.randomUUID(), name, database, connectionId, dirty: false, savedVersionId: null, kind }
+    const targetId = connectionId ? this.options.target?.(connectionId) : undefined
+    const document: QueryDocument = { id: crypto.randomUUID(), name, database, connectionId, ...targetId ? { targetId } : {}, dirty: false, savedVersionId: null, kind }
     this.customs.set(document.id, kind)
     this.changed({ ...this.getSnapshot(), documents: [...this.getSnapshot().documents, document] })
     this.activate(document.id)
@@ -151,6 +157,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
   /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
   follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.provider(id)?.canFollowTarget?.(id, targetId) ?? false }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.provider(id)?.coalesceTarget?.(id, fromTargetId, toTargetId) ?? false }
   /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
   /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
@@ -296,8 +304,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
-    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.pinned ? { pinned: true } : {} }
-    const document = this.add(o.name, o.text, kind ? '' : o.database || 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
+    const document = this.add(o.name, o.text, kind ? '' : o.database ?? 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
     // A file whose text was all deleted is still a change to save.
     if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
     return this.get(document.id) ?? document
@@ -305,7 +313,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
@@ -313,7 +321,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
     // Before the saved version is read: setting the line ending is a change, though not one Undo reverts.
     if (eol) model.setEOL(eol === 'crlf' ? 1 : 0)
-    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...extra }
+    const targetId = !kind && connectionId ? this.options.target?.(connectionId) : undefined
+    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...targetId ? { targetId, attachWanted: true } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => {
       if (this.pendingReveal?.id === id) this.dropPendingFocus()
       const current = this.get(id), fill = this.entries.get(id)?.fill
@@ -534,6 +543,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    this.closeText(id, entry)
+  }
+  /** Sessions and the transport have ended. Validate the complete reviewed query set before the first local close. */
+  closeDisconnectedQueries(approved: readonly { readonly id: string; readonly revision: number }[]): void {
+    if (this.disposed || !this.getSnapshot().busy || new Set(approved.map(item => item.id)).size !== approved.length || approved.some(({ id, revision }) =>
+      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.revision(id) !== revision))
+      throw new Error('The approved queries changed before local close. All tabs stayed open.')
+    for (const { id } of approved) this.closeText(id, this.entries.get(id)!)
+  }
+  private closeText(id: string, entry: DocumentEntry): void {
     this.keepClosed(id, entry)
     const current = this.getSnapshot(), next = this.closing(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)

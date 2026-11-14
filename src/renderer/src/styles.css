@@ -704,6 +704,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-title:only-child { margin-block: auto; }
 /* The automatic margins split the space below the title equally above and below the chips. */
 .tab-metadata { display: flex; align-items: center; flex: none; gap: var(--varia-space-1); min-width: 0; margin-block: auto; }
+.tab-remembered-server { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
 .tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
@@ -2698,3 +2699,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .help-sample table { width: 100%; border-collapse: collapse; }
 .help-sample th, .help-sample td { text-align: left; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
 .help-sample-output { display: flex; flex-wrap: wrap; gap: var(--varia-space-5); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); }
+.connection-details-dialog { width: min(680px, calc(100vw - 32px)); }
+.connection-details-dialog table { width: 100%; border-collapse: collapse; text-align: left; }
+.connection-details-dialog th, .connection-details-dialog td { padding: 8px; overflow-wrap: anywhere; }
+.connection-details-dialog .connection-footer { flex-wrap: wrap; justify-content: flex-end; }

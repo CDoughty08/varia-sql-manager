@@ -11,7 +11,7 @@ static class OfflineSuites
     // Suites that change process-wide state run alone, before the lanes start: Entra redirects the console and sets
     // IDENTITY_ENDPOINT, Store measures the managed heap across forced collections, and Scripting sets
     // ScriptingCulture.Override.
-    public static readonly string[] Alone = ["Entra", "Store", "Scripting"];
+    public static readonly string[] Alone = ["Entra", "ConnectionPrincipal", "Store", "Scripting"];
 
     // Measured seconds per suite, from a serial run's 'Offline suite' lines (VARIA_TEST_OFFLINE_LANES=1, Windows, 2026-11-08, after the timing checks were hardened for starved runners);
     // suites under 0.3 s are left out and count as 0.1 s. Refresh it when a suite moves by more than a second. Text is CPU-bound,

@@ -1,6 +1,7 @@
 // Strict zod schemas for object actions, and the shapes of their results. Main validates every request with them before
 // the backend re-checks it against the catalogue and the subtype it derives itself in the action's own connection.
 import { z } from 'zod'
+import { backendConnectionBindingChangeSchema } from '../connection-binding-receipts.ts'
 import { boundedRecord } from '../zod-bounds.ts'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
@@ -388,6 +389,8 @@ export const dropUserStepTitle = 'Drop the database user'
  *  a reply in which it is 'done' changed the password, even when a later step failed. */
 export const loginPasswordStepTitle = 'Change the password'
 export interface ActionExecuteResult {
+  readonly bindingChanges?: readonly import('../connection-binding-receipts').BackendConnectionBindingChange[]
+  readonly bindingChangesComplete?: boolean
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
   /** SQL Server's informational messages (sp_rename's caution), at most 32 of 512 characters. */
@@ -767,8 +770,10 @@ export const actionExecuteResultSchema = z.object({
   restored: z.union([
     z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
-  ]).optional(), identity: identitySchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional()
-}).strict() satisfies z.ZodType<ActionExecuteResult>
+  ]).optional(), identity: identitySchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional(),
+  bindingChanges: z.array(backendConnectionBindingChangeSchema).max(256).optional(), bindingChangesComplete: z.boolean().optional()
+}).strict().refine(value => (value.bindingChanges === undefined) === (value.bindingChangesComplete === undefined), 'Binding receipts require their completion flag.')
+  .refine(value => !value.bindingChanges || new Set(value.bindingChanges.map(change => change.connectionId)).size === value.bindingChanges.length, 'A binding receipt lists each connection once.') satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */
 const stepIndex = z.number().int().min(0).max(actionStepLimit - 1)

@@ -294,7 +294,7 @@ internal static class DatabasePropertiesLiveChecks
         ActionExecuteResult afterOwnPool;
         await using (var pooled = ((Varia.Backend.Explorer.IExplorerHost)service).Connection(info.Id, db))
         {
-            await pooled.OpenAsync();
+            await ((Varia.Backend.Explorer.IExplorerHost)service).OpenAsync(pooled, CancellationToken.None);
             var running = client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }));
             await Task.Delay(300);
             await pooled.CloseAsync();

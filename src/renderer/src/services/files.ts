@@ -17,6 +17,8 @@ export interface FileServiceOptions {
 }
 /** The file banner: an error, or a warning that changes nothing (a file whose line endings were mixed). */
 export interface FileSnapshot { readonly error: string; readonly kind: 'error' | 'warning' }
+/** A complete dirty-file review. It closes nothing and is only valid while every reviewed document stays unchanged. */
+export interface PreparedQueryClose { readonly documents: readonly { readonly document: QueryDocument; readonly revision: number }[] }
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 /** What a document keeps of an opened file: everything but its text and line endings, which the model holds. */
 export const registeredFile = ({ id, name, path, encoding, codePage, readOnly }: OpenSqlFile | SqlFile): SqlFile => ({ id, name, path, encoding, ...codePage ? { codePage } : {}, readOnly })
@@ -243,6 +245,33 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (this.documents.revision(id) !== revision) throw new Error(`The ${noun} changed while confirming close. Review the latest changes before closing it.`)
     return true
   }
+  /** The disconnect coordinator holds the document task. All save choices finish before any session or tab ends. */
+  async prepareQueryClose(ids: readonly string[]): Promise<PreparedQueryClose | undefined> {
+    const approved: { document: QueryDocument; revision: number }[] = []
+    for (const id of ids) {
+      const document = this.documents.get(id)
+      if (!document || document.kind) throw new Error('The affected query tabs changed. Review the disconnect again.')
+      if (!await this.confirmClose(id) || this.disposed) return undefined
+      const current = this.documents.get(id)
+      if (!current) throw new Error('The affected query tabs changed. Review the disconnect again.')
+      approved.push({ document: current, revision: this.documents.revision(id) })
+    }
+    const plan = { documents: approved }
+    this.validateQueryClose(plan)
+    return plan
+  }
+  /** Identity catches database/target/name/file/dirty changes as well as edits that Monaco's revision catches. */
+  validateQueryClose(plan: PreparedQueryClose): void {
+    if (this.disposed || plan.documents.some(({ document, revision }) => this.documents.get(document.id) !== document || this.documents.revision(document.id) !== revision))
+      throw new Error('A query changed while confirming disconnect. Review the latest changes before disconnecting.')
+  }
+  /** After transport teardown, close locally through DocumentService's normal events, then release unclaimed files. */
+  closeDisconnectedQueries(plan: PreparedQueryClose, closeLocal: (approved: readonly { readonly id: string; readonly revision: number }[]) => void): void {
+    this.validateQueryClose(plan)
+    const files = plan.documents.flatMap(({ document }) => document.file ? [document.file] : [])
+    closeLocal(plan.documents.map(({ document, revision }) => ({ id: document.id, revision })))
+    void this.releaseUnclaimed(files).catch(error => { this.reportError(error instanceof Error ? error.message : 'A closed query file could not be released.') })
+  }
   /**
    * Asks about unsaved changes, then about an open transaction (SSMS's Yes, No, Cancel) or a query still executing
    * (cancel it, or keep it running), and closes the query. Saving first means a later Cancel leaves nothing undone but a
@@ -347,6 +376,8 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.disposed) return
         // What was kept is the text as it was when written; an edit made while writing it would be lost.
         unchanged()
+        if (!now.checkpointCurrent())
+          throw new Error('A connection target changed while closing the window. Review the latest changes before closing it.')
       }
       // The user has confirmed every document, so unloading must no longer be blocked.
       this.exiting = true

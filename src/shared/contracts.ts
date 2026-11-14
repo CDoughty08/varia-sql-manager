@@ -1,6 +1,8 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
+import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
+import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -85,12 +87,22 @@ export interface ConnectionOptions {
  * server profile probed at connect, and are absent when the probe failed.
  */
 export interface ConnectionInfo {
+  /** Main validates the actual server principal and the exact remembered credential revision. */
+  authentication?: ConnectionAuthentication
+  /** Main proved unchanged live credentials and applied an explicit user remember/forget choice. */
+  credentialUpdated?: true
+  /** Main's authoritative reuse coordinator selects this durable target; the backend never supplies it. */
+  targetId?: string
   /** Older SQL Server connections omit this. Language features default those connections to sqlserver. */
   providerId?: DatabaseProviderId
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
   /** Set by main: the saved entry's environment label, which a connect without one kept. */
   environment?: string
   productVersion?: string; login?: string; engineEdition?: number; linux?: boolean
+  /** Backend verified stable identity (SQL/Windows SID or Entra tenant/object IDs), never a display login or token. */
+  principalId?: string
+  /** Backend ordering of confirmed runtime credential/initial-database mutations. */
+  bindingRevision?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
@@ -423,7 +435,7 @@ export interface ExplorerNode {
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
 // NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'NOT_SUPPORTED'] as const
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -553,7 +565,10 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {}
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {
+  'connections.connect': { params: ConnectionOptions & { nonInteractive?: boolean }; result: ConnectionInfo }
+  'connections.databases': { params: ConnectionOptions & { nonInteractive?: boolean }; result: DatabaseInfo[] }
+}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
  *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
@@ -562,7 +577,7 @@ export type BackendMethod = keyof BackendMethods
 export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string; reason?: ErrorReason; exception?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
  *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true; credentialRejected?: true; connectionFailure?: ConnectionFailureReason }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
@@ -665,6 +680,11 @@ export interface VariaApi {
   /** The Connect dialog's Stop: cancels connects and Load databases by their `requestId`s (1–16), including a Microsoft
    *  Entra sign-in waiting for the web browser; `cancelled` counts those still running. They answer `CANCELLED`. */
   cancelConnectionRequests(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Acknowledge authenticated target adoption. Only retained:false proves the handle is no longer owned by main. */
+  acceptConnectionRequest(requestId: string): Promise<ApiResult<{ accepted: boolean; retained: boolean }>>
+  /** Forget security pins only after the renderer pruned hidden targets with no remaining document references. */
+  pruneConnectionTargets(targetIds: readonly string[]): Promise<ApiResult<{ pruned: number }>>
+  onConnectionBindingsChanged(callback: (event: ConnectionBindingsChanged) => void): () => void
   /** Help › Clear Entra ID Token Cache: main asks first; resolves to false when the user cancels. */
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>

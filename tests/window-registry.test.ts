@@ -14,6 +14,23 @@ function fakeWindow() {
 }
 
 describe('WindowRegistry', () => {
+  it('versions user input across windows without treating focus or content adoption as input', () => {
+    const registry = new WindowRegistry(undefined)
+    const input = new EventTarget()
+    const view = { closed: false, addEventListener: (type: string, listener: EventListener) => input.addEventListener(type, listener),
+      removeEventListener: (type: string, listener: EventListener) => input.removeEventListener(type, listener) }
+    const tracked = registry.add(view as unknown as Window)
+    expect(registry.inputRevision).toBe(0)
+    input.dispatchEvent(new Event('focus'))
+    registry.adopted()
+    expect(registry.inputRevision).toBe(0)
+    input.dispatchEvent(new Event('pointerdown'))
+    input.dispatchEvent(new Event('keydown'))
+    expect(registry.inputRevision).toBe(2)
+    tracked.dispose()
+    input.dispatchEvent(new Event('keydown'))
+    expect(registry.inputRevision).toBe(2)
+  })
   it('answers the window the user works in: a focused popout, the popout focused last while the main window has no focus, else main', () => {
     const main = fakeWindow(), popout = fakeWindow(), other = fakeWindow()
     const registry = new WindowRegistry(main.window)

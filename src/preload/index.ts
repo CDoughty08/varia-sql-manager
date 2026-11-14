@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ApiResult, BackendState, OpenedFiles, RecentFile, ResultsJobProgress, RpcMethod, RpcMethods, ShortcutsSnapshot, VariaApi } from '../shared/contracts'
 import type { ConnectContext } from '../shared/connections'
+import type { ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
@@ -47,9 +48,17 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:context-menu-command', listener) }
   },
   health: () => request('system.health', {}),
+  // Background callers use an exact credential reference and preserve policy; main validates both.
   connect: (options, context) => connectRequest('connections.connect', options, context),
   discoverDatabases: (options, context) => connectRequest('connections.databases', options, context),
   cancelConnectionRequests: requestIds => ipcRenderer.invoke('varia:connections-cancel', { requestIds }),
+  acceptConnectionRequest: requestId => ipcRenderer.invoke('varia:connections-accept', { requestId }),
+  pruneConnectionTargets: targetIds => ipcRenderer.invoke('varia:connections-prune', { targetIds }),
+  onConnectionBindingsChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, event: ConnectionBindingsChanged) => callback({ generation: event.generation, ...event.warning ? { warning: event.warning } : {}, changes: event.changes.map(change => ({ targetId: change.targetId, handle: change.handle, revision: change.revision, options: change.options, authentication: change.authentication })) })
+    ipcRenderer.on('varia:connection-bindings-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:connection-bindings-changed', listener) }
+  },
   clearEntraTokenCache: () => ipcRenderer.invoke('varia:entra-cache-clear'),
   discoverServers: scope => request('connections.discover', { scope }),
   previewConnection: options => request('connections.preview', options),

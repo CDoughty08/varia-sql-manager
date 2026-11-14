@@ -183,6 +183,7 @@ const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEditio
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
 }
+const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
  * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
  * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
@@ -481,7 +482,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const connection = this.connectionOf(connectionId)
     return {
       connectionId, ref: { type: 'object', object }, kind: object.kind, label, ...(subtype ? { subtype } : {}),
-      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !!connection.lost
+      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !connectionAvailable(connection)
     }
   }
   private connectionOf(connectionId: string): LiveConnection | undefined {
@@ -490,7 +491,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {
     const node = id === undefined ? undefined : this.nodes.get(rowOwner(id))
-    if (!node || !this.connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)) return undefined
+    if (!node || !this.connections.getSnapshot().some(connection => connection.id === node.connectionId && connectionAvailable(connection))) return undefined
     const object = objectOf(node.ref), database = object.kind === 'database' ? object.name : object.database
     return database === undefined ? { connectionId: node.connectionId } : { connectionId: node.connectionId, database }
   }
@@ -548,7 +549,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   beginRename(nodeId: number): boolean {
     const node = this.nodes.get(nodeId)
     if (!node || node.kind === 'folder' || node.lost || !this.attached(node) || actionMenuState({ kind: node.kind, subtype: node.subtype }).rename !== 'enabled') return false
-    if (!this.connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)) return false
+    if (!this.connections.getSnapshot().some(connection => connection.id === node.connectionId && connectionAvailable(connection))) return false
     this.select(nodeId, { reveal: true })
     this.renameStore.set(nodeId)
     return true
@@ -712,25 +713,45 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   private syncConnections(): void {
     if (this.disposed) return
-    const list = this.connections.getSnapshot(), ids = new Set(list.map(connection => connection.id))
+    const list = this.connections.getSnapshot().filter(connection => connection.inExplorer !== false), ids = new Set(list.map(connection => connection.id))
+    const targets = new Set(list.flatMap(connection => connection.targetId ? [connection.targetId] : []))
+    const retained = new Map(this.roots.flatMap(id => { const root = this.nodes.get(id); return root?.targetId ? [[root.targetId, id] as const] : [] }))
     const selectedRoot = this.selected === undefined ? undefined : this.rootOf(this.nodes.get(rowOwner(this.selected)))
     let removedAt = -1
     for (const [connectionId, rootId] of [...this.rootByConnection]) {
-      if (ids.has(connectionId)) continue
+      const root = this.nodes.get(rootId)
+      if (ids.has(connectionId) || (root?.targetId && targets.has(root.targetId))) continue
       if (selectedRoot?.id === rootId) removedAt = this.roots.indexOf(rootId)
       this.removeRoot(connectionId, rootId)
     }
     const roots: number[] = [], added: number[] = []
     for (const connection of list) {
-      const existing = this.rootByConnection.get(connection.id)
+      const available = connectionAvailable(connection)
+      const existing = this.rootByConnection.get(connection.id) ?? (connection.targetId ? retained.get(connection.targetId) : undefined)
       if (existing === undefined) {
         const id = this.addRoot(connection)
         roots.push(id)
-        if (!connection.lost) added.push(id)
+        if (available) added.push(id)
         continue
       }
       const root = this.nodes.get(existing)!
-      if (connection.lost && !root.lost) this.markLost(root)
+      const changedHandle = root.connectionId !== connection.id
+      if (changedHandle) {
+        this.markLost(root)
+        const previousId = root.connectionId, filters = this.filters.get(previousId)
+        if (filters) { this.filterCount -= filters.size; this.filters.delete(previousId) }
+        this.rootByConnection.delete(previousId)
+        root.connectionId = connection.id
+        this.rootByConnection.set(connection.id, root.id)
+      }
+      if (!available && !root.lost) this.markLost(root)
+      else if (available && root.lost) {
+        root.lost = false
+        root.hasChildren = true
+        root.generation++
+        added.push(root.id)
+      }
+      this.updateRoot(root, connection)
       roots.push(existing)
     }
     this.roots = roots
@@ -743,15 +764,25 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   private addRoot(connection: LiveConnection): number {
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
+    node.targetId = connection.targetId
+    this.updateRoot(node, connection)
+    node.hasChildren = connectionAvailable(connection)
+    node.lost = !connectionAvailable(connection)
+    node.lastUsed = ++this.clock
+    this.rootByConnection.set(connection.id, node.id)
+    return node.id
+  }
+  private updateRoot(node: TreeNode, connection: LiveConnection): void {
+    node.targetId = connection.targetId ?? node.targetId
+    node.connectionLifecycle = connection.lifecycle
+    const label = connection.displayName || connection.server
+    node.label = label
+    node.lower = label.toLocaleLowerCase()
     node.sublabel = serverSublabel(connection)
     node.brief = serverBrief(connection)
     const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
     node.detail = facts.filter(Boolean).join(' · ') || undefined
-    node.hasChildren = !connection.lost
-    node.lost = !!connection.lost
-    node.lastUsed = ++this.clock
-    this.rootByConnection.set(connection.id, node.id)
-    return node.id
+    node.rev++
   }
   private removeRoot(connectionId: string, rootId: number): void {
     this.abortWhere(task => task.connectionId === connectionId)
@@ -761,12 +792,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = this.roots.filter(id => id !== rootId)
     this.bury(rootId)
   }
-  /** A connection lost with its backend generation keeps its row, collapsed and loading nothing, until it is reconnected or removed. */
+  /** Disconnect retains the server row, discarding metadata and every load owned by its former handle. */
   private markLost(root: TreeNode): void {
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
-    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined })
-    // A lost root never loads again (reconnecting adds a new one); this only lets go of the rows a reconcile held.
+    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined, note: undefined })
+    root.generation++
+    // A reconnect starts from fresh metadata, including rows a previous reconcile held.
     const state = this.state(root)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
     root.rev++

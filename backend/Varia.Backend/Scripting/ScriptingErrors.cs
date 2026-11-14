@@ -94,7 +94,7 @@ internal static class ScriptingErrors
             "SMO_ERROR" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
             "SQL_ERROR" => "Could not script " + o + ": Msg " + number.ToString(CultureInfo.InvariantCulture) + ": " + Detail(detail ?? "", MaxDetail),
             // The detail is ConnectionFailures' or EntraFailures' advice (run kinit, install the library, connect again).
-            "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
+            "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
             _ => throw new InvalidOperationException("Unknown scripting error " + code)
         };
         return new(code, Clip(message, MaxMessage), catalog.Retryable(code));

@@ -7,7 +7,7 @@ namespace Varia.Backend;
 /// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
 /// bounds it, since the workbench shows it and SQL Server never sees it.</summary>
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
-    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null);
+    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null, bool NonInteractive = false);
 internal sealed record AdvancedConnectionOptions(
     int CommandTimeout = 0, int ConnectTimeout = 15, bool ColumnEncryption = false, bool SecureEnclaves = false,
     string AttestationProtocol = "None", string EnclaveAttestationUrl = "", bool MultipleActiveResultSets = false,
@@ -16,9 +16,10 @@ internal sealed record AdvancedConnectionOptions(
     string ApplicationIntent = "ReadWrite", string CurrentLanguage = "", bool Replication = false, string IpAddressPreference = "IPv4First",
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
-/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect; they are absent when the probe failed.</summary>
+/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect. PrincipalId is
+/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);
@@ -686,7 +687,12 @@ internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Ab
 /// renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult); Sessions: a login action's count of the sessions
 /// connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
-    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null);
+    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null,
+    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null);
+/// <summary>A confirmed action-induced change to one live handle's backend settings. Monotonic safe-integer revision;
+/// initial connect is revision 0. At most 256 distinct handles per result. PasswordChanged carries no secret: main uses
+/// only the matching validated action's transient password. NewDatabase is the resulting catalog, at most 128 characters.</summary>
+internal sealed record ConnectionBindingChange(string ConnectionId, long BindingRevision, string? NewDatabase = null, bool? PasswordChanged = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

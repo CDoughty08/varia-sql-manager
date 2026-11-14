@@ -319,6 +319,7 @@ change to a role's members; a sysadmin's are not evaluated.
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | No |
 | `AUTH_ENTRA` | No |
+| `AUTH_IDENTITY` | No |
 | `WINDOWS_AUTH_REQUIRED` | No |
 | `ALREADY_FINAL` | No |
 | `NOT_STARTED` | No |

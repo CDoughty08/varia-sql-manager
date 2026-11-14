@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 // The Activity Monitor documents (docs/activity-monitor.md): one per connection, each a renderer-only tab whose content
 // is one live subscription to the `activity` source. The service keeps each monitor's choices (interval, chart window,
 // panes, expanded charts, Pause) outside React, so a tab switch remounts the view without losing them, and keeps the
@@ -152,7 +153,7 @@ export const splitLimits = { minimum: 0.25, maximum: 0.75, default: 0.55, step: 
 const clampRatio = (ratio: number) => Number.isFinite(ratio) ? Math.round(Math.min(splitLimits.maximum, Math.max(splitLimits.minimum, ratio)) * 100) / 100 : splitLimits.default
 export const monitorTitle = (server: string) => `${server} - Activity Monitor`
 
-export interface ActivityMonitorServiceOptions {
+export interface ActivityMonitorServiceOptions extends CustomDocumentTargetOptions {
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'>
   readonly connections: Pick<ConnectionService, 'get'>
   readonly live: { open(spec: LiveSpec, owner: LiveOwner): LiveHandle }
@@ -212,10 +213,12 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   /** Each monitor's Details read in flight, cancelled when the flyout closes or reads again. */
   private readonly detailsRequests = new Map<string, string>()
   private reports = 0
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: ActivityMonitorServiceOptions) {
     super({ monitors: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.registration = options.documents.registerProvider(this)
   }
 
@@ -286,8 +289,10 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const connection = this.options.connections.get(connectionId)
     if (!connection) throw new Error('Connect to the server first.')
     if (connection.lost) throw new Error('This connection was lost when the SQL backend restarted. Reconnect it first.')
+    if (connection.lifecycle && connection.lifecycle.state !== 'connected') throw new Error('Wait for this connection to finish changing before opening Activity Monitor.')
     const label = connection.displayName || connection.server
     const document = this.options.documents.openCustom('activityMonitor', monitorTitle(label), connection.id, 'master')
+    this.targetBindings.bind(document.id, connection.id)
     this.put(initialMonitor(document.id, connection.server, this.options.settings()))
     this.startView(document.id)
     this.options.focus?.(document.id)
@@ -296,9 +301,10 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
 
   private startView(id: string): void {
     const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
-    if (!state || !connectionId) return
+    if (!state || !connectionId || !this.live(id)) return
     // A paused monitor subscribes paused (Retry while paused): pausing after it opened would let a sample run first.
-    const handle = this.options.live.open({ connectionId, source: 'activity', args: monitorArgs(state), probes: probeSettings(state), ...state.paused ? { paused: true } : {} }, this.options.owner(id))
+    const owner = this.options.owner(id)
+    const handle = this.options.live.open({ connectionId, source: 'activity', args: monitorArgs(state), probes: probeSettings(state), ...state.paused ? { paused: true } : {} }, { ...owner, connectionId: () => this.live(id) ? this.options.documents.get(id)?.connectionId : undefined })
     this.handles.set(id, handle)
     this.ticks.set(id, handle.onTick(applied => this.noteTick(id, applied)))
   }
@@ -387,7 +393,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     if (!state) return
     this.cancelDetails(id)
     const api = this.options.api
-    if (!api || !connectionId) {
+    if (!api || !connectionId || !this.live(id)) {
       this.put({ ...state, details: { ...details, status: 'failed', locks: 'none', error: 'Details is not available: the monitor has no connection.' } })
       return
     }
@@ -396,10 +402,11 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.put({ ...state, details })
     const withLocks = details.locks === 'loading'
     const settle = (change: Partial<DetailsPanel>) => {
-      if (this.detailsRequests.get(id) === requestId) this.detailsRequests.delete(id)
+      if (this.detailsRequests.get(id) !== requestId) return
+      this.detailsRequests.delete(id)
       const now = this.get(id)
       // An answer to an older read (another session, Refresh since, the flyout closed) changes nothing.
-      if (!now?.details || now.details.read !== details.read) return
+      if (!now?.details || now.details.read !== details.read || this.options.documents.get(id)?.connectionId !== connectionId || !this.live(id)) return
       this.put({ ...now, details: { ...now.details, ...change } })
     }
     api.activityDetails({ requestId, connectionId, sessionId: details.session.sessionId, loginTime: details.session.loginTime, ...withLocks ? { locks: true } : {} }).then(result => {
@@ -411,7 +418,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   /** Kill Process…: asks first; the confirm names the session and warns about rollback. */
   askKill(id: string, session: SessionRef): void {
     const state = this.get(id)
-    if (!state || state.kill?.phase === 'running') return
+    if (!state || state.kill?.phase === 'running' || !this.live(id)) return
     this.put({ ...state, kill: { session, phase: 'confirm' } })
   }
   cancelKill(id: string): void {
@@ -419,10 +426,11 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     if (state?.kill?.phase === 'confirm') this.put({ ...state, kill: undefined })
   }
   /** Whether Kill may run on a session now (the login's ALTER ANY CONNECTION, never Varia's own pools), and why not. */
-  killOffer(id: string, session: SessionRef | undefined): ReturnType<typeof killOffer> { return killOffer(session, this.factsOf(id).status.canKill) }
+  killOffer(id: string, session: SessionRef | undefined): ReturnType<typeof killOffer> { return this.live(id) ? killOffer(session, this.factsOf(id).status.canKill) : { allowed: false, reason: 'Reconnect this Activity Monitor before killing a session.' } }
   /** The confirm's Kill: one session, which the backend checks against the row's login time and host process id. */
   async confirmKill(id: string): Promise<void> {
     const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
+    const targetId = this.options.documents.get(id)?.targetId, generation = connectionId ? this.options.connections.get(connectionId)?.generation : undefined
     const session = state?.kill?.phase === 'confirm' ? state.kill.session : undefined
     if (!state || !session) return
     // The permission can go while the confirm is open (the next sample says so): say why, rather than doing nothing.
@@ -431,10 +439,11 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
       this.put({ ...state, kill: undefined, killReport: { ...killReport(session, undefined, offer.reason), id: ++this.reports } })
       return
     }
-    this.put({ ...state, kill: { session, phase: 'running' }, killReport: undefined })
+    const running = { session, phase: 'running' as const }
+    this.put({ ...state, kill: running, killReport: undefined })
     let report: KillReport
     const api = this.options.api
-    if (!api || !connectionId) report = killReport(session, undefined, 'Kill Process is not available: the monitor has no connection.')
+    if (!api || !connectionId || !this.live(id)) report = killReport(session, undefined, 'Kill Process is not available: the monitor has no connection.')
     else {
       try {
         const result = await api.activityKill({ connectionId, sessions: [{ sessionId: session.sessionId, loginTime: session.loginTime, hostProcessId: session.hostProcessId }] })
@@ -444,7 +453,12 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
       }
     }
     const now = this.get(id)
-    if (!now) return
+    if (!now || now.kill !== running) return
+    const document = this.options.documents.get(id), connection = connectionId ? this.options.connections.get(connectionId) : undefined
+    if (document?.connectionId !== connectionId || document?.targetId !== targetId || connection?.generation !== generation || !this.live(id)) {
+      this.put({ ...now, kill: undefined })
+      return
+    }
     this.put({ ...now, kill: undefined, killReport: { ...report, id: ++this.reports } })
     // The next sample shows the session gone, or rolling back, without waiting for the interval.
     if (report.tone === 'success') this.refresh(id)
@@ -475,7 +489,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.handles.get(id)?.setUserPaused(paused)
   }
   togglePause(id: string): void { const state = this.get(id); if (state) this.setPaused(id, !state.paused) }
-  refresh(id: string): void { if (!this.get(id)?.paused) this.handles.get(id)?.refresh() }
+  refresh(id: string): void { if (this.live(id) && !this.get(id)?.paused) this.handles.get(id)?.refresh() }
 
   setInterval(id: string, seconds: number): void {
     const state = this.get(id)
@@ -543,8 +557,17 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   canClose(): string | undefined { return undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  private live(id: string): boolean {
+    const connectionId = this.options.documents.get(id)?.connectionId
+    const connection = connectionId ? this.options.connections.get(connectionId) : undefined
+    return this.targetBindings.matchesConnection(id, connectionId) && !!connection && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
+  }
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const handle = this.handles.get(id)
     this.handles.delete(id)
     this.tones.delete(id)
@@ -565,6 +588,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     for (const handle of this.handles.values()) handle.dispose()
     this.handles.clear()
     for (const tick of this.ticks.values()) tick.dispose()

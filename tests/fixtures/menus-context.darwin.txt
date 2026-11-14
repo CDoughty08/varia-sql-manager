@@ -167,7 +167,8 @@ explorer.context, for Object Explorer's empty area
   Re&fresh  F5  -+++
 explorer.context, for a server
   &Connect…  ++++
-  &Disconnect  -+--
+  &Disconnect  -++-
+  Disc&onnect and Remove from Explorer  -++-
   &Environment…  -++-
   ---
   New &Query  -++-
@@ -180,7 +181,7 @@ explorer.context, for a server
 explorer.context, for a server whose connection was lost
   &Connect…  ++++
   &Reconnect…  ++++
-  Rem&ove  +++-
+  Rem&ove from Explorer  +++-
 explorer.context, for the Databases folder
   &Attach…  -+++
   &Restore Database…  -+++

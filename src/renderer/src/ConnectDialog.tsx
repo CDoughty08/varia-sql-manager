@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { flushSync } from 'react-dom'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
-import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
+import type { ConnectionDetails } from '../../shared/connection-targets'
+import { detailsOf, type ConnectionAttempt } from './services/connections'
+import { liveGeneration } from './services/backend'
+import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
+import { connectionTargetOptions } from '../../shared/connection-targets'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
@@ -21,7 +25,7 @@ function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(re
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
 // Profiles store the preset's value, which the theme maps to its own color for that preset.
 const palette: readonly (readonly [string, string])[] = [['Default', ''], ...connectionPresets.map(preset => [preset.label, preset.stored] as const)]
-interface Props { initial: ConnectionOptions; onConnected(info: ConnectionInfo, options: ConnectionOptions): void; onClose(): void }
+interface Props { initial: ConnectionOptions; initialTargetId?: string; reviewOpen?: boolean; initialAutoReconnect?: ConnectionDetails['autoReconnect']; onConnected(info: ConnectionInfo, options: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal): Promise<void>; onClose(): void }
 type Field = { key: keyof AdvancedConnectionOptions; label: string; choices?: readonly string[]; min?: number; max?: number; boolean?: boolean; maxLength?: number }
 const sections: { title: string; fields: Field[] }[] = [
   { title: 'Common', fields: [{ key: 'commandTimeout', label: 'Command timeout (seconds)', min: 0, max: 86400 }, { key: 'connectTimeout', label: 'Connect timeout (seconds)', min: 0, max: 3600 }] },
@@ -92,15 +96,19 @@ function AdvancedProperties({ value, onSave, onClose }: { value: Partial<Advance
   </form></div>
 }
 
-export default function ConnectDialog({ initial, onConnected, onClose }: Props) {
-  const { theme, platform, gestures } = useWorkbench()
+export default function ConnectDialog({ initial, initialTargetId, reviewOpen, initialAutoReconnect, onConnected, onClose }: Props) {
+  const { theme, platform, gestures, connections, backend, connectionReady, startupReconnect } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
+  const [autoReconnect, setAutoReconnect] = useState(initialAutoReconnect ?? 'inherit')
+  // A target, explicit field edit, Reset or row choice owns this draft. A late library read cannot replace that choice.
+  const reconnectOwned = useRef(!!initialTargetId || initialAutoReconnect !== undefined)
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
   // The entries with a remembered password (ids only: the password stays in main), and whether the OS can protect one.
   const [savedIds, setSavedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [storage, setStorage] = useState<SecretStorageState>()
   const [remember, setRemember] = useState(false)
+  const rememberEdited = useRef(false)
   const [identity, setIdentity] = useState('Current Windows user')
   // Off Windows: the Kerberos principal Windows Authentication signs in with, while there is a valid ticket.
   const [principal, setPrincipal] = useState<string>()
@@ -146,12 +154,14 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const environmentOwner = useRef<string | null>(null)
   const ownsEnvironment = () => environmentOwner.current !== null && environmentOwner.current === currentOptions.current.server.trim().toLowerCase()
   const entryKeys = useMemo(() => new Map(library.profiles.map(profile => [profile.id, entryKey(profile.options)])), [library])
-  const entry = useMemo(() => savedEntry(library.profiles, entryKeys, options), [library, entryKeys, options])
+  const entry = useMemo(() => savedEntry(library.profiles, entryKeys, options, selectedId), [library, entryKeys, options, selectedId])
   const locked = busy || saving
   const auth = authenticationCatalog[options.authentication]
   const authReady = !requiresUser(options.authentication) || !!options.username?.trim()
   // The request Stop cancels: the running connect's, and the running Load databases' (cancelled when the form changes).
   const connectRequest = useRef<string | undefined>(undefined)
+  const targetAttempt = useRef<ConnectionAttempt | undefined>(undefined)
+  const connectAbort = useRef<AbortController | undefined>(undefined)
   const databasesRequest = useRef<string | undefined>(undefined)
   const stopButton = useRef<HTMLButtonElement>(null)
   const connectButton = useRef<HTMLButtonElement>(null)
@@ -180,6 +190,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   /** Stop: the connect ends at once, even while it waits for a Microsoft Entra sign-in in the web browser. */
   function stop() {
+    connectAbort.current?.abort()
+    if (targetAttempt.current) connections.cancelAttempt(targetAttempt.current)
     const id = connectRequest.current
     if (id) void window.varia.cancelConnectionRequests([id]).catch(() => {})
   }
@@ -210,6 +222,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     if (entry.options.environment && labelServer.current === null) labelServer.current = entry.options.server
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry?.id, entry?.options.environment, options.server])
+  useEffect(() => {
+    if (!reconnectOwned.current) setAutoReconnect(entry?.autoReconnect ?? 'inherit')
+  }, [entry?.id, entry?.autoReconnect])
   // Connect disables the form, so focus moves to Stop, where Escape and Enter still reach the dialog, and back to Connect after.
   useEffect(() => {
     if (busy) stopButton.current?.focus()
@@ -217,7 +232,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }, [busy])
   // Choosing an entry with a remembered password checks Remember password, as SSMS does; a typed password keeps the choice.
   useEffect(() => {
-    if (!currentOptions.current.password) setRemember(!!match)
+    if (!currentOptions.current.password && !rememberEdited.current) setRemember(!!match)
   }, [match?.id])
   useEffect(() => {
     dbRequest.current++; cancelDatabases(); dbLoadedKey.current = ''; setDatabases([]); setDbNote(''); setDbDetails(undefined); setDbBusy(false)
@@ -249,8 +264,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   function update(patch: Partial<ConnectionOptions>) { setOptions(current => ({ ...current, ...patch })); setError(''); setNotice('') }
   function choose(profile: ConnectionProfile) {
     const chosen = { ...profile.options, password: '' }
-    environmentOwner.current = null; setSelectedId(profile.id); setOptions(chosen)
+    environmentOwner.current = null; setSelectedId(profile.id); setOptions(chosen); reconnectOwned.current = true; setAutoReconnect(profile.autoReconnect ?? 'inherit')
     // Enter selects and submits in one event; remembered credentials must follow the row before the form submits.
+    rememberEdited.current = false
     setRemember(!!rememberedProfile(library.profiles, savedIds, chosen, profile.id))
     labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null
     setError(''); setNotice('')
@@ -310,11 +326,11 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     if (!labelled) return
     setSaving(true); setError(''); setNotice('')
     try {
-      const input = { id: profile?.id ?? selectedId, options: labelled, favorite, registered }
+      const input = { id: profile?.id ?? selectedId ?? entry?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect }
       const value = unwrap(await window.varia.saveConnectionProfile(input))
       if (!alive.current) return
       showLibrary(value)
-      if (!profile) setSelectedId(value.library.profiles.find(item => connectionKey(item.options) === connectionKey(options))?.id)
+      if (!profile) setSelectedId(savedEntry(value.library.profiles, new Map(value.library.profiles.map(item => [item.id, entryKey(item.options)])), labelled, input.id)?.id)
     } catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
@@ -326,29 +342,72 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   /** Connects with the form's options, or with `chosen` when a fix changed them in the same click. */
   async function connect(chosen: ConnectionOptions = options) {
+    if (connectRequest.current || saving || !loaded) return
     const labelled = labelledOptions(chosen)
     if (!labelled) return
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
     setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
+    const controller = new AbortController(), foreground = startupReconnect.beginManual()
+    connectAbort.current = controller
     connectRequest.current = requestId
     const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
+    const selectedProfileId = selectedId ?? savedEntry(library.profiles, entryKeys, labelled)?.id
+    let attempt: ConnectionAttempt | undefined
     try {
-      const result = await window.varia.connect(labelled, { ...saved ? { profileId: saved.id } : {}, remember: remember && rememberable, requestId, ...ownsEnvironment() ? { setsEnvironment: true } : {} })
+      await connectionReady
+      if (!alive.current || controller.signal.aborted) return
+      const targetId = matchingTarget(labelled)
+      const prior = targetId ? connections.connectionTargets.get(targetId) : initialTarget(labelled)
+      const credentialPolicy = canRememberPassword(labelled.authentication) && storage?.available ? remember ? 'remember' : 'forget' : 'preserve'
+      const credentialIntent = prior && (labelled.password || rememberEdited.current || (credentialPolicy === 'remember' && !prior.credential) || (credentialPolicy === 'forget' && prior.credential)) ? 'update-credentials' : 'preserve'
+      attempt = connections.beginConnect(labelled, liveGeneration(backend.getSnapshot().state), targetId, detailsOf(labelled, autoReconnect), credentialIntent)
+      if (!attempt) { setError('This connection is already changing. Review its current state before connecting.'); return }
+      targetAttempt.current = attempt
+      const result = await window.varia.connect(labelled, {
+        targetId: attempt.operation.targetId, mode: 'interactive', credentialIntent, credentialPolicy, autoReconnect,
+        ...prior?.expectedPrincipal ? { expectedPrincipal: prior.expectedPrincipal } : {}, ...prior?.credential ? { credential: prior.credential } : {},
+        ...saved ? { profileId: saved.id } : {}, ...selectedProfileId ? { selectedProfileId } : {}, remember: remember && rememberable, requestId, ...ownsEnvironment() ? { setsEnvironment: true } : {}
+      })
       if (!alive.current) return
       // Main says which label the entry kept when the form had none (the history had not loaded yet).
-      if (result.ok) { const { environment: kept, ...info } = result.value; onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }) }
+      if (result.ok) { const { environment: kept, ...info } = result.value; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal); targetAttempt.current = undefined }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
+        connections.failAttempt(attempt, result.connectionFailure ?? 'unknown')
         setError(result.error); setFailure({ error: result.error, code: result.code, details: result.details, server: chosen.server, options: chosen })
         if (result.passwordForgotten) passwordRejected()
       }
     } catch (reason) { if (alive.current) { setError(message(reason)); setFailure(undefined) } }
     finally {
+      if (attempt && targetAttempt.current === attempt) { connections.failAttempt(attempt); targetAttempt.current = undefined }
       if (connectRequest.current === requestId) connectRequest.current = undefined
+      if (connectAbort.current === controller) connectAbort.current = undefined
+      foreground.dispose()
       if (alive.current) setBusy(false)
     }
+  }
+  // This only chooses a reconnect candidate. Main still proves complete credentials/settings equivalence.
+  function matchingTarget(value: ConnectionOptions): string | undefined {
+    try {
+      const encoded = JSON.stringify(connectionTargetOptions(value))
+      const target = initialTarget(value)
+      if (target && ['disconnected', 'lost'].includes(target.lifecycle.state)) return target.id
+      if (value.password) return
+      const saved = rememberedProfile(library.profiles, savedIds, value, selectedId)
+      if (!saved) return
+      const candidates = connections.connectionTargets.getSnapshot().filter(candidate => ['disconnected', 'lost'].includes(candidate.lifecycle.state)
+        && candidate.credential?.profileId === saved.id && JSON.stringify(candidate.options) === encoded)
+      if (candidates.length === 1) return candidates[0].id
+    } catch {}
+  }
+  /** An explicitly selected target can supply pinned account/credential evidence even when main will reuse it live. */
+  function initialTarget(value: ConnectionOptions) {
+    try {
+      const target = initialTargetId ? connections.connectionTargets.get(initialTargetId) : undefined
+      return target && JSON.stringify(target.options) === JSON.stringify(connectionTargetOptions(value)) ? target : undefined
+    } catch { return undefined }
   }
   /** Trust server certificate and connect: checks the box, as the person would, and connects again with it. */
   function trustAndConnect() {
@@ -411,7 +470,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     trapFocus(event)
   }
   return <>
-    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
+    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal={reviewOpen ? undefined : 'true'} aria-hidden={reviewOpen || undefined} inert={advanced || reviewOpen} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
       <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="icon-button" aria-label="Close connection dialog" disabled={locked} onClick={onClose}><Icon name="close" /></button></div>
       <div className="connect-panes">
         <div ref={sourcesPane} className="connect-sources-pane" onKeyDown={sourcesKey}>
@@ -441,7 +500,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
                 {/* Only the types with a password show Password and Remember password; the others have nothing to type there. */}
                 {passwordShown && <>
                   <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
-                  <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
+                  <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => { rememberEdited.current = true; setRemember(event.target.checked) }} />Remember password</label></div>
                   {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
                 </>}
                 {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
@@ -468,6 +527,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
                 <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
                 <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
                 <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { labelServer.current = null; environmentOwner.current = options.server.trim().toLowerCase(); update({ environment }) }} /></div>
+                <div className="property-row"><label htmlFor="connect-auto-reconnect">Reconnect on startup</label><select id="connect-auto-reconnect" disabled={locked} value={autoReconnect} onChange={event => { reconnectOwned.current = true; setAutoReconnect(event.target.value as ConnectionDetails['autoReconnect']) }}><option value="inherit">Use global default</option><option value="on">On</option><option value="off">Off</option></select></div>
               </div>
               <div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div>
             </section>
@@ -484,7 +544,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
             {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
           </div>}
         </div>}
-        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
+        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); rememberEdited.current = false; labelServer.current = null; reconnectOwned.current = true; setOptions(connectionDefaults(platform)); setAutoReconnect('inherit'); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !loaded || !authReady}>{busy ? 'Connecting…' : matchingTarget(options) && (options.password || rememberEdited.current) ? 'Update Credentials and Reconnect' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
       </div>
     </form></div>
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}

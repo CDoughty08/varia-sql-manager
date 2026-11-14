@@ -18,25 +18,34 @@ internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAut
     {
         var method = parameters.AuthenticationMethod;
         EntraAttempt attempt;
-        if (!EntraEndpoints.TryParseAuthority(parameters.Authority, out var host, out var tenant))
+        if (!EntraConnectScope.Authorized)
+            attempt = new EntraFailure("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+        else if (!EntraEndpoints.TryParseAuthority(parameters.Authority, out var host, out var tenant))
             attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.RefusedAuthority(EntraEndpoints.HostOf(parameters.Authority)));
         else if (!EntraEndpoints.IsAllowedResource(parameters.Resource))
             attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.RefusedResource(EntraEndpoints.HostOf(parameters.Resource)));
         else
         {
             var request = new EntraRequest(host, tenant, EntraEndpoints.Scope(parameters.Resource), string.IsNullOrWhiteSpace(parameters.UserId) ? null : parameters.UserId);
-            using var limit = new CancellationTokenSource(parameters.ConnectionTimeout > 0 ? TimeSpan.FromSeconds(Math.Min(parameters.ConnectionTimeout, 3600)) : UnboundedLimit);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(EntraConnectScope.Token);
+            limit.CancelAfter(parameters.ConnectionTimeout > 0 ? TimeSpan.FromSeconds(Math.Min(parameters.ConnectionTimeout, 3600)) : UnboundedLimit);
             try
             {
                 var token = await AcquireAsync(service.Source, method, request, parameters.Password ?? "", limit.Token).ConfigureAwait(false);
                 if (token is not null)
                 {
                     // MFA without a user name took the only account signed in to the tenant: the Connect dialog pins it.
-                    if (method == SqlAuthenticationMethod.ActiveDirectoryInteractive && request.User is null && token.Account is { Length: > 0 and <= 128 } account)
-                        service.Attempts.Record(parameters.ConnectionId, new Served(account));
-                    return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                    var account = method == SqlAuthenticationMethod.ActiveDirectoryInteractive && request.User is null && token.Account is { Length: > 0 and <= 128 } hint ? hint : null;
+                    var principal = ConnectionPrincipal.FromEntraToken(token.AccessToken);
+                    if (EntraConnectScope.ExpectedPrincipal is { } expected && principal != expected)
+                        attempt = new EntraFailure("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                    else
+                    {
+                        service.Attempts.Record(parameters.ConnectionId, new Served(account, principal));
+                        return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                    }
                 }
-                attempt = new InteractionRequired(request);
+                else attempt = new InteractionRequired(request);
             }
             catch (OperationCanceledException) when (limit.IsCancellationRequested) { attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.TokenTimedOut); }
             catch (Exception error) when (error is not OutOfMemoryException) { attempt = EntraFailures.Map(error, method); }

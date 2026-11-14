@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
@@ -22,7 +23,7 @@ import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
-import { connectionCancelSchema, validateRequest, validateResult } from './validation'
+import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
@@ -31,8 +32,11 @@ import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
+import { ConnectionAuthenticationGuard } from './connection-authentication'
+import { ConnectionOpenService, validateOpenedConnection } from './connection-open'
+import { ConnectionSessionCheckpoint } from './connection-session-checkpoint'
 import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
-import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
+import { hasPendingCredentialRequests, prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
@@ -42,7 +46,7 @@ import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
-import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
+import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
@@ -65,7 +69,7 @@ import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import { maxClipboardText, type ApiResult, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -125,8 +129,11 @@ type SessionCheckpoint = { generation: number } & (
   { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: readonly (string | null)[] }
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
+const connectionAuthentication = new ConnectionAuthenticationGuard()
+let credentialRequestsPending = () => false
+let connectionOpen: ConnectionOpenService | undefined
 const reloadRequest = z.object({
-  role: z.literal('reload'), session: sessionWriteSchema.refine(value => value.documents.length > 0 && value.documents.every(tab => tab.pinned)),
+  role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
 }).strict().refine(value => value.recoveryIds.length === value.session.documents.length)
 let closeApproved = false
@@ -180,6 +187,7 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
+const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending())
 // Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
@@ -275,7 +283,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   reloadRefresh = 'waiting'
   rendererGeneration++
   const checkpoint = sessionCheckpoint
-  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length)
+  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length || checkpoint.record.workspace?.targets.length)
     ? { ...checkpoint, generation: rendererGeneration } : undefined
   longRuns = noLongRuns
   // A popout's content belongs to the page that opened it.
@@ -286,6 +294,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   endPreview()
   resultsPort?.reset()
   resultsJobs?.reset()
+  connectionOpen?.reset()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -365,14 +374,14 @@ function sessionInput(request: SessionWrite): SessionInput {
   const documents = request.documents.map(({ fileId, ...document }) => ({
     ...document, ...fileId ? files.sessionFile(fileId) : undefined
   }))
-  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {} }
+  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {}, ...request.workspace ? { workspace: connectionAuthentication.project(request.workspace) } : {} }
 }
 
 function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
   const session = pins?.session ?? { documents: [], activeIndex: -1 }
   return {
     kind: 'reload', generation: rendererGeneration + 1, sourceGeneration: rendererGeneration,
-    record: encodeSession(sessionInput(session)).record, recoveryIds: pins?.recoveryIds ?? []
+    ...encodeReloadSession(sessionInput(session), pins?.recoveryIds ?? [])
   }
 }
 
@@ -612,8 +621,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     const generation = rendererGeneration
     const checkpoint = sessionCheckpoint?.generation === generation + 1 ? sessionCheckpoint : undefined
     const keepsPins = checkpoint?.kind === 'reload' && checkpoint.record.documents.length > 0
+    const keepsQueries = checkpoint?.kind === 'reload' && checkpoint.record.documents.some(tab => !tab.pinned)
     const abandon = () => { if (sessionCheckpoint === checkpoint) sessionCheckpoint = undefined }
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsQueries ? 'session' : keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) { abandon(); return }
       reloadApproved = true
@@ -644,7 +654,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // What this process restored is in no other copy until a close keeps the tabs again (AutoRecover waits for its
     // interval), so the replacement page reopens previous.json as the next process would.
     sessionTaken = false
-    const restores = sessionCheckpoint?.kind === 'reload' ? 'pins' : sessionCheckpoint ? 'session' : undefined
+    const restores = sessionCheckpoint?.kind === 'reload' && sessionCheckpoint.record.documents.every(tab => tab.pinned) ? 'pins' : sessionCheckpoint ? 'session' : undefined
     void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
@@ -811,6 +821,7 @@ app.whenReady().then(async () => {
   // The Connect dialog's connect and Load databases, which its Stop cancels (a Microsoft Entra sign-in waits for the browser).
   const connectionRequests = new RendererRequests(backend, connectionRequestLimits, 'connection')
   backend.onState(state => {
+    connectionOpen?.backendState(state)
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
   })
@@ -821,6 +832,22 @@ app.whenReady().then(async () => {
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
+  connectionOpen = new ConnectionOpenService({
+    authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
+    generation: () => backend.current?.generation,
+    open: async (params, generation, signal) => {
+      const requestId = randomUUID(), load = connectionRequests.begin(requestId)
+      const cancel = () => { connectionRequests.cancel([requestId]) }
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) cancel()
+      try { return await validateOpenedConnection(await backend.request('connections.connect', params as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
+      finally { signal.removeEventListener('abort', cancel); load.end() }
+    },
+    close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation }),
+    bindingsChanged: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:connection-bindings-changed', event) }
+  })
+  connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
@@ -924,10 +951,10 @@ app.whenReady().then(async () => {
     if (!main) return
     if (role === 'reload' && sessionCheckpoint) {
       if (sessionCheckpoint.generation === rendererGeneration + 1) return
-      throw new Error(sessionCheckpoint.kind === 'reload' ? 'Wait for the pinned tabs to reopen before reloading.' : 'Wait for the saved tabs to reopen before reloading.')
+      throw new Error('Wait for the saved tabs to reopen before reloading.')
     }
     if (request || (role === 'reload' && hotExitAvailable)) {
-      if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The pinned tabs cannot be kept by this page.')
+      if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The queries cannot be kept by this page.')
       sessionCheckpoint = reloadCheckpoint(request)
       reloadRefresh = 'waiting'
     }
@@ -942,7 +969,7 @@ app.whenReady().then(async () => {
   ipcMain.on('varia:reload-pins-pending', event => { event.returnValue = trusted(event) && pendingReload() })
   ipcMain.on('varia:reload-pins-refresh', (event, value: unknown) => {
     if (!trusted(event) || !pendingReload()) {
-      event.returnValue = { ok: false, error: 'The pinned tabs cannot be kept by this page.' }
+      event.returnValue = { ok: false, error: 'The queries cannot be kept by this page.' }
       return
     }
     try {
@@ -951,7 +978,7 @@ app.whenReady().then(async () => {
       event.returnValue = { ok: true, value: undefined }
     } catch (error) {
       reloadRefresh = 'failed'
-      event.returnValue = failure(error, 'The pinned tabs could not be kept.')
+      event.returnValue = failure(error, 'The queries could not be kept.')
     }
   })
   handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
@@ -963,7 +990,21 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      const prepared = await prepareConnection(method, validated, context, { savedPasswords })
+      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+      if (method === 'connections.connect') {
+        if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+        if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+        const outcome = await connectionOpen.connect(validated as ConnectionOptions, context)
+        if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
+        return { ok: true, value: outcome.value }
+      }
+      if (method === 'connections.disconnect') {
+        if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+        return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
+      }
+      const prepared = await prepareConnection(method, validated, context, { savedPasswords, authentication: connectionAuthentication })
+      let bindingMutation: string | undefined
+      try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
       // A script's events reach the results worker; its results become readable by this renderer.
@@ -980,21 +1021,31 @@ app.whenReady().then(async () => {
       let outcome: Settled
       try {
         try {
-          result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) }
-            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {})
+          if (method === 'actions.execute') bindingMutation = connectionOpen?.beginBindingMutation(validated as RpcMethods['actions.execute']['params'])
+          result = await backend.request(method as RpcMethod, prepared.params as never, { ...queryId !== undefined ? { onEvent: (queryEvent: import('../shared/contracts').QueryEvent) => results.queryEvent(queryId, queryEvent) }
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {}, ...bindingMutation ? { generation: backend.current?.generation } : {} })
         } finally {
           load?.end()
           progress?.close()
           indexing?.close()
         }
         result = validateResult(method as RpcMethod, result)
+        if (bindingMutation) {
+          const ticket = bindingMutation
+          bindingMutation = undefined
+          await connectionOpen?.finishBindingMutation(ticket, result as RpcMethods['actions.execute']['result'])
+        }
         outcome = { ok: true, value: result }
-      } catch (error) { outcome = { ok: false, error } }
+      } catch (error) {
+        if (bindingMutation) { const ticket = bindingMutation; bindingMutation = undefined; await connectionOpen?.finishBindingMutation(ticket).catch(() => {}) }
+        outcome = { ok: false, error }
+      }
       // History and remembered passwords for the connect methods; other methods pass through.
-      outcome = await settleConnection(prepared, outcome, { savedPasswords, connections: connectionStore })
-      if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}) }
+      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: connectionStore, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
+      if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }
+      } finally { if (bindingMutation) await connectionOpen?.finishBindingMutation(bindingMutation).catch(() => {}); prepared.release?.() }
     } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
@@ -1011,7 +1062,18 @@ app.whenReady().then(async () => {
   // Closing an Activity Monitor session's Details: its read stops in SQL Server (an attention) and answers CANCELLED.
   handle('varia:activity-cancel', value => ({ cancelled: activityRequests.cancel(activityCancelSchema.parse(value).requestIds) }))
   // The Connect dialog's Stop: a connect waiting for SQL Server or for a Microsoft Entra sign-in in the browser ends at once.
-  handle('varia:connections-cancel', value => ({ cancelled: connectionRequests.cancel(connectionCancelSchema.parse(value).requestIds) }))
+  handle('varia:connections-cancel', value => {
+    const ids = connectionCancelSchema.parse(value).requestIds
+    return { cancelled: (connectionOpen?.cancel(ids) ?? 0) + connectionRequests.cancel(ids) }
+  })
+  handle('varia:connections-accept', value => {
+    if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+    return connectionOpen.accept(connectionAcceptSchema.parse(value).requestId)
+  })
+  handle('varia:connections-prune', value => {
+    if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+    return { pruned: connectionOpen.pruneTargets(connectionPruneSchema.parse(value).targetIds) }
+  })
   handle('varia:entra-cache-clear', () => clearEntraTokenCache({
     confirm: async () => (await pageDialog((window, signal) => dialog.showMessageBox(window, { ...clearEntraPrompt, buttons: [...clearEntraPrompt.buttons], signal }), { response: 1, checkboxChecked: false }, true)).response === 0,
     clear: () => backend.request('entra.cache.clear', {})
@@ -1077,7 +1139,9 @@ app.whenReady().then(async () => {
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
     if (!hotExitAvailable) throw new Error('Restore open queries on startup is off.')
-    await openSession.write(sessionInput(sessionWriteSchema.parse(value)), pageGeneration)
+    const generation = pageGeneration
+    await connectionSession.write(sessionInput(sessionWriteSchema.parse(value)), generation)
+    if (generation !== pageGeneration || generation !== rendererGeneration) throw new Error('The workbench changed while keeping the session.')
   })
   handle('varia:session-take', async (): Promise<RestoredSession> => {
     const generation = pageGeneration
@@ -1092,6 +1156,10 @@ app.whenReady().then(async () => {
       // The same disk read may already have been handed to a replacement page.
       if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
       throw error
+    }
+    if (record?.workspace) {
+      if (checkpoint.kind === 'disk') connectionAuthentication.restore(record.workspace)
+      record = { ...record, workspace: connectionAuthentication.project(record.workspace) }
     }
     const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
@@ -1109,7 +1177,7 @@ app.whenReady().then(async () => {
     }
     // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
     const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined
-    return { documents, activeIndex, ...groups ? { groups } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
+    return { documents, activeIndex, ...groups ? { groups } : {}, ...record?.workspace ? { workspace: record.workspace } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
   })
   handle('varia:session-restored', value => {
     const generation = z.int().parse(value)
@@ -1160,13 +1228,17 @@ app.whenReady().then(async () => {
   // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', async event => {
     if (!trusted(event)) return
+    connectionSession.assertCurrent(pageGeneration)
     closeApproved = true
     // Every query was saved, discarded or kept by hot exit, so AutoRecover's copies of this page's go, before the app can
     // exit. A close that kept nothing leaves nothing for the next start to reopen.
-    await recovery.discardOwned(pageGeneration).catch(() => {})
-    if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
-    if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
-    else app.quit()
+    try {
+      await recovery.discardOwned(pageGeneration).catch(() => {})
+      if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
+      connectionSession.assertCurrent(pageGeneration)
+      if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
+      else app.quit()
+    } catch (error) { closeApproved = false; throw error }
   })
   buildMenu()
   createWindow()

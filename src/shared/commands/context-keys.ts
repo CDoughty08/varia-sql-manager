@@ -98,8 +98,8 @@ export const contextKeys = {
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },
   activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected and its connection was not lost." },
-  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A connection was lost when the SQL backend restarted and has not been reconnected or removed.' },
-  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
+  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A remembered server is disconnected or was lost and has not been reconnected or removed.' },
+  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's remembered server is disconnected or was lost." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   includeActualPlan: { type: 'boolean', scope: 'state', description: 'The active query will capture actual execution plans.' },
   includeLivePlan: { type: 'boolean', scope: 'state', description: 'The active query will show live execution plans.' },
@@ -165,7 +165,7 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['background', 'folder', ...nodeKinds, ''],
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."
   },
-  explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a server whose connection was lost when the SQL backend restarted.' },
+  explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a disconnected server, including a connection lost when the SQL backend restarted.' },
   explorerFolderFilterable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that Filter Settings can filter.' },
   explorerFolderFiltered: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that has a filter.' },
   explorerFolder: {

@@ -205,8 +205,9 @@ describe('Peek tabs (PeekTabService)', () => {
     }
     const listeners = new Set<() => void>()
     const servers: Record<string, string> = { [connectionId]: 'Prod\SQL01' }
-    const peekTabs = new PeekTabService({ peek: base.service, documents, connections: { get: id => servers[id] === undefined ? undefined : { server: servers[id]! } } })
-    return { ...base, peekTabs, documents, opened, providers, servers, listeners }
+    const targetIds: Record<string, string> = { [connectionId]: 'target-one' }
+    const peekTabs = new PeekTabService({ peek: base.service, documents, targetIdOf: id => targetIds[id], connections: { get: id => servers[id] === undefined ? undefined : { server: servers[id]! } } })
+    return { ...base, peekTabs, documents, opened, providers, servers, listeners, targetIds }
   }
 
   it('opens the object in a tab of its own with a view that owns its reads and rows, and closing the tab releases them', async () => {
@@ -230,8 +231,8 @@ describe('Peek tabs (PeekTabService)', () => {
     await expect(peekTabs.save()).resolves.toBe(false)
   })
 
-  it('follows Reconnect to a new connection to the server it was opened on, and reads again there', async () => {
-    const { peekTabs, documents, executes, lose, reconnect, servers, api, results } = tabs()
+  it('follows only an exact target reconnect and reads again on its new handle', async () => {
+    const { peekTabs, documents, executes, lose, reconnect, servers, api, results, targetIds } = tabs()
     const id = peekTabs.open(node('table'), 'rows')!
     const view = peekTabs.view(id)!
     view.follow({ name: 'vOrders', schema: 'dbo', kind: 'view' })
@@ -245,7 +246,10 @@ describe('Peek tabs (PeekTabService)', () => {
     // Reconnect gives the server a new connection id; the document moves only to the server the tab was opened on.
     const next = '22222222-2222-4222-8222-222222222222'
     servers[next] = 'prod\sql01'
-    expect([peekTabs.follows(id, 'PROD\SQL01 '), peekTabs.follows(id, 'Other')]).toEqual([true, false])
+    expect([peekTabs.follows(id, 'PROD\SQL01 '), peekTabs.follows(id, 'Other')]).toEqual([false, false])
+    expect(peekTabs.canFollowTarget(id, 'another-target')).toBe(false)
+    targetIds[next] = 'target-one'
+    expect(peekTabs.canFollowTarget(id, 'target-one')).toBe(true)
     reconnect(next)
     const peeks = api.explorerPeek.mock.calls.length
     documents.update(id, { connectionId: next })
@@ -257,7 +261,24 @@ describe('Peek tabs (PeekTabService)', () => {
     expect(executes.at(-1)!.options.connectionId).toBe(next)
     // A tab closed is forgotten: it no longer follows anything.
     peekTabs.closed(id)
-    expect(peekTabs.follows(id, 'Prod\SQL01')).toBe(false)
+    expect(peekTabs.canFollowTarget(id, 'target-one')).toBe(false)
+  })
+
+  it('stops dependent reads when a document receives another target even with the same server label', async () => {
+    const { peekTabs, documents, reconnect, servers, targetIds, api } = tabs()
+    const id = peekTabs.open(node('procedure'))!
+    await flush()
+    const other = 'other-handle'
+    servers[other] = servers[connectionId]!
+    targetIds[other] = 'another-target'
+    reconnect(other)
+    documents.update(id, { connectionId: other })
+    const reads = api.explorerPeek.mock.calls.length
+    const view = peekTabs.view(id)!
+    expect(view.connected).toBe(false)
+    expect(view.getSnapshot().open?.node.lost).toBe(true)
+    view.refresh()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(reads)
   })
 
   it('refuses what Peek cannot describe, names the tab after a followed dependency, and lets every view go on dispose', () => {

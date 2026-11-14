@@ -10,9 +10,9 @@ internal sealed record InteractionRequired(EntraRequest Request) : EntraAttempt;
 /// is the AADSTS number main uses to forget a rejected remembered password (50126 and 7000215 only). Without
 /// <paramref name="Explained"/>, the message is MSAL's or Azure.Identity's own and follows SqlClient's first line.</summary>
 internal sealed record EntraFailure(string Code, string Message, int? Number = null, bool Explained = true) : EntraAttempt;
-/// <summary>A token given to Microsoft Entra MFA without a user name, and the account it is for: the Connect dialog names that
-/// account in the connection string it keeps, so later opens find the same account's token when several are signed in.</summary>
-internal sealed record Served(string Account) : EntraAttempt;
+/// <summary>The provider supplied a token: its bounded nonsecret stable identity and, for anonymous MFA, its account hint.
+/// Only a successful open of this exact ClientConnectionId may use the identity; account pinning must carry it onward.</summary>
+internal sealed record Served(string? Account, string? PrincipalId = null) : EntraAttempt;
 
 /// <summary>What the provider recorded for each connection attempt (a failure, or the account an MFA token without a user
 /// name is for), by SqlClient's ClientConnectionId: SqlClient turns a provider's exception into a SqlException with no inner

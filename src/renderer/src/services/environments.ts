@@ -25,11 +25,18 @@ export function entryKey(options: ConnectionOptions): string | undefined { try {
 /**
  * The saved entry the Connect dialog's options name (the same server in any case, database, login and settings), whose
  * environment the form shows until the user sets one: typing a production server's name shows its PROD tag before
- * connecting, as choosing it from history does. `keys` maps each profile id to its entryKey.
+ * connecting, as choosing it from history does. Aliases can share settings: an explicit selection owns its metadata,
+ * otherwise use a unique presentation match or the sole matching entry. `keys` maps each profile id to its entryKey.
  */
-export function savedEntry(profiles: readonly ConnectionProfile[], keys: ReadonlyMap<string, string | undefined>, options: ConnectionOptions): ConnectionProfile | undefined {
+export function savedEntry(profiles: readonly ConnectionProfile[], keys: ReadonlyMap<string, string | undefined>, options: ConnectionOptions, selectedId?: string): ConnectionProfile | undefined {
   const key = entryKey(options)
-  return key === undefined ? undefined : profiles.find(profile => keys.get(profile.id) === key)
+  if (key === undefined) return undefined
+  const matches = profiles.filter(profile => keys.get(profile.id) === key)
+  const selected = matches.find(profile => profile.id === selectedId)
+  if (selected) return selected
+  if (matches.length === 1) return matches[0]
+  const presentation = matches.filter(profile => (['displayName', 'color', 'environment'] as const).every(field => (profile.options[field] ?? '') === (options[field] ?? '')))
+  return presentation.length === 1 ? presentation[0] : undefined
 }
 
 const notSaved = 'The environment could not be saved with this connection.'
@@ -45,6 +52,7 @@ export async function applyEnvironment(deps: EnvironmentDeps, connectionId: stri
   if (!connection) return { ok: false, error: 'This server is no longer connected.' }
   const parsed = parseEnvironment(value)
   if (!parsed.ok) return parsed
+  if (connection.lifecycle) { deps.connections.relabel(connectionId, parsed.environment); return parsed }
   const { environment: _previous, ...options } = connection.options
   try {
     const result = await deps.setEnvironment({ options, ...parsed.environment ? { environment: parsed.environment } : {} })
