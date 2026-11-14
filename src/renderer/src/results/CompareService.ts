@@ -314,6 +314,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const item: Running = { abort, queryId: tab.queryId, old, neu, id }
     if (!items) this.inFlight.set(tabId, items = new Map())
     items.set(id, item)
+    // A new attempt on the pair the popover shows clears what it said of the last (a failure, a cancel), as its Compare does.
+    if (!o.quiet && this.shows(tabId, tab.queryId, old, neu, o.exact)) this.update(tabId, { error: undefined, cancelled: false })
     this.publishRunning()
     try {
       const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal }), { signal: abort.signal })

@@ -236,6 +236,36 @@ describe('Compare popover', () => {
     }
   })
 
+  it('closes and focuses its comparison when the focus fell to the page (a press on its text) while it ran', async () => {
+    const view = fixture()
+    let finish!: (answer: DiffAnswer) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(yes => { finish = yes }))
+    await act(async () => { view.button('Compare')!.click() })
+    act(() => { (document.activeElement as HTMLElement | null)?.blur() })
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }) })
+    view.draw()
+    expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+    expect(view.results.getSnapshot().t1.focused).toBe(view.results.getSnapshot().t1.sets.find(set => set.descriptor.kind === 'diff')?.key)
+  })
+
+  it('clears what it said of a Compare with Previous Result when that is asked for again', async () => {
+    const view = fixture()
+    vi.mocked(view.handle(view.keys[0]).diff).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'Too large to compare.'))
+    await act(async () => { await view.compare.compare('t1', view.keys[1]) })
+    view.draw()
+    expect(view.status()?.textContent).toBe('Too large to compare.')
+    let finish!: (answer: DiffAnswer) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(yes => { finish = yes }))
+    const again = view.compare.compare('t1', view.keys[1])
+    view.draw()
+    expect(view.status()?.textContent).toBe('')
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }); await again })
+    view.draw()
+    expect(view.status()?.textContent).toBe('')
+    expect(view.button('Show It')).toBeDefined()
+  })
+
   it('says a failure of Compare with Previous Result on the pair it shows, where it offered its Cancel', async () => {
     const view = fixture()
     let fail!: (error: unknown) => void

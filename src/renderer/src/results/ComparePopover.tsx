@@ -209,8 +209,10 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     if (running || !sides) return
     const owner = card.current?.ownerDocument, form = card.current
     // Asked once the comparison is there: with the focus in another dialog (the palette), the popover stays for it to come
-    // back. Any Compare popover of the document counts: closed and opened again on the pair, it is a new one.
-    const focused = await compare.run(tabId, { holdsFocus: () => !!owner?.activeElement?.closest('.compare-popover') })
+    // back. Any Compare popover of the document counts (closed and opened again on the pair, it is a new one), and so does
+    // a focus lost to the page (a press on the popover's text), which nothing else holds.
+    const holdsFocus = () => { const at = owner?.activeElement; return !at || at === owner.body || !at.isConnected || !!at.closest('.compare-popover') }
+    const focused = await compare.run(tabId, { holdsFocus })
     const at = owner?.activeElement
     const lost = !at || at === owner.body || !at.isConnected || !!form?.contains(at)
     if (focused !== undefined && lost && results.getSnapshot()[tabId]?.focused === focused) focusResultGrid(owner, tabId, focused)
