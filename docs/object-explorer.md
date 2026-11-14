@@ -422,6 +422,7 @@ takes more than VIEW DEFINITION (db_owner by default): a login refused it still 
 reference SQL Server resolved to an object in this database shows without a server or database, however the code spelled
 them (the database in another case, or the local server's own name), so one made several ways lists once. A
 dependency in the same database of a kind Peek describes opens in the same card, beside the same row, and Back returns.
+View Dependencies (below) follows the same listings level by level.
 Every tab but Definition is read the first time it is chosen, and again (or by Retry) when it is chosen after failing; the
 arrow keys move between tabs without choosing them, and Enter or Space chooses. **Top rows** (tables and views) runs Select
 Top N Rows' own script with N = 10 (the columns from `tables.columns`, as Select Top 1000 Rows lists them) through
@@ -483,6 +484,24 @@ tab owns its reads and its Top rows run as the card does; closing it releases th
 | `type` | Alias type (alias) | Data type, Collation, Default, Rule |
 | `type` | CLR type (clr) | Assembly, Class, Binary ordered, Fixed length |
 | `tableType` | General | Schema, Created, Last modified, Memory optimized |
+
+## View Dependencies
+
+SSMS's View Dependencies, on the context menu of the kinds whose Peek has a Dependencies tab, opens the Object Dependencies
+dialog. Its two choices list the objects that depend on the object, or the objects it depends on, as a tree whose root is the
+object. Each level is one of the Dependencies tab's listings, the same SQL (`explorer.dependencies`, one direction per request,
+on Peek's slot and budget), read the first time its node is expanded and never before; a failed level says why and offers
+Retry. A level lists at most 500 objects in name order, the tree at most
+10,000 in all and 32 levels deep, and a level cut by either says so. A node is a leaf, and says
+why, when it is on a linked server or in another database (named, never read), unresolved, of a kind the tree cannot read (a
+constraint), or already above it on its branch: a cycle is marked rather than followed. Below the tree the selected node shows
+its name, type and dependency type (foreign key, schema-bound or non-schema-bound). Enter, a double-click or Show in Object
+Explorer selects the node in the tree (walking and paging to it as Search Objects' Reveal does) and closes the dialog; Peek
+opens the node's Peek tab. A trigger is named below its table or view, so it can be read, selected and peeked too.
+
+| Kinds | Leaf reasons |
+| --- | --- |
+| `table`, `view`, `procedure`, `function`, `trigger`, `synonym`, `sequence`, `type`, `tableType` | On a linked server: not followed; In another database: not followed; Unresolved reference; Not followed; Cycle: already above on this branch; Not followed past 32 levels |
 
 ## Limits
 

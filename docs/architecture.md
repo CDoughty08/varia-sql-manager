@@ -283,6 +283,13 @@ being true.
   cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units), a bound on the renderer's
   memory (about twice that for a moment, while the pages are joined): a longer text is not read, and the part says so, never
   showing part of it. Search Objects' details pane, which shows at most `shownChars`, reads a module's pages only that far.
+- View Dependencies (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) reads no SQL of its own: a
+  level of its tree is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings (`PeekSql.Level`, the
+  same text `PeekSql.Dependencies` joins), on Peek's slot and budget, linted with the rest. A level is read only when its node
+  expands, at most `dependencyLimits.perLevel` objects (the catalogue's `dependencyLevel`, mirrored in C#), the tree at most
+  `dependencyLimits.nodes` and `dependencyLimits.depth`, each cut marked. A node already above it on its branch is a cycle leaf,
+  never read; another database's or a linked server's object is a leaf, never read. Closing the dialog or changing its choice
+  cancels the reads still running (`explorerCancel`) and drops their answers.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

@@ -4,7 +4,7 @@
 // the `peek` block of the embedded Explorer/explorer-catalog.json, which explorerCatalogJson writes.
 import type { ExplorerError } from '../contracts.ts'
 import type { NodeKind, NodeSubtype } from './catalog.ts'
-import type { ObjectRef } from './refs.ts'
+import type { ObjectRef, ParentRef } from './refs.ts'
 
 export const peekKinds = ['table', 'view', 'procedure', 'function', 'index', 'trigger', 'databaseTrigger', 'serverTrigger', 'database', 'login', 'synonym', 'sequence', 'type',
   'tableType'] as const satisfies readonly NodeKind[]
@@ -260,9 +260,10 @@ export const peekLimits = {
 
 export type PeekValue = string | number | boolean | null
 /**
- * One object on the Dependencies tab. `database` and `server` name another database or a linked server (references only, so
- * the object may not exist); `kind` is its Object Explorer kind when it is in this database and of a kind the tree lists by
- * name, and absent otherwise (a trigger, a column-less reference). `foreignKey`: a foreign key, not code, makes the link.
+ * One object on the Dependencies tab and in View Dependencies' tree (`dependencies.ts`). `database` and `server` name another
+ * database or a linked server (references only, so the object may not exist); `kind` is its Object Explorer kind when it is in
+ * this database and of a kind the tree lists by name (a DML trigger, with its table's or view's `parent`), and absent otherwise
+ * (a constraint, an unresolved reference). `foreignKey`: a foreign key, not code, makes the link.
  */
 export interface PeekDependency {
   readonly name: string
@@ -273,6 +274,12 @@ export interface PeekDependency {
   /** The subtype the tree lists it with, so a followed dependency offers the same Script As verbs and folders. */
   readonly subtype?: NodeSubtype
   readonly foreignKey?: true
+  /** Its sys.objects type, trimmed (`U`, `P`, `TR`); absent when SQL Server did not resolve the reference in this database. */
+  readonly type?: string
+  /** A schema-bound reference (sys.sql_expression_dependencies), or a column or parameter of a type. */
+  readonly schemaBound?: true
+  /** A trigger's table or view. */
+  readonly parent?: ParentRef
 }
 export interface PeekParams {
   readonly connectionId: string
