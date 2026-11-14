@@ -81,7 +81,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.memory-nerd-toggle > .codicon', '.memory-group h4 .codicon', '.update-status .codicon', '.oe-active > .codicon',
+    '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.memory-nerd-toggle > .codicon', '.memory-group-aside > .codicon', '.update-status .codicon', '.oe-active > .codicon',
     '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon',
     '.tile-caption > .codicon'
   ],

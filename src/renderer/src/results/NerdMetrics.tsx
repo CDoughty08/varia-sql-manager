@@ -54,14 +54,14 @@ export function NerdDetails({ model }: { model: NerdMetricsModel }) {
       </li>)}
     </ul>
     <div className="memory-group">
-      <h4>Where it lives<span>same scale</span></h4>
+      <h4>Where it lives<span className="memory-group-aside">same scale</span></h4>
       {model.bars.map((bar, index) => <Usage key={bar.label} bar={bar} bytes={bytes} index={index} />)}
       <ul className="memory-legend">
         {model.legend.map(part => <li key={part.part}><span className="memory-swatch" data-part={part.part} aria-hidden="true" />{part.label}<span className="memory-figure">{bytes(part.bytes)}</span></li>)}
       </ul>
     </div>
     <div className="memory-group">
-      <h4>Biggest results<span>rows <Icon name="arrow-right" /> stored</span></h4>
+      <h4>Biggest results<span className="memory-group-aside">rows <Icon name="arrow-right" /> stored</span></h4>
       {model.biggest.length === 0 ? <p className="memory-nerd-empty">No results held.</p> : <ul className="memory-biggest" aria-label="Biggest results">
         {model.biggest.map(row => <li key={row.resultId}>
           <ResultName name={row.name} />
@@ -73,7 +73,7 @@ export function NerdDetails({ model }: { model: NerdMetricsModel }) {
       </ul>}
     </div>
     <div className="memory-group">
-      <h4>Codec<span>{model.codecOn ? 'since start' : 'off'}</span></h4>
+      <h4>Codec<span className="memory-group-aside">{model.codecOn ? 'since start' : 'off'}</span></h4>
       <dl className="memory-counters" aria-label="Codec counters">
         {model.counters.map(counter => <div key={counter.label}><dt>{counter.label}</dt><dd>{counter.value}</dd></div>)}
       </dl>

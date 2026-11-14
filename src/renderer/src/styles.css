@@ -1287,8 +1287,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .memory-tile[data-tone="saved"] .memory-tile-value { color: var(--varia-successForeground); }
 .memory-group { display: grid; gap: var(--varia-space-1); }
 .memory-group h4 { display: flex; justify-content: space-between; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
-.memory-group h4 span { display: flex; align-items: center; gap: var(--varia-space-0); font-weight: 400; letter-spacing: 0; text-transform: none; }
-.memory-group h4 .codicon { font-size: var(--varia-glyph-sm); }
+.memory-group-aside { display: flex; align-items: center; gap: var(--varia-space-0); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.memory-group-aside > .codicon { font-size: var(--varia-glyph-sm); }
 .memory-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--varia-space-0) var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .memory-figure { text-align: end; white-space: nowrap; }
 .memory-bar { grid-column: 1 / -1; display: flex; height: 8px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); }
