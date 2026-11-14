@@ -283,10 +283,12 @@ internal static class PackerChecks
         rig.Packer.PackDue();
         var packedUse = rig.Store.UsedBytes;
         var pokes = rig.Pokes;
-        var view = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
-        check(view.Rows == set.RowsAvailable && !set.HasPacked && set.NeedsPacking && rig.Pokes > pokes && rig.Store.UsedBytes > packedUse,
-            "a sort of a packed hidden result unpacks it first, charging its raw size, and its end wakes the policy");
-        // The operation counts as a use: packed again only once the result has gone unused for the delay, so a pivot or
+        // A search needs every row at once, so it unpacks a packed result first (a sort, filter, profile or pivot reads it
+        // fused and leaves it packed: FusedReadChecks).
+        var search = (ResultsSearchResult)service.DispatchAsync("results.search", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, text = "no such text", fromRow = 0, maxMatches = 10 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
+        check(search.Rows == set.RowsAvailable && !set.HasPacked && set.NeedsPacking && rig.Pokes > pokes && rig.Store.UsedBytes > packedUse,
+            "a search of a packed hidden result unpacks it first, charging its raw size, and its end wakes the policy");
+        // The operation counts as a use: packed again only once the result has gone unused for the delay, so a search or
         // comparison that reads a hidden result run after run does not unpack and pack it each time.
         var again = rig.Packer.PackDue();
         check(again == rig.Clock + ResultPacker.DelayMs && !set.HasPacked, "after an operation unpacked it, a hidden result waits its delay again: " + again);
@@ -326,9 +328,9 @@ internal static class PackerChecks
         rig.Store.TryReserve(filler, rig.Store.GlobalBytes - rig.Store.UsedBytes - 1024, false, out _);
         var used = rig.Store.UsedBytes;
         string? code = null;
-        try { service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = new[] { new { column = 1, descending = false, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
+        try { service.DispatchAsync("results.search", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, text = "still no such text", fromRow = 0, maxMatches = 10 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
         catch (RequestException error) { code = error.Code; }
-        check(code == "TOO_LARGE" && AllPacked(set) && rig.Store.UsedBytes == used, "a sort refused the budget to unpack a packed result answers TOO_LARGE and leaves it packed");
+        check(code == "TOO_LARGE" && AllPacked(set) && rig.Store.UsedBytes == used, "a search refused the budget to unpack a packed result answers TOO_LARGE and leaves it packed");
     }
 
     private static void UsedWhileDue(Action<bool, string> check)

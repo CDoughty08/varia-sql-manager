@@ -254,6 +254,17 @@ internal sealed partial class ResultStore
         return page;
     }
 
+    /// <summary>A packed page unpacked into a fused read's room (<see cref="PageCodec.UnpackInto"/>), timed and counted as
+    /// any unpack is.</summary>
+    internal void UnpackInto(PackedPage packed, Span<byte> room)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        PageCodec.UnpackInto(packed.Bytes, room);
+        Interlocked.Add(ref unpackTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        Interlocked.Increment(ref pagesUnpacked);
+        Interlocked.Add(ref unpackedOut, room.Length);
+    }
+
     /// <summary>Moves what the sets hold packed and cached (each set keeps its own share and gives it back when freed).</summary>
     internal void Held(long packed, long logical, long cached)
     {
@@ -382,9 +393,12 @@ internal sealed partial class ResultStore
     /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a
     /// page of rows is: the budget is a share of the machine's memory, not of what is free, and a sort of a large result
     /// would otherwise take gigabytes from a machine with none to spare. Smaller requests are not asked: a busy machine
-    /// still sorts a small result. (What is taken in many small steps, a profile's long values or a diff's cells, is
-    /// not asked either.)</summary>
+    /// still sorts a small result. What is taken in many small steps (a profile's long values, a diff's cells) asks once
+    /// for every this much taken (<see cref="WorkSteps"/>), as a sort key's pages do.</summary>
     public const long WorkCheckBytes = 64L << 20;
+
+    /// <summary>What <see cref="WorkSteps"/> take between load readings: <see cref="WorkCheckBytes"/>, less only in checks.</summary>
+    internal long WorkStepBytes { get; init; } = WorkCheckBytes;
 
     /// <summary>Takes the working memory of an operation on a result (a sort's keys, a profile's figures).</summary>
     public bool TryReserveWork(QueryBudget query, long bytes) => TryReserve(query, bytes, bytes >= WorkCheckBytes, out _);

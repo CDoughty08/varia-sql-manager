@@ -8,6 +8,7 @@ import {
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, type PeekDefinitionParams, type PeekParams } from './peek.ts'
+import { dependencyDirections, isDependencyKind, type DependenciesParams } from './dependencies.ts'
 
 // zod's max() counts code points, while sysname holds 128 UTF-16 code units.
 const utf16 = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -104,3 +105,6 @@ export const peekDependenciesParamsSchema = z.object({ connectionId: z.uuid(), r
 export const peekDefinitionParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema,
   offset: z.number().int().min(1).max(peekLimits.definitionMaxChars - 1) }).strict()
   .refine(params => isPeekKind(params.target.kind) && peekSpecs[params.target.kind].definition === 'module', { path: ['target', 'kind'], message: 'Peek reads no module text of this kind of object.' }) satisfies z.ZodType<PeekDefinitionParams>
+/** One level of View Dependencies' tree: a kind whose Peek has the Dependencies tab, and one of the two directions. */
+export const dependenciesParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, direction: z.enum(dependencyDirections) }).strict()
+  .refine(params => isDependencyKind(params.target.kind), { path: ['target', 'kind'], message: 'View Dependencies does not list this kind of object.' }) satisfies z.ZodType<DependenciesParams>

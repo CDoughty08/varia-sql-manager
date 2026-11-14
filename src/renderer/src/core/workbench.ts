@@ -84,6 +84,7 @@ import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
+import { DependenciesService } from '../explorer/DependenciesService'
 import { LongRunService } from '../services/long-runs'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
@@ -217,6 +218,8 @@ export interface Workbench extends Disposable {
   readonly ssisCatalog: CreateCatalogService
   /** The long runs (Create Catalog, a restore): they refuse a window close, a Disconnect of their server and Restart. */
   readonly longRuns: LongRunService
+  /** Object Explorer › View Dependencies: its dialog and the tree it reads one level at a time. */
+  readonly dependencies: DependenciesService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
   /** The SSIS Catalog's properties documents (Folder, Project, Package and Environment Properties). */
@@ -415,6 +418,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek, documents, connections,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
+  // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
+  const dependencies = new DependenciesService({
+    api, connections, explorer,
+    reveal: (connectionId, hit) => { void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError) },
+    peek: node => { peekTabs.open(node) }
+  })
   const releaseNotes = new ReleaseNotesService(documents, () => updates.getSnapshot().currentVersion,
     id => focusLater(() => {
       const target = document.querySelector<HTMLElement>(`[data-release-notes="${CSS.escape(id)}"] [aria-label="Release version"]`)
@@ -559,6 +568,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     serverFiles,
     ssisCatalog,
     longRuns,
+    dependencies,
     designers,
     ssisProperties,
     properties,
@@ -638,6 +648,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       dialogs.dispose()
       serverFiles.dispose()
       ssisCatalog.dispose()
+      dependencies.dispose()
       longRuns.dispose()
       connections.dispose()
       editorOptions.dispose()

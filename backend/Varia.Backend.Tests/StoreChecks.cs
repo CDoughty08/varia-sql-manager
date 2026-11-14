@@ -85,6 +85,29 @@ internal static class StoreChecks
         counted.TryReserve(MiB);
         counted.ReturnAll();
         check(crossings == 8 * 4096 / 4 / 64 && !refusing.TryReserve(MiB) && returned == 0, $"a key's memory taken by many threads asks once for each 64 MiB, and a refusal holds nothing: {crossings} {returned}");
+        // Working memory taken in many small steps (a profile's long values, a diff's cells, a pivot's figures) asks the
+        // memory load once for every 64 MiB it holds, not at every step, and is refused under high load once past one.
+        var readings = 0;
+        var loaded = false;
+        var stepped = new ResultStore(4 * GiB, 2 * GiB, () => { readings++; return (loaded ? 100 : 0, 50); });
+        var stepQuery = stepped.BeginQuery("steps");
+        var steps = new WorkSteps(stepped, stepQuery);
+        var calmSteps = Enumerable.Range(0, 63).All(_ => steps.TryReserve(MiB)) && readings == 0;
+        var calmCrossing = steps.TryReserve(MiB) && readings == 1;
+        loaded = true;
+        var underLoad = Enumerable.Range(0, 63).All(_ => steps.TryReserve(MiB)) && readings == 1;
+        var refusedCrossing = !steps.TryReserve(MiB) && readings == 2 && steps.LowMemory && !steps.TryReserve(MiB) && readings == 3;
+        var largeStep = !new WorkSteps(stepped, stepQuery).TryReserve(ResultStore.WorkCheckBytes) && readings == 4;
+        check(calmSteps && calmCrossing && underLoad && refusedCrossing && largeStep && steps.Held == 127 * MiB && stepQuery.UsedBytes == 127 * MiB && stepQuery.Stopped == TruncationReason.None,
+            $"working memory taken in small steps reads the memory load once for each 64 MiB held and is refused under high load past it, asking again at the next step; a refusal holds nothing and stops nothing: {readings} {steps.Held / MiB} {stepQuery.UsedBytes / MiB}");
+        var small = new ResultStore(4 * MiB, 4 * MiB);
+        var budgetSteps = new WorkSteps(small, small.BeginQuery("small"));
+        check(!budgetSteps.TryReserve(5 * MiB) && !budgetSteps.LowMemory && budgetSteps.Held == 0, "a step the budget refuses is not low memory and holds nothing");
+        var crossingSteps = 0;
+        var sharedStore = new ResultStore(16 * GiB, 16 * GiB, () => { Interlocked.Increment(ref crossingSteps); return (0, 50); });
+        var sharedSteps = new WorkSteps(sharedStore, sharedStore.BeginQuery("shared"));
+        Parallel.For(0, 8, _ => { for (var step = 0; step < 4096; step++) sharedSteps.TryReserve(MiB / 4); });
+        check(crossingSteps == 8 * 4096 / 4 / 64 && sharedSteps.Held == 8 * 4096 * (MiB / 4), $"steps taken by many threads read the memory load once for each 64 MiB between them: {crossingSteps}");
         check(ResultStore.LimitFromEnvironment("300") == 300 * MiB && ResultStore.LimitFromEnvironment("1048576") == 1024 * GiB && ResultStore.LimitFromEnvironment("1") == MiB
             && new[] { "1048577", "0", "-5", "+5", " 5", "5 ", "5.0", "0x10", "", "lots", "99999999999999999999" }.All(text => ResultStore.LimitFromEnvironment(text) is null)
             && ResultStore.LimitFromEnvironment(null) is null,

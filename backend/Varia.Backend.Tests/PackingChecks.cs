@@ -303,8 +303,8 @@ internal static class PackingChecks
         check(turnedBytes == rawTurned && turnedBytes > 0 && set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed,
             "a transposed Copy of a packed result reads its rows' pages unpacked, leaves the result packed and returns the working memory");
         var sorted = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
-        check(sorted.Rows == set.RowsAvailable && !set.HasPacked && store.UsedBytes > packed,
-            "an operation on the whole result unpacks it first and leaves it unpacked for the stage-1 policy to pack again");
+        check(sorted.Rows == set.RowsAvailable && set.HasPacked && store.UsedBytes == packed + 4 * set.RowsAvailable + ResultStore.ViewOverhead,
+            "a sort of a packed result reads it fused (FusedReadChecks): it stays packed and holds only the view's order afterwards");
         set.Pack();
         var filler = store.BeginQuery("filler");
         store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - 1024, false, out _);

@@ -68,6 +68,7 @@ const api: VariaApi = {
   explorerPeek: params => request('explorer.peek', params),
   explorerPeekDependencies: params => request('explorer.peekDependencies', params),
   explorerPeekDefinition: params => request('explorer.peekDefinition', params),
+  explorerDependencies: params => request('explorer.dependencies', params),
   // Only the four fields cross to the page, whatever main sent.
   onExplorerIndexProgress: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({ requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects })

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -31,7 +32,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.dependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -324,7 +325,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" => RequestLane.Results,
-        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
+        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
@@ -404,6 +405,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
         "explorer.peek" => await explorer.PeekAsync(Read<PeekArgs>(parameters, json), Token(context)),
         "explorer.peekDependencies" => await explorer.PeekDependenciesAsync(Read<PeekArgs>(parameters, json), Token(context)),
+        "explorer.dependencies" => await explorer.DependenciesAsync(Read<DependenciesArgs>(parameters, json), Token(context)),
         "explorer.peekDefinition" => await explorer.PeekDefinitionAsync(Read<PeekDefinitionArgs>(parameters, json), Token(context)),
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
         "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
@@ -983,9 +985,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var iteration = 0;
         var totalBatches = batches.Sum(batch => batch.RepeatCount);
         long storedRows = 0;
-        // Sets past maxResultSets, sets whose descriptors would not fit in the summary, and sets after the budget stopped.
-        int overflowSets = 0, oversizeSets = 0, budgetSets = 0, unkeptSets = 0;
-        long unkeptRows = 0;
+        // Sets discarded on request, past maxResultSets, whose descriptors would not fit in the summary, or after the budget stopped.
+        var tally = new ResultSetTally();
         long descriptorBytes = 0;
         QueryBudget? budget = null;
         long recordsAffected = -1;
@@ -1164,51 +1165,27 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                     if (reader.FieldCount > 0)
                                     {
                                         // Discard results: only a plan is looked for (its first row says), and kept as ever, within
-                                        // the limits on sets as ever.
-                                        if (args.DiscardResults && !ColumnPlan.MayBeExecutionPlan(reader))
+                                        // the limits on sets as ever (ResultSetTally). A discarded set is read to its end here.
+                                        var current = reader;
+                                        (var fate, prefetched, plan) = await tally.SortAsync(reader, args.DiscardResults, sets.Count, args.MaxResultSets, prefix =>
                                         {
-                                            unkept = true;
-                                            unkeptSets++;
-                                        }
-                                        else if (sets.Count >= args.MaxResultSets) overflowSets++;
-                                        else if (oversizeSets > 0) oversizeSets++;
-                                        else
+                                            var built = ColumnPlan.From(current, prefix);
+                                            return (built, built.IsPlan, built.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes);
+                                        }, token);
+                                        if (fate == ResultSetTally.Fate.Open)
                                         {
-                                            prefetched = ColumnPlan.MayBeExecutionPlan(reader) && await reader.ReadAsync(CancellationToken.None);
-                                            plan = ColumnPlan.From(reader, prefetched ? ColumnPlan.ReadShowplanPrefix(reader) : null);
-                                            if (args.DiscardResults && !plan.IsPlan)
-                                            {
-                                                // It looked like a plan and is rows: the row read to tell is one of them.
-                                                unkept = true;
-                                                unkeptSets++;
-                                                if (prefetched) unkeptRows++;
-                                                prefetched = false;
-                                                plan = null;
-                                            }
-                                            else if (plan.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
-                                            else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
+                                            if (store.Open(budget, sets.Count, batchNumber, iteration, plan!.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
                                             {
                                                 descriptorBytes += plan.DescriptorBytes;
                                                 currentSet = opened;
                                                 sets.Add(opened);
                                                 events.Opened(opened);
                                             }
-                                            else { budgetSets++; plan = null; }
+                                            else { tally.Refused(); plan = null; }
                                         }
+                                        unkept = fate == ResultSetTally.Fate.Unkept;
                                     }
-                                    // Rows are counted as they pass, so a run that is stopped or fails says how many it read. Long
-                                    // values are read past on a thread of its own, as in a set that stopped storing; a thread for
-                                    // every set of a script that returns thousands would be the cost of the script.
-                                    if (unkept)
-                                    {
-                                        if (ColumnPlan.HasLongColumns(reader))
-                                        {
-                                            var passed = new long[1];
-                                            try { await SkipRowsAsync(reader, null, events, token, passed); }
-                                            finally { unkeptRows += passed[0]; }
-                                        }
-                                        else while (await reader.ReadAsync(CancellationToken.None)) unkeptRows++;
-                                    }
+                                    if (unkept) { /* SortAsync read it to its end, counting its rows as they passed. */ }
                                     else if (plan?.ForXml is not null && currentSet is not null)
                                     {
                                         // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
@@ -1260,11 +1237,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         if (currentSet is null) continue;
                                         currentSet.CountRow();
                                         events.RowsChanged();
-                                        // The limit is on the rows a query returns: a plan asked for with them is kept whatever came before.
                                         // A plan is told by its first row, and is that row: a set of more rows under a plan's column name is rows.
                                         var planRow = plan?.IsPlan == true && currentSet.RowsRead == 1;
-                                        // With results discarded only a plan's set is open, and only its plan is kept of it.
-                                        if ((args.DiscardResults || args.MaxRows > 0 && storedRows >= args.MaxRows) && !planRow) { currentSet.Skip(TruncationReason.RowLimit); continue; }
+                                        if (!ResultSetTally.Stores(args.DiscardResults, args.MaxRows, storedRows, planRow)) { currentSet.Skip(TruncationReason.RowLimit); continue; }
                                         var builder = currentSet.BeginRow();
                                         if (builder is null) continue;
                                         skipped = false;
@@ -1474,11 +1449,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes)) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
-        if (unkeptSets > 0)
-            Note("Discard results after execution is on: " + unkeptSets.ToString("N0", CultureInfo.InvariantCulture) + (unkeptSets == 1 ? " result set (" : " result sets (")
-                + unkeptRows.ToString("N0", CultureInfo.InvariantCulture) + (unkeptRows == 1 ? " row) was" : " rows) " + (unkeptSets == 1 ? "was" : "were")) + " read and not kept.");
-        if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
-        if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
+        foreach (var note in tally.Notes(args.MaxResultSets)) Note(note);
         if (omittedPlans || plans.Any(set => set.Truncated is not null || set.TruncatedCells > 0))
             Note("Some actual execution plans could not be stored in full within the plan capture or result memory limits.");
         if (lostPlanEvents)
@@ -1495,7 +1466,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
-        return new(descriptors, overflowSets + oversizeSets + budgetSets + unkeptSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
+        return new(descriptors, tally.Discarded, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
             statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
     }
@@ -1632,10 +1603,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             });
         }
         var complete = set.IsComplete;
+        // A packed result stays packed: the build reads it fused, page by page on its workers (ViewSorter.PageSource).
         using var pin = set.Pin();
-        await Unpack(filters.Length > 0
-            ? "There is not enough result memory to filter these rows. Close other results and try again."
-            : "There is not enough result memory to sort these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1651,6 +1620,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
         try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
+        // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
+        // answers as it would anywhere else.
+        // Only those: a limit with its own reason (too many values, rows or comparisons) is answered as it is.
+        catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message is ViewSorter.SortTooLarge or ViewSorter.FilterTooLarge or ViewSorter.NoRoomToRead)
+        {
+            store.Return(set.Budget, working + kept);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            throw TooLarge(error.Message);
+        }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -1774,8 +1752,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        // A packed result stays packed: each of the profile's runs unpacks the page it reads into a room of its own.
         using var pin = set.Pin();
-        await Unpack("There is not enough result memory to profile these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1796,8 +1774,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
                 if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
             }
-            // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
-            var charges = new ColumnProfiler.Charges(bytes => store.TryReserveWork(set.Budget, bytes));
+            // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them, asking the
+            // system's memory load once for every 64 MiB of them.
+            var steps = new WorkSteps(store, set.Budget);
+            var charges = new ColumnProfiler.Charges(steps.TryReserve);
             try
             {
                 var threads = workers;
@@ -1808,12 +1788,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             catch (ColumnProfiler.ProfileTooLargeException) when (workers > 1)
             {
-                // Every thread keeps long values of its own: one thread's may still fit.
+                // Every thread keeps long values of its own: one thread's may still fit, and under high memory load they
+                // may stay under the 64 MiB at which the threads' values together asked it.
                 workers = 1;
             }
             catch (ColumnProfiler.ProfileTooLargeException)
             {
-                throw new RequestException("TOO_LARGE", tooLarge);
+                throw steps.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : TooLarge(tooLarge);
             }
             finally { store.Return(set.Budget, working + charges.Extra); }
         }
@@ -2095,18 +2076,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
         if (!store.TryReserveWork(left.Budget, working))
             throw TooLarge("There is not enough result memory to compare these results. Close other results and try again.");
-        long cellBytes = 0;
-        bool ReserveCells(long bytes)
-        {
-            if (!store.TryReserveWork(left.Budget, bytes)) return false;
-            cellBytes += bytes;
-            return true;
-        }
+        // The differing cells are charged a chunk at a time, asking the system's memory load once for every 64 MiB of them.
+        var cells = new WorkSteps(store, left.Budget);
         try
         {
             DiffModel model;
-            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, ReserveCells), token, left, right); }
-            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error, (left, args.Left), (right, args.Right)); }
+            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, left, right); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE")
+            {
+                throw NotStored(left.Budget, cells.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : error, (left, args.Left), (right, args.Right));
+            }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
@@ -2141,7 +2120,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(left.Budget, working + cellBytes); }
+        finally { store.Return(left.Budget, working + cells.Held); }
     }
 
     /// <summary>results.pivot: groups and aggregates a complete result's rows (ResultPivoter), or its view's, off the frame
@@ -2161,29 +2140,35 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
+        // A packed result stays packed: the build reads it fused, and its output reads the rows it copies together.
         using var pin = set.Pin();
-        await Unpack(tooLarge, token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
         if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
-        long figures = 0;
-        bool Reserve(long bytes)
-        {
-            if (!store.TryReserveWork(set.Budget, bytes)) return false;
-            figures += bytes;
-            return true;
-        }
+        // The figures and the bounds of Distinct Count's runs, charged as the build meets them.
+        var figures = new WorkSteps(store, set.Budget);
         try
         {
             PivotModel model;
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, Reserve, keyMemory), token, set); }
-            catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
+            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, figures.TryReserve, keyMemory), token, set); }
+            catch (PivotTooLargeException)
+            {
+                // Thrown only for the figures, the first step: a refused Distinct Count bounds step (also LowMemory) comes
+                // later and is not an error, the build sorts by cell and value instead.
+                throw figures.LowMemory ? NotStored(set.Budget, new RequestException("TOO_LARGE", LowMemory), (set, args.ResultId)) : NotStored(set.Budget, tooLarge, (set, args.ResultId));
+            }
+            // A packed result's rooms and extracts (a fused read) refused: why, as for the figures.
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
-            var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
+            IReadOnlyList<ResultColumn> columns;
+            IReadOnlyList<WireKind> wires;
+            IReadOnlyList<ColumnLength> lengths;
+            try { (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model, token); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
                 ?? throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
             void Release()
@@ -2192,7 +2177,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             try
             {
-                await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set);
+                // The rows it copies from a packed result are read together (RowAccess.Hold): refused, why, as above.
+                try { await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
                 // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
                 if (pivot.Describe().RowsStored < model.RowGroups) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
                 var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);
@@ -2206,7 +2193,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(set.Budget, working + figures); }
+        finally { store.Return(set.Budget, working + figures.Held); }
     }
 
     /// <summary>A pivot request checked against its result: distinct row columns, a column group that is not one of them, and
@@ -2411,7 +2398,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// a cancel of its own from another thread could deadlock with that one.</summary>
     /// <param name="passed">Counts the rows read past in its first element, as they pass: what it holds when the read
     /// is stopped or fails is what was read.</param>
-    private static Task SkipRowsAsync(SqlDataReader reader, ResultSetBuffer? set, QueryEventSink events, CancellationToken token, long[]? passed = null) =>
+    internal static Task SkipRowsAsync(DbDataReader reader, ResultSetBuffer? set, QueryEventSink? events, CancellationToken token, long[]? passed = null) =>
         Task.Factory.StartNew(() =>
         {
             while (true)
@@ -2421,7 +2408,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 if (passed is not null) passed[0]++;
                 if (set is null) continue;
                 set.CountRow();
-                events.RowsChanged();
+                events?.RowsChanged();
             }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 

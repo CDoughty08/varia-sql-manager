@@ -94,4 +94,12 @@ internal static class PageCodec
             throw new InvalidDataException("A packed result page could not be read.");
         return page;
     }
+
+    /// <summary>The page packed into <paramref name="packed"/> unpacked into <paramref name="room"/>, which is exactly its
+    /// length as sealed: a fused read's own room, reused page after page (ViewSorter.PageRooms).</summary>
+    public static void UnpackInto(byte[] packed, Span<byte> room)
+    {
+        if (!ZstandardDecoder.TryDecompress(packed, room, out var written) || written != room.Length)
+            throw new InvalidDataException("A packed result page could not be read.");
+    }
 }

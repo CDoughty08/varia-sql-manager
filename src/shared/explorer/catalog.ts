@@ -6,6 +6,7 @@ import type { CodiconId, IconId } from '../icons.ts'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { loginSubtypes } from '../actions/logins.ts'
 import { peekCatalogBlock } from './peek.ts'
+import { dependencyLimits } from './dependencies.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -578,7 +579,7 @@ export function explorerCatalogJson(): string {
     `  "folders": ${block(folders)},`,
     `  "kinds": ${block(kinds)},`,
     `  "managedInstanceEngineEditions": ${line(managedInstanceEngineEditions)},`,
-    `  "peek": ${line(peekCatalogBlock())},`,
+    `  "peek": ${line({ ...peekCatalogBlock(), dependencyLevel: dependencyLimits.perLevel })},`,
     `  "queries": ${line(queryIds)},`,
     `  "schemaGroups": ${line({ list: schemaGroupList, rows: ['schema'] })},`,
     `  "scopes": ${line(scopeFields)},`,
