@@ -64,24 +64,26 @@ await import(${JSON.stringify(core)})`
     // failed as "The results could not be compared." because its schema required a null key the backend never sends.
     // Every shared and main schema is scanned, as a backend answer's schema may live in any of them (validation.ts,
     // supervisor.ts, connection.ts); a null that is not a member the backend could leave out is listed with why. A line
-    // an allowance names may hold only the one null it excuses.
-    const allowed: readonly (readonly [file: string, text: string, why: string])[] = [
+    // an allowance names may hold only the one null it excuses; a pattern matches a whole line too generic to quote.
+    const allowed: readonly (readonly [file: string, text: string | RegExp, why: string])[] = [
       [join('src', 'shared', 'activity', 'schema.ts'), 'hostProcessId: z.number()', 'a request member the renderer sends, never a backend answer'],
       [join('src', 'shared', 'language-service.ts'), 'languageHoverSchema = z.object(', 'the whole answer, not a member: no hover answers null'],
+      [join('src', 'shared', 'language-service.ts'), /^\}\)\.strict\(\)\.nullable\(\)$/, 'the unindented end of languageDefinitionSchema: the whole answer, not a member: no definition answers null'],
       [join('src', 'shared', 'live', 'schema.ts'), 'metrics: z.array(z.number().nullable())', 'array elements, whose nulls the backend keeps'],
       [join('src', 'shared', 'settings', 'schema.ts'), 'settingsPatchSchema = z.object(', 'a patch the renderer sends, where null resets a setting'],
       [join('src', 'shared', 'theme', 'choice.ts'), 'themePreviewSchema = z.object(', 'the renderer\'s own value, never a backend answer'],
       [join('src', 'main', 'index.ts'), 'recoveryIds: z.array(', 'array elements of a request the renderer sends']
     ]
+    const names = (line: string, text: string | RegExp) => typeof text === 'string' ? line.includes(text) : text.test(line)
     const nulls = (line: string) => [...line.matchAll(/\.nullable\(\)(?!\.(?:optional|default)\()|\bz\.nullable\(|\bz\.null\(\)|\bz\.literal\(null\)/g)].length
     const scanned = [...files(join('src', 'shared')), ...files(join('src', 'main'))].filter(file => file.endsWith('.ts'))
     const bare = scanned.flatMap(file => readFileSync(file, 'utf8').split('\n').flatMap((line, at) => {
-      const excused = allowed.some(([path, text]) => path === file && line.includes(text)) ? 1 : 0
+      const excused = allowed.some(([path, text]) => path === file && names(line, text)) ? 1 : 0
       return nulls(line) > excused ? [`${file}:${at + 1}`] : []
     }))
     expect(bare, 'use .optional() for a member the backend may leave out, or list a null that is not one').toEqual([])
     // Each allowance still matches a line, so none outlives what it excused.
-    for (const [file, text, why] of allowed) expect(readFileSync(file, 'utf8').split('\n').some(line => line.includes(text) && nulls(line) === 1), `${file}: ${why}`).toBe(true)
+    for (const [file, text, why] of allowed) expect(readFileSync(file, 'utf8').split('\n').some(line => names(line, text) && nulls(line) === 1), `${file}: ${why}`).toBe(true)
   })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
