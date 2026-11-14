@@ -346,6 +346,16 @@ describe('query orchestration', () => {
     await discarding.queries.execute()
     expect(discarding.queryApi.execute.mock.calls[0][0]).toMatchObject({ discardResults: true })
   })
+  it('tells the results a run discards, and the next run after the setting is turned off keeps its rows', async () => {
+    const settings: { -readonly [K in keyof SettingsValues]?: SettingsValues[K] } = { 'queryResults.grid.discardResults': true }
+    const f = fixture(undefined, undefined, settings)
+    await f.queries.execute()
+    expect(f.results.begin.mock.calls[0][3]).toEqual({ discard: true })
+    settings['queryResults.grid.discardResults'] = false
+    await f.queries.execute()
+    expect(f.results.begin.mock.calls[1][3]).toEqual({ discard: false })
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('discardResults')
+  })
   it('delivers events to later listeners when an earlier one throws', () => {
     const bus = new EventBus(), received: string[] = []
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

@@ -258,10 +258,14 @@ were unchanged. No newly reviewed main, renderer or smoke finding remained after
 
 ## Current-main integration review
 
-The merge through main `49361180` combines the new result-set context, Pivot updates, editor mouse behavior and
-welcome-query startup optimization with connection restoration. Both the real workbench and its fixture subscribe to
+The merge through main `f9699653` combines the new result-set context, Pivot updates, editor mouse behavior,
+welcome-query startup optimization, discard-results status and memory accounting with connection restoration.
+Both the real workbench and its fixture subscribe to
 result-set availability while retaining live-connection admission, visible-only recovery candidates, exact target
-restoration and the startup readiness barrier. Generated command, gesture, settings and Monaco references are checked
+restoration and the startup readiness barrier. Memory-limit synchronization after a successful settings read retains
+the startup settings gate. Discard notices capture each run's options without changing its connection or retained
+provenance; low-memory derived-result refusals preserve cancellation, source release and query budgets.
+Generated command, gesture, settings, theme and Monaco references are checked
 from the combined catalogs. The query guide keeps its target/session guidance and the editor's new gesture references.
 
 An independent review found the new startup benchmark used Playwright's raw Windows launcher without the existing

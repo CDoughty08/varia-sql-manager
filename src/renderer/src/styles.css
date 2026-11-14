@@ -1284,6 +1284,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .client-statistics td:last-child { white-space: normal; }
 .client-statistics th[scope="row"] { font-weight: 500; }
 .memory-status { margin-left: var(--varia-space-2); }
+/* Discard results after execution (DiscardStatus): shown only while it is on, as plain as the memory control beside it. */
+.discard-status { display: flex; margin-left: var(--varia-space-2); }
+.discard-status-button { display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; border-color: transparent; background: transparent; cursor: pointer; }
+.discard-status-button:focus-visible { outline-offset: -2px; }
+.discard-status-button .codicon { font-size: var(--varia-glyph-sm); }
 .memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
 .memory-indicator:focus-visible { outline-offset: -2px; }
 .memory-status > .memory-indicator[aria-expanded="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }

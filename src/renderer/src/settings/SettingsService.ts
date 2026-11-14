@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import { defaultSettings, type BooleanSettingKey, type SettingKey, type SettingsValues, type SettingValue } from '../../../shared/settings/catalog'
+import { defaultSettings, settingDefs, type BooleanSettingKey, type SettingKey, type SettingsValues, type SettingValue } from '../../../shared/settings/catalog'
 import { settingsPatchSchema, settingsStateSchema, type SettingsPatch, type SettingsState } from '../../../shared/settings/schema'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -15,7 +15,7 @@ export interface SettingsSnapshot {
   readonly warning?: string
 }
 export type SettingsApi = Pick<VariaApi, 'getSettings' | 'updateSettings' | 'onSettingsChanged'>
-export interface OptionsDialogState { readonly open: boolean; readonly page?: string }
+export interface OptionsDialogState { readonly open: boolean; readonly page?: string; readonly setting?: SettingKey }
 type Report = (message: string, kind: 'error' | 'warning') => void
 
 class DialogStore extends SnapshotStore<OptionsDialogState> {
@@ -154,8 +154,12 @@ export class SettingsService extends SnapshotStore<SettingsSnapshot> implements 
   }
 
   get dialog(): ExternalStore<OptionsDialogState> { return this.dialogStore }
-  /** Opens Options on `page`, else the page last shown in this session, else Environment › General. */
-  openDialog(page?: string): void { this.dialogStore.set({ open: true, page: page ?? this.lastPage ?? 'environment.general' }) }
+  /** Opens Options on `page`, else the page last shown in this session, else Environment › General; with a known `setting`,
+   *  on that setting's page with its control focused. */
+  openDialog(page?: string, setting?: string): void {
+    const def = setting === undefined ? undefined : settingDefs.find(candidate => candidate.key === setting)
+    this.dialogStore.set(def ? { open: true, page: def.page, setting: def.key as SettingKey } : { open: true, page: page ?? this.lastPage ?? 'environment.general' })
+  }
   closeDialog(): void { this.dialogStore.set({ open: false }) }
   /**
    * OK in Options: saves `patch`, then closes the dialog that asked, and resolves to whether it did. A dialog that closed,

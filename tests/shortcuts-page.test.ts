@@ -561,14 +561,14 @@ describe('Options dialog over the shortcuts service', () => {
     root = createRoot(host)
   })
   afterEach(() => { act(() => root.unmount()); host.remove() })
-  const mount = async (service: FakeShortcutsService) => {
+  const mount = async (service: FakeShortcutsService, documents = { focusActive: vi.fn() }) => {
     const settings = new SettingsService({
       getSettings: async () => ({ ok: true, value: { revision: 1, values: defaultSettings } }),
       updateSettings: async () => ({ ok: true, value: { revision: 1, values: defaultSettings } }),
       onSettingsChanged: () => () => {}
     } as never)
     settings.openDialog(shortcutsPageId)
-    const workbench = { settings, platform: 'win32', keybindings: { capture: () => () => {} } } as unknown as Workbench
+    const workbench = { settings, platform: 'win32', keybindings: { capture: () => () => {} }, documents } as unknown as Workbench
     await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ShortcutsProvider, { shortcuts: service, children: createElement(OptionsDialog, { page: shortcutsPageId }) }) })))
     return settings
   }
@@ -594,6 +594,17 @@ describe('Options dialog over the shortcuts service', () => {
     await ok()
     expect(service.stored().file.bindings).toEqual([{ command: 'file.new', key: 'mod+n', remove: true }])
     expect(settings.dialog.getSnapshot().open).toBe(false)
+  })
+  it('gives focus to the active document when what opened the dialog is gone', async () => {
+    // The status bar's Results discarded item opens Options and goes when its setting is turned off there.
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+    const documents = { focusActive: vi.fn() }
+    await mount(createFakeShortcutsService(), documents)
+    opener.remove()
+    await act(async () => { button('Cancel').click() })
+    expect(documents.focusActive).toHaveBeenCalledTimes(1)
   })
   it('lets an untouched draft follow another window\'s save, so OK saves nothing', async () => {
     const service = createFakeShortcutsService()

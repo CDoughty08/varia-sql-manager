@@ -22,7 +22,8 @@ export function SettingRef({ id }: { readonly id: SettingKey }) {
   const { settings, commands } = useWorkbench(), { values } = useServiceSnapshot(settings), def = settingDef(id)
   return <span className="help-reference" data-help-setting={id}><strong>{def.label}: {settingValueLabel(id, values)}</strong>{' '}
     <span className="help-muted">{pagePath(def.page).map(page => page.title).join(' › ')}</span>{' '}
-    <button type="button" onClick={() => { void commands.execute('preferences.options', { settingsPage: def.page }, 'toolbar') }}>Open this Options page</button>
+    {/* Named by its setting too: a guide section can show several of these, and each must be told apart by ear. */}
+    <button type="button" aria-label={`Open this Options page for ${def.label}`} onClick={() => { void commands.execute('preferences.options', { settingsPage: def.page }, 'toolbar') }}>Open this Options page</button>
   </span>
 }
 
