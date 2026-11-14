@@ -1232,7 +1232,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   set's rows are read and none stored: no set is opened, so nothing is charged to the budget; each counts in
   `discardedResultSets`, and an informational message gives the sets and the rows read, also when the run is stopped
   or fails. A set that is an execution plan (told by its column's name and first row) is kept as ever, within
-  `maxResultSets`; rows after a plan's in its set are not kept.
+  `maxResultSets`; rows after a plan's in its set are not kept. The read loop takes these decisions through
+  `ResultSetTally` (`backend/Varia.Backend/Results/ResultSetTally.cs`), which the offline `Discard` suite checks against
+  a fake reader.
 - **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the renderer
   sends `queryResults.grid.maxRows`, 0 by default). A row of an execution plan returned with the rows (the first row of a
   plan set) is kept past it and not counted. **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
