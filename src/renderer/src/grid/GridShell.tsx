@@ -1,4 +1,4 @@
-import { Component, useCallback, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type HTMLAttributes, type KeyboardEvent, type ReactNode, type RefCallback } from 'react'
+import { Component, Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type HTMLAttributes, type KeyboardEvent, type ReactNode, type RefCallback } from 'react'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { ColumnFilterPopover, type ColumnFilterSource, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
@@ -37,8 +37,23 @@ export interface GridFunnels {
   columnName(column: number): string | undefined
 }
 
+/** Between a lead's links: words of the sentence (old → new), not an icon. */
+const toward = ' → '
+
+/** A lead's links, then its detail. A link reads as text with a button's behaviour, so the strip stays one line. */
+function StripLeadText({ lead }: { lead: StripLead }) {
+  return <>{lead.links.map((link, at) => <Fragment key={at}>{at > 0 && toward}
+    {link.run ? <button type="button" className="rg-strip-link" title={link.title} onClick={link.run}>{link.label}</button>
+      : <span className="rg-strip-closed" title={link.title}>{link.label}{link.closed ? ' (closed)' : ''}</span>}
+  </Fragment>)}{lead.links.length > 0 && ', '}{lead.detail}</>
+}
+
 /** A strip's button: its accessible name, icon, tooltip and the keys of the command it runs (`aria-keyshortcuts`). */
 export interface StripAction { readonly label: string; readonly icon?: IconId; readonly title?: string; readonly keys?: string; run(): void }
+/** A strip's leading link (a comparison's input): a button while `run` is set, else its words alone (`closed` is said after it). */
+export interface StripLink { readonly label: string; readonly title?: string; readonly closed?: boolean; run?(): void }
+/** Links drawn first, joined by ` → `, then `detail`; the strip's `text` stays its tooltip. */
+export interface StripLead { readonly links: readonly StripLink[]; readonly detail: string }
 
 export interface GridShellProps {
   /** The grid element's own attributes (its name, the data-* the menus read, focus handlers). */
@@ -64,7 +79,7 @@ export interface GridShellProps {
   /** The rows are gone (a released or lost result, a stopped live view): an overlay says why, over the strips. */
   readonly gone?: string
   /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy), and a button after it that acts on it. */
-  readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction }
+  readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead }
   /** What the render error strip calls the grid's contents. */
   readonly contents?: 'result' | 'rows'
   /** How cells show white space, when not the results setting (a grid whose menu has no White space item). */
@@ -167,7 +182,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
             <button ref={actionRef} type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
               onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget || event.currentTarget.isConnected) actionFocused.current = false }}>
               {action.icon && <Icon name={action.icon} />}{action.label}
-            </button></> : strip.text}
+            </button></> : strip.lead ? <StripLeadText lead={strip.lead} /> : strip.text}
         </div> : null}
     {funnel && !gone && funnels && columnName !== undefined && rootRef.current && <ColumnFilterPopover key={funnel.column} source={funnels.source} target={funnel}
       columnName={columnName || '(No column name)'} filtered={funnels.filtered.has(funnel.column)} grid={rootRef.current} onClose={closeFunnel} />}

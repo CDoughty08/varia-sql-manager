@@ -88,7 +88,8 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   how many depends on the server version and authentication (Mixed Mode adds the low-privilege login checks, and
   `VARIA_TEST_SQL_SCRATCH=1` adds the Object Explorer, Script As and object action scratch-database checks, the last in
   their own `VariaScratch_…_act` database, and the script goldens in `tests/fixtures/scripting/`;
-  `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`), and `connections-smoke.mjs`
+  `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`; offline,
+  `VARIA_UPDATE_ORDINAL_CASING=1` rewrites the column-name casing table, `src/shared/ordinal-casing.ts`, from the runtime's casing), and `connections-smoke.mjs`
   connects for real. Check counts are not recorded in docs: they change with almost every PR. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
   session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
   (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.

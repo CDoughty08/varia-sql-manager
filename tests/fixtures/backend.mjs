@@ -80,6 +80,7 @@ import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { copyText, exportText, validTurn } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
+import { sameName } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
 import { fixturePlan } from './plans/model.mjs'
 
@@ -674,7 +675,8 @@ function buildDiff(left, right, exact, context) {
   const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => item.role !== 'tone')
   const used = new Set(), pairs = []
   for (const { item, at } of visible(left)) {
-    const match = visible(right).find(other => !used.has(other.at) && other.item.name.toLowerCase() === item.name.toLowerCase())
+    // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing).
+    const match = visible(right).find(other => !used.has(other.at) && sameName(other.item.name, item.name) && other.item.wire === item.wire)
     if (match) { used.add(match.at); pairs.push([at, match.at]) }
   }
   if (pairs.length === 0) return undefined
@@ -1849,7 +1851,9 @@ async function workbench(id, method, params, credit) {
       const left = stored.get(params.left), right = stored.get(params.right)
       if (!left) return missing(id, params.left)
       if (!right) return missing(id, params.right)
-      if (params.left === params.right || left.kind === 'diff' || right.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
+      if (params.left === params.right) return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
+      // Tables only, as SqlService.DiffAsync.
+      if (left.kind !== 'rows' || right.kind !== 'rows') return fail(id, 'INVALID_PARAMS', "Only a query's own result sets can be compared: not a pivot, a comparison or an execution plan set.")
       if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
       if (await budgetStopped(id)) return
       const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)

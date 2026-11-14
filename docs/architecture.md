@@ -146,6 +146,16 @@ being true.
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
+  any other kind). The Compare picker's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
+  pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both
+  read: change the rule in both and add a case. Names compare through one fixed table, `src/shared/ordinal-casing.ts`, in
+  the backend (`OrdinalNames`, which embeds the file), the renderer and the fake backend, not through an ICU's casing,
+  whose Unicode version differs by platform; `DiffChecks.OrdinalCasing` checks it against the runtime wherever the runtime
+  knows the letter, and `VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test` rewrites it from the runtime's casing. Derived builds go through the window's `DerivedWork` (four at once, a
+  busy refusal retried), one comparison per pair and exact-text choice at a time. A comparison's source links come from
+  its frozen `ResultSlot.sources` and go only to an entry whose set key is still the one compared; otherwise they read
+  closed.
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
   stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
   goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's

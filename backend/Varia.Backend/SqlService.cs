@@ -2007,6 +2007,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal const string BudgetStoppedLowMemory = "The computer was low on memory while this query ran, so it can store nothing more. Run the query again.";
 
+    internal const string NotTablesSentence = "Only a query's own result sets can be compared: not a pivot, a comparison or an execution plan set.";
+
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
     /// memory to their query budget, and stores the unified diff as a new derived result of the query, whole or not at all,
     /// released with its others, or at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
@@ -2017,8 +2019,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
         var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
         var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
-        if (!ReferenceEquals(left.Budget, right.Budget) || left.Kind == "diff" || right.Kind == "diff")
+        if (!ReferenceEquals(left.Budget, right.Budget))
             throw new RequestException("INVALID_PARAMS", "Only two result sets of the same query can be compared.");
+        // Tables only (grouped results PR 16): a pivot's aggregate would be ranked ahead of its group column as the key, and
+        // a plan set or another comparison has no rows of its own to align.
+        if (left.Kind != "rows" || right.Kind != "rows")
+            throw new RequestException("INVALID_PARAMS", NotTablesSentence);
         if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
         ThrowIfStopped(left.Budget);
         using var leftPin = left.Pin();

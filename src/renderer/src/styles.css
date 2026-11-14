@@ -854,8 +854,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
   .results-search input { min-width: 12px; }
-  /* Transposed and its Headers give way too: they are also in the grid's menu and the palette. */
-  .results-toolbar .results-transpose { display: none; }
+  /* Transposed and its Headers, and Compare, give way too: they are also in the grid's menu and the palette. */
+  .results-toolbar .results-transpose, .results-toolbar .results-compare { display: none; }
 }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
@@ -1094,6 +1094,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A strip with a button (Stop query while a truncated query runs): the text is cut, the button always shows. */
 .rg-strip.has-action { display: flex; align-items: center; }
 .rg-strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A comparison's input links: words with a link's behaviour, so the strip keeps its one line. */
+.rg-strip .rg-strip-link { margin: 0; padding: 0; border: 0; background: none; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-decoration: underline; cursor: pointer; }
 .rg-strip .rg-strip-action { flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--varia-space-1); }
 /* A live log scrolled up: rows that arrived since, and a way back to the tail (LiveGridPane). */
 .live-grid-new-rows { position: absolute; bottom: var(--varia-space-3); left: 50%; z-index: 5; transform: translateX(-50%); padding: var(--varia-space-0) var(--varia-space-3); border-radius: var(--varia-radius-pill); font: var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-ui); background: var(--varia-button-background); color: var(--varia-button-foreground); }
@@ -2767,3 +2769,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .help-sample table { width: 100%; border-collapse: collapse; }
 .help-sample th, .help-sample td { text-align: left; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
 .help-sample-output { display: flex; flex-wrap: wrap; gap: var(--varia-space-5); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); }
+/* The Compare picker (ComparePanel), in the pivot builder's place and built from its classes. */
+.compare-sides { display: flex; align-items: stretch; gap: 4px; margin-bottom: 8px; }
+.compare-side { display: flex; flex: 1; min-width: 0; flex-direction: column; padding: 4px 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+.compare-side small { color: var(--varia-descriptionForeground); }
+.compare-side b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.compare-sides .icon-button { align-self: center; width: 22px; height: 22px; padding: 3px; }
+.compare-targets { margin: 0 0 4px; padding: 0; border: 0; }
+.compare-targets legend { margin: 0 0 4px; padding: 0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
+.compare-target { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center; padding: 3px 4px; border-radius: var(--varia-radius-sm); }
+.compare-target:hover { background: var(--varia-list-hoverBackground); }
+.compare-target small { grid-column: 2; color: var(--varia-descriptionForeground); }
+.compare-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-unpaired li { flex-wrap: wrap; gap: 4px; }
+.compare-owner, .compare-why { color: var(--varia-descriptionForeground); }
+.compare-column { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--varia-font-mono); }
+.compare-exact { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.compare-exact small { color: var(--varia-descriptionForeground); }
+.compare-panel .profile-note { padding: 4px 0; }
+.compare-panel .pivot-foot .profile-note { padding: 0; }
+.profile-note.warning { color: var(--varia-warningForeground); }
+.compare-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+/* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
+   the whole button, so its focus ring stays at full strength. */
+.compare-buttons button[aria-disabled="true"], .compare-buttons button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }
