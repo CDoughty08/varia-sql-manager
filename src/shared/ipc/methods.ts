@@ -57,6 +57,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Refresh cancels obsolete language work before rebuilding metadata, so it must reach an occupied metadata lane.
   'language.refresh': { kind: 'unary', lane: 'control', deadlineMs: 30_000 },
   'language.close': control,
+  'language.definition': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   'plans.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   // EstimatedPlanCapture: 30 s acquisition + 2 s isolated-session cleanup, inside this fixed deadline.
   'plans.estimate': { kind: 'unary', lane: 'query', deadlineMs: 35_000 },

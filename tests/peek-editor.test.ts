@@ -220,6 +220,24 @@ describe('Peek editor keys', () => {
     }
   })
 
+  it.each(platforms)('runs Go To Definition (F12) and Peek Definition (Alt+F12) in Peek\'s editor and a query\'s, and leaves Object Explorer\'s Alt+F12 alone, on %s', platform => {
+    for (const where of ['card', 'tab'] as const) {
+      const values = keysIn(platform, peekElement(where, 'text'))
+      expect(press(platform, values, 'F12', 'F12').ran).toEqual(['edit.goToDefinition'])
+      expect(press(platform, values, 'F12', 'F12', { alt: true }).ran).toEqual(['edit.peekDefinition'])
+    }
+    const keys = (element: unknown, focused: boolean) => computeContextKeys({ platform, focus: focusFacts(element as never, { getContainerDomNode: () => ({ contains: () => focused }), hasTextFocus: () => focused }),
+      documents, queries: { byTab: {} } as never, connections: [{ id: 'c1' }], quickInputVisible: false, wordWrap: false, backendStatus: 'ready' })
+    // A query tab's text has the query editor's own keys.
+    const query = keys({ matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => 'editor' } : null }, true)
+    expect(press(platform, query, 'F12', 'F12').ran).toEqual(['edit.goToDefinition'])
+    expect(press(platform, query, 'F12', 'F12', { alt: true }).ran).toEqual(['edit.peekDefinition'])
+    // In Object Explorer's tree, Alt+F12 is still Peek on the selection, and F12 nothing.
+    const explorer = keys({ matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => 'explorer' } : selector === '[data-explorer-tree]' ? { getAttribute: () => null } : null }, false)
+    expect(press(platform, explorer, 'F12', 'F12', { alt: true }).ran).toEqual(['explorer.peek'])
+    expect(press(platform, explorer, 'F12', 'F12').ran).toEqual([])
+  })
+
   it('leaves Peek\'s editor out of the chord bridge, and finds its text (not its find widget) for Monaco\'s chord mode', () => {
     expect(bridgeWhen).toBe(`editorTextFocus && !${peekEditorContextKey}`)
     expect(peekEditorHasTextFocus(peekElement('card', 'text'))).toBe(true)

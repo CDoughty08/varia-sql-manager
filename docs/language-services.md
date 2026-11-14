@@ -29,6 +29,8 @@ Open a query tab and use **Ctrl+Space** to request suggestions, or type a provid
 
 Column suggestions rank ahead of general suggestions with the same matching quality. In supported SELECT scopes, unqualified column suggestions carry their source qualifier: a self-join exposes `t.high` and `b.high` independently, and typing `hi` can match both. Typing `t.` uses SQL Tools' normal qualified completion and returns only that source's columns. Scope resolution uses a bounded SQL parser and SQL Tools' binder for each visible source; temporary probe edits are restored before any other request uses that document. Work is limited to 16 source qualifiers and a five-second probe budget. An incomplete expansion does not reintroduce ambiguous bare table columns.
 
+**Go To Definition (F12)** scripts the table, view, procedure, function, synonym or user-defined type under the caret as CREATE to a new query tab, as SSMS does; on a column it goes to the column's table, using the statement's aliases. **Alt+F12** opens the object in a Peek tab instead, and **Ctrl+click** (**⌘-click** on macOS; change it on the Shortcuts page's mouse gestures) does what F12 does. Both keys work in query tabs and in Peek's read-only definition editor. Names resolve on the query's connection and database, including three-part names in another database. A name that matches nothing, a temporary object or a linked server's object shows a short status-bar message, never an error dialog.
+
 Hover and completion widgets can extend beyond a short query panel while remaining within the window. Each editor owns its widgets across split and floating groups; menus and dialogs stay above them.
 
 SQL error checking runs after a 500 ms editing pause without executing the query. Syntax and catalog-binding errors, including missing columns and unknown aliases, appear as red squiggles; provider warnings appear yellow. Hover for the message, or use **Alt+F8** / **Alt+Shift+F8** and **Edit › IntelliSense › Next/Previous SQL Issue** to navigate the current query. The status bar reports analysis progress, failures and error/warning counts. Turn it off in **Tools › Options › Text Editor › Transact-SQL › IntelliSense › Enable error checking**. Every edit clears obsolete markers immediately; only results matching the current model version, connection context and backend generation are displayed. Results are limited to 1,000 issues, with explicit incomplete status when capped. Unconnected queries receive syntax analysis; database name resolution requires a supported live connection.
@@ -55,7 +57,7 @@ The SQL Server adapter opens the buffer before connecting, waits for metadata re
 
 ## First-slice scope
 
-- Completion, hover, syntax/catalog diagnostics and explicit metadata-cache refresh are implemented. Formatting, definition navigation, signature help and completion-item resolution are future work.
+- Completion, hover, syntax/catalog diagnostics and explicit metadata-cache refresh are implemented. Go To Definition is implemented by Varia's backend, not SQL Tools (below). Formatting, signature help and completion-item resolution are future work.
 - SQL Server is the only implemented provider. The reserved PostgreSQL and BigQuery identifiers do not enable those engines.
 - Server responses are bounded before reaching the editor. Documents above 250,000 UTF-16 code units retain normal editing and execution behavior without language requests. Completion retains at most 128 documents and 8,000,000 UTF-16 code units in total; a completion response returns at most 500 items. Matching identifiers are prioritized before truncation so names later in a large catalog remain reachable as the user types.
 - An absent service executable leaves language support unavailable; query editing and execution remain available.
@@ -71,7 +73,7 @@ Database management actions temporarily pause language requests and release meta
 
 ## Next stages
 
-Add Entra token handoff, formatting, signatures and definition navigation. Implement a second provider before promoting any SQL Server-specific assumption into the common contract.
+Add Entra token handoff, formatting and signatures. Implement a second provider before promoting any SQL Server-specific assumption into the common contract.
 
 ## Live validation
 

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
-import { languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
+import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
-import { pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import { definitionScheme, pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
@@ -39,16 +39,18 @@ async function fixture(status = configured, withBackend = false) {
     languageHover: vi.fn<VariaApi['languageHover']>(async () => ({ ok: true, value: { contents: 'Customer table' } })),
     languageDiagnostics: vi.fn<VariaApi['languageDiagnostics']>(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } })),
     languageRefresh: vi.fn<VariaApi['languageRefresh']>(async () => ({ ok: true, value: { refreshed: true } })),
-    languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } }))
+    languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } })),
+    languageDefinition: vi.fn<VariaApi['languageDefinition']>(async () => ({ ok: true, value: null }))
   }
-  let completion!: Monaco.languages.CompletionItemProvider, hover!: Monaco.languages.HoverProvider
-  const unregisterCompletion = vi.fn(), unregisterHover = vi.fn()
+  let completion!: Monaco.languages.CompletionItemProvider, hover!: Monaco.languages.HoverProvider, definition!: Monaco.languages.DefinitionProvider
+  const unregisterCompletion = vi.fn(), unregisterHover = vi.fn(), unregisterDefinition = vi.fn()
   const monaco = { languages: {
     // Distinct values catch accidentally treating LSP's numeric kind as Monaco's numeric kind.
     CompletionItemKind: { Text: 100, Function: 300, Field: 500, Variable: 600, Class: 700, Property: 1000, Keyword: 1400 }, CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
     registerCompletionItemProvider: vi.fn((_id: string, provider: Monaco.languages.CompletionItemProvider) => { completion = provider; return { dispose: unregisterCompletion } }),
-    registerHoverProvider: vi.fn((_id: string, provider: Monaco.languages.HoverProvider) => { hover = provider; return { dispose: unregisterHover } })
-  } } as unknown as typeof Monaco
+    registerHoverProvider: vi.fn((_id: string, provider: Monaco.languages.HoverProvider) => { hover = provider; return { dispose: unregisterHover } }),
+    registerDefinitionProvider: vi.fn((_id: string, provider: Monaco.languages.DefinitionProvider) => { definition = provider; return { dispose: unregisterDefinition } })
+  }, Uri: { from: (parts: object) => parts } } as unknown as typeof Monaco
   const backendApi = {
     getBackendState: vi.fn<VariaApi['getBackendState']>(async () => ({ ok: true, value: { status: 'ready', generation: 1, pid: 1, runtime: 'test', platform: 'test' } })),
     onBackendState: vi.fn<VariaApi['onBackendState']>(() => () => {}),
@@ -77,7 +79,8 @@ async function fixture(status = configured, withBackend = false) {
   const addConnection = (id: string, providerId: ConnectionInfo['providerId'] = 'sqlserver', generation = 1) => connections.add(
     { id, providerId, generation, server: id, database: 'master', serverVersion: 'test' },
     { server: id, database: 'master', authentication: 'windows', trustServerCertificate: false })
-  return { ...docs, documentApi: docs.api, api, connections, service, completion, hover, complete, getHover, model, addConnection, monaco, unregisterCompletion, unregisterHover, backend }
+  const getDefinition = async (id: string, at = position, cancel = token()) => await definition.provideDefinition(model(id), at, cancel)
+  return { ...docs, documentApi: docs.api, api, connections, service, completion, hover, definition, complete, getHover, getDefinition, model, addConnection, monaco, unregisterCompletion, unregisterHover, unregisterDefinition, backend }
 }
 
 describe('SQL language editor integration', () => {
@@ -313,6 +316,44 @@ describe('SQL language editor integration', () => {
     expect(await f.getHover(tab.id)).toBeNull()
   })
 
+  it('resolves a definition on the query’s own connection and database, as a location naming the object', async () => {
+    const f = await fixture(); f.addConnection('connection-a')
+    const tab = f.documents.create('a.sql', 'SELECT * FROM dbo.Customer', 'Sales', 'connection-a')
+    const found: LanguageDefinition = { database: 'Sales', schema: 'dbo', name: 'Customer', kind: 'table', range: { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } } }
+    expect(languageDefinitionSchema.safeParse(found).success).toBe(true)
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: found })
+    const at = { lineNumber: 1, column: 20 } as Monaco.Position
+    expect(await f.getDefinition(tab.id, at)).toEqual({ uri: { scheme: definitionScheme, authority: 'connection-a', path: '/Sales/dbo/Customer', query: 'table' },
+      range: { startLineNumber: 1, startColumn: 15, endLineNumber: 1, endColumn: 27 } })
+    const request = f.api.languageDefinition.mock.calls[0]![0]
+    expect(request).toMatchObject({ documentId: tab.id, text: 'SELECT * FROM dbo.Customer', position: { line: 0, character: 19 }, context: { providerId: 'sqlserver', connectionId: 'connection-a', database: 'Sales' } })
+    // Nothing matched is null; a failure throws its message to the command, and the provider answers nothing.
+    expect(await f.service.definition(f.model(tab.id), at)).toBeNull()
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: false, error: 'NOT_CONNECTED' })
+    await expect(f.service.definition(f.model(tab.id), at)).rejects.toThrow('NOT_CONNECTED')
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: false, error: 'NOT_CONNECTED' })
+    expect(await f.getDefinition(tab.id, at)).toBeNull()
+    // A range outside the model is not believed.
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: { ...found, range: { start: { line: 3, character: 0 }, end: { line: 3, character: 2 } } } })
+    expect(await f.service.definition(f.model(tab.id), at)).toBeNull()
+    // Definition needs no SQL Tools Service (no backend document to close), but it needs a connection.
+    expect(f.api.languageClose).not.toHaveBeenCalled()
+    const offline = f.documents.create('b.sql', 'SELECT * FROM dbo.Customer', 'master')
+    expect(await f.service.definition(f.model(offline.id), at)).toBeUndefined()
+    expect(f.api.languageDefinition).toHaveBeenCalledTimes(5)
+  })
+
+  it('serves definition without a configured SQL Tools Service, and drops an answer an edit made stale', async () => {
+    const f = await fixture({ providers: [{ id: 'sqlserver', configured: false, completion: false, hover: false, reason: 'not installed' }] }); f.addConnection('connection-a')
+    const tab = f.documents.create('a.sql', 'EXEC dbo.Load', 'Sales', 'connection-a')
+    const answer = deferred<ApiResult<LanguageDefinition>>()
+    f.api.languageDefinition.mockReturnValueOnce(answer.promise)
+    const result = f.service.definition(f.model(tab.id), { lineNumber: 1, column: 10 } as Monaco.Position)
+    f.models.get(`varia-sql://query/${tab.id}`)!.edit('EXEC dbo.Other')
+    answer.resolve({ ok: true, value: { database: 'Sales', schema: 'dbo', name: 'Load', kind: 'procedure', subtype: 'sql', range: { start: { line: 0, character: 5 }, end: { line: 0, character: 13 } } } })
+    expect(await result).toBeUndefined()
+  })
+
   it.each(['edit', 'database', 'round trip', 'lost', 'close'] as const)('discards a completion after %s changes its document context', async change => {
     const f = await fixture(); f.addConnection('connection-a')
     const tab = f.documents.create('a.sql', 'SELECT a', 'master', 'connection-a')
@@ -504,6 +545,7 @@ describe('SQL language editor integration', () => {
     await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([a.id, b.id, b.id]))
     expect(f.unregisterCompletion).toHaveBeenCalledTimes(1)
     expect(f.unregisterHover).toHaveBeenCalledTimes(1)
+    expect(f.unregisterDefinition).toHaveBeenCalledTimes(1)
   })
 
   it.each([
@@ -994,6 +1036,33 @@ describe('SQL language features in Peek', () => {
     const stray = new TestModel('SELECT 1', 'varia-sql://other/1')
     expect(await f.hover.provideHover(Object.assign(stray, { getLanguageId: () => 'sql' }).asModel(), position, token())).toBeNull()
     expect(f.api.languageHover).toHaveBeenCalledOnce()
+  })
+
+  it('resolves a definition in a Peek model with its connection and database, under Peek’s own cap', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const model = peek.show('1', 'CREATE PROCEDURE dbo.P AS SELECT * FROM dbo.Customer')
+    const found: LanguageDefinition = { database: 'Sales', schema: 'dbo', name: 'Customer', kind: 'table', range: { start: { line: 0, character: 40 }, end: { line: 0, character: 52 } } }
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: found })
+    expect(await f.service.definition(model, { lineNumber: 1, column: 48 } as Monaco.Position)).toEqual({ connectionId: peekConnection, definition: found })
+    const request = f.api.languageDefinition.mock.calls[0]![0]
+    expect(languageRequestSchema.safeParse(request).success).toBe(true)
+    expect(request).toMatchObject({ documentId: peekModelContext(model)!.documentId, context: { connectionId: peekConnection, database: 'Sales' } })
+    expect(bookkeeping(f.service).used.has(request.documentId)).toBe(false)
+    // Two Peek requests in flight fill Peek's cap; query tabs keep theirs.
+    const stalled = [deferred<ApiResult<LanguageDefinition>>(), deferred<ApiResult<LanguageDefinition>>()]
+    f.api.languageDefinition.mockReturnValueOnce(stalled[0]!.promise).mockReturnValueOnce(stalled[1]!.promise)
+    // Each view keeps one model, so three views hold three live Peek models.
+    const views = [peekFixture(), peekFixture(), peekFixture()]
+    cleanups.push(() => views.forEach(view => view.editor.dispose()))
+    const [second, third, fourth] = views.map((view, index) => view.show(String(index), 'SELECT * FROM dbo.A'))
+    const pending = [f.service.definition(second!, position), f.service.definition(third!, position)]
+    expect(await f.service.definition(fourth!, position)).toBeUndefined()
+    expect(f.api.languageDefinition).toHaveBeenCalledTimes(3)
+    for (const answer of stalled) answer.resolve({ ok: true, value: null })
+    await Promise.all(pending)
   })
 
   it('closes a Peek model’s backend document with the model, leaving no context, epoch or listener behind', async () => {

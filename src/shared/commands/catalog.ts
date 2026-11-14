@@ -88,6 +88,7 @@ const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
 const noBookmarks = 'No bookmarks are set.'
 const noDocumentBookmarks = 'This query has no bookmarks.'
+const definitionHint = 'Put the caret on an object name in a connected query.'
 const openMonitor = 'Open the Activity Monitor first (Tools: Activity Monitor).'
 
 /**
@@ -681,6 +682,21 @@ export const commandCatalog = {
     precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.',
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
+  },
+  // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens it in a Peek tab. Peek's own read-only
+  // editor takes both through its own focus key (peekEditorFocus), so neither needs a query-tab key there. Ctrl+click is
+  // gestures.ts's editor.goToDefinition.
+  'edit.goToDefinition': {
+    title: 'Go To Definition', category: 'Edit', icon: 'go-to-file', keywords: ['goto', 'script', 'create', 'navigate', 'object'],
+    precondition: 'backendReady', unavailableHint: definitionHint,
+    keybindings: [{ key: 'f12', when: 'editorTextFocus || peekEditorFocus' }],
+    menus: [{ menu: 'editor.context', group: '2_definition', order: 1, mnemonic: 'g' }]
+  },
+  'edit.peekDefinition': {
+    title: 'Peek Definition', category: 'Edit', icon: 'eye', keywords: ['peek', 'properties', 'preview', 'object'],
+    precondition: 'backendReady', unavailableHint: definitionHint,
+    keybindings: [{ key: 'alt+f12', when: 'editorTextFocus || peekEditorFocus' }],
+    menus: [{ menu: 'editor.context', group: '2_definition', order: 2, mnemonic: 'k' }]
   },
   'edit.nextSqlIssue': {
     title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,

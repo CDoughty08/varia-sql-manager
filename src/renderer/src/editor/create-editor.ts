@@ -33,7 +33,7 @@ export interface QueryEditorUse {
  * Creates a query editor in `container`. Each editor group has one, which shows the group's active text document; Peek has
  * one per card or tab, read-only (`use`).
  */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'> & Partial<Pick<Workbench, 'gestures' | 'commands'>>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
   const readOnly = use.readOnly
   // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
   // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
@@ -96,6 +96,27 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   // Object Explorer rows dropped on the editor insert their names, where it takes text.
   const drop = readOnly ? undefined : bindExplorerDrop(instance)
   if (use.contextKey) instance.createContextKey(use.contextKey, true)
+  const definition = bindDefinitionClick(workbench, instance)
   return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
-    dispose: () => { visibility(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+    dispose: () => { visibility(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+}
+
+/**
+ * Go to Definition's click (gestures.ts `editor.goToDefinition`, Ctrl+click or ⌘-click by default): a plain click on a name with
+ * the gesture's modifiers runs F12's command once Monaco has put the caret there. A modifier that is also Monaco's multi-cursor
+ * click (Tools › Options) stays Monaco's, so adding a cursor never scripts an object.
+ */
+function bindDefinitionClick(workbench: Partial<Pick<Workbench, 'gestures' | 'commands' | 'monaco'>>, instance: editor.IStandaloneCodeEditor): Disposable {
+  const { gestures, commands, monaco } = workbench
+  if (!gestures || !commands || !monaco) return { dispose() {} }
+  return instance.onMouseUp(event => {
+    const pointer = event.event
+    if (!pointer.leftButton || pointer.detail !== 1 || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return
+    if (!gestures.matches('editor.goToDefinition', pointer.browserEvent)) return
+    const cursor = instance.getOption(monaco.editor.EditorOption.multiCursorModifier)
+    const modifiers = gestures.modifiers('editor.goToDefinition') ?? []
+    if (modifiers.includes('alt') ? cursor === 'altKey' : cursor !== 'altKey') return
+    if (!instance.getSelection()?.isEmpty()) return
+    void commands.execute('edit.goToDefinition', undefined, 'keybinding')
+  })
 }

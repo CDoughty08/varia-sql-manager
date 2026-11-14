@@ -28,7 +28,7 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
-import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult } from './language-service'
+import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult, LanguageDefinition } from './language-service'
 
 /** The longest text `writeClipboardText` takes (main checks it): 8 Mi characters. */
 export const maxClipboardText = 8_388_608
@@ -465,6 +465,7 @@ export interface RpcMethods {
   'language.diagnostics': { params: LanguageRefreshRequest; result: LanguageDiagnosticResult }
   'language.refresh': { params: LanguageRefreshRequest; result: LanguageRefreshResult }
   'language.close': { params: { documentId: string }; result: { closed: boolean } }
+  'language.definition': { params: LanguageRequest; result: LanguageDefinition }
   'plans.parse': { params: { xml: string }; result: PlanDocument }
   'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
@@ -665,6 +666,7 @@ export interface VariaApi {
   languageHover(request: LanguageRequest): Promise<ApiResult<LanguageHover>>
   languageDiagnostics(request: LanguageRefreshRequest): Promise<ApiResult<LanguageDiagnosticResult>>
   languageRefresh(request: LanguageRefreshRequest): Promise<ApiResult<LanguageRefreshResult>>
+  languageDefinition(request: LanguageRequest): Promise<ApiResult<LanguageDefinition>>
   languageClose(documentId: string): Promise<ApiResult<{ closed: boolean }>>
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>
   /** Compile only, on a bounded isolated connection; cancel with cancel(requestId). */

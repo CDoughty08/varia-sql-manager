@@ -123,6 +123,9 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     if (value.warnings.length) this.notify({ text: `Scripted ${job.label} with a warning: ${value.warnings[0]}`, title: value.warnings.join('\n'), kind: 'warning' }, scriptLimits.warningNoticeMs)
   }
 
+  /** Shows a quiet status-bar notice that is not a script's: Go to Definition's "no definition found". */
+  inform(text: string): void { this.notify({ text, kind: 'info' }, scriptLimits.noticeMs) }
+
   /** Cancels running requests by id: their results are dropped and main cancels them on the backend. */
   cancel(ids: readonly string[]): void {
     const wanted = new Set(ids), cancelled = this.jobs.filter(job => wanted.has(job.id))

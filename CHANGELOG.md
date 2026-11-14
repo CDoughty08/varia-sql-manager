@@ -21,6 +21,7 @@
 - **Larger results:** query results can now use a quarter of the computer's memory up to 16 GiB (it was 2 GiB), half of it for one query, so a query of several million rows keeps them all on a machine with the memory for it. Tools › Options › Query Results › SQL Server › Results to Grid has a **Result memory limit** to set it yourself, and a **Maximum rows kept per execution** for when you only want the first rows. A change to the limit applies at once, without restarting the SQL backend, and the status bar's memory meter follows it; lowering it below what results hold keeps them and stores nothing more until enough are closed. A truncated result names the budget it filled, even after the limit changes.
 
 - **Nerd metrics in the Memory panel:** open Nerd metrics under the status bar's Memory breakdown for what results hold as read and in memory, the largest results by name, the page codec's counters and the managed heap. It starts collapsed and remembers whether you opened it. Result compression is not on yet, so it shows rows stored as read, with no compression figures made up; the breakdown is a little wider to fit it.
+- **Go To Definition:** press **F12** on a table, view, procedure, function, synonym or user-defined type in a query (or on a column, for its table) to script it as CREATE to a new query tab, as in SSMS. **Alt+F12** opens it in Peek, and **Ctrl+click** does what F12 does. Both keys also work in Peek's definition editor, and a name that matches nothing only shows a status-bar message.
 
 ### Improved
 

@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult } from '../../../shared/language-service'
+import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -9,14 +9,22 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 
-type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics'>>
+type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition'>>
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
-/** `peek`: the model is a Peek definition's (read-only), which gets hover but neither completion nor diagnostics. */
+/** `peek`: the model is a Peek definition's (read-only), which gets hover and Go to Definition but neither completion nor diagnostics. */
 interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel; readonly peek: boolean }
 interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void>; readonly peek: boolean }
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
+/** What Go to Definition found: the object `language.definition` resolved, on the model's connection. */
+export interface FoundDefinition { readonly connectionId: string; readonly definition: NonNullable<LanguageDefinition> }
+/** The URI a definition location names: the object, not a file. `parseDefinitionUri` reads it back. */
+export const definitionScheme = 'varia-object'
+export function definitionUri(found: FoundDefinition): { scheme: string; authority: string; path: string; query: string } {
+  const { database, schema, name, kind, subtype } = found.definition
+  return { scheme: definitionScheme, authority: found.connectionId, path: '/' + [database, schema, name].map(encodeURIComponent).join('/'), query: subtype ? `${kind}.${subtype}` : kind }
+}
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
 // Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
 // their own here: a burst of them on a slow server never fills the renderer's slots for query tabs. On the backend they
@@ -135,6 +143,13 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return null
         } finally { activity.dispose(); pending.finish(); foreground.dispose() }
+      }
+    }), monaco.languages.registerDefinitionProvider('sql', {
+      // Monaco's own navigation is not loaded: F12, Alt+F12 and Ctrl+click are Varia's commands (contributions/languages.ts), which
+      // call definition() directly. A location still names the object, for anything that asks Monaco's provider.
+      provideDefinition: async (model, position, token) => {
+        const found = await this.definition(model, position, token).catch(() => undefined)
+        return found ? { uri: monaco.Uri.from(definitionUri(found)), range: toMonacoRange(found.definition.range) } : null
       }
     }))
     const reconcile = () => this.reconcile()
@@ -292,6 +307,27 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       if (!result.ok) throw new Error(result.error)
       if (result.value.version !== version) return
       return result.value
+    } finally { pending.finish() }
+  }
+  /**
+   * Go to Definition: the object the name at `position` stands for, from `language.definition` on the model's own connection
+   * and database (a query document's or a Peek model's). Null when nothing matches; undefined when there is nothing to ask
+   * (no connection, too large), the same request is still running, or an edit or context change made the answer stale.
+   * A failure throws its message. It needs no SQL Tools Service, so it serves every connection, and opens no backend document.
+   */
+  async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
+    const capture = this.capture(model, position)
+    const connectionId = capture?.request.context.connectionId
+    if (!capture || !connectionId || token.isCancellationRequested || !this.api.languageDefinition) return
+    const pending = this.begin(`${capture.request.documentId}:definition`, token, capture.peek)
+    if (!pending) return
+    try {
+      if (pending.previous && !await this.waitFor(pending.previous, token)) return
+      if (!this.current(capture, token)) return
+      const result = await this.track(capture.request.documentId, this.api.languageDefinition(capture.request))
+      if (!this.current(capture, token)) return
+      if (!result.ok) throw new Error(result.error)
+      return result.value && validRange(model, result.value.range) ? { connectionId, definition: result.value } : null
     } finally { pending.finish() }
   }
   diagnosticsEpoch(documentId: string): number {

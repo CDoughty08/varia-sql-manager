@@ -20,3 +20,6 @@ internal sealed record LanguageDiagnosticResult(int Version, IReadOnlyList<Langu
 internal sealed record LanguageProviderStatus(string Id, bool Configured, bool Completion, bool Hover, string? Reason = null, bool Refresh = false, bool Diagnostics = false);
 internal sealed record LanguageStatus(IReadOnlyList<LanguageProviderStatus> Providers);
 internal sealed record LanguageStatusArgs;
+/// <summary>language.definition's answer: the object (its database, schema, name, and Object Explorer kind and subtype) and the
+/// span of the name it was found from.</summary>
+internal sealed record LanguageDefinition(string Database, string Schema, string Name, string Kind, string? Subtype, LanguageRange Range);

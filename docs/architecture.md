@@ -36,9 +36,18 @@ being true.
   process (SIGSTOP) before it kills it, and an exit in between would leave the child stopped for good. The gate cannot
   cover a backend that main kills, so only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send the
   one signal, which has no stopped state.
+  Go To Definition (`language.definition`, `DefinitionService`) never goes through SQL Tools: ScriptDom finds the name under
+  the caret and, from the caret's batch only, whether it is a column (whose table is the target) and which tables its aliases
+  name (`DefinitionNames`, at most 8 candidates); constant `DefinitionSql.Lookup` resolves them on the Object Explorer pool,
+  names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, within a 10 s budget. A missing object
+  or a database the login cannot open is `null`, which the renderer shows as a status-bar notice, never an error banner.
+  F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
+  `editor.goToDefinition`), since Monaco's gotoSymbol contribution is not loaded: F12 scripts the object as CREATE to a new
+  query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
+  precondition, so they work in Peek's editor without enabling query commands there.
   The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
-  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
-  or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
+  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover and Go To Definition only, never
+  completion or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
   context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
   (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
   documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
@@ -239,7 +248,7 @@ being true.
   Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
   a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
   `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
-  query command acts on it.
+  query command acts on it. Go To Definition and Peek Definition are the exception: their keys accept `peekEditorFocus`.
   User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
   hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
   file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.

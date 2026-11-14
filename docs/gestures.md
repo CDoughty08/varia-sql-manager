@@ -8,13 +8,19 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (19)
+## Gestures (20)
 
 ### Global
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Zoom | `global.wheelZoom` | Zooms the window, except over a document tab shelf where Control+wheel changes its row count. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+
+### Query Editor
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Go To Definition | `editor.goToDefinition` | Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does. | Command | Ctrl+Click an object name | Ctrl+Click an object name | ⌘ Click an object name | Choose: Ctrl / ⌘, Alt / ⌥ | Go To Definition (`edit.goToDefinition`) |
 
 ### Results Grid
 
