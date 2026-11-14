@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.ObjectModel;
 using System.Data.Common;
+using System.Globalization;
 using Varia.Backend.Results;
 
 namespace Varia.Backend.Tests;
@@ -46,6 +47,11 @@ internal static class DiscardChecks
             && tally is { OversizeSets: 3, UnkeptSets: 1 },
             "after a set whose columns did not fit no later one is shown, plans included, and other sets are still discarded on request");
         tally = new ResultSetTally();
+        check(tally.Told(discard: false, isPlan: false, prefetched: false, descriptorsTooLarge: true) == ResultSetTally.Fate.Oversize
+            && tally.Arrive(discard: false, mayBePlan: false, keptSets: 10, maxResultSets: 10) == ResultSetTally.Fate.Overflow
+            && tally is { OverflowSets: 1, OversizeSets: 1 },
+            "a set past maxResultSets after one whose columns did not fit counts as past the limit");
+        tally = new ResultSetTally();
         check(tally.Told(discard: true, isPlan: false, prefetched: false, descriptorsTooLarge: true) == ResultSetTally.Fate.Unkept
             && tally.Told(discard: true, isPlan: true, prefetched: true, descriptorsTooLarge: false) == ResultSetTally.Fate.Open
             && tally.Told(discard: false, isPlan: false, prefetched: true, descriptorsTooLarge: false) == ResultSetTally.Fate.Open
@@ -75,10 +81,22 @@ internal static class DiscardChecks
     {
         var tally = new ResultSetTally();
         var plain = Reader.Ints(10);
-        var sorted = await Sort(tally, plain);
+        string? measured = "unset";
+        var sorted = await Sort(tally, plain, prefix => measured = prefix);
         check(sorted is { Fate: ResultSetTally.Fate.Unkept, Prefetched: false, Plan: null } && tally is { UnkeptSets: 1, UnkeptRows: 10 }
-            && plain.AsyncReads == 11 && plain.SyncReads == 0 && !plain.Asked,
-            "a discarded set without long columns is read to its end inline, every row counted");
+            && plain is { AsyncReads: 11, SyncReads: 0, CancelableReads: 0, Asked: false } && measured == "unset",
+            "a discarded set without long columns is read to its end inline, without the token, every row counted, its columns never measured");
+
+        // A set that cannot be a plan is discarded on request before the limits on sets are looked at.
+        tally = new ResultSetTally();
+        sorted = await Sort(tally, Reader.Ints(3), keptSets: 10);
+        check(sorted.Fate == ResultSetTally.Fate.Unkept && tally is { UnkeptSets: 1, UnkeptRows: 3, OverflowSets: 0 },
+            "with results discarded a set that cannot be a plan past maxResultSets is discarded on request, not counted past the limit");
+        tally = new ResultSetTally();
+        await Sort(tally, Reader.Showplan(PlanXml), tooLarge: true);
+        sorted = await Sort(tally, Reader.Ints(2));
+        check(sorted.Fate == ResultSetTally.Fate.Unkept && tally is { UnkeptSets: 1, UnkeptRows: 2, OversizeSets: 1 },
+            "with results discarded a set that cannot be a plan after one whose columns did not fit is discarded on request");
 
         tally = new ResultSetTally();
         var wide = Reader.Longs(7);
@@ -118,6 +136,11 @@ internal static class DiscardChecks
         check(tally is { UnkeptSets: 3, UnkeptRows: 13, Discarded: 3 }
             && tally.Notes(10).SequenceEqual(["Discard results after execution is on: 3 result sets (13 rows) were read and not kept."]),
             "the counts add up across sets and the note says them");
+
+        tally = new ResultSetTally();
+        await Sort(tally, Reader.Ints(1234));
+        check(tally.Notes(10).SequenceEqual(["Discard results after execution is on: 1 result set (1,234 rows) was read and not kept."]),
+            "the note's row count is grouped: " + tally.Notes(10).FirstOrDefault());
     }
 
     // A set named like a plan is looked at: a plan is kept, rows under its name are discarded with the row read to tell.
@@ -128,7 +151,7 @@ internal static class DiscardChecks
         string? told = "unset";
         var sorted = await Sort(tally, lookAlike, prefix => told = prefix);
         check(told == "<a/>" && sorted is { Fate: ResultSetTally.Fate.Unkept, Prefetched: false, Plan: null } && tally is { UnkeptSets: 1, UnkeptRows: 3 }
-            && lookAlike.AsyncReads == 1 && lookAlike.SyncReads == 3 && lookAlike.PoolReads == 0,
+            && lookAlike is { AsyncReads: 1, SyncReads: 3, PoolReads: 0, CancelableReads: 0 },
             "a set named like a plan whose first row is not one is discarded, and the row read to tell is counted with the rest: " + tally.UnkeptRows);
 
         tally = new ResultSetTally();
@@ -157,10 +180,16 @@ internal static class DiscardChecks
             "a set that cannot be a plan is opened without reading a row, and a set past maxResultSets is not read before the loop reads past it");
 
         tally = new ResultSetTally();
+        var kept = Reader.Showplan("<a/>", "<b/>");
+        sorted = await Sort(tally, kept, discard: false);
+        check(sorted is { Fate: ResultSetTally.Fate.Open, Prefetched: true, Plan: "plan" } && kept is { AsyncReads: 1, SyncReads: 0 } && tally is { UnkeptSets: 0, Discarded: 0 },
+            "with results kept a set named like a plan whose first row is not one is opened on that row, for the loop to store it");
+
+        tally = new ResultSetTally();
         var planned = Reader.Showplan(PlanXml);
         sorted = await Sort(tally, planned);
-        check(sorted is { Fate: ResultSetTally.Fate.Open, Prefetched: true, Plan: "plan" } && tally is { UnkeptSets: 0, UnkeptRows: 0, Discarded: 0 } && planned.AsyncReads == 1 && !tally.Notes(10).Any(),
-            "with results discarded a plan is kept, the reader left on its plan row for the loop to store");
+        check(sorted is { Fate: ResultSetTally.Fate.Open, Prefetched: true, Plan: "plan" } && tally is { UnkeptSets: 0, UnkeptRows: 0, Discarded: 0 } && planned is { AsyncReads: 1, CancelableReads: 0 } && !tally.Notes(10).Any(),
+            "with results discarded a plan is kept, its first row read without the token, the reader left on its plan row for the loop to store");
 
         tally = new ResultSetTally();
         sorted = await Sort(tally, Reader.Showplan(PlanXml), keptSets: 10);
@@ -210,20 +239,48 @@ internal static class DiscardChecks
         var many = new ResultSetTally();
         for (var i = 0; i < 1234; i++) many.Arrive(discard: true, mayBePlan: false, keptSets: 0, maxResultSets: 10);
         for (var i = 0; i < 1001; i++) many.Arrive(discard: false, mayBePlan: false, keptSets: 1000, maxResultSets: 1000);
-        check(many.Notes(1000).SequenceEqual([
-                "Discard results after execution is on: 1,234 result sets (0 rows) were read and not kept.",
-                "Only the first 1,000 result sets are displayed. Display limits do not stop script execution."]) && many.Discarded == 2235,
-            "the note's counts are grouped, and come before the other notes on sets not kept");
+        // The notes are grouped the same on every machine: a culture that groups with dots must not change them.
+        var dotted = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        dotted.NumberFormat.NumberGroupSeparator = ".";
+        var culture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = dotted;
+        try
+        {
+            check(many.Notes(1000).SequenceEqual([
+                    "Discard results after execution is on: 1,234 result sets (0 rows) were read and not kept.",
+                    "Only the first 1,000 result sets are displayed. Display limits do not stop script execution."]) && many.Discarded == 2235,
+                "the note's counts are grouped, whatever the machine's culture, and come before the other notes on sets not kept");
+        }
+        finally { CultureInfo.CurrentCulture = culture; }
         check(!new ResultSetTally().Notes(10).Any(), "a run that kept every set says nothing about sets not kept");
+        var every = new ResultSetTally();
+        every.Arrive(discard: true, mayBePlan: false, keptSets: 0, maxResultSets: 5);
+        every.Told(discard: false, isPlan: false, prefetched: false, descriptorsTooLarge: true);
+        every.Arrive(discard: false, mayBePlan: false, keptSets: 5, maxResultSets: 5);
+        check(every.Notes(5).SequenceEqual([
+                "Discard results after execution is on: 1 result set (0 rows) was read and not kept.",
+                "Only the first 5 result sets are displayed. Display limits do not stop script execution.",
+                "1 later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution."]),
+            "the notes on sets not kept come discarded, past maxResultSets, past the descriptor limit, and only ten is spelled out");
+        var oversize = new ResultSetTally();
+        oversize.Told(discard: false, isPlan: false, prefetched: false, descriptorsTooLarge: true);
+        for (var i = 1; i < 1000; i++) oversize.Arrive(discard: false, mayBePlan: false, keptSets: 0, maxResultSets: 10);
+        // As the note has always read (docs/ipc.md's table): its count is not grouped.
+        check(oversize.Notes(10).SequenceEqual(["1000 later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution."]),
+            "the note on sets past the descriptor limit counts them ungrouped: " + oversize.Notes(10).FirstOrDefault());
     }
 
+    // A token that can be cancelled, as the query's is, so a read given it shows in CancelableReads.
+    private static readonly CancellationTokenSource Running = new();
+
+    // Sorted from a pool thread, as the read loop is, so a synchronous read on the caller's thread shows in PoolReads.
     private static Task<(ResultSetTally.Fate Fate, bool Prefetched, string? Plan)> Sort(ResultSetTally tally, Reader reader, Action<string?>? told = null,
         int keptSets = 0, bool tooLarge = false, CancellationToken token = default, bool discard = true) =>
-        tally.SortAsync(reader, discard, keptSets, maxResultSets: 10, prefix =>
+        Task.Run(() => tally.SortAsync(reader, discard, keptSets, maxResultSets: 10, prefix =>
         {
             told?.Invoke(prefix);
             return ("plan", ColumnPlan.IsShowplan(prefix), tooLarge);
-        }, token);
+        }, token.CanBeCanceled ? token : Running.Token));
 
     private static async Task<Exception?> Caught(Func<Task> run)
     {
@@ -251,7 +308,7 @@ internal static class DiscardChecks
         // One value a row: a reader of more columns has no rows here.
         private readonly object?[] rows = [.. values];
         private int position = -1;
-        public int AsyncReads, SyncReads, PoolReads;
+        public int AsyncReads, SyncReads, PoolReads, CancelableReads;
         /// <summary>The row (counting from 1) whose read throws, as a broken connection or a cancelled command does.</summary>
         public int FailAt { get; set; }
         public Action<int>? OnRead { get; set; }
@@ -282,6 +339,8 @@ internal static class DiscardChecks
         public override Task<bool> ReadAsync(CancellationToken cancellationToken)
         {
             AsyncReads++;
+            // SqlClient cancels a token-bound ReadAsync from another thread, which can deadlock with the batch's StatementStop.
+            if (cancellationToken.CanBeCanceled) CancelableReads++;
             try { return Task.FromResult(Advance()); }
             catch (Exception error) { return Task.FromException<bool>(error); }
         }
