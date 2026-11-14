@@ -29,6 +29,7 @@
     "bench": "vitest run --config vitest.bench.config.ts",
     "bench:e2e": "node scripts/ipc-bench.mjs",
     "bench:grid": "node scripts/grid-bench.mjs",
+    "bench:startup": "node scripts/startup-bench.mjs",
     "package": "electron-builder --publish never"
   },
   "overrides": {
