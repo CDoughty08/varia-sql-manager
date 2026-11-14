@@ -1614,7 +1614,8 @@ receives a new result to read like any other, never the rows it grouped.
   `count`, `countDistinct`, `sum`, `avg`, `min` and `max`, and only `count` may leave out the column (it then counts rows,
   COUNT(*)). Columns must be within the result, and `sum` and `avg` need an exact or approximate numeric column other than
   bit (`INVALID_PARAMS`, "Sum and Average need a numeric column."). The result must be complete (`RESULT_OPEN`) and be a
-  query's rows or another pivot (`INVALID_PARAMS` for a diff or any other kind). Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
+  query's own rows (`INVALID_PARAMS`, "Only a query's results can be pivoted.", for a pivot, a diff, a plan set or any other
+  kind, before anything is reserved). Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
   answer counts the rows read.
 - **Grouping.** Values group as GROUP BY would, by the sort's comparison ([Sorted views](#sorted-views)): text by its
   collation, ignoring trailing spaces, exact numerics by value, NULL as a group of its own. Groups come in ascending
@@ -1665,11 +1666,19 @@ receives a new result to read like any other, never the rows it grouped.
   cell of 65,536 rows or more is sorted on several threads and its runs counted in parts. Without room for the bounds it
   sorts the rows by cell and value in one sort, on several threads too. The counts are one thread's either way. The
   worker's `cancel` stops it (`CANCELLED`), every thread with it.
-- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
-  panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
-  N", whose grid strip says what was read and how many groups it has; a refusal shows in the panel, which keeps the draft. A new run gives up a pivot in flight, and
-  `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
-  which follows its columns by name if the query now returns them in another order (`remapDraft`).
+- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each
+  group's draft and shows the pivot as the group's Pivot, named "Pivot of Result N", whose grid strip says what was read
+  and how many groups it has; a refusal shows in the panel, which keeps the draft. A group's Pivot is replaced atomically:
+  the old result stays held and readable while the new one is built, so for that time the query's budget holds both,
+  and `addSet` puts the new one in the same slot under the same entry key (the slot's `revision` counts builds) before
+  releasing the old one. Builds of different groups run at once through `DerivedJobs`: at most four a window (comparisons
+  are to share its places with PR 16), the rest waiting in the renderer, and `BUSY` or `TOO_MANY_REQUESTS` asked again after 1, 4 and
+  16 s (a new request each time, never on `TIMEOUT`). A build reads the Table's view the grid showed at the click and holds it
+  (`ResultsService.holdView`) from then until it ends and, when the backend evicted that view (`VIEW_NOT_FOUND`), builds once more: over the grid's current
+  view if it has built another, else over a view of the same order and filters built for the pivot alone and closed after. A run holds at most 1,000 results: a group's first Pivot that would pass that, counting first Pivots in flight,
+  is refused before the backend is asked. A new run, the Table closed or the Pivot being replaced closed gives a build
+  up, and an answer that comes anyway is released (`ResultsService.discard`). A re-run keeps the draft, which follows its
+  columns by name if the query now returns them in another order (`remapDraft`).
 
 ## Transposed
 

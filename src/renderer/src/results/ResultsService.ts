@@ -51,6 +51,20 @@ export type ViewKind = 'table' | 'pivot' | 'comparison'
  */
 export interface SourceRef { readonly key: EntryKey; readonly set: string; readonly number: number; readonly name: string; readonly ordinal?: number }
 /**
+ * What a Pivot was built from, recorded when its build publishes and kept with its slot: the recipe (row columns, column
+ * group, values, in the Table's columns), the Table's resolved filters the build applied (none when it read the stored
+ * rows), the rows it read, and whether the Table was cut short (truncated, incomplete) or long values were grouped by a
+ * prefix (approximate). PR 11 compares `filters` with the Table's to say the Pivot is out of date.
+ */
+export interface PivotProvenance {
+  readonly recipe: { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly { readonly aggregate: string; readonly column?: number }[] }
+  readonly filters: readonly ResolvedViewFilter[]
+  readonly inputRows: number
+  readonly truncated: boolean
+  readonly incomplete: boolean
+  readonly approximate: boolean
+}
+/**
  * A presentation slot: one view the stack draws. Its identity is `key`, the key of the entry it shows, which is also where
  * its grid state lives (`ResultsService.gridState(tabId, key)`: scroll, widths, selection, orientation) and its sort and
  * filters (`TabResults.sorts`). `entry` is the stored result it shows now and `revision` counts the results the slot has
@@ -62,6 +76,8 @@ export interface ResultSlot {
   /** The ordinal of the group it belongs to; a comparison belongs to none. */
   readonly group?: number
   readonly sources: readonly SourceRef[]
+  /** A Pivot's provenance, from its latest build. */
+  readonly pivot?: PivotProvenance
 }
 /**
  * An original result and what was made of it: named by its `ordinal` ("Result 3"), with the batch it came from, its Table,
@@ -221,7 +237,7 @@ export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCod
 export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
 /** What the service keeps of a slot beside its entry. */
-interface SlotRecord { readonly view: ViewKind; readonly group?: number; readonly revision: number; readonly sources: readonly SourceRef[] }
+interface SlotRecord { readonly view: ViewKind; readonly group?: number; readonly revision: number; readonly sources: readonly SourceRef[]; readonly pivot?: PivotProvenance }
 interface Run {
   readonly tabId: string
   readonly queryId: string
@@ -230,8 +246,6 @@ interface Run {
   readonly slots: Map<EntryKey, SlotRecord>
   /** The groups whose Pivot last had the focus, by ordinal; the others' Table is selected. */
   readonly selected: Set<number>
-  /** How many Pivots each group has shown, by ordinal. */
-  readonly pivots: Map<number, number>
   /** The published groups and comparisons, built when asked for after the entries changed. */
   shape?: Shape
   /** The ordinal of the group that had the focus in the tab's previous run: its Table takes the focus when it opens. */
@@ -277,11 +291,12 @@ interface Run {
   readonly sorting: Map<EntryKey, AbortController>
   /** Each grid's views still open (its current one, the one it shows, and those superseded since), by entry key: a view
    *  closes only once the grid shows another or none, so a re-sort keeps painting the old order until the new one is read. */
-  readonly held: Map<EntryKey, { shown?: ResultHandle; readonly views: Set<ResultView> }>
+  readonly held: Map<EntryKey, { shown?: ResultHandle; readonly views: Set<ResultView>; pins?: Map<ResultView, number> }>
   /** Its last entry was closed by `removeEntry`. */
   emptied: boolean
 }
-interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
+/** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
+interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
 
 const emptyView = (): TabViewState => ({ stackScrollTop: 0, grids: new Map(), collapsed: new Set() })
 
@@ -427,7 +442,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.selectionAnnounced.delete(tabId)
     this.views.set(tabId, emptyView())
     const run: Run = {
-      tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), pivots: new Map(), ...refocus === undefined ? {} : { refocus },
+      tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false
@@ -800,14 +815,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const jobId = this.newId()
     // A grid drawn transposed saves as drawn: a line per column, which its progress then counts.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
-    const running: RunningJob = { tabId, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    let saved!: () => void
+    const done = new Promise<void>(resolve => { saved = resolve })
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
     try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number), ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
-    finally { this.endJob(running) }
+    finally { this.endJob(running); saved() }
     if (this.disposed) return undefined
     if (result.ok) {
       if (!result.value) return undefined
@@ -1191,14 +1208,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
   /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
   /** Adds a result Varia made from the run's own after the run ended, named `label`, into the slot its kind takes: a pivot
-   *  (results.pivot) as its source group's Pivot, directly under the Table, in place of the Pivot the group had; a diff
-   *  (results.diff) as a comparison, after the groups. It is released with
-   *  the run's others, and its rows are not counted among those the query read. `sources` are the set keys it was made
-   *  from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one) does not take it.
+   *  (results.pivot) as its source group's Pivot, directly under the Table; a diff (results.diff) as a comparison, after the
+   *  groups. It is released with the run's others, and its rows are not counted among those the query read. `sources` are
+   *  the set keys it was made from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one)
+   *  does not take it. `pivot` is a pivot's provenance, kept with its slot.
+   *
+   *  A group that has a Pivot keeps it until this call: the new result replaces the old one in the same slot, under the same
+   *  entry key, as the slot's next revision, and only then is the old result released (`replaceSet`). Nothing is freed
+   *  early to make room, so the backend held both while the new one was built.
+   *
    *  Returns its entry's key, or undefined when the run is gone, still running, lacks a source, has its most sets, is
    *  drawn bare, or the result is a pivot of anything but a group's Table of rows; the result is then released, since
    *  nothing else would close it. */
-  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = []): EntryKey | undefined {
+  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = [], o: { readonly pivot?: PivotProvenance } = {}): EntryKey | undefined {
     const run = this.runs.get(tabId)
     const key = setKey(descriptor)
     if (run?.setKeys.has(key)) return undefined
@@ -1210,16 +1232,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A bare run (Peek) shows its rows alone: no Pivot and no comparison.
     if (run.bare) return refuse()
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
-    // Pivot, a comparison or a plan set), and a group has one, so the one it had is released first.
+    // Pivot, a comparison or a plan set), and a group has one, so a new one takes the slot of the one it had.
     const group = view === 'comparison' ? undefined : origin?.group
-    let replaced: ResultSetEntry | undefined
+    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: entryName(source), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
-      replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
+      const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
+      if (replaced) return this.replaceSet(tabId, run, replaced, descriptor, label, refs, o.pivot)
     }
-    if (run.sets.length - (replaced ? 1 : 0) >= resultLimits.sets) return refuse()
-    const refocus = replaced !== undefined && this.views.get(tabId)?.focused === replaced.key
-    if (replaced) this.drop(tabId, run, [replaced])
+    if (run.sets.length >= resultLimits.sets) return refuse()
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
@@ -1228,22 +1249,103 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
-    let revision = 1
-    if (view === 'pivot') { revision = (run.pivots.get(group!) ?? 0) + 1; run.pivots.set(group!, revision) }
-    run.slots.set(entry.key, {
-      view, ...group === undefined ? {} : { group }, revision,
-      sources: from.map(source => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: entryName(source), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
-    })
+    run.slots.set(entry.key, { view, ...group === undefined ? {} : { group }, revision: 1, sources: refs, ...o.pivot ? { pivot: o.pivot } : {} })
     run.shape = undefined
-    // The Pivot it replaces had the focus: the new one has it.
-    if (refocus) { this.viewState(tabId).focused = entry.key; this.select(run, entry.key) }
-    if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
-    // Its grid always shows a strip: what was compared.
-    run.settled.set(key, { rows: descriptor.rowsStored, strip: true })
+    this.settleDerived(run, key, descriptor)
     run.emptied = false
     run.view = 'results'
     this.schedule(tabId)
     return entry.key
+  }
+
+  /**
+   * A group's Pivot shows a new result: the same entry key, number and place, the slot's next revision and the new
+   * provenance, published together; then the old result is released. What named the old result's rows goes with it: the
+   * sort or filter being built, its views and filters (the toolbar says the filters were removed), its controller (the grid
+   * is built again over the new result), a copy of it, its selection and its scroll. The rest stays: the focus and the
+   * group's selected view, collapse and splitter share, the orientation, and the sort keys, widths and header column of each
+   * column whose name is unique in both results.
+   */
+  private replaceSet(tabId: string, run: Run, old: ResultSetEntry, descriptor: ResultDescriptor, label: string, sources: readonly SourceRef[], pivot: PivotProvenance | undefined): EntryKey {
+    const key = old.key, record = run.slots.get(key)!
+    const moved = uniqueNames(old.descriptor.columns, descriptor.columns)
+    run.sorting.get(key)?.abort()
+    run.sorting.delete(key)
+    // Releasing the old result closes its views.
+    run.held.delete(key)
+    const sort = run.sorts.get(key)
+    if (sort) {
+      for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+      const sorts = new Map(run.sorts)
+      sorts.delete(key)
+      run.sorts = sorts
+    }
+    this.controllers.delete(key)
+    if (this.copying && this.runs.get(this.copying.tabId) === run && this.copying.job.entry === key) this.cancelRunning(this.copying)
+    run.setKeys.delete(setKey(old.descriptor))
+    if (run.settled.has(setKey(old.descriptor))) {
+      if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+      run.settled.delete(setKey(old.descriptor))
+    }
+    run.setKeys.add(setKey(descriptor))
+    const entry: ResultSetEntry = { key, number: old.number, descriptor, handle: this.client.open(descriptor), label }
+    if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+    run.sets[run.sets.indexOf(old)] = entry
+    run.entries.set(key, entry)
+    // The old build's provenance never describes the new one: without its own, the slot has none.
+    const { pivot: _previous, ...kept } = record
+    run.slots.set(key, { ...kept, revision: record.revision + 1, sources, ...pivot ? { pivot } : {} })
+    run.shape = undefined
+    const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
+    if (grids && state) grids.set(key, carriedState(state, moved, descriptor.columns.length))
+    this.settleDerived(run, setKey(descriptor), descriptor)
+    run.emptied = false
+    run.view = 'results'
+    // Published now, before the old result is released: no snapshot ever points a grid at a released handle.
+    this.publishNow(tabId)
+    // A save of the old Pivot may still be in its file dialog, before main checks the result is there: it is released
+    // once that save ends, so rebuilding never fails a save the user started.
+    this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
+    const keys = (sort?.keys ?? []).flatMap(item => { const at = moved.get(item.column); return at === undefined ? [] : [{ ...item, column: at }] })
+    if (keys.length) this.applySort(tabId, run, key, keys)
+    if (sort?.filters.length) this.notify(tabId, `${entryName(entry)} was built again, so its filters were removed.`)
+    return key
+  }
+
+  /** A derived set has all its rows when it is added: the stack sizes it to them, and its grid always shows a strip (what
+   *  was pivoted or compared). */
+  private settleDerived(run: Run, key: string, descriptor: ResultDescriptor): void {
+    if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+    run.settled.set(key, { rows: descriptor.rowsStored, strip: true })
+  }
+
+  /**
+   * Keeps `view` of a grid open while work reads it (a pivot build reads its Table's view), also once the grid has moved on
+   * to another; it closes when the last hold ends and the grid neither has it nor shows it. The backend may still evict it.
+   * Returns the end of the hold.
+   */
+  holdView(tabId: string, key: EntryKey, view: ResultView): () => void {
+    const run = this.runs.get(tabId)
+    if (!run || !run.entries.has(key)) return () => {}
+    const held = run.held.get(key) ?? { views: new Set<ResultView>() }
+    run.held.set(key, held)
+    held.views.add(view)
+    const pins = held.pins ??= new Map()
+    pins.set(view, (pins.get(view) ?? 0) + 1)
+    let ended = false
+    return () => {
+      if (ended) return
+      ended = true
+      const count = (pins.get(view) ?? 1) - 1
+      if (count > 0) pins.set(view, count)
+      else pins.delete(view)
+      if (run.held.get(key) === held && this.runs.get(tabId) === run) this.closeHeld(run, key)
+    }
+  }
+
+  /** Releases a derived result no run took: the late answer of work that was given up. */
+  discard(descriptor: Pick<ResultDescriptor, 'generation' | 'resultId'>): void {
+    void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
   }
 
   notify(tabId: string, text: string): void {
@@ -1424,7 +1526,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!held) return
     const keep = run.sorts.get(index)?.view
     for (const view of [...held.views]) {
-      if (view === keep || view === held.shown) continue
+      if (view === keep || view === held.shown || held.pins?.has(view)) continue
       held.views.delete(view)
       void view.close()
     }
@@ -1502,13 +1604,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (entries.length) { run.sets = run.sets.filter(entry => !keys.has(entry.key)); run.setsPublished = false }
     if (plans.length) run.planSets = run.planSets.filter(entry => !keys.has(entry.key))
     if (this.copying && this.runs.get(this.copying.tabId) === run && keys.has(this.copying.job.entry)) this.cancelRunning(this.copying)
+    this.releaseEntries(run, gone)
+  }
+
+  /** Releases stored results in one request and disposes their handles. A close may race a bounded XML copy: the copy
+   *  owns that temporary lease and reads them first; history owns no handles. */
+  private releaseEntries(run: Run, gone: readonly ResultSetEntry[], after: readonly Promise<void>[] = []): void {
     const released: ResultKey[] = gone.map(entry => entry.handle.key)
     const release = () => {
       void this.client.release(released).catch(() => {})
       for (const entry of gone) entry.handle.dispose()
     }
-    // A close may race a bounded XML copy. The copy owns this temporary lease; history owns no handles.
-    if (run.retaining) void run.retaining.then(release, release)
+    const waits = run.retaining ? [run.retaining, ...after] : after
+    if (waits.length) void Promise.allSettled(waits).then(release)
     else release()
   }
 
@@ -1628,6 +1736,47 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 }
 
 const table: ViewOrientation = { transposed: false }, turnedPlain: ViewOrientation = { transposed: true }
+
+/** Where each column of `from` stands in `to`, for the columns whose name is unique in both: what a rebuilt Pivot carries
+ *  over (sort keys, widths, the header column). */
+export function uniqueNames(from: readonly ResultColumn[], to: readonly ResultColumn[]): ReadonlyMap<number, number> {
+  const once = (columns: readonly ResultColumn[]) => {
+    const seen = new Map<string, number>()
+    columns.forEach((column, at) => seen.set(column.name, seen.has(column.name) ? -1 : at))
+    return seen
+  }
+  const target = once(to), moved = new Map<number, number>()
+  for (const [name, at] of once(from)) {
+    const there = target.get(name)
+    if (at >= 0 && there !== undefined && there >= 0) moved.set(at, there)
+  }
+  return moved
+}
+
+/**
+ * A rebuilt Pivot's grid state from the old one's: the orientation, the header column and the widths the user gave the
+ * columns it keeps by name (`moved`), the transposed layout's shared width and name column; not its selection, scroll or
+ * per-row widths, which named the old rows. A width left NaN is measured as a new column's (GridView).
+ */
+export function carriedState(state: GridViewState, moved: ReadonlyMap<number, number>, columns: number): GridViewState {
+  const next: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }
+  if (state.widths && state.userSized?.size) {
+    const widths = new Float64Array(columns).fill(Number.NaN), userSized = new Set<number>()
+    for (const column of state.userSized) {
+      const at = moved.get(column)
+      if (at === undefined || column >= state.widths.length) continue
+      widths[at] = state.widths[column]
+      userSized.add(at)
+    }
+    if (userSized.size) { next.widths = widths; next.userSized = userSized }
+  }
+  if (state.orientation) next.orientation = state.orientation
+  const header = state.headerColumn === undefined ? undefined : moved.get(state.headerColumn)
+  if (header !== undefined) next.headerColumn = header
+  // The shared width stays as it was (sized, so the first rows do not measure it again); per-row widths named old rows.
+  if (state.transposed) next.transposed = { topRow: 0, virtualTop: 0, scrollLeft: 0, width: state.transposed.width, overrides: new Map(), sized: state.transposed.sized, ...state.transposed.nameWidth === undefined ? {} : { nameWidth: state.transposed.nameWidth } }
+  return next
+}
 /** A focused grid drawn transposed (`ResultsService.turned`): its entry and the column that heads its drawn columns. */
 export interface FocusedOrientation { readonly entry: EntryKey; readonly headerColumn?: number }
 /** An entry whose view can be drawn transposed (`turnableKinds`, and no tone column whatever its kind). */

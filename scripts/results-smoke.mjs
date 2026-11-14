@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, pivotSource, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1624,14 +1624,17 @@ try {
   await cell(0, 0, pivoted).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Pivot Results…', exact: true }).click()
   await expect(pivotSource(page)).toHaveText('Result 1')
-  await expect(pivoting).toContainText('Building again replaces Pivot of Result 1.')
-  // A second build, without Max of id, replaces the group's Pivot: still one Pivot, now of two columns.
+  await expect(pivoting).toContainText('Building again replaces Pivot of Result 1 once the new one is built.')
+  // A second build, without Max of id, replaces the group's Pivot in place: still one Pivot, in the same slot (its entry
+  // key), now of two columns.
+  const pivotEntry = await resultEntryKey(pivoted)
   await pivoting.getByRole('button', { name: 'Remove value 2', exact: true }).click()
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
   await expect(pivoted.getByRole('columnheader', { name: /^Count of rows/ })).toHaveCount(1)
   await expect(pivoted.getByRole('columnheader', { name: /^Max of id/ })).toHaveCount(0)
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(pivoted).toHaveCount(1)
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()
@@ -1650,7 +1653,8 @@ try {
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
   await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
-  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  // The builder has two live regions (its error, and its waiting notes): the refusal is in one of them.
+  await expect(pivoting.getByRole('status').filter({ hasText: 'The column group has 300 distinct values, and a pivot can have at most 256 column groups.' })).toBeVisible()
   await expect(anyResultGrid(page)).toHaveCount(1)
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await run('-- varia-fake: sets=W1*100')
