@@ -129,6 +129,52 @@ internal static class SqlDefinitionChecks
             && Candidates("UPDATE |T SET x = 1 FROM dbo.T") is [{ Schema: "dbo", Name: "T" }]
             && Candidates("UPDATE dbo.|T SET x = 1") is [{ Schema: "dbo", Name: "T" }],
             "the caret on UPDATE's or DELETE's target finds the table it names");
+        // Scripts without semicolons: a broken statement before or after the caret's still leaves its aliases.
+        check(Candidates("SELECT o.Tot|al FROM dbo.Orders o\nSELECT * FROM WHERE") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT * FROM dbo.Lines l WHERE\nSELECT o.Tot|al FROM dbo.Orders o") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT o.Id\nFROM dbo.Orders o\nWHERE o.Sta|tus = 1\n\nSELECT TOP 10 * FROM dbo.Lines l WHERE l.") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT Tot|al FROM dbo.Orders\nSELECT * FROM dbo.Lines WHERE") is [{ Schema: "dbo", Name: "Orders", Column: null }]
+            && Candidates("UPDATE c SET Na|me = 1 FROM dbo.Customer AS c WITH (NOLOCK) WHERE c.Id = 1\nSELECT * FROM WHERE") is [{ Schema: "dbo", Name: "Customer" }],
+            "a statement keyword starts a statement for the fallback, and SET or WITH inside one stays with it");
+        // A method of a column (XML, CLR types) is the column's, never a three-part object.
+        check(Candidates("SELECT t.Do|c.value('(/a)[1]','int') FROM dbo.Xml t") is [{ Schema: "dbo", Name: "Xml" }]
+            && Candidates("SELECT |t.Doc.value('(/a)[1]','int') FROM dbo.Xml t") is [{ Schema: "dbo", Name: "Xml" }]
+            && Candidates("SELECT t.Doc.val|ue('(/a)[1]','int') FROM dbo.Xml t") is [{ Schema: "dbo", Name: "Xml" }]
+            && Candidates("SELECT Do|c.value('(/a)[1]','int') FROM dbo.Xml") is [{ Schema: "Doc", Name: "value" }, { Schema: "dbo", Name: "Xml", Column: "Doc" }]
+            && Candidates("SELECT dbo.f|n(1) FROM dbo.T") is [{ Schema: "dbo", Name: "fn" }, ..],
+            "a call on a column is a method of its table's column; a schema's function stays first otherwise");
+        // White space and comments may sit around the dots.
+        check(Candidates("SELECT * FROM dbo . /*x*/ Ord|ers") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT * FROM dbo./*c*/Ord|ers") is [{ Schema: "dbo", Name: "Orders" }]
+            && At("SELECT * FROM dbo.  Ord|ers")?.Range == new LanguageRange(new(0, 14), new(0, 26))
+            && Candidates("SELECT l . Tot|al FROM dbo.Orders o JOIN dbo.Lines l ON o.Id = l.OrderId") is [{ Schema: "dbo", Name: "Lines" }],
+            "white space and comments around a name's dots keep it whole");
+        check(At("CREATE TRIGGER dbo.trg ON dbo.Orders AFTER INSERT AS SELECT * FROM inser|ted") is null
+            && At("CREATE TRIGGER dbo.trg ON dbo.Orders AFTER DELETE AS SELECT * FROM dele|ted") is null,
+            "a trigger's inserted and deleted in FROM have no object");
+        // Correlation: a subquery's column may be an outer table's; a derived table's or CTE's may not.
+        check(Candidates("SELECT (SELECT MAX(v) FROM (VALUES (Col|A), (ColB)) AS t(v)) FROM dbo.Wide") is [{ Schema: "dbo", Name: "Wide", Column: "ColA" }],
+            "a VALUES list inside a subquery leaves its columns to the outer table");
+        check(Candidates("SELECT * FROM dbo.Customers c WHERE EXISTS (SELECT 1 FROM dbo.Orders o WHERE o.CustomerId = c.Id AND Regi|on = 'W')")
+            is [{ Name: "Orders", Column: "Region" }, { Name: "Customers", Column: "Region" }],
+            "a correlated subquery's bare column may be the outer table's, offered after its own");
+        check(Candidates("SELECT * FROM dbo.A AS a CROSS APPLY (SELECT TOP 1 Va|l FROM dbo.B AS b WHERE b.Id = a.Id) AS x") is [{ Name: "B", Column: "Val" }, { Name: "A", Column: "Val" }]
+            && Candidates("WITH c AS (SELECT Na|me FROM dbo.Inner1) SELECT * FROM c CROSS JOIN dbo.Outer1") is [{ Name: "Inner1", Column: null }],
+            "an APPLY's query sees outer tables, a CTE's does not");
+        // Column names that are no column references.
+        check(Candidates("CREATE TABLE dbo.Lines (OrderId int REFERENCES dbo.Orders (I|d))") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("ALTER TABLE dbo.Lines ADD FOREIGN KEY (OrderId) REFERENCES dbo.Orders (I|d)") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("CREATE INDEX ix ON dbo.Orders (Custom|erId) INCLUDE (Total)") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("CREATE INDEX ix ON dbo.Orders (CustomerId) INCLUDE (Tot|al)") is [{ Schema: "dbo", Name: "Orders" }]
+            && At("SELECT o.Total AS Gra|nd FROM dbo.Orders o") is null,
+            "a foreign key's and an index's columns are their table's, and a column alias has no object");
+        check(Candidates("SELECT d|bo.Orders.Total FROM dbo.Orders") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT Sales.dbo.Orders.To|tal FROM Sales.dbo.Orders") is [{ Database: "Sales", Schema: "dbo", Name: "Orders" }],
+            "a caret anywhere in a column's qualifier finds the whole qualifier");
+        check(Candidates("USE Sales;\nSELECT * FROM dbo.Ord|ers") is [{ Database: "Sales", Schema: "dbo", Name: "Orders" }]
+            && Candidates("USE [Sales Data]\nGO\nSELECT o.To|tal FROM dbo.Orders AS o") is [{ Database: "Sales Data", Schema: "dbo", Name: "Orders" }]
+            && Candidates("USE Sales; SELECT * FROM Other.dbo.Ord|ers") is [{ Database: "Other" }],
+            "USE earlier in the script is the database a name without one resolves in");
         // A batch that does not parse still has a caret statement that may.
         check(Candidates("SELECT c.Na|me FROM dbo.C c; SELECT * FROM") is [{ Schema: "dbo", Name: "C" }]
             && Candidates("SELECT Na|me FROM dbo.C; SELECT * FROM") is [{ Schema: "dbo", Name: "C", Column: null }]
