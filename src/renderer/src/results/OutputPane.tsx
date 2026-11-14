@@ -128,32 +128,37 @@ function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: Ta
  * Switching the layout while a grid had the focus (the palette and the menus give it back to the grid before the command
  * runs) unmounts that grid: the focus would fall to the page. Once the other layout is drawn, the focused view's grid
  * takes it instead, as soon as it is mounted (the stack mounts its grids over a few frames), unless the focus has gone
- * somewhere else meanwhile.
+ * somewhere else meanwhile. Whether a grid of this pane had it is read in the render that switches, while the old grid is
+ * still drawn: a mark kept from focus events would outlive a grid removed some other way (a re-run, Close Results).
  */
-function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
+export function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
   const mainRef = useRef<HTMLDivElement>(null)
-  const gridHeld = useRef(false)
   const layout = useRef(tabs)
-  const onFocus = (event: FocusEvent<HTMLDivElement>) => { gridHeld.current = !!(event.target as Element).closest('[data-result-grid]') }
-  // A focused element that is removed may blur with no target: that is the switch itself, not the user moving on.
-  const onBlur = (event: FocusEvent<HTMLDivElement>) => { const to = event.relatedTarget as Node | null; if (to && !event.currentTarget.contains(to)) gridHeld.current = false }
+  const held = useRef<{ readonly tabs: boolean; readonly grid: boolean } | undefined>(undefined)
+  if (layout.current === tabs) held.current = undefined
+  else if (held.current?.tabs !== tabs) {
+    const main = mainRef.current, active = main?.ownerDocument.activeElement
+    held.current = { tabs, grid: !!main && !!active && main.contains(active) && !!active.closest('[data-result-grid]') }
+  }
+  // Drawn now in place of the other layout while a grid had the focus: the stack brings the focused view into view.
+  const switching = layout.current !== tabs && !!held.current?.grid
   useLayoutEffect(() => {
     if (layout.current === tabs) return
     layout.current = tabs
-    const main = mainRef.current
-    if (!gridHeld.current || !main) return
-    const doc = main.ownerDocument
+    const main = mainRef.current, hadGrid = held.current?.grid
+    held.current = undefined
+    if (!hadGrid || !main) return
     const place = () => {
-      const active = doc.activeElement
+      const doc = main.ownerDocument, active = doc.activeElement
       if (active && active !== doc.body) return true
       const key = focused()
       const grid = [...main.querySelectorAll<HTMLElement>('[data-result-grid]')].find(element => key === undefined || element.getAttribute('data-result-entry') === key)
       grid?.focus({ preventScroll: true })
-      return !!grid
+      return !!grid && doc.activeElement === grid
     }
     if (place()) return
     // Until the grid is mounted, or the user does something else: a click, the wheel or the focus moving.
-    const view = windowOf(main), observer = new view.MutationObserver(() => { if (place()) stop() })
+    const doc = main.ownerDocument, observer = new (windowOf(main).MutationObserver)(() => { if (place()) stop() })
     const stop = () => {
       observer.disconnect()
       for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.removeEventListener(type, stop, true)
@@ -162,9 +167,7 @@ function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
     for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.addEventListener(type, stop, true)
     return stop
   }, [tabs])
-  // Drawn now in place of the other layout while a grid had the focus: the stack brings the focused view into view.
-  const switching = layout.current !== tabs && gridHeld.current
-  return { mainRef, onFocus, onBlur, switching }
+  return { mainRef, switching }
 }
 
 /** The output view's height, followed while it is mounted. */
@@ -299,8 +302,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
           {/* Siblings keyed by run: their keys must differ, or React keeps a superseded run's grids beside the new ones. */}
-          <div className="results-main" ref={layoutFocus.mainRef} onBlur={layoutFocus.onBlur} onFocus={(event: FocusEvent<HTMLDivElement>) => {
-            layoutFocus.onFocus(event)
+          <div className="results-main" ref={layoutFocus.mainRef} onFocus={(event: FocusEvent<HTMLDivElement>) => {
             const grid = (event.target as Element).closest('[data-result-grid]')
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })

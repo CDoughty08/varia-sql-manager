@@ -597,7 +597,8 @@ Outcome, accepted by the owner:
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near
     the split guideline).
-    - **What PR 13 settled or left** (`tests/results-tabs.test.ts` holds its checks; `scripts/grouped-results-smoke.mjs`
+    - **What PR 13 settled or left** (`tests/results-tabs.test.ts` holds its checks, with `tests/layout-focus.test.ts` for
+      the focus across a switch and `tests/results-stack.test.ts` for the stack's side; `scripts/grouped-results-smoke.mjs`
       its interface steps):
       - The layout is `ResultsTabs` beside `ResultsStack`, chosen by `OutputPane` from `queryResults.grid.layout`
         (`stacked` | `tabs`, default `stacked`). The toggle is `output.toggleResultsTabs` ("Show Results as Tabs"), a
@@ -646,7 +647,8 @@ Outcome, accepted by the owner:
         command runs) gives the focus to the focused view's grid in the other layout once it is mounted (`OutputPane`'s
         `useLayoutFocus`), instead of letting it fall to the page. The stack drawn then opens that view if collapsed and
         scrolls it into view (`revealFocused`, through Find Next's reveal), so its grid mounts; the hand-off gives up as
-        soon as the user clicks, wheels or moves the focus.
+        soon as the user clicks, wheels or moves the focus. Whether a grid of the pane had the focus is read in the render
+        that switches, not kept from focus events, so a grid removed by a re-run or Close Results leaves nothing behind.
       - The strip's wheel is the fixed gesture `resultTabs.scroll` (Control+wheel still zooms), and in forced colours the
         selected tab's focus ring is HighlightText on Highlight.
       - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and
