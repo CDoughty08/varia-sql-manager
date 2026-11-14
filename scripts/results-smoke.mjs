@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
-import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
+import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
@@ -196,6 +196,8 @@ async function focusRingPixels() {
 
 try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
+  // These steps read the stacked layout: captions, splitters, several grids at once. scripts/grouped-results-smoke.mjs covers Tabs.
+  await pinStackedResults(page)
   // A hidden window draws about once a second; the grid's frames and the scroll steps need real ones.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // Closing an unsaved query asks first; answer Don't Save.
@@ -1223,6 +1225,22 @@ try {
   expect(await editorText()).toContain('<unavailable-plan')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
+  // Its only grid closed, the run keeps its captured plans (hasResults) but has no result set (hasResultSets): the palette
+  // offers Close Results, and shows Find, Find Next and Save Results As disabled, not as commands that do nothing.
+  await outputTab(/^Results/).click()
+  await resultClose(page, 'Result 1').click()
+  await expect(outputEmpty(page)).toHaveText('Results were closed. Execute the query again to see them.')
+  await expect(outputTab(/^Execution plan/)).toHaveAccessibleName('Execution plan, 2 plans')
+  for (const [typed, name, disabled] of [['find in results', 'Find in Results', true], ['find next in results', 'Find Next in Results', true], ['save results as', 'Save Results As…', true], ['close results', 'Close Results', false]]) {
+    await page.keyboard.press('F1')
+    await page.keyboard.type(typed)
+    const option = quickInput(page).getByRole('option', { name: new RegExp(`^Query: ${name}(,|$)`) })
+    await expect(option).toHaveCount(1)
+    if (disabled) await expect(option).toHaveAttribute('aria-disabled', 'true')
+    else await expect(option).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Escape')
+    await expect(quickInput(page)).toHaveCount(0)
+  }
   const holdPlans = join(control, 'hold', 'mixed-plan-summary')
   await writeFile(holdPlans, '')
   await run('SELECT 42 -- MIXED_PLAN_FIXTURE', { running: true })
@@ -1559,7 +1577,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Update Pivot', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1680,6 +1698,36 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(pivoted).toHaveCount(1)
   expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  // Out of date and Update: filtering the Table (Keep Selected Rows on its first ten) marks its Pivot out of date on its
+  // caption and in its strip; Update builds it again from its own recipe over the filtered Table, in the same slot, and
+  // the mark goes.
+  const updatePivot = page.getByRole('button', { name: 'Update Pivot of Result 1', exact: true })
+  await expect(updatePivot).toHaveCount(0)
+  const pivotTable = resultGrid(page, 'Result 1', 'table')
+  await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = 0 })
+  await cell(0, 0, pivotTable).click()
+  await cell(9, 0, pivotTable).click({ modifiers: ['Shift'] })
+  await cell(9, 0, pivotTable).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
+  await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name: 'Keep Selected Rows', exact: true }).click()
+  await expect(strip('Pivot of Result 1')).toContainText("Out of date: Result 1's filters changed after this Pivot was built.")
+  await expect(updatePivot).toBeEnabled()
+  await updatePivot.click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1 (as sorted and filtered): 10 rows in 2 row groups.')
+  await expect(strip('Pivot of Result 1')).not.toContainText('Out of date')
+  await expect(updatePivot).toHaveCount(0)
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  // The filter removed, it is out of date again (nothing rebuilds by itself).
+  await outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true }).getByRole('button', { name: 'Remove filter 10 selected rows', exact: true }).click()
+  await expect(updatePivot).toBeVisible()
+  // Update Pivot on the Pivot's own grid menu: the rebuilt Pivot is a new grid in the same slot, and it keeps the focus,
+  // so the grid's keys still work.
+  await cell(0, 0, pivoted).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Update Pivot', exact: true }).click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(updatePivot).toHaveCount(0)
+  await expect(pivoted).toBeFocused()
+  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update (caption or grid menu) builds it again in its slot from the filtered rows, keeping the focus.')
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()
@@ -2167,9 +2215,11 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups fit.
+  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups
+  // fit; so does Tabs (in the palette and the Window menu).
   await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })).toBeHidden()
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Tabs', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
@@ -2678,6 +2728,7 @@ try {
     page = await application.firstWindow()
     page.setDefaultTimeout(30000)
     page.on('pageerror', error => failures.push(error.message))
+    await pinStackedResults(page)
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await application.evaluate(({ dialog }) => {
       dialog.showMessageBox = async (...args) => {

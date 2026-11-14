@@ -80,7 +80,7 @@ function linkedRow(platform: Platform, linked: LinkedSettings): GestureRow {
   const current: GestureModifiers = linked.multiCursorModifier === 'ctrlCmd' ? ['mod'] : ['alt']
   return {
     id: multiCursorRowId, kind: 'linked', title: 'Add Cursor', description: 'Adds another cursor where you click in the query editor (Monaco\'s multi-cursor modifier).',
-    action: 'click', target: 'the query editor', scopeTitle: 'SQL Query Editor', scopes: ['queryEditor'], label: gestureLabel('click', current, platform), current, currentToken: gestureToken(current), defaultChoice: ['alt'],
+    action: 'click', target: 'the query editor', scopeTitle: gestureScopes.queryEditor, scopes: ['queryEditor'], label: gestureLabel('click', current, platform), current, currentToken: gestureToken(current), defaultChoice: ['alt'],
     defaultLabel: modifiersLabel(['alt'], platform), options: [], source: 'setting', changed: linked.multiCursorModifier !== defaultLinked.multiCursorModifier,
     keyboard: [], keys: [], problems: [], page: multiCursorPage
   }

@@ -10,6 +10,10 @@ import type { Disposable } from '../core/types'
 import { gridLimits } from '../grid/constants'
 
 export const documentUri = (id: string): string => `varia-sql://query/${id}`
+/** The query a first launch opens. */
+export const welcomeQueryText = '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n'
+/** Whether `text` is still that query, whatever its line endings. */
+export const isWelcomeQuery = (text: string): boolean => text.length >= welcomeQueryText.length && text.length <= welcomeQueryText.length + 8 && text.replace(/\r\n/g, '\n') === welcomeQueryText
 /** A Monaco model for a document's text in its language ('sql', 'xml' or 'json'). */
 export type ModelFactory = (text: string, uri: string, language: string) => editor.ITextModel
 /** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */

@@ -4,7 +4,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -77,15 +77,70 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 }
 
 /**
+ * A filtered result's filters, each its words and a Remove button, and Clear filters when there are several. Removing the
+ * last one (or clearing them) removes the button that has the focus, so the focus goes first to `refocus`'s target: the
+ * caption's Collapse button in the stack, the selected view tab in Tabs.
+ */
+export function FilterChips({ tabId, entry, name, sort, refocus }: { tabId: string; entry: ResultSetEntry; name: string; sort?: GridSort; refocus(): void }) {
+  const { results } = useWorkbench()
+  if (!sort || sort.filters.length === 0) return null
+  return <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
+    {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
+      <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
+      <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) refocus(); results.removeFilter(tabId, entry.key, at) }}><Icon name="close" /></button>
+    </span>)}
+    {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { refocus(); results.clearFilters(tabId, entry.key) }}>Clear filters</button>}
+  </span>
+}
+
+/**
+ * A group's Pivot's mark and its one action, beside its name (a Stacked caption, the Tabs view row): "Building again…"
+ * and Cancel while it is built again (by Update, or Build Pivot in the builder); else, while it is out of date (its
+ * Table's filters changed since it was built), an Out of date chip and Update, which waits while the Table cannot be
+ * pivoted (the query running, its sort or filter being built, the backend gone). The action is one button, so the focus
+ * stays on it as Update turns into Cancel and back; when it goes (built, and up to date) the focus goes to `refocus`,
+ * unless the user had put it somewhere else. The status line is mounted with it, so a screen reader hears it start.
+ */
+export function PivotMark({ tabId, entry, name, ordinal, stale, running, refocus }: { tabId: string; entry: ResultSetEntry; name: string; ordinal: number; stale: boolean; running: boolean; refocus(): void }) {
+  const { commands, results, pivot } = useWorkbench()
+  const rebuilding = useSyncExternalStore(pivot.subscribe, () => pivot.building(tabId, ordinal))
+  const updatable = useSyncExternalStore(results.subscribe, () => stale && pivot.canPivot(tabId, entry.key))
+  const action = rebuilding ? 'cancel' : stale ? 'update' : undefined
+  const actionRef = useRef<HTMLButtonElement>(null), actionFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (action || !actionFocus.current) return
+    actionFocus.current = false
+    const document = actionRef.current?.ownerDocument ?? globalThis.document
+    if (!document.activeElement || document.activeElement === document.body) refocus()
+  }, [action])
+  const update = (event: MouseEvent<HTMLButtonElement>) => {
+    void commands.execute('output.updatePivot', { target: { kind: 'output', tabId, view: 'grid', entry: entry.key, selectedText: '', element: event.currentTarget } }, 'toolbar')
+  }
+  return <>
+    <span className="rs-caption-state" role="status">{rebuilding ? 'Building again…' : ''}</span>
+    {action === 'update' && <span className="rs-caption-stale" title={`Result ${ordinal}'s filters changed after this Pivot was built`}><Icon name="warning" />Out of date</span>}
+    {action && <button ref={actionRef} type="button" className="rs-caption-action" onFocus={() => { actionFocus.current = true }} onBlur={event => { if (event.relatedTarget) actionFocus.current = false }}
+      {...action === 'cancel'
+        ? { 'aria-label': `Cancel building ${name} again`, title: `Stop building ${name} again; it keeps its last build`, onClick: () => pivot.cancel(tabId, ordinal) }
+        : { 'aria-label': `Update ${name}`, title: `Build ${name} again from Result ${ordinal} as it is filtered now`, disabled: !updatable || running, onClick: update }}>
+      {action === 'cancel' ? 'Cancel' : <><Icon name="refresh" />Update</>}
+    </button>}
+  </>
+}
+
+/**
  * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, Save
  * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
  * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot); a Pivot's or
  * a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, onToggle, onClose }: {
-  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, pivotOf, stale, onToggle, onClose }: {
+  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string
+  /** The group number of the Pivot this caption heads, and whether it is out of date (its Table's filters changed). */
+  pivotOf?: number; stale?: boolean
+  onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
 }) {
-  const { commands, results } = useWorkbench()
+  const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry)
   const facts = [rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
@@ -97,20 +152,16 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   }
   // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
   const toggleRef = useRef<HTMLButtonElement>(null)
+  const refocus = useCallback(() => toggleRef.current?.focus(), [])
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
-    {sort && sort.filters.length > 0 && <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
-      {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
-        <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
-        <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) toggleRef.current?.focus(); results.removeFilter(tabId, entry.key, at) }}><Icon name="close" /></button>
-      </span>)}
-      {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { toggleRef.current?.focus(); results.clearFilters(tabId, entry.key) }}>Clear filters</button>}
-    </span>}
+    <FilterChips tabId={tabId} entry={entry} name={name} sort={sort} refocus={refocus} />
     {batch && <span className="rs-caption-batch">{batch}</span>}
+    {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} stale={!!stale} running={running} refocus={refocus} />}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
     {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`}
@@ -130,22 +181,23 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
  * run (`tab.bare`, Peek's rows) draws the grid alone: no close buttons, and no caption either while it has one grid
  * without filters (a caption returns to hold the filters, so they can be removed).
  */
-export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
+export default function ResultsStack({ tabId, tab, revealFocused = false }: { tabId: string; tab: TabResults; revealFocused?: boolean }) {
   const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
   const search = useServiceSnapshot(resultsSearch)[tabId]
   const sets = tab.sets, count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
   const slots = useMemo(() => {
-    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string }>()
+    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string; stale?: boolean }>()
     for (const group of tab.groups) {
       // What a Table's close takes with it, for its button's tooltip.
       map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others: group.pivot ? ' and its Pivot' : '' })
-      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '' })
+      // A Pivot whose Table's filters changed since it was built is marked on its caption, with Update.
+      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '', ...pivotOutOfDate(tab, group) ? { stale: true } : {} })
     }
     for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '' })
     return map
-  }, [tab.groups, tab.comparisons])
+  }, [tab.groups, tab.comparisons, tab.sorts])
   const stackRef = useRef<HTMLDivElement>(null)
   const [paneHeight, setPaneHeight] = useState(0)
   const [scrollTop, setScrollTop] = useState(view.stackScrollTop)
@@ -241,7 +293,12 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const active = stack?.ownerDocument.activeElement
     const own = !active || active === stack?.ownerDocument.body || gone.has(active.closest('.rs-item')?.querySelector('[data-caption-entry]')?.getAttribute('data-caption-entry') ?? '')
     if (own && !next) resultsTab()?.focus({ preventScroll: true })
-    if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = { closed: key, next: next.key }
+    const focused = results.getSnapshot()[tabId]?.focused
+    if (!results.removeEntry(tabId, key) || !own || !next) return
+    // When the closed view had the grid focus, the service passed it to the view its neighbour last showed (a group's Pivot
+    // or Table): the caption focus goes there too, so commands act on the view the focus is on.
+    const moved = focused !== undefined && gone.has(focused) ? results.getSnapshot()[tabId]?.focused : undefined
+    pendingFocus.current = { closed: key, next: moved ?? next.key }
   }, [results, tabId, slots])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   useLayoutEffect(() => {
@@ -298,6 +355,16 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     if (collapsedEntries.has(revealEntry)) toggle(revealEntry)
     stackReveal.current = revealEntry
   }, [revealSeq, revealEntry])
+  // Drawn in place of the Tabs layout while a grid had the focus (OutputPane): the focused view opens and scrolls into
+  // view as a match does, so its grid mounts and can take the focus back. Only at mount.
+  const revealAtMount = useRef(revealFocused)
+  useLayoutEffect(() => {
+    const key = tab.focused
+    if (!revealAtMount.current || key === undefined || !sets.some(entry => entry.key === key)) return
+    revealAtMount.current = false
+    if (collapsedEntries.has(key)) toggle(key)
+    stackReveal.current = key
+  }, [])
   useLayoutEffect(() => {
     const element = stackRef.current, key = stackReveal.current
     if (key === undefined) return
@@ -354,7 +421,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     // A bare run's one grid stands alone, unless it has filters to show and remove.
     const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
       {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={tab.summary?.budget} sort={sort}
         view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}
     </div>)

@@ -15,6 +15,7 @@ export const reviewedImports = [
   'monaco-editor/languages/definitions/xml/register.js',
   'monaco-editor/editor/contrib/find/browser/findController.js',
   'monaco-editor/editor/contrib/clipboard/browser/clipboard.js',
+  'monaco-editor/editor/contrib/dnd/browser/dnd.js',
   'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js',
   'monaco-editor/editor/contrib/comment/browser/comment.js',
   'monaco-editor/editor/contrib/snippet/browser/snippetController2.js',
