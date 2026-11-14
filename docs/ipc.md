@@ -2653,6 +2653,13 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   the request, start its task); CANCEL; CREDIT; and PING, whose PONG it queues on the control lane itself, so liveness
   survives a starved thread pool (SMO is synchronous). More than 288 requests in flight are answered `BUSY`. At stdin
   EOF (main exited or closed the generation) it cancels everything, waits at most 1.5 s, disposes the service and exits 0.
+- **Thread pool floor** (`ThreadPoolFloor`): the service raises the pool's minimum worker and completion threads to 64
+  when it starts, so the pool makes threads at once up to there instead of about two a second. SqlClient's managed SNI
+  (Linux and macOS) logs in synchronously on a pool thread, and timers fire through the pool, script deadlines among them:
+  with 24 tabs opening sessions together on one processor's worth of threads, a 1 s deadline fired only after its 5 s
+  batch had finished, and the script reported `completedWithErrors` instead of `timedOut`. A live check holds 32 pool
+  threads in sleeps (which the pool does not compensate for, unlike `Monitor.Wait`) and requires a 1 s deadline to stop a
+  5 s `WAITFOR` within 4 s.
 - **Writer thread** (`varia-ipc-writer`) drains the control lane before the bulk lane, drops droppable events past 1,000
   frames or 8 MiB, and exits 0 if a write fails. .NET's console stdout ignores broken-pipe errors, so that does not
   happen when main exits: stdin EOF is what ends the process. The writer never exits because of queue size: main may be

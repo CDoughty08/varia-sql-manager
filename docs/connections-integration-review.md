@@ -110,9 +110,10 @@ restore, own-pool protection and SSIS Stop. All 31 Electron suites then passed l
 including sticky menu parity/placement, SQL results, live plans and hot exit. The unique temporary SQL login was removed
 afterward. Cross-platform CI results are recorded in the PR; its first follow-up run passed all three platform checks,
 all six Electron shards and live groups 2/3 and 3/3, and exposed only the overview fixture dependency described above.
-After the clean merge with current main `e9e68ee2`, the full check passed again in 110.1 seconds: 2,722 offline .NET
-checks and 5,075 Vitest tests. A separate integration-impact review found no connection, cancellation or result-lease
-issues from main's fair worker gate.
+After merging current main through `362cf04d`, the full check passed again in 96.7 seconds: 2,722 offline .NET
+checks and 5,075 Vitest tests. Separate integration-impact reviews found no connection, cancellation or result-lease
+issues from main's fair worker gate or thread-pool floor. The thread-pool floor preserves authentication scopes,
+request ownership and Dropped/Unsent cleanup; the worker gate retains its independent CPU concurrency limit.
 
 One opt-in local SQL Server 2025 Windows Extended Events assertion remains a baseline limitation: its password-redaction
 test fails identically on an isolated build of unchanged main `733b2917`. The login/SSIS SQL and that assertion are
