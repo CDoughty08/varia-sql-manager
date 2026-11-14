@@ -120,7 +120,8 @@ describe('results as tabs', () => {
     })
     act(() => { results.focusEntry('t1', three) })
     draw()
-    expect(left).toBe(150)
+    // Result 3 (200 to 300) shows whole and clear of the 16 px fade at the edge that still hides the comparison's tab.
+    expect(left).toBe(166)
     expect(strip.parentElement!.hasAttribute('data-clip-start')).toBe(true)
     expect(strip.parentElement!.hasAttribute('data-clip-end')).toBe(true)
     act(() => { results.focusEntry('t1', results.getSnapshot().t1.sets[0].key) })
@@ -130,6 +131,15 @@ describe('results as tabs', () => {
     // The wheel scrolls the strip sideways.
     act(() => { strip.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true })) })
     expect(left).toBe(120)
+    // Drawn again with the same selection (OutputPane draws often), the strip stays where the user scrolled it.
+    draw()
+    expect(left).toBe(120)
+    // A wheel that scrolls by pages moves a strip's width; by lines, a fade's width a line.
+    act(() => { strip.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, deltaMode: 2, bubbles: true })) })
+    expect(left).toBe(-30)
+    left = 0
+    act(() => { strip.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, deltaMode: 1, bubbles: true })) })
+    expect(left).toBe(48)
   })
 
   it('draw a bounded window of result tabs around the selected one', () => {

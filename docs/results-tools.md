@@ -85,8 +85,8 @@ groups one at a time instead of stacked. Stacked stays the default for now.
 - The arrow keys, Home and End move along a row of tabs and select as they go; each row is one Tab stop.
 - There is no scroll bar around the grid. The Messages strip opens by itself when the pane fits the two rows of tabs, the
   grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
-- When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), keeps the selected tab in view
-  and fades the edge that hides tabs.
+- When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
+  view whenever the selection changes and fades the edge that hides tabs.
 - A run of more than 64 results draws 64 result tabs around the selected one, with a count of those before and after;
   the arrow keys, Home, End and Find Next reach the rest. A picker that lists them all comes with Tabs becoming the default.
 - Peek's rows are never drawn as tabs.

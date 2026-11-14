@@ -3,6 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { entryName, entryOf, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
+import { observeResize } from '../core/windows'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, scrollbarSize, settledContent } from './ResultsStack'
@@ -31,6 +32,25 @@ export const groupView = (group: ResultGroup): EntryKey => group.selected === 'p
 export function revealLeft(scrollLeft: number, viewWidth: number, start: number, width: number): number {
   if (start < scrollLeft || width >= viewWidth) return start
   return start + width > scrollLeft + viewWidth ? start + width - viewWidth : scrollLeft
+}
+
+/** The width of the fade at a strip edge that hides tabs: .rt-strip's mask in styles.css, --varia-space-4. */
+const stripFade = 16
+/** Marks the edges of the strip that hide tabs, for the fade. */
+function clipStrip(strip: HTMLElement | null) {
+  const row = strip?.parentElement
+  if (!strip || !row) return
+  row.toggleAttribute('data-clip-start', strip.scrollLeft > 0)
+  row.toggleAttribute('data-clip-end', strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1)
+}
+/** Scrolls the strip to show its selected tab whole and clear of the fade, then marks its edges. */
+function revealSelectedTab(strip: HTMLElement | null) {
+  const target = strip?.querySelector<HTMLElement>('.rt-tab[data-selected]')
+  if (strip && target) {
+    const start = Math.max(0, target.offsetLeft - stripFade), end = Math.min(strip.scrollWidth, target.offsetLeft + target.offsetWidth + stripFade)
+    strip.scrollLeft = Math.max(0, Math.min(revealLeft(strip.scrollLeft, strip.clientWidth, start, end - start), strip.scrollWidth - strip.clientWidth))
+  }
+  clipStrip(strip)
 }
 
 /** The places of the top-row items drawn: all of them up to `size`, else a window of `size` around the selected one, so a
@@ -197,35 +217,22 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     select(views[next].key)
     rootRef.current?.querySelector<HTMLElement>(`[data-tab-row="view"] [data-tab-entry="${views[next].key}"] [role="tab"]`)?.focus()
   }
-  // Fewer tabs fit than the window draws: the strip scrolls (the wheel scrolls it sideways), keeps the selected tab in
-  // view and fades an edge that hides tabs.
+  // Fewer tabs fit than the window draws: the strip scrolls (the wheel scrolls it sideways) and fades an edge that hides
+  // tabs. It brings the selected tab into view, clear of the fade, when the selection or the window moves and when the
+  // strip is resized, not on every render (OutputPane draws often), so a strip the user scrolled stays where they left it.
   const stripRef = useRef<HTMLDivElement>(null)
-  const clipped = () => {
-    const strip = stripRef.current, row = strip?.parentElement
-    if (!strip || !row) return
-    row.toggleAttribute('data-clip-start', strip.scrollLeft > 0)
-    row.toggleAttribute('data-clip-end', strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1)
-  }
-  const selectedTab = group?.table.key ?? selected?.key
-  useLayoutEffect(() => {
-    const strip = stripRef.current, target = selectedTab === undefined ? null : strip?.querySelector<HTMLElement>(`[data-tab-entry="${selectedTab}"]`)
-    if (strip && target) strip.scrollLeft = revealLeft(strip.scrollLeft, strip.clientWidth, target.offsetLeft, target.offsetWidth)
-    clipped()
-  })
+  useLayoutEffect(() => { revealSelectedTab(stripRef.current) }, [group?.table.key ?? selected?.key, first, !selected])
+  useLayoutEffect(() => { clipStrip(stripRef.current) }, [items.length, last, !selected])
   useEffect(() => {
     const strip = stripRef.current
-    if (!strip || typeof ResizeObserver !== 'function') return
-    const observer = new ResizeObserver(() => {
-      const target = selectedTab === undefined ? null : strip.querySelector<HTMLElement>(`[data-tab-entry="${selectedTab}"]`)
-      if (target) strip.scrollLeft = revealLeft(strip.scrollLeft, strip.clientWidth, target.offsetLeft, target.offsetWidth)
-      clipped()
-    })
-    observer.observe(strip)
-    return () => observer.disconnect()
-  }, [selectedTab, !selected])
+    if (!strip) return
+    const observer = observeResize(strip, () => revealSelectedTab(strip))
+    return () => observer.dispose()
+  }, [!selected])
   const wheel = (event: WheelEvent<HTMLDivElement>) => {
     if (event.deltaX || !event.deltaY) return
-    event.currentTarget.scrollLeft += event.deltaY
+    const strip = event.currentTarget
+    strip.scrollLeft += event.deltaY * (event.deltaMode === 2 ? strip.clientWidth : event.deltaMode === 1 ? stripFade : 1)
   }
   const closeTitle = (name: string, others = '') => running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`
   const refocusView = () => (rootRef.current?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]')
@@ -237,7 +244,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   return <div ref={rootRef} className="rt-root" onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" role="tablist" aria-label="Results and comparisons" data-tab-row="result" onKeyDown={resultKey}>
       {first > 0 && <span className="rt-more" aria-hidden="true" title={`${formatCount(first)} more before`}>+{formatCount(first)}</span>}
-      <div className="rt-strip" ref={stripRef} onScroll={clipped} onWheel={wheel}>
+      <div className="rt-strip" ref={stripRef} onScroll={event => clipStrip(event.currentTarget)} onWheel={wheel}>
       {shown.map((item, place) => {
         const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
