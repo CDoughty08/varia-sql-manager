@@ -676,7 +676,8 @@ describe('PivotService', () => {
     results.sortBy('t1', one, 0, 'ascending')
     await settle()
     results.viewShown('t1', one, filtered)
-    filtered.pivot.mockResolvedValueOnce({ descriptor: descriptor(891, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    const reading = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    filtered.pivot.mockImplementationOnce(() => reading.promise)
     // Another derived job holds the only place.
     const other = deferred<void>()
     const holding = jobs.run(() => other.promise)
@@ -688,16 +689,26 @@ describe('PivotService', () => {
     vi.mocked(first.sort).mockImplementationOnce(() => refiltering.promise)
     results.sortBy('t1', one, 1, 'ascending')
     expect(results.sortOf('t1', one)?.sorting).toBe(true)
+    // The grid shows its new view while the build still waits: the click's view is held, so it stays open.
+    const unfiltered = view(2, [])
+    refiltering.resolve(unfiltered)
+    await settle()
+    results.viewShown('t1', one, unfiltered)
+    expect(filtered.close).not.toHaveBeenCalled()
     other.resolve()
     await holding
-    await pivoting
     await settle()
-    // It read the view shown at the click, never the stored rows, and that view stayed open for it.
+    // It reads the view shown at the click, never the stored rows nor the grid's new view.
     expect(filtered.pivot).toHaveBeenCalledOnce()
     expect(first.pivot).not.toHaveBeenCalled()
-    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toMatchObject({ filters: [{ op: 'in', column: 0, rows: [2], nulls: false }] })
-    refiltering.resolve(view(2, []))
+    expect(unfiltered.pivot).not.toHaveBeenCalled()
+    reading.resolve({ descriptor: descriptor(891, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    await pivoting
     await settle()
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toMatchObject({ filters: [{ op: 'in', column: 0, rows: [2], nulls: false }] })
+    // Its hold ended with the build, and the grid had moved on: it is closed, once.
+    expect(filtered.close).toHaveBeenCalledOnce()
+    expect(unfiltered.close).not.toHaveBeenCalled()
   })
 
   it('follows the focused group with a draft per group, falls back to the first it can pivot, and keeps its group by number into the next run', async () => {
