@@ -63,6 +63,14 @@ function naturalHeight(form: HTMLElement): number {
   return body ? form.offsetHeight - body.clientHeight + body.scrollHeight : form.scrollHeight
 }
 
+/** Why a column is not compared, naming each result: only one has it, its types differ, or its name repeats in its own
+ *  result (the other's column of that name already paired). */
+function unpairedWhy(column: UnpairedColumn, own: ResultSetEntry, other: ResultSetEntry): string {
+  if (column.otherType === undefined) return `only in ${entryName(own)}`
+  if (column.otherType !== column.dataType) return `${column.dataType} in ${entryName(own)}, ${column.otherType} in ${entryName(other)}`
+  return `a second column of this name in ${entryName(own)}`
+}
+
 /** Popovers drawn per tab: one that goes while its picker is open (its pane hidden, another tab shown) closes the picker,
  *  unless another takes its place at once (StrictMode's replay, a re-render under a new key). */
 const drawn = new Map<string, number>()
@@ -208,11 +216,11 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const reordered = (entry: ResultSetEntry) => { const sort = results.sortOf(tabId, entry.key); return !!sort && (sort.keys.length > 0 || sort.filters.length > 0) }
   const filtered = sides ? [sides.old, sides.neu].filter(reordered) : []
   const left = sides ? [...sides.pairing.oldOnly.map(column => [column, sides.old, sides.neu] as const), ...sides.pairing.newOnly.map(column => [column, sides.neu, sides.old] as const)] : []
-  const rows = (entry: ResultSetEntry) => formatCount(entry.handle.getSnapshot().rowsStored)
+  const rows = (entry: ResultSetEntry) => { const stored = entry.handle.getSnapshot().rowsStored; return `${formatCount(stored)} ${stored === 1 ? 'row' : 'rows'}` }
   const side = (entry: ResultSetEntry, old: boolean) => <div className="compare-side" role="group" aria-label={old ? 'Old side' : 'New side'}
     title={old ? 'Old side: its rows that differ show as removed (−)' : 'New side: its rows that differ show as added (+)'}>
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>
-    <b>{entryName(entry)}</b>{!list && <small>{rows(entry)} rows</small>}
+    <b>{entryName(entry)}</b>{!list && <small>{rows(entry)}</small>}
   </div>
   const title = sides ? `Differences: ${entryName(sides.old)} → ${entryName(sides.neu)}` : ''
 
@@ -235,7 +243,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
               <input type="radio" name={ids + 'target'} disabled={running} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
               <span className="compare-target-name">{entryName(target.entry)}</span>
               {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
-              <small>{rows(target.entry)} rows</small>
+              <small>{rows(target.entry)}</small>
             </label>
           })}
         </fieldset>}
@@ -248,7 +256,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           <h3 id={ids + 'unpaired'}>Not compared <span className="compare-info" title={pairingRule} aria-label={pairingRule} role="img"><Icon name="info" /></span></h3>
           <ul>{left.map(([column, own, other]) => <li key={own.key + ':' + column.index}>
             <code>{nameOf(column)}</code>
-            <span>{column.otherType !== undefined ? `${column.dataType} here, ${column.otherType} in ${entryName(other)}` : `only in ${entryName(own)}`}</span>
+            <span>{unpairedWhy(column, own, other)}</span>
           </li>)}</ul>
         </section>}
         {filtered.length > 0 && <p className="compare-note warning"><Icon name="filter" /><span>{filtered.map(entryName).join(' and ')} {filtered.length > 1 ? 'are' : 'is'} sorted or filtered here. The comparison uses all the stored rows, in their own order.</span></p>}

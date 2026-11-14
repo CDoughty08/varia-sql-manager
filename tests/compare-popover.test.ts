@@ -87,6 +87,23 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
+  it('names each result when a column is not compared, and counts one row as one', () => {
+    const wide = (name: string, dataType: string, wire: ResultColumn['wire']): ResultColumn => ({ name, dataType, wire, nullable: false })
+    const view = fixture({ columns: { 0: [column('Id'), column('Id'), wide('Data', 'nvarchar', 'text')], 1: [column('Id'), wide('Data', 'varbinary', 'binary')] } })
+    const items = [...view.popover()!.querySelectorAll('section li')].map(item => item.textContent)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.stringContaining('a second column of this name in Result 1'),
+      expect.stringContaining('nvarchar in Result 1, varbinary in Result 2'),
+      expect.stringContaining('varbinary in Result 2, nvarchar in Result 1')
+    ]))
+    expect(view.popover()!.textContent).not.toContain(' here')
+    view.handle(view.keys[0]).snapshot = { ...view.handle(view.keys[0]).snapshot, rowsStored: 1 }
+    view.draw()
+    expect(view.popover()!.querySelector('[aria-label="Old side"]')?.textContent).toContain('1 row')
+    expect(view.popover()!.querySelector('[aria-label="Old side"]')?.textContent).not.toContain('1 rows')
+    view.unmount()
+  })
+
   it('warns only while an input is sorted or filtered', () => {
     const view = fixture()
     expect(view.popover()?.textContent).not.toContain('sorted or filtered')
