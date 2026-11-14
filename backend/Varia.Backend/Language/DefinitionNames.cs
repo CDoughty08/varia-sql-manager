@@ -72,7 +72,8 @@ internal static class DefinitionNames
             {
                 // A bare column: its statement's tables, the column deciding when there are several or when a derived table,
                 // a CTE or a table variable may hold it instead.
-                if (scope.ListTable is { } listed) Add(listed);
+                // A column list's (INSERT's, OUTPUT INTO's) column is that table's, or nothing for a variable, temp table or CTE.
+                if (scope.InList) Add(scope.ListTable);
                 else
                 {
                     var sources = scope.Sources;
@@ -175,6 +176,7 @@ internal static class DefinitionNames
         public DefinitionName? Declared { get; private set; }
         /// <summary>The caret's column is in a column list (INSERT's, OUTPUT INTO's) of this table; null when none, or unknown.</summary>
         public DefinitionName? ListTable { get; private set; }
+        public bool InList { get; private set; }
 
         public bool Knows(string name, out DefinitionName? target) => aliases.TryGetValue(name, out target);
 
@@ -225,27 +227,29 @@ internal static class DefinitionNames
             if (visitor.Statement is null) return scope;
             var ctes = new CteCollector();
             visitor.Statement.Accept(ctes);
+            // Only UPDATE's and DELETE's target may name another table of the statement (by its alias or exposed name).
+            var byName = ByNameTarget(visitor.Statement);
             // Innermost query first, so its own aliases win over an outer query's of the same name; a bare column's tables are
             // those of the innermost level that names any. A level's subqueries are levels of their own, never its tables.
             var levels = visitor.Queries.AsEnumerable().Reverse().Cast<TSqlFragment>().Append(visitor.Statement);
             var sourced = false;
             foreach (var level in levels)
             {
-                var tables = new TableCollector(ctes.Names);
+                var tables = new TableCollector(ctes.Names, byName);
                 level.Accept(tables);
                 var sourcing = !sourced && tables.Refs.Count != 0;
                 // UPDATE c ... FROM dbo.T AS c, and UPDATE T ... FROM dbo.T, name their target by another table of the level: a
                 // one-part name with no alias that another table declares (as its alias, or as its own unaliased name).
-                bool NamesAnother(TableRef table) => table.Target is { Database: null, Schema: null } && table.Alias is null && table.BaseName is { } own
+                bool NamesAnother(TableRef table) => table.ByName && table.Target is { Database: null, Schema: null } && table.Alias is null && table.BaseName is { } own
                     && tables.Refs.Any(other => !ReferenceEquals(other, table) && other.Target != table.Target
                         && (string.Equals(other.Alias, own, StringComparison.OrdinalIgnoreCase) || other.Alias is null && string.Equals(other.BaseName, own, StringComparison.OrdinalIgnoreCase)));
                 var named = tables.Refs.Where(table => !NamesAnother(table)).ToList();
-                // Aliases before base names, so an alias is never taken for a table of its name.
+                // Aliases before base names, so an alias is never taken for a table of its name; an aliased table's own name is
+                // hidden, as SQL Server hides it.
                 foreach (var table in named) if (table.Alias is { } alias) scope.aliases.TryAdd(alias, table.Target);
                 foreach (var table in named)
                 {
-                    if (table.BaseName is not { } baseName) continue;
-                    scope.aliases.TryAdd(baseName, table.Target);
+                    if (table.Alias is null && table.BaseName is { } baseName) scope.aliases.TryAdd(baseName, table.Target);
                     if (sourcing && table.Target is { } name && !scope.Sources.Contains(name)) scope.Sources.Add(name);
                 }
                 if (!sourcing) continue;
@@ -253,36 +257,59 @@ internal static class DefinitionNames
                 scope.Partial = tables.Refs.Any(table => table.Target is null);
             }
             // OUTPUT's inserted and deleted are the DML target's rows; elsewhere (a trigger's) they are no object to go to.
+            // The object a table reference stands for: UPDATE's and DELETE's target through the statement's other tables, any
+            // other by its own name; a CTE, variable or temp table is none.
+            DefinitionName? Table(TableReference? reference) => reference switch
+            {
+                NamedTableReference named2 when IsCte(named2.SchemaObject, ctes.Names) => null,
+                NamedTableReference named2 when ReferenceEquals(named2, byName) && named2.SchemaObject is { SchemaIdentifier: null, DatabaseIdentifier: null }
+                    && scope.aliases.TryGetValue(named2.SchemaObject.BaseIdentifier.Value, out var known) => known,
+                NamedTableReference named2 => NameOf(named2.SchemaObject),
+                SchemaObjectFunctionTableReference function => NameOf(function.SchemaObject),
+                _ => null
+            };
+            // OUTPUT's inserted and deleted are the DML target's rows; elsewhere (a trigger's) they are no object to go to.
             if (DmlTarget(visitor.Statement) is { } dml)
             {
-                var target = dml.SchemaObject is { SchemaIdentifier: null, DatabaseIdentifier: null } && scope.aliases.TryGetValue(dml.SchemaObject.BaseIdentifier.Value, out var aliased) ? aliased : NameOf(dml.SchemaObject);
+                var target = Table(dml);
                 scope.aliases.TryAdd("inserted", target);
                 scope.aliases.TryAdd("deleted", target);
             }
             scope.aliases.TryAdd("inserted", null);
             scope.aliases.TryAdd("deleted", null);
             // The caret's own table reference, alias or column list.
-            DefinitionName? Table(TableReference? reference) => reference switch
-            {
-                NamedTableReference named2 when IsCte(named2.SchemaObject, ctes.Names) => null,
-                NamedTableReference named2 => named2.SchemaObject is { SchemaIdentifier: null, DatabaseIdentifier: null } && scope.aliases.TryGetValue(named2.SchemaObject.BaseIdentifier.Value, out var known) && named2.Alias is null ? known : NameOf(named2.SchemaObject),
-                SchemaObjectFunctionTableReference function => NameOf(function.SchemaObject),
-                _ => null
-            };
             if (visitor.CteName || visitor.TableName is { } reference2 && IsCte(reference2.SchemaObject, ctes.Names)) scope.NoObject = true;
+            else if (visitor.TableName is { } dmlName && ReferenceEquals(dmlName, byName))
+            {
+                // UPDATE c ... FROM dbo.T AS c: the target's name is the table it names.
+                scope.Declares = true;
+                scope.Declared = Table(dmlName);
+            }
             if (visitor.AliasOf is { } declaring)
             {
                 scope.Declares = true;
                 scope.Declared = declaring is NamedTableReference { } own2 && IsCte(own2.SchemaObject, ctes.Names) ? null
                     : declaring is NamedTableReference { } plain ? NameOf(plain.SchemaObject) : Table(declaring);
             }
-            if (visitor.ListOf is { } list) scope.ListTable = Table(list);
+            if (visitor.ListOf is { } list)
+            {
+                scope.InList = true;
+                scope.ListTable = Table(list);
+            }
             return scope;
         }
     }
 
     private static bool IsCte(SchemaObjectName name, IReadOnlySet<string> ctes) =>
         name.SchemaIdentifier is null && name.DatabaseIdentifier is null && name.ServerIdentifier is null && ctes.Contains(name.BaseIdentifier.Value);
+
+    /// <summary>UPDATE's or DELETE's target, which may name another table of its FROM clause; null for any other statement.</summary>
+    private static NamedTableReference? ByNameTarget(TSqlStatement statement) => statement switch
+    {
+        UpdateStatement update => update.UpdateSpecification?.Target as NamedTableReference,
+        DeleteStatement delete => delete.DeleteSpecification?.Target as NamedTableReference,
+        _ => null
+    };
 
     /// <summary>The table an INSERT, UPDATE, DELETE or MERGE writes, when it is named.</summary>
     private static NamedTableReference? DmlTarget(TSqlStatement statement) => statement switch
@@ -381,7 +408,7 @@ internal static class DefinitionNames
     }
 
     /// <summary>A table a query level names: its alias, its own name when it has one, and the object it is (null when none).</summary>
-    private sealed record TableRef(string? Alias, string? BaseName, DefinitionName? Target);
+    private sealed record TableRef(string? Alias, string? BaseName, DefinitionName? Target, bool ByName = false);
 
     /// <summary>The statement's CTE names, which its FROM clauses use as tables that are no objects.</summary>
     private sealed class CteCollector : TSqlFragmentVisitor
@@ -393,13 +420,14 @@ internal static class DefinitionNames
     /// <summary>The tables of one query level: its FROM clause and DML target, never those of its subqueries, derived tables or
     /// CTE bodies (levels of their own). A table-valued function's alias stands for the function; MERGE keeps its target's alias
     /// apart from the table reference.</summary>
-    private sealed class TableCollector(IReadOnlySet<string> ctes) : TSqlFragmentVisitor
+    private sealed class TableCollector(IReadOnlySet<string> ctes, NamedTableReference? byName) : TSqlFragmentVisitor
     {
         public List<TableRef> Refs { get; } = [];
 
         private void Named(SchemaObjectName name, Identifier? alias) => Refs.Add(new(alias?.Value, name.BaseIdentifier?.Value, IsCte(name, ctes) ? null : NameOf(name)));
 
-        public override void ExplicitVisit(NamedTableReference node) => Named(node.SchemaObject, node.Alias);
+        public override void ExplicitVisit(NamedTableReference node) =>
+            Refs.Add(new(node.Alias?.Value, node.SchemaObject.BaseIdentifier?.Value, IsCte(node.SchemaObject, ctes) ? null : NameOf(node.SchemaObject), ReferenceEquals(node, byName)));
         // Its parameters may hold subqueries: not this level's tables.
         public override void ExplicitVisit(SchemaObjectFunctionTableReference node) => Named(node.SchemaObject, node.Alias);
         public override void ExplicitVisit(QueryDerivedTable node) => Refs.Add(new(node.Alias?.Value, null, null));

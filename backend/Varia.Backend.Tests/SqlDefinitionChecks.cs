@@ -113,6 +113,22 @@ internal static class SqlDefinitionChecks
             "OUTPUT's inserted and deleted are the DML target's rows, and elsewhere no object");
         check(Candidates("UPDATE T SET c|c = 1 FROM dbo.T") is [{ Schema: "dbo", Name: "T", Column: null }],
             "UPDATE T ... FROM dbo.T names one table, the FROM clause's");
+        // Only UPDATE's and DELETE's target names another table; INSERT's is its own, whatever its source is called.
+        check(Candidates("INSERT INTO Customer (I|d, Name) SELECT Id, Name FROM Staging.Customer") is [{ Schema: null, Name: "Customer" }]
+            && Candidates("INSERT INTO Customer (Id, Name) OUTPUT inserted.I|d SELECT Id, Name FROM Staging.Customer") is [{ Schema: null, Name: "Customer" }]
+            && Candidates("INSERT INTO T (x|) SELECT a FROM dbo.S AS T") is [{ Schema: null, Name: "T" }],
+            "an INSERT target is never swapped for a source of its name");
+        check(At("INSERT INTO #tmp (x|) SELECT a FROM dbo.S") is null && At("INSERT INTO @t (x|) SELECT a FROM dbo.S") is null
+            && At("UPDATE dbo.T SET x = 1 OUTPUT inserted.x INTO @t (x|)") is null && At("UPDATE dbo.T SET x = 1 OUTPUT inserted.x INTO #a (x|)") is null,
+            "a column list of a variable or temp table has nothing to go to, never another table");
+        check(Candidates("SELECT * FROM dbo.Orders AS o JOIN Archive.Orders ON o.Id = Orders.I|d") is [{ Schema: "Archive", Name: "Orders" }]
+            && Candidates("CREATE TRIGGER t ON dbo.T AFTER INSERT AS INSERT INTO dbo.A (x) OUTPUT inserted.x| SELECT i.x FROM inserted AS i") is [{ Schema: "dbo", Name: "A" }],
+            "an aliased table's own name is hidden, as SQL Server hides it");
+        check(Candidates("UPDATE |c SET Name = 1 FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer" }]
+            && Candidates("DELETE |c FROM dbo.Customer AS c WHERE c.Id = 1") is [{ Schema: "dbo", Name: "Customer" }]
+            && Candidates("UPDATE |T SET x = 1 FROM dbo.T") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("UPDATE dbo.|T SET x = 1") is [{ Schema: "dbo", Name: "T" }],
+            "the caret on UPDATE's or DELETE's target finds the table it names");
         // A batch that does not parse still has a caret statement that may.
         check(Candidates("SELECT c.Na|me FROM dbo.C c; SELECT * FROM") is [{ Schema: "dbo", Name: "C" }]
             && Candidates("SELECT Na|me FROM dbo.C; SELECT * FROM") is [{ Schema: "dbo", Name: "C", Column: null }]
