@@ -728,12 +728,16 @@ internal static partial class ViewSorter
         // Pages are independent: each is read once, in order, on whichever thread takes it. A key that gave up ranking its
         // values asks for the pages again.
         var inexact = 0;
-        using var threads = Gate.Take(Math.Min(Workers, source.Count));
         bool again;
         do
         {
         again = false;
-        key.Begin();
+        key.Begin(token);
+        // The lease is taken after the sample and let go before an extract: those read a packed result on leases of their
+        // own, which a lease held here, idle, would leave one thread.
+        var threads = Gate.Take(Math.Min(Workers, source.Count));
+        try
+        {
         do
             threads.For(source.Count, () => new Scratch(source), (index, scratch) =>
             {
@@ -773,6 +777,8 @@ internal static partial class ViewSorter
                 key.EndPage(scratch, index);
             }, token);
         while (key.Finish());
+        }
+        finally { threads.Dispose(); }
         if (key is InstantKey { Declined: true })
         {
             key = new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null);
@@ -1128,7 +1134,8 @@ internal static partial class ViewSorter
         }
 
         /// <summary>Every page in order on this thread. Packed pages are unpacked ahead on the workers, a batch at a time,
-        /// each into a room of its own, while the pages held as sealed are read in place as before.</summary>
+        /// each into a room of its own: the next batch is unpacked while this thread reads the one before, so two batches'
+        /// rooms are held. Pages held as sealed are read in place as before.</summary>
         public void InOrder(PageReader read, CancellationToken token)
         {
             if (rooms is null)
@@ -1137,40 +1144,53 @@ internal static partial class ViewSorter
                 return;
             }
             var batch = Math.Clamp(Workers, 1, packedPages);
-            var held = new PageRoom?[batch];
-            var bytes = new byte[batch][];
+            // Two halves: one being read, one being unpacked.
+            var held = new PageRoom?[2, batch];
+            var bytes = new byte[2][][];
+            bytes[0] = new byte[batch][];
+            bytes[1] = new byte[batch][];
+            void Fill(int half, int start)
+            {
+                var end = Math.Min(pages.Length, start + batch);
+                var packed = 0;
+                for (var i = start; i < end; i++)
+                {
+                    if (bodies[i] is not null) continue;
+                    held[half, i - start] ??= rooms.Rent();
+                    packed++;
+                }
+                if (packed == 0) return;
+                // A lease a batch, so threads go back to other operations between batches.
+                using var threads = Gate.Take(Math.Min(Workers, packed));
+                threads.For(end - start, k =>
+                {
+                    if (bodies[start + k] is null) bytes[half][k] = pages[start + k].Set!.Read(pages[start + k], held[half, k]!.Bytes);
+                }, token);
+            }
+            Task? ahead = null;
             try
             {
-                for (var start = 0; start < pages.Length; start += batch)
+                Fill(0, 0);
+                for (int start = 0, half = 0; start < pages.Length; start += batch, half ^= 1)
                 {
                     token.ThrowIfCancellationRequested();
+                    var next = start + batch;
+                    var other = half ^ 1;
+                    ahead = next < pages.Length ? Task.Run(() => Fill(other, next), token) : null;
                     var end = Math.Min(pages.Length, start + batch);
-                    var packed = 0;
-                    for (var i = start; i < end; i++)
-                    {
-                        if (bodies[i] is not null) continue;
-                        held[i - start] ??= rooms.Rent();
-                        packed++;
-                    }
-                    if (packed > 0)
-                    {
-                        // A lease a batch, so threads go back to other operations while this one reads on its own thread.
-                        using var threads = Gate.Take(Math.Min(Workers, packed));
-                        var first = start;
-                        threads.For(end - start, k =>
-                        {
-                            if (bodies[first + k] is null) bytes[k] = pages[first + k].Set!.Read(pages[first + k], held[k]!.Bytes);
-                        }, token);
-                    }
                     for (var i = start; i < end; i++)
                     {
                         if (bodies[i] is not null) read(i, pages[i], View(i));
-                        else read(i, pages[i], PageView.Parse(bytes[i - start].AsSpan(0, pages[i].Length), columns, held[i - start]!.Layout));
+                        else read(i, pages[i], PageView.Parse(bytes[half][i - start].AsSpan(0, pages[i].Length), columns, held[half, i - start]!.Layout));
                     }
+                    ahead?.GetAwaiter().GetResult();
+                    ahead = null;
                 }
             }
             finally
             {
+                // A batch still being unpacked finishes (or fails) before its rooms go back.
+                try { ahead?.Wait(); } catch (AggregateException) { }
                 foreach (var room in held) room?.Dispose();
             }
         }
@@ -1259,7 +1279,7 @@ internal static partial class ViewSorter
         public virtual void BeginPage(Scratch scratch, int page) { }
         public virtual void EndPage(Scratch scratch, int page) { }
         /// <summary>Before the first page: what the key learns from a sample of its rows.</summary>
-        public virtual void Begin() { }
+        public virtual void Begin(CancellationToken token) { }
         /// <summary>Every page is filled. True to fill them all again (the key changed how it holds its rows).</summary>
         public virtual bool Finish() => false;
         /// <summary>How the key holds its rows, for the checks.</summary>
@@ -1465,7 +1485,7 @@ internal static partial class ViewSorter
 
         public override string Layout => (ranked ? "ranked" : blocks is null ? "prefix" : "whole") + ", " + shared.Length + " shared, " + odds + " odd";
 
-        public override void Begin()
+        public override void Begin(CancellationToken token)
         {
             var count = prefixes.Length;
             var places = Places(count, Sampled);
@@ -1475,7 +1495,7 @@ internal static partial class ViewSorter
             Source.ForRows(places, () => new Scratch(), (place, view, local, scratch) =>
             {
                 if (!view.IsNull(Column, local)) found[place] = Bytes(view.Span(Column, local), scratch).ToArray();
-            }, CancellationToken.None);
+            }, token);
             var values = new List<byte[]>(found.Length);
             foreach (var value in found) if (value is not null) values.Add(value);
             values.Sort(ByteComparer.Instance);

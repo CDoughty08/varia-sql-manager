@@ -122,7 +122,7 @@ internal static partial class PageCompressionBench
         using (var process = Process.GetCurrentProcess()) Print("fused.peakWorkingSetMiB", process.PeakWorkingSet64 >> 20, "MiB", "over the whole run");
     }
 
-    /// <summary>A Save as the product writes one (ResultJobs): each page through the set's accessor, one thread.</summary>
+    /// <summary>A Save as the product writes one (ResultJobs' ReadRoom): one thread, each packed page unpacked into one room.</summary>
     private static long SaveThrough(ResultSetBuffer set, StoredPage[] pages, ResultColumn[] columns)
     {
         using var pin = set.Pin();
@@ -130,11 +130,13 @@ internal static partial class PageCompressionBench
         var writer = new ResultTextWriter(output, TextOptions.Export(TextFormat.Csv, true, "NULL"), columns);
         int[] selected = [.. Enumerable.Range(0, columns.Length)];
         var scratch = new int[PageView.ScratchLength(columns.Length)];
+        var room = new byte[pages.Length == 0 ? 0 : pages.Max(page => page.Length)];
         writer.Begin();
         writer.Header(selected);
         foreach (var page in pages)
         {
-            var view = PageView.Parse(page.Body(), columns.Length, scratch);
+            var body = set.Raw(page) ?? set.Read(page, room);
+            var view = PageView.Parse(body.AsSpan(0, page.Length), columns.Length, scratch);
             for (var row = 0; row < view.Rows; row++) writer.Row(view, row, selected);
         }
         writer.End();

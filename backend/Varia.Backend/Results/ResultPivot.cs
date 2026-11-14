@@ -569,7 +569,7 @@ internal static class PivotOutput
         return new ResultColumn(name, "decimal(38," + scale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: 38, Scale: scale);
     }
 
-    public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model)
+    public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model, CancellationToken token = default)
     {
         using var pin = source.Pin();
         var columns = new List<ResultColumn>();
@@ -583,7 +583,7 @@ internal static class PivotOutput
         }
         var access = new RowAccess(pages, source.Wires.Count);
         // The pivot was built over a packed result without unpacking it: the column groups' rows are read together, charged.
-        var held = access.Hold(source, model.ColumnReps, ResultPivoter.TooLarge, CancellationToken.None);
+        var held = access.Hold(source, model.ColumnReps, ResultPivoter.TooLarge, token);
         List<string> groups;
         try { groups = [.. model.ColumnReps.Select(row => GroupName(source, access, spec.Column, row))]; }
         finally { source.ReturnWork(held); }

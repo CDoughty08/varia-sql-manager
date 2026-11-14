@@ -146,21 +146,24 @@ being true.
   keeping only the latest page). A sort, a filter, a profile and a pivot read a packed result fused and leave it packed
   (`ViewSorter.PageSource`, `PageRooms`): each reader takes a room (one page, the largest packed page's length, reserved
   as working memory when first made and returned when the operation ends; refused, `TOO_LARGE` with the operation's
-  sentence, or a profile's retry on one thread) and unpacks the page it is about to read into it
+  sentence, or a profile's retry on one thread; a sort's or filter's refusal says low memory, or that the result was
+  closed, as any other) and unpacks the page it is about to read into it
   (`ResultSetBuffer.Read`, never through the cache), so the operation holds about a page a worker. Rooms are worker
   state, given back when a worker stops (`WorkerGate` disposes an `IDisposable` state). A key whose comparisons go back to
   cells (`Key.ReadsCells`: long exact numbers that tie as doubles, text kept as 8 bytes) has its column extracted once
   after it is built (`PageSource.Extract`, page by page on the workers, charged as working memory, `TOO_LARGE` when
   refused), so no comparison unpacks a page; a sampled read goes page by page on the workers (`ForRows`), and a pivot's
-  in-order pass unpacks a batch of pages ahead on the workers (`InOrder`). A pivot's output reads the rows it copies
+  in-order pass unpacks the next batch of pages on the workers while it reads the one before (`InOrder`, two batches of
+  rooms). A pivot's output reads the rows it copies
   from pages read together (`RowAccess.Hold`, `BodiesTogether`). Pages held as sealed read exactly as before. The other
   operations on the whole result (distinct values, whose snapshot keeps its pages for later reads; row identity; diff;
   and a search, whose slots keep the pages it reads) first
   unpack it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
   then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
   A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
-  held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page through
-  the cache. `ResultStore.PackingSnapshot` holds the
+  held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
+  unpacking each packed page into one room of its own (`ResultJobs.ReadRoom`, the largest page reserved as working memory;
+  refused, the page is read through the accessor as before), never through the cache. `ResultStore.PackingSnapshot` holds the
   counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
   `results.memory`.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,

@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Concurrent;
 
 namespace Varia.Backend.Results;
@@ -36,7 +35,8 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
                 throw new ObjectDisposedException(nameof(PageRooms));
             }
             reserved += length;
-            room = new PageRoom(this, ArrayPool<byte>.Shared.Rent(length), new int[layout]);
+            // Its own array, not a pooled one: it goes with the operation, so memory charged as working memory is not kept after it.
+            room = new PageRoom(this, GC.AllocateUninitializedArray<byte>(length), new int[layout]);
             made.Add(room);
         }
         return room;
@@ -55,7 +55,6 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
         {
             if (disposed) return;
             disposed = true;
-            foreach (var room in made) ArrayPool<byte>.Shared.Return(room.Bytes);
             made.Clear();
             set.ReturnWork(reserved);
             reserved = 0;

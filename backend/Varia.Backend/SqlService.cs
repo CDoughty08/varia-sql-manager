@@ -1637,6 +1637,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
         try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
+        // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
+        // answers as it would anywhere else.
+        catch (RequestException error) when (error.Code == "TOO_LARGE")
+        {
+            store.Return(set.Budget, working + kept);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            throw TooLarge(error.Message);
+        }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -2174,7 +2182,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             IReadOnlyList<ResultColumn> columns;
             IReadOnlyList<WireKind> wires;
             IReadOnlyList<ColumnLength> lengths;
-            try { (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model); }
+            try { (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model, token); }
             catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
                 ?? throw NotStored(set.Budget, tooLarge, (set, args.ResultId));

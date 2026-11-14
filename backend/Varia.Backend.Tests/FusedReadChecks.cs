@@ -166,6 +166,14 @@ internal static class FusedReadChecks
                 "a pivot of a packed result writes the pages it writes unpacked, its rows copied from pages read together, and leaves the result packed");
         }
 
+        // A plain Copy's size (and its writing, which reads alike) unpacks each packed page into one room of its own, not
+        // through the read cache, and gives the room back.
+        CopyPartArgs[] whole = [new([[0, Rows - 1]], [[0, 5]])];
+        var unpackedBeforeCopy = packedStore.PackingSnapshot().PagesUnpacked;
+        var copied = ResultJobs.EstimateCopy(packed, whole, true, false);
+        check(copied == ResultJobs.EstimateCopy(raw, whole, true, false) && copied > 0 && packedStore.PackingSnapshot().PagesUnpacked - unpackedBeforeCopy == packed.SealedSnapshot().Length && Kept(),
+            "a plain Copy of a packed result reads each page once through a room of its own, leaves no page cached and gives the room back");
+
         // Pages the codec kept raw beside packed ones (a result packed on request) read in place, the others fused.
         var mixedStore = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
         var mixed = Filled(mixedStore, "mixed");
@@ -288,5 +296,27 @@ internal static class FusedReadChecks
         }
         check(ties == "TOO_LARGE: " + ViewSorter.SortTooLarge && plain.Order.Length == 20_000 && plain.Order[0] == 19_999 && Kept(),
             "with room for the rooms but not a column's extract, a sort whose ties compare cells is refused and one that needs no extract still sorts: " + ties);
+
+        // Through the service, a fused read refused while the computer is low on memory says so, as any refusal there does.
+        var low = false;
+        var pressed = new ResultStore(64L << 20, 64L << 20, () => (low ? 100 : 0, 50)) { Packing = PagePacking.EveryComplete };
+        var lowSet = Filled(pressed, "low", 20_000);
+        var room = ViewSorter.WorkingBytes(20_000, 1) + 4L * 20_000 + ResultStore.ViewOverhead + 1024;
+        var lowFiller = pressed.BeginQuery("filler");
+        check(pressed.TryReserve(lowFiller, pressed.GlobalBytes - pressed.UsedBytes - room, false, out _), "the low-memory check fills the budget but the sort's own room");
+        var lowUsed = pressed.UsedBytes;
+        using var service = new SqlService(pressed);
+        string? Asked(object args)
+        {
+            try { service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        object Sorted() => new { resultId = lowSet.ResultId, sort = new[] { new { column = 0, descending = false, mode = "value" } } };
+        var budgetOnly = Asked(Sorted());
+        low = true;
+        var lowAnswer = Asked(Sorted());
+        low = false;
+        check(budgetOnly == "TOO_LARGE: " + ViewSorter.SortTooLarge && lowAnswer == "TOO_LARGE: " + SqlService.LowMemory && lowSet.HasPacked && pressed.UsedBytes == lowUsed,
+            "a sort refused its rooms through the service names the budget, or the computer's memory when that is low, and holds nothing: " + budgetOnly + " | " + lowAnswer);
     }
 }
