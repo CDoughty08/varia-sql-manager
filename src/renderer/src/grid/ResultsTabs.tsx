@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, entryOf, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, entryOf, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize } from '../core/windows'
 import { gridLimits as g } from './constants'
@@ -180,18 +180,19 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   }, [revealSeq, revealEntry])
 
   // A Pivot built for the selected group shows at once: Tabs draws one view, and the builder works on this group, so a
-  // Pivot that stayed behind its Table's tab would be built out of sight. (A rebuilt one takes the focus in PivotService.)
+  // Pivot that stayed behind its Table's tab would be built out of sight. A rebuilt Pivot keeps its entry key and swaps in
+  // a new result, so a build is told by the Pivot's result, not its key. (A rebuilt one takes the focus in PivotService.)
   // While a comparison or a plan set is selected the builder works on a group it can pivot, so a Pivot built for any group
   // shows. Only a Pivot that appears while the layout is drawn: one there at mount, or another group's while a group that
   // can be pivoted is selected, selects nothing. Nor does one that arrives while a grid of the layout has the focus: the
   // Build button is in the builder, so the user went back to a grid while it was built, and PivotService leaves the focus
   // with them then too. (The focus itself, not the hand-off mark, which a trip through the Results tab can leave set.)
-  const pivots = useRef<ReadonlyMap<number, EntryKey | undefined> | undefined>(undefined)
+  const pivots = useRef<ReadonlyMap<number, string | undefined> | undefined>(undefined)
   useLayoutEffect(() => {
     const seen = pivots.current
-    pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot?.key]))
+    pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot && setKey(item.pivot.entry.descriptor)]))
     if (!seen) return
-    const built = tab.groups.filter(item => item.pivot && seen.has(item.ordinal) && seen.get(item.ordinal) !== item.pivot.key)
+    const built = tab.groups.filter(item => item.pivot && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
     const shown = group && !group.planSet ? built.find(item => item === group) : built[0]
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!shown?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return
@@ -296,8 +297,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       <SaveView tabId={tabId} entry={selected} name={selectedName} />
     </div>
     <div className="rt-panel" role="tabpanel" id={id + 'panel'} aria-labelledby={labelledBy}>
-      {/* Keyed by entry: another view is another grid, and the one it replaces unmounts and gives back its pool. */}
-      <ResultGrid key={selected.key} tabId={tabId} entry={selected} count={tab.numbered} focused budget={tab.summary?.budget} sort={sort}
+      {/* Keyed by result: another view is another grid, and the one it replaces unmounts and gives back its pool; so is a
+          rebuilt Pivot, which keeps its entry key but is drawn over its new result. */}
+      <ResultGrid key={setKey(selected.descriptor)} tabId={tabId} entry={selected} count={tab.numbered} focused budget={tab.summary?.budget} sort={sort}
         view={group?.planSet ? 'plan' : selectedSlot?.view} group={group?.ordinal} onFocus={select} />
     </div>
   </div>

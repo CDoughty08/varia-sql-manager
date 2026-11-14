@@ -254,6 +254,27 @@ describe('results as tabs', () => {
     expect(later).toBeDefined()
   })
 
+  it('show a rebuilt Pivot, which keeps its key, at once, and draw its grid again over the new result', () => {
+    const { results, three, pivot, draw, grids, viewTabs, chosen, all } = fixture()
+    results.focusEntry('t1', three)
+    draw()
+    expect(grids()).toEqual([three])
+    // Built again from its Table: the new result takes the old one's slot and key.
+    expect(results.addSet('t1', descriptor(805, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])).toBe(pivot)
+    draw()
+    expect(results.getSnapshot().t1.focused).toBe(pivot)
+    draw()
+    expect(chosen(viewTabs())).toBe('Pivot')
+    expect(grids()).toEqual([pivot])
+    const first = all('[data-grid]')[0].dataset.instance
+    // Built again while it is shown: the same tab, a grid over the new result.
+    expect(results.addSet('t1', descriptor(806, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])).toBe(pivot)
+    draw()
+    draw()
+    expect(grids()).toEqual([pivot])
+    expect(all('[data-grid]')[0].dataset.instance).not.toBe(first)
+  })
+
   it('show a Pivot built from the builder after the focus went from a grid through the Results tab and out', () => {
     const { results, one, draw, grids, all } = fixture()
     draw()
