@@ -619,9 +619,8 @@ Outcome, accepted by the owner:
         results can be pivoted.", before anything is reserved). The renderer already refused it in `addSet` and
         `pivotGroup`; `ResultClient` does not check the kind (its handle state has no kind).
       - Parallel builds: `DerivedJobs` (`results/derived-jobs.ts`, one per window as `workbench.derivedJobs`) gives four
-        places for pivot builds. Comparisons do not take them yet: PR 16 is to route `CompareService` through the same
-        instance, which the plan's "at most four builds and comparisons" needs. A free place is taken in the same task, so
-        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots to finish" (or, while it
+        places for pivot builds, which PR 16 gave comparisons too. A free place is taken in the same task, so
+        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots and comparisons to finish" (or, while it
         waits to ask a busy backend again, that it is asked again in a moment). `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
         never `TIMEOUT`. Builds of different groups no longer block each other (`PivotTab.busy` is gone, `queued` is
         new); a newer build of the same group cancels the older.
@@ -666,6 +665,54 @@ Outcome, accepted by the owner:
     benchmark case, not smoke.
 15. **Save names, narrow and short panes, popouts.**
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
+    - **What PR 16 settled or left** (`tests/results-compare.test.ts`, `tests/compare-pairing.test.ts`,
+      `tests/results-derived-jobs.test.ts`, `DiffChecks.cs` and `results-smoke` step 14g hold its checks):
+      - The picker is a side panel in the builder's place (`ComparePanel`): opening Compare closes the Pivot builder and
+        Pivot… closes the picker. It is opened by a new command, `output.compare` ("Compare Results…" in the palette, a
+        Compare toggle in the results toolbar). Its grid-menu title is **Compare…** (p): to free p, Copy
+        Column Name took y and the Transpose submenu n.
+      - Targets are a radio group, not the mock's listbox: the keyboard lint allows no key listener of its own, and radios
+        bring the arrow keys. The default target is the Table Compare with Previous Result would pick, else the first.
+      - The picker stays on the Table it was opened on when the focus moves (the mock closes it); Compare… on another grid
+        moves it. Only the user closes it (Close, the head's close button, the toolbar toggle, Pivot…). It follows its
+        Table and target by group number into the next run, waiting while the query runs; while the run has no such
+        Table it says so and offers nothing. A target that closes leaves it with nothing picked. It goes only with the
+        tab's results: the tab closing, Close Results, a finished run with no result, or its last result closed (nothing
+        to show it beside). A group whose number now holds a plan set counts as no Table. Cancel is said in the picker.
+      - While its pair runs the picker offers Cancel and shows a failure there; success leaves it open (its button then
+        reads Show It) and focuses the comparison unless the user moved the focus meanwhile (`focusStamp`). The run's comparison of the same two inputs,
+        the same way round and exact-text choice is shown (Show It), not made again.
+      - Parallel comparisons go through PR 10's `DerivedJobs`, the workbench's one instance that Pivot builds use (this PR's
+        own `DerivedWork` was dropped when PR 10 landed first): four builds and comparisons at once, the rest queued in
+        order, a `TOO_MANY_REQUESTS` or `BUSY` refusal retried after 1, 4 and 16 s with the place given back meanwhile,
+        never `TIMEOUT`. The Pivot builder's wait now says "other pivots and comparisons".
+      - The 1,000 rule counts this run's comparisons and first Pivots in flight in both services (`compareFullText`, and
+        the Pivot refusal): each takes the other's `adding(tabId)`, wired in the workbench.
+      - The backend refuses any kind but `rows` on either side with `INVALID_PARAMS` and `SqlService.NotTablesSentence`;
+        the fake backend does the same, and now pairs by wire and `OrdinalIgnoreCase` as `ResultDiffer.Pairs` does
+        (it paired by lower-cased name only). No protocol change.
+      - The backend (`ResultDiffer.Pairs` through `OrdinalNames`), the renderer and the fake backend compare names with
+        one fixed table, `src/shared/ordinal-casing.ts`: `OrdinalIgnoreCase` code point by code point, as the generating
+        runtime cased it. Neither `OrdinalIgnoreCase` itself nor `toUpperCase` could be shared: each follows its own ICU
+        and so its own Unicode version (and JavaScript maps ſ to S and ı to I). `DiffChecks.OrdinalCasing` checks the table
+        against the runtime wherever it knows the letter and against the count and checksum its generator wrote into it (a
+        lost range shows); `VARIA_UPDATE_ORDINAL_CASING=1` rewrites it. `tests/fixtures/compare-pairing` has cases
+        for the Kelvin sign, ı, ſ, a letter past the BMP and one whose full upper case is two letters. A target sharing more columns than a diff can show
+        (`ResultDiffer.MaxPairs`) is not offered.
+      - Source links: the strip starts with the two inputs from `ResultSlot.sources`, each a link while an entry of that
+        key still shows that set key, else "Result N (closed)". A link focuses the input's grid, which scrolls the stack
+        to it; a layout that mounts the grid only when selected (Tabs, PR 13) gets the focus a frame later. The strip
+        also says that the inputs' filters and sorts were not applied.
+      - Compare… from the toolbar acts on its own tab's focused grid, never another tab's; from the palette with no grid
+        focused, on the active document's focused result (as Pivot… does). Compare with Previous Result now falls back the
+        same way.
+      - On success the keyboard focus goes from the Compare button to the comparison's grid (`focusResultGrid`, looked for
+        over the next few frames while the stack draws it), unless the user put it somewhere else meanwhile. While its
+        comparison runs the button is `aria-disabled`, not disabled, so the focus stays on it and a failure meets it there.
+      - Left: a target's row count in the picker is its stored rows, not its view's; the picker does not warn when an
+        input is still loading (such a Table is simply not offered). A re-run releases the old results before any new
+        one arrives, so the results view (the picker with it) is not drawn until the first set comes, and a keyboard focus
+        inside it falls to the page, as it does from a grid; the picker's state waits in `CompareService` meanwhile.
 17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
     took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.

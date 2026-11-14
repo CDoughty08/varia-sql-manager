@@ -303,9 +303,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
-  const compare = new CompareService(results)
+  // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
   const derivedJobs = new DerivedJobs()
-  const pivot = new PivotService(results, { jobs: derivedJobs })
+  // Each counts the other's new results in flight against a run's 1,000.
+  const compare: CompareService = new CompareService(results, { jobs: derivedJobs, adding: tabId => pivot.adding(tabId) })
+  const pivot: PivotService = new PivotService(results, { jobs: derivedJobs, adding: tabId => compare.adding(tabId) })
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')

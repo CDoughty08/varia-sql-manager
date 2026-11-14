@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Varia.Backend;
@@ -25,6 +26,8 @@ internal static class DiffChecks
         Context(check);
         CellMemory(check);
         WireMismatch(check);
+        SharedPairing(check);
+        OrdinalCasing(check);
         Rules(check);
         Tones(check);
         Halves(check);
@@ -33,11 +36,11 @@ internal static class DiffChecks
         Refusals(check);
     }
 
-    private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null)
+    private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
     {
         columns ??= Columns;
         var wires = columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text).ToArray();
-        var set = store.Open(budget, index, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var set = store.Open(budget, index, 1, 1, kind, columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
         foreach (var row in rows)
         {
             set.CountRow();
@@ -293,6 +296,99 @@ internal static class DiffChecks
         check(ResultDiffer.WorkingBytes(10, 10) == 54 * 10 + 16 * 10 + 20 * 20, "a diff reserves its identities, match tables, parts, lookups and entries, written straight into the model");
     }
 
+    /// <summary>tests/fixtures/compare-pairing: ResultDiffer.Pairs gives each case's pairs. The Compare picker's copy of the
+    /// rule (src/renderer/src/results/compare-pairing.ts) reads the same cases in tests/compare-pairing.test.ts.</summary>
+    private static void SharedPairing(Action<bool, string> check)
+    {
+        var path = Path.Combine(GoldenText.Repository(), "tests", "fixtures", "compare-pairing", "cases.json");
+        var cases = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!["cases"]!.AsArray();
+        static ResultColumn[] ColumnsOf(System.Text.Json.Nodes.JsonNode side) =>
+            [.. side.AsArray().Select(item => new ResultColumn((string)item!["name"]!, "nvarchar", (string)item["wire"]!, Role: (string?)item["role"]))];
+        static WireKind[] WiresOf(ResultColumn[] columns) => [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)];
+        var differences = new List<string>();
+        foreach (var item in cases)
+        {
+            var left = ColumnsOf(item!["left"]!);
+            var right = ColumnsOf(item["right"]!);
+            var pairs = string.Join(" ", ResultDiffer.Pairs(left, right, WiresOf(left), WiresOf(right)).Select(pair => pair.Left + ":" + pair.Right));
+            var expected = string.Join(" ", item["pairs"]!.AsArray().Select(pair => (int)pair![0]! + ":" + (int)pair[1]!));
+            if (pairs != expected) differences.Add((string)item["name"]! + " gave [" + pairs + "], not [" + expected + "]");
+        }
+        check(cases.Count >= 9 && differences.Count == 0, "ResultDiffer.Pairs gives each pairing case in tests/fixtures/compare-pairing: " + string.Join("; ", differences));
+    }
+
+    /// <summary>
+    /// ResultDiffer.Pairs, the Compare picker and the fake backend compare column names through one fixed table
+    /// (src/shared/ordinal-casing.ts, embedded in the backend as OrdinalNames), since OrdinalIgnoreCase follows the operating
+    /// system's ICU and so its Unicode version. The table must agree with this runtime wherever the runtime cases the
+    /// letter (an older ICU may case fewer), and its keys are final; VARIA_UPDATE_ORDINAL_CASING=1 rewrites it from this runtime's casing: each
+    /// code point equal by OrdinalIgnoreCase to its invariant upper case maps to it (ı and ſ keep their own).
+    /// </summary>
+    private static void OrdinalCasing(Action<bool, string> check)
+    {
+        var entries = new List<(int Code, int Key)>();
+        var disagree = new List<string>();
+        for (var code = 0; code <= 0x10FFFF; code++)
+        {
+            if (code is >= 0xD800 and <= 0xDFFF) continue;
+            var text = char.ConvertFromUtf32(code);
+            var upper = text.ToUpperInvariant();
+            var known = upper != text && upper.Length == text.Length;
+            if (known && string.Equals(text, upper, StringComparison.OrdinalIgnoreCase)) entries.Add((code, char.ConvertToUtf32(upper, 0)));
+            var key = OrdinalNames.Key(code);
+            // A mapping this runtime contradicts. Every key is final (itself unmapped), so a mapping turned round shows on
+            // any runtime. Where the runtime upper-cases the letter, the key is that upper case. Where it does not, the
+            // mapping stands if the runtime compares the two equal anyway, or the code point is unassigned or a lower- or
+            // title-case letter, which a newer ICU than this one may case: only an older ICU is tolerated.
+            var category = Rune.GetUnicodeCategory(new Rune(code));
+            var contradicted = key != code && (OrdinalNames.Key(key) != key || (known
+                ? key != char.ConvertToUtf32(upper, 0) || !string.Equals(text, upper, StringComparison.OrdinalIgnoreCase)
+                : !string.Equals(text, char.ConvertFromUtf32(key), StringComparison.OrdinalIgnoreCase) && category is not (UnicodeCategory.OtherNotAssigned or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter)));
+            if (contradicted) disagree.Add(code.ToString("X4", CultureInfo.InvariantCulture));
+        }
+        var path = Path.Combine(GoldenText.Repository(), "src", "shared", "ordinal-casing.ts");
+        var source = File.ReadAllText(path).Replace("\r\n", "\n");
+        // Rewriting checks only that it wrote: the embedded copy is the old table until the next build.
+        if (Environment.GetEnvironmentVariable("VARIA_UPDATE_ORDINAL_CASING") == "1") { WriteOrdinalCasing(check, path, source, entries); return; }
+        // The table read (the embedded copy) is the whole one its generator described in the file: a range lost by an edit,
+        // or a line the parser skips, shows here on any runtime. (A runtime that knows more letters is not an error.)
+        var described = OrdinalLine(OrdinalNames.Count, OrdinalNames.Checksum);
+        check(source.Contains(described, StringComparison.Ordinal), "the column-name casing table read is the whole generated table (" + described.TrimEnd() + ")");
+        check(OrdinalNames.Count > 1000 && disagree.Count == 0, "the column-name casing table agrees with this runtime's OrdinalIgnoreCase wherever it knows the letter: " + string.Join(", ", disagree.Take(10)));
+        check(OrdinalNames.Same("ItemId", "ITEMID") && !OrdinalNames.Same("ſid", "SID") && !OrdinalNames.Same("ıd", "ID") && OrdinalNames.Same("\U00010428d", "\U00010400D") && !OrdinalNames.Same("\U00010428", "\uD801x"),
+            "OrdinalNames compares as the table says: ſ and ı keep their own, a surrogate pair is one code point, a lone surrogate its own");
+    }
+
+    private static void WriteOrdinalCasing(Action<bool, string> check, string path, string source, List<(int Code, int Key)> entries)
+    {
+        // Runs of [first, last, delta, stride]: every stride-th code point from first to last maps to itself plus delta.
+        var ranges = new List<(int First, int Last, int Delta, int Stride)>();
+        for (var at = 0; at < entries.Count;)
+        {
+            var (first, key) = entries[at];
+            var delta = key - first;
+            var stride = at + 1 < entries.Count && entries[at + 1].Key - entries[at + 1].Code == delta && entries[at + 1].Code - first is 1 or 2 ? entries[at + 1].Code - first : 1;
+            var last = first;
+            at++;
+            while (at < entries.Count && entries[at].Code == last + stride && entries[at].Key - entries[at].Code == delta) last = entries[at++].Code;
+            ranges.Add((first, last, delta, stride));
+        }
+        const string Open = "// <generated: DiffChecks.OrdinalCasing>\n", Close = "// </generated>\n";
+        var start = source.IndexOf(Open, StringComparison.Ordinal);
+        var end = source.IndexOf(Close, StringComparison.Ordinal);
+        var hash = 2166136261u;
+        foreach (var (code, key) in entries) foreach (var value in new[] { code, key }) { hash ^= (uint)value; hash *= 16777619u; }
+        // Numbers in the invariant culture: some cultures write a minus sign JavaScript cannot read.
+        var block = new StringBuilder(OrdinalLine(entries.Count, hash)).Append("const ranges: readonly (readonly [number, number, number, number])[] = [\n");
+        for (var i = 0; i < ranges.Count; i++)
+            block.Append(CultureInfo.InvariantCulture, $"  [{ranges[i].First}, {ranges[i].Last}, {ranges[i].Delta}, {ranges[i].Stride}]").Append(i + 1 < ranges.Count ? ",\n" : "\n");
+        block.Append("]\n");
+        check(start >= 0 && end > start, "src/shared/ordinal-casing.ts has the generated block VARIA_UPDATE_ORDINAL_CASING=1 rewrites");
+        if (start >= 0 && end > start) File.WriteAllText(path, source[..(start + Open.Length)] + block + source[end..]);
+    }
+
+    private static string OrdinalLine(int count, uint checksum) => string.Create(CultureInfo.InvariantCulture, $"// {count} code points, FNV-1a {checksum:x8}\n");
+
     private static void Host(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
@@ -328,6 +424,19 @@ internal static class DiffChecks
         check(string.Join(",", codes) == "INVALID_PARAMS,INVALID_PARAMS,RESULT_NOT_FOUND,RESULT_OPEN,INVALID_PARAMS,INVALID_PARAMS",
             "results.diff checks its results: two different, complete, comparable results of one query: " + string.Join(",", codes));
         check(Code("results.diff", new { left = left.ResultId, right = other.ResultId }) == "INVALID_PARAMS", "results of different queries are not compared");
+        // Tables only (grouped results PR 16): a pivot, a plan set or a comparison of the same query is refused either way
+        // round, before anything is compared, with the sentence that says so.
+        var pivot = Fill(store, left.Budget, 7, [["1", "a", "1"]], kind: "pivot");
+        var plan = Fill(store, left.Budget, 8, [["1", "a", "1"]], kind: "executionPlan");
+        string? Sentence(long l, long r)
+        {
+            try { Call<object>("results.diff", new { left = l, right = r }); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var notTables = new[] { Sentence(left.ResultId, pivot.ResultId), Sentence(pivot.ResultId, right.ResultId), Sentence(plan.ResultId, right.ResultId), Sentence(left.ResultId, plan.ResultId),
+            Sentence(diff.Descriptor.ResultId, right.ResultId) };
+        check(notTables.All(text => text == "INVALID_PARAMS: " + SqlService.NotTablesSentence),
+            "results.diff compares a query's own result sets only, never a pivot, a plan set or a comparison: " + string.Join(" | ", notTables));
         store.BeginQuery(left.Budget.SessionId);
         check(store.Find(diff.Descriptor.ResultId) is null, "a diff is released with its query's other results");
         var tight = new ResultStore(8192, 8192);

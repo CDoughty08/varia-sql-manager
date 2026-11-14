@@ -71,7 +71,7 @@ export function pivotGroup(tab: TabResults | undefined, key: EntryKey | undefine
  * The builder belongs to one group: the one whose grid last had the focus, or the first that can be pivoted when that grid
  * is a comparison or a plan set. Each group keeps a draft of its own, which a new run's group of the same number takes
  * over, fitted to its columns by name. Builds of different groups run at once, at most four in a window (DerivedJobs,
- * which PR 16's comparisons are to share); a newer run (or none) gives up a build still running, as does closing its Table or the Pivot
+ * shared with comparisons); a newer run (or none) gives up a build still running, as does closing its Table or the Pivot
  * it would replace.
  */
 export class PivotService extends SnapshotStore<PivotSnapshot> implements Disposable {
@@ -79,6 +79,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   /** The builds in flight, by tab and ordinal: a newer run, its Table closed or the Pivot it replaces closed gives one up. */
   private readonly running = new Map<string, Map<number, Build>>()
   private readonly jobs: DerivedJobs
+  /** New results other services are building for a tab's current run (comparisons), counted against its 1,000. */
+  private readonly elsewhere: (tabId: string) => number
   /** Why each group's last build failed, by tab and ordinal: the builder shows it only while it is that group's, until
    *  that group's draft is edited or it is built again. */
   private readonly errors = new Map<string, Map<number, string>>()
@@ -96,11 +98,18 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly focus = new Map<string, EntryKey | undefined>()
   private readonly unsubscribe: () => void
 
-  constructor(results: Results, o: { jobs?: DerivedJobs } = {}) {
+  constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number } = {}) {
     super({ tabs: {}, info: new Map() })
     this.results = results
     this.jobs = o.jobs ?? new DerivedJobs()
+    this.elsewhere = o.adding ?? (() => 0)
     this.unsubscribe = results.subscribe(() => this.sync())
+  }
+
+  /** The first Pivots being built for a tab's current run: results it will add, which comparisons count against its 1,000. */
+  adding(tabId: string): number {
+    const queryId = this.results.getSnapshot()[tabId]?.queryId
+    return [...this.running.get(tabId)?.values() ?? []].filter(build => build.replaces === undefined && build.queryId === queryId).length
   }
 
   /** Opens the builder on the group of a grid (the one the command named or that has the focus): on the group whose Table
@@ -170,9 +179,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (!builds) this.running.set(tabId, builds = new Map())
     const replaces = group.pivot?.key
     // A run shows at most 1,000 results, derived ones included: a build that would pass it, counting the new Pivots being
-    // built for other groups of this tab, is refused before the backend is asked, and leaves this group's build in flight
-    // alone. A replacement takes no more room.
-    const adding = [...builds.values()].filter(build => build.replaces === undefined && build.ordinal !== group.ordinal).length
+    // built for other groups of this tab and the comparisons in flight, is refused before the backend is asked, and leaves
+    // this group's build in flight alone. A replacement takes no more room.
+    const adding = [...builds.values()].filter(build => build.replaces === undefined && build.ordinal !== group.ordinal && build.queryId === tab.queryId).length + this.elsewhere(tabId)
     if (replaces === undefined && tab.sets.length + adding >= resultLimits.sets) {
       this.fail(tabId, group.ordinal, `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so no pivot can be added. Close some results, or run the query again.`)
       this.refresh(tabId)

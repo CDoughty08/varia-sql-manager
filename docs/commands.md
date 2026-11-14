@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (304)
+## Commands (305)
 
 ### File
 
@@ -179,6 +179,7 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare… |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
@@ -831,7 +832,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `0_session` | **K**ill Process… | `activity.killProcess` | `outputView == 'live' && outputLiveRows == 'session'` |
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid' \|\| outputView == 'live'` |
-| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `1_copy` | Cop**y** Column Name | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
 | `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid' \|\| outputLiveSortable` |
 | `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid' \|\| outputLiveSortable` |
@@ -841,8 +842,9 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid' \|\| outputLiveFilterable` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid' && !outputGridBare` |
+| `2_sort` | Com**p**are… | `output.compare` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid' && !outputGridBare` |
-| `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
+| `2_sort` | Tra**n**spose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid' \|\| outputView == 'live'` |

@@ -56,7 +56,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const can = !!entry && pivot.canPivot(tabId, entry.key)
   const facts = entry ? pivotFacts(entry.descriptor.rowsStored, sort?.view?.rows) : ''
   // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
-  const waiting = state.queued === 'place' ? 'Waiting for other pivots to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
+  const waiting = state.queued === 'place' ? 'Waiting for other pivots and comparisons to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
   return <aside className="profile-panel pivot-panel" aria-label="Pivot">
     <div className="profile-head">
       <span className="profile-title">Pivot</span>
