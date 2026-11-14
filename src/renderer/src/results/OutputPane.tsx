@@ -76,8 +76,9 @@ export const discardSetting = 'queryResults.grid.discardResults'
 /** What the Results view shows in place of grids for a run made with Discard results after execution, which kept none:
  *  why, and the one step that follows (`on` is the setting now). While it is on, that step turns it off; once it is off, a
  *  finished run's step executes the query again, now keeping its rows. Undefined for any other run. */
-export function discardNotice(tab: Pick<TabResults, 'discard' | 'status' | 'sets' | 'summary'>, on: boolean): { title: string; detail: string; action?: 'turnOff' | 'execute' } | undefined {
-  if (!tab.discard || tab.status === 'closed' || tab.sets.length > 0) return undefined
+export function discardNotice(tab: Pick<TabResults, 'discard' | 'status' | 'sets' | 'summary' | 'emptied'>, on: boolean): { title: string; detail: string; action?: 'turnOff' | 'execute' } | undefined {
+  // Results the user closed (all at once, or a kept plan set one at a time) say so instead.
+  if (!tab.discard || tab.status === 'closed' || tab.emptied || tab.sets.length > 0) return undefined
   const read = tab.summary?.discardedResultSets ?? 0
   // A finished run that returned no sets kept nothing it would have kept: there is nothing to explain.
   if (tab.status !== 'running' && read === 0) return undefined

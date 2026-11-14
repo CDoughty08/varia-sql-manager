@@ -51,7 +51,7 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
  * from what main stored; Cancel and Escape discard them, and focus returns to where it was.
  */
 export default function OptionsDialog({ page: requested, setting }: { page?: string; setting?: string }) {
-  const { settings, platform, keybindings } = useWorkbench()
+  const { settings, platform, keybindings, documents } = useWorkbench()
   const { values } = useServiceSnapshot(settings)
   const [draft, setDraft] = useState<OptionsDraft>(() => draftFrom(values))
   // The Shortcuts page's edits: a second draft, saved after the settings by OK.
@@ -95,7 +95,9 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     document.getElementById(controlId(key))?.focus()
   })
 
-  const restoreFocus = () => returnFocusTo(returnFocus)
+  // What opened the dialog may be gone once its changes apply (the status bar's Results discarded item, for one): the
+  // keyboard goes to the active document rather than to nothing.
+  const restoreFocus = () => { if (returnFocus?.isConnected) returnFocusTo(returnFocus); else documents.focusActive() }
   // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
     if (saving) return

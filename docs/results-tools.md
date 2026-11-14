@@ -206,11 +206,13 @@ A results grid drawn transposed (its columns as rows) copies and saves what it s
 With **Discard results after execution** on (Tools › Options › Query Results › SQL Server › Results to Grid), every query
 reads its rows and keeps none. While it is on, the status bar shows **Results discarded**; pressing it opens Options with
 the setting focused. A run that read result sets and kept none shows a notice where its grid would be, saying how many
-sets were read, with **Turn off Discard results**. Once the setting is off the notice offers **Execute again**, and focus
-moves to it, so the next run keeps its rows. While the run is still going the notice says rows are not being kept. A run
-that also kept an execution plan opens the Execution plan view as before, with the notice on its Results tab, which
-screen readers name "Results, not kept". Select Top 1000 Rows from Object Explorer runs the same way. Runs made with the
-setting off show none of this, even when sets past the result-set limit were not kept.
+sets were read, with **Turn off Discard results**. Once the setting is off the notice offers **Execute again**, so the
+next run keeps its rows; turned off from the notice, focus moves to Execute again, and turned off from Options opened by
+the status bar item, focus goes to the active document. While the run is still going the notice says rows are not being
+kept. A run that also kept an execution plan opens the Execution plan view as before, with the notice on its Results tab,
+which screen readers name "Results, not kept"; the run's completion announcement says how many sets were read and not
+kept. Select Top 1000 Rows from Object Explorer runs the same way. Runs made with the setting off show none of this, even
+when sets past the result-set limit were not kept, and results you close say they were closed.
 
 ![The Results view after a discarded run in the dark theme: Results were not kept, with Turn off Discard results, and Results discarded in the status bar](images/results-discarded-dark.png)
 

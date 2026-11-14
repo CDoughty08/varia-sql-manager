@@ -553,7 +553,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
     // A run that discarded its sets shows the Results view's notice that it did, unless it kept a plan to show.
     if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : discardedSets(run) ? 'results' : 'messages'
-    this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
+    // A screen reader hears why there are no sets, as the Results view's notice shows it; focus does not move there.
+    const discarded = discardedSets(run)
+    this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run))
+      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : ''))
     let retaining: Promise<void> | undefined
     if (end.planContext && this.retainedPlans) {
       const sources: SnapshotSource[] = []

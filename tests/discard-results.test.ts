@@ -26,8 +26,11 @@ function service() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
   }
   const documents = { openText: vi.fn<DocumentService['openText']>() }
-  const results = new ResultsService({ client: fakeResultClient(), api, events: new EventBus(), documents, frame: callback => callback(), timers: manualTimers().timers, newId: () => 'job' })
-  return { results, tab: () => results.getSnapshot().t1 }
+  const clock = manualTimers()
+  const results = new ResultsService({ client: fakeResultClient(), api, events: new EventBus(), documents, frame: callback => callback(), timers: clock.timers, newId: () => 'job' })
+  // The live region's sentence, once its short settle delay has passed.
+  const heard = () => { clock.advance(1000); return results.getSnapshot().t1.announcement.replace('​', '') }
+  return { results, tab: () => results.getSnapshot().t1, heard }
 }
 
 /** A settings service as the components read it: values main holds, and `choose`, which saves one as main would answer. */
@@ -42,20 +45,20 @@ function settingsStore(values: Partial<SettingsValues>) {
 }
 
 function render(element: ReturnType<typeof createElement>, settings: ReturnType<typeof settingsStore>) {
-  const commands = { execute: vi.fn(async () => true) }
-  const workbench = { settings, commands } as unknown as Workbench
+  const commands = { execute: vi.fn(async () => true) }, documents = { focusActive: vi.fn() }
+  const workbench = { settings, commands, documents } as unknown as Workbench
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
   act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: element })) })
   const button = (name: string) => [...container.querySelectorAll('button')].find(item => (item.getAttribute('aria-label') ?? item.textContent) === name)
   const rerender = (next: ReturnType<typeof createElement>) => root.render(createElement(WorkbenchProvider, { workbench, children: next }))
-  return { container, commands, button, rerender, unmount: () => act(() => { root.unmount(); container.remove() }) }
+  return { container, commands, documents, button, rerender, unmount: () => act(() => { root.unmount(); container.remove() }) }
 }
 
 describe('discard results after execution', () => {
   it('gives a discarding run a Results view that says its sets were not kept, from its start to its end', () => {
-    const { results, tab } = service()
+    const { results, tab, heard } = service()
     results.begin('t1', 'q1', undefined, { discard: true })
     expect(tab().discard).toBe(true)
     expect(hasResultsView(tab())).toBe(true)
@@ -63,6 +66,8 @@ describe('discard results after execution', () => {
     void results.finish('t1', 'q1', { summary: summaryOf([], { discardedResultSets: 3 }) })
     // The output moves to Results, which says what happened and offers to turn the setting off.
     expect(outputViewOf(tab())).toBe('results')
+    // A screen reader hears why there are none: focus does not move to the notice.
+    expect(heard()).toBe('Query executed successfully. 0 result sets, 0 rows. 3 result sets were read and not kept: Discard results after execution is on.')
     expect(discardNotice(tab(), true)).toEqual({ title: 'Results were not kept', action: 'turnOff',
       detail: '3 result sets were read and not kept. Discard results after execution is on, so queries in every tab keep no rows.' })
     // Once the setting is off, the step that follows is executing again.
@@ -79,13 +84,14 @@ describe('discard results after execution', () => {
   })
 
   it('shows nothing of it for a run made with the setting off, even one whose sets past a limit were not kept', () => {
-    const { results, tab } = service()
+    const { results, tab, heard } = service()
     results.begin('t1', 'q1')
     void results.finish('t1', 'q1', { summary: summaryOf([], { discardedResultSets: 4 }) })
     expect(tab().discard).toBeUndefined()
     expect(hasResultsView(tab())).toBe(false)
     expect(outputViewOf(tab())).toBe('messages')
     expect(discardNotice(tab(), true)).toBeUndefined()
+    expect(heard()).not.toContain('not kept')
     // A discarding run that returned no sets at all has nothing to explain once it ends.
     results.begin('t1', 'q2', undefined, { discard: true })
     void results.finish('t1', 'q2', { summary: summaryOf([]) })
@@ -145,6 +151,32 @@ describe('discard results after execution', () => {
     expect(view.commands.execute).toHaveBeenCalledWith('preferences.options', { setting: 'queryResults.grid.discardResults' }, 'toolbar')
     await act(async () => { await settings.choose('queryResults.grid.discardResults', false) })
     expect(view.container.textContent).toBe('')
+    view.unmount()
+  })
+  it('says results that were closed were closed, not that they were not kept', () => {
+    const { results, tab } = service()
+    // The backend keeps a plan-shaped set even while discarding: closing it from its caption empties the run.
+    results.begin('t1', 'q1', undefined, { discard: true })
+    void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1)], { discardedResultSets: 1 }) })
+    expect(results.removeEntry('t1', tab().sets[0].key)).toBe(true)
+    expect(tab().emptied).toBe(true)
+    expect(hasResultsView(tab())).toBe(true)
+    expect(discardNotice(tab(), true)).toBeUndefined()
+  })
+
+  it('gives the keyboard to the editor when the status bar item it was on goes, and leaves focus elsewhere alone', async () => {
+    const settings = settingsStore({ 'queryResults.grid.discardResults': true })
+    const view = render(createElement(DiscardStatus), settings)
+    view.button('Results discarded')!.focus()
+    await act(async () => { await settings.choose('queryResults.grid.discardResults', false) })
+    expect(view.documents.focusActive).toHaveBeenCalledTimes(1)
+    await act(async () => { await settings.choose('queryResults.grid.discardResults', true) })
+    const elsewhere = document.createElement('input')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    await act(async () => { await settings.choose('queryResults.grid.discardResults', false) })
+    expect(view.documents.focusActive).toHaveBeenCalledTimes(1)
+    elsewhere.remove()
     view.unmount()
   })
 })
