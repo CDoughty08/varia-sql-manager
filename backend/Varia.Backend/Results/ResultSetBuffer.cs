@@ -73,6 +73,7 @@ internal sealed class ResultSetBuffer
     private int sealedPages;
     private int leases;
     private int pins;
+    private CancellationTokenSource? released;
     private bool freePending, gone;
     /// <summary>Packed pages' bytes, their bytes as sealed, and the unpacked cache's bytes (all under the lock).</summary>
     private long packedBytes, packedLogical, cacheBytes;
@@ -287,16 +288,33 @@ internal sealed class ResultSetBuffer
     /// returns the memory it frees: all of it, or nothing while a job holds a lease (the last lease frees it).</summary>
     internal long Release()
     {
+        CancellationTokenSource? stop;
+        long freed;
         lock (gate)
         {
             state = 2;
             builder = null;
+            stop = released;
             if (leases > 0 || pins > 0)
             {
                 freePending = true;
-                return 0;
+                freed = 0;
             }
-            return FreeLocked();
+            else freed = FreeLocked();
+        }
+        // Outside the lock: cancelling runs the operations' registrations inline.
+        stop?.Cancel();
+        return freed;
+    }
+
+    /// <summary>Cancelled when the set is released (already cancelled once it has been), so an operation over the whole
+    /// result (a sort, profile, diff or pivot) stops at once rather than keeping the pages it pins, and their budget,
+    /// until it finishes.</summary>
+    public CancellationToken Released
+    {
+        get
+        {
+            lock (gate) return state == 2 ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
         }
     }
 
@@ -335,7 +353,7 @@ internal sealed class ResultSetBuffer
     public int Leases { get { lock (gate) return leases; } }
 
     /// <summary>Pins the set while a request reads its pages: a release meanwhile ends the request's reads at their next
-    /// check (<see cref="IsReleased"/>), but frees the pages and their budget only when the last pin ends, as for a lease.
+    /// check (<see cref="IsReleased"/>, or <see cref="Released"/> for an operation over the whole result), but frees the pages and their budget only when the last pin ends, as for a lease.
     /// Pins nest and cost a lock each; a released set can still be pinned, and its pages are then empty or the ones a lease
     /// keeps. Dispose the pin when the read ends.</summary>
     public PagePin Pin()
@@ -661,11 +679,11 @@ internal sealed class ResultSetBuffer
     public CellSize? CellSize(long row, int column)
     {
         if ((uint)column >= (uint)Wires.Count) throw new ArgumentOutOfRangeException(nameof(column));
+        using var pin = Pin();
         var found = PagesFor(row, 1);
         if (found.Count == 0 || found[0].FirstRow > row) return null;
         var page = found[0];
         var at = (int)(row - page.FirstRow);
-        using var pin = Pin();
         var view = PageView.Parse(page.Body(), Wires.Count);
         if (view.IsNull(column, at)) return null;
         if (page.Lengths.TryCell(at, column, out var cell)) return new CellSize(cell.Chars, cell.Bytes, cell.Exact && !Lengths[column].Estimated);

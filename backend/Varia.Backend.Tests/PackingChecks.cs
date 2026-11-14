@@ -225,7 +225,7 @@ internal static class PackingChecks
         var rows = (int)set.RowsAvailable;
         var order = Enumerable.Range(0, rows).OrderBy(row => (row * 2654435761u) % 1000003).ToArray();
         var view = store.AddView(set, order, [], false, true, 0, null);
-        byte[][] Read() => [.. ViewPages.Build(view, 1000, 6000)];
+        byte[][] Read() => [.. ViewPages.Build(view, 1000, 6000).Select(page => page.Body())];
         var raw = Read();
         set.Pack();
         var used = store.UsedBytes;
@@ -238,10 +238,10 @@ internal static class PackingChecks
         var tight = Store(PagePacking.OnRequest, 64L << 20);
         var big = Filled(tight, "tight", 60_000);
         var bigView = tight.AddView(big, order, [], false, true, 0, null);
-        var expected = ViewPages.Build(bigView, 0, 3000).ToArray();
+        var expected = ViewPages.Build(bigView, 0, 3000).Select(page => page.Body()).ToArray();
         big.Pack();
         tight.TryReserve(tight.BeginQuery("filler"), tight.GlobalBytes - tight.UsedBytes - 4 * 1024 * 1024, false, out _);
-        var narrow = ViewPages.Build(bigView, 0, 3000).ToArray();
+        var narrow = ViewPages.Build(bigView, 0, 3000).Select(page => page.Body()).ToArray();
         check(narrow.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && narrow.Length == expected.Length,
             "with no room to unpack pages together a view read still reads them one at a time");
     }

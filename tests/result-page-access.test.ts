@@ -30,6 +30,8 @@ describe('result page access', () => {
     expect(source).toMatch(/public byte\[\] Body\(\) => Set is null \? \(byte\[\]\)Stored : Set\.Body\(this\);/)
     expect(source).toMatch(/return page\.Stored as byte\[\] \?\? Unpacked\(page\);/)
     expect(lines(/\.Stored\b(?!\()/, [accessor, 'backend/Varia.Backend.Tests/PackingChecks.cs'])).toEqual([])
+    // A property pattern (page is { Stored: var bytes }) reads it as well.
+    expect(lines(/\bStored\s*:(?!:)/, [accessor, 'backend/Varia.Backend.Tests/PackingChecks.cs'])).toEqual([])
   })
   it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read', () => {
     expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs'])).toEqual([])
