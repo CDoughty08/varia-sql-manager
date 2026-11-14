@@ -559,6 +559,8 @@ export const columnProfile = page => page.getByRole('complementary', { name: 'Co
 export const profileCard = (page, column) => columnProfile(page).getByRole('region', { name: column, exact: true })
 /** The pivot builder beside the grids (PivotPanel): its source, row groups, column group and values, then Build Pivot. */
 export const pivotPanel = page => page.getByRole('complementary', { name: 'Pivot', exact: true })
+/** The builder's head facts: how many rows its source has ("100 rows", or "… as sorted and filtered"). */
+export const pivotFacts = page => pivotPanel(page).locator('.profile-facts')
 /** The builder's source: the name of the result whose group it belongs to ("Result 2"). It follows the focused grid;
  *  there is nothing to pick. */
 export const pivotSource = page => pivotPanel(page).getByRole('group', { name: 'Pivot source', exact: true }).locator('.pivot-source')

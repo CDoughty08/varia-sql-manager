@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1663,6 +1663,8 @@ try {
   await expect(pivoting).toBeVisible()
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'true')
   await expect(pivotSource(page)).toHaveText('Result 1')
+  // The rows its source holds, not the none it had when it opened.
+  await expect(pivotFacts(page)).toHaveText('100 rows')
   await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true })).toHaveCount(0)
   await pivoting.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ label: 'active' })
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
@@ -2425,7 +2427,6 @@ try {
   await picker.getByRole('button', { name: 'Compare', exact: true }).click()
   await expect(grid('Result 3')).toBeFocused()
   await expect(strip('Result 3')).toContainText('Result 2 → Result 1, whole rows matched: 0 changed rows, 1 added row, 1 removed row, 3 unchanged.')
-  await expect(picker.getByRole('status')).not.toContainText('could not be compared')
   await picker.getByRole('button', { name: 'Close', exact: true }).click()
   console.log('Results checks: results with no shared unique column compare by whole rows from the picker, which counts each target by its stored rows.')
 

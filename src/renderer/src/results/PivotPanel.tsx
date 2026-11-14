@@ -54,7 +54,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   }
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
   const can = !!entry && pivot.canPivot(tabId, entry.key)
-  const facts = entry ? pivotFacts(entry.descriptor.rowsStored, sort?.view?.rows) : ''
+  const facts = entry ? pivotFacts(entry.handle.getSnapshot().rowsStored, sort?.view?.rows) : ''
   // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
   const waiting = state.queued === 'place' ? 'Waiting for other pivots and comparisons to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
   return <aside className="profile-panel pivot-panel" aria-label="Pivot">

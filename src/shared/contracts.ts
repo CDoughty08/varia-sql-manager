@@ -308,10 +308,10 @@ export interface ResultsFindRowsResult { positions: number[]; marks: number[]; t
  *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
  *  all); `exact`: text compared character for character instead of by collation. */
 export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number }
-/** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (null: whole rows
- *  did); counts by kind, `soft` the values equal only by collation; `leftOnly` and `rightOnly` the columns not compared. */
+/** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (absent when whole
+ *  rows did: the backend leaves out a null member); counts by kind, `soft` the values equal only by collation; `leftOnly`
+ *  and `rightOnly` the columns not compared. */
 export interface ResultsDiffResult {
-  /** The column whose values matched rows; absent when whole rows did. */
   descriptor: ResultDescriptor; key?: string; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]
 }
