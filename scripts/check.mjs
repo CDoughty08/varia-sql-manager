@@ -10,12 +10,18 @@
 // build, which balances the two chains (vitest is the longest lane). VARIA_CHECK_CPUS=<n> overrides the CPU count, to try
 // either layout. VARIA_CHECK_SKIP=typecheck leaves out the type check: CI's Windows and macOS jobs, since Linux's proves it.
 //
+// Off CI the check first takes the machine lock's shared tier (scripts/machine-lock.mjs), so parallel sessions' checks wait
+// rather than pile up, and plans for its share of the machine: the CPUs divided among the shared slots, which also caps
+// each vitest lane's workers (vitestWorkers). Two checks at once then about fill the machine rather than oversubscribe it;
+// VARIA_CHECK_CPUS and VITEST_MAX_WORKERS still win.
+//
 //   node scripts/check.mjs          the whole check
 //   node scripts/check.mjs --build  npm run build:smoke: the Release backend and electron-vite build, side by side
 import { spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { acquire, lockEnabled, sharedSlots } from './machine-lock.mjs'
 // The vitest files that start backend/Varia.Backend/bin/Release: tests/backend-sidecar.test.ts, and the live files when
 // VARIA_TEST_SQL_SERVER is set. A new file that spawns the Release backend belongs here.
 export const needsBackend = readdirSync('tests').filter(name => name === 'backend-sidecar.test.ts' || name.endsWith('-live.test.ts')).map(name => `tests/${name}`)
@@ -45,6 +51,27 @@ export function plan({ cpus, build = false, skip = [] }) {
     : { all: [{ chain: [...typecheck, 'vitest'] }, { chain: [dotnet, 'electron-vite build'] }] }
 }
 
+/**
+ * The CPUs the check plans for: VARIA_CHECK_CPUS when set, otherwise the machine's, divided among the machine lock's shared
+ * slots when the lock applies (each check gets its share, so concurrent checks never oversubscribe the machine).
+ */
+export function cpuBudget(env = process.env, machine = availableParallelism()) {
+  if (Number(env.VARIA_CHECK_CPUS)) return Number(env.VARIA_CHECK_CPUS)
+  return lockEnabled(env) ? Math.max(1, Math.floor(machine / sharedSlots(env))) : machine
+}
+
+/**
+ * The vitest workers each vitest lane gets within a CPU budget. In the wide layout both run beside the type check, the
+ * build and the .NET lanes, so the main lane leaves room for those and the Release-backend files (one file without a server)
+ * get two; vitest's own default (every CPU but one, per lane) would put one check at about twice its budget.
+ */
+export function vitestWorkers(cpus) {
+  return { vitest: Math.max(1, cpus - 3), 'vitest (Release backend)': Math.min(2, Math.max(1, cpus - 1)) }
+}
+
+/** Each lane's extra environment: set in the main block when the machine lock applies. */
+const laneEnv = {}
+
 /** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
 export const skippable = { typecheck: 'Type check' }
 
@@ -71,9 +98,9 @@ export function skippedNote(layout, skip) {
 /** The lanes still running, so a signal can print what they held. */
 export const running = new Set()
 
-export const run = (name, command, write = text => process.stdout.write(text)) => new Promise(resolve => {
+export const run = (name, command, write = text => process.stdout.write(text), env = {}) => new Promise(resolve => {
   const started = performance.now(), output = []
-  const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1' } })
+  const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', ...env } })
   const lane = { name, started, output, child }
   running.add(lane)
   child.stdout.on('data', chunk => output.push(chunk))
@@ -97,20 +124,22 @@ export function flushRunning(write = text => process.stdout.write(text)) {
 }
 
 const execute = node => {
-  if (typeof node === 'string') return run(node, steps[node]).then(result => [result])
+  if (typeof node === 'string') return run(node, steps[node], undefined, laneEnv[node]).then(result => [result])
   if (node.all) return Promise.all(node.all.map(execute)).then(results => results.flat())
   if (node.chain) return (async () => { const results = []; for (const item of node.chain) results.push(...await execute(item)); return results })()
   return execute(node.gate).then(async results => results.some(result => result.code) ? results : [...results, ...await execute(node.then)])
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const cpus = Number(process.env.VARIA_CHECK_CPUS) || availableParallelism()
+  const cpus = cpuBudget()
   let skip
   try { skip = parseSkip(process.env.VARIA_CHECK_SKIP) } catch (error) {
     console.error(error.message)
     process.exit(2)
   }
   const build = process.argv.includes('--build')
+  const { others } = await acquire('shared', { label: build ? 'npm run build:smoke' : 'npm run check' })
+  if (lockEnabled() && !process.env.VITEST_MAX_WORKERS) for (const [lane, workers] of Object.entries(vitestWorkers(cpus))) laneEnv[lane] = { VITEST_MAX_WORKERS: String(workers) }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     console.log(`\nCheck stopped by ${signal}; the lanes still running held:`)
     flushRunning()
@@ -122,6 +151,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const failed = results.filter(result => result.code)
   const skipped = build ? '' : skippedNote(layout, skip)
   console.log(`
-${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'})${skipped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
+${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'}${others ? `, beside ${others} other ${others > 1 ? 'checks' : 'check'}` : ''})${skipped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
   process.exitCode = failed.length ? 1 : 0
 }

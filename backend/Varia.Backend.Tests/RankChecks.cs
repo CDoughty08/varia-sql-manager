@@ -59,6 +59,7 @@ internal static class RankChecks
             set.TryCommitRow();
         }
         set.Complete();
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var source = new ViewSorter.PageSource(pages, Wires.Length);
         var approximate = false;

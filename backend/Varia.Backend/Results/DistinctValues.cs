@@ -209,6 +209,7 @@ internal static partial class ViewSorter
 
     private static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, ResultView? kept, KeyMemory? memory, DistinctStages? stages, CancellationToken token)
     {
+        using var pin = set.Pin();
         var lap = System.Diagnostics.Stopwatch.GetTimestamp();
         long Lap()
         {

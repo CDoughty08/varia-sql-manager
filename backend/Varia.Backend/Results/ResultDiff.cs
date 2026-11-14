@@ -101,13 +101,14 @@ internal sealed class RowAccess
         lengths = stored.Lengths;
         if (Volatile.Read(ref parsed[page]) is not { } layout)
         {
-            var first = PageView.Parse(stored.Body, columns);
-            Volatile.Write(ref parsed[page], layout = new Parsed(first.Layout, first.BlobStart));
+            var body = stored.Body();
+            var first = PageView.Parse(body, columns);
+            Volatile.Write(ref parsed[page], layout = new Parsed(body, first.Layout, first.BlobStart));
         }
-        return PageView.At(stored.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
+        return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
     }
 
-    private sealed record Parsed(int[] Layout, int BlobStart);
+    private sealed record Parsed(byte[] Body, int[] Layout, int BlobStart);
 }
 
 /// <summary>Aligns two complete results (results.diff). Columns pair by name (case-insensitively, in the first result's
@@ -168,6 +169,8 @@ internal static class ResultDiffer
         Func<long, bool>? reserve = null, DiffStages? stages = null)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var leftPin = left.Pin();
+        using var rightPin = right.Pin();
         var pairs = Pairs(left.Columns, right.Columns, left.Wires, right.Wires);
         if (pairs.Length == 0)
             throw new RequestException("INVALID_PARAMS", Pairs(left.Columns, right.Columns).Length == 0
@@ -507,6 +510,8 @@ internal static class UnifiedDiff
     /// completes it.</summary>
     public static void Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token)
     {
+        using var leftPin = left.Pin();
+        using var rightPin = right.Pin();
         var sides = (Left: new Side(new RowAccess(leftPages, left.Wires.Count), model.Pairs, true, left.Lengths, right.Lengths),
             Right: new Side(new RowAccess(rightPages, right.Wires.Count), model.Pairs, false, right.Lengths, right.Lengths));
         var shown = Shown(model, context);

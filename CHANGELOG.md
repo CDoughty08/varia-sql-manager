@@ -19,6 +19,8 @@
 - **Pivot replaced in place:** building a result's Pivot again keeps the old one on screen until the new one is ready, then swaps it in the same place, keeping the focus, the transposed view and the sort and column widths of columns it still has; a build that fails, is cancelled or does not fit in result memory leaves the old Pivot as it was and says why. Pivot Results… on a Pivot reopens what it was built with. Pivots of different results now build at the same time (up to four at once), a busy SQL backend is asked again a few times before giving up, and a Pivot's strip says when its result holds only part of the query's rows.
 - **Larger results:** query results can now use a quarter of the computer's memory up to 16 GiB (it was 2 GiB), half of it for one query, so a query of several million rows keeps them all on a machine with the memory for it. Tools › Options › Query Results › SQL Server › Results to Grid has a **Result memory limit** to set it yourself, and a **Maximum rows kept per execution** for when you only want the first rows. A change to the limit applies at once, without restarting the SQL backend, and the status bar's memory meter follows it; lowering it below what results hold keeps them and stores nothing more until enough are closed. A truncated result names the budget it filled, even after the limit changes.
 
+- **Nerd metrics in the Memory panel:** open Nerd metrics under the status bar's Memory breakdown for what results hold as read and in memory, the largest results by name, the page codec's counters and the managed heap. It starts collapsed and remembers whether you opened it. Result compression is not on yet, so it shows rows stored as read, with no compression figures made up; the breakdown is a little wider to fit it.
+
 ### Improved
 
 - **Runtime:** the SQL backend now runs on .NET 11 (it was .NET 10). Nothing to install: Varia ships the runtime with the backend. Building from source needs the .NET 11 SDK.
@@ -34,6 +36,7 @@
 
 ### Fixed
 
+- **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
 - **Results:** the notice for a running query that has filled its result memory, or that stopped keeping rows because the computer is low on memory, now has a **Stop query** button (Cancel Executing Query for that tab), reachable by keyboard, until the query ends. The row limit you set yourself only says it was reached.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.

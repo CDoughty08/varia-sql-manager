@@ -672,7 +672,7 @@ internal static class TextChecks
             writer.Header(columns);
             foreach (var page in pages)
             {
-                var view = PageView.Parse(page.Body, columns.Length, scratch);
+                var view = PageView.Parse(PinnedPage.Body(page), columns.Length, scratch);
                 for (var row = 0; row < view.Rows; row++) writer.Row(view, row, columns);
             }
             writer.End();

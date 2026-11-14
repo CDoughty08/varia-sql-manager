@@ -2,7 +2,10 @@
 import { mkdir } from 'node:fs/promises'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
+import { holdForEntry } from './machine-lock.mjs'
 
+// It does not import fixtures/smoke.mjs, which takes the machine lock for the other suites.
+await holdForEntry()
 await mkdir('artifacts', { recursive: true })
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath }
 delete env.ELECTRON_RUN_AS_NODE

@@ -14,4 +14,9 @@
   <ItemGroup>
     <None Include="Fixtures/*.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- Only for the page compression benchmark (docs/page-compression-findings.md): LZ4 to compare with the runtime's
+       Zstandard. The backend itself does not reference it. -->
+  <ItemGroup>
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+  </ItemGroup>
 </Project>
