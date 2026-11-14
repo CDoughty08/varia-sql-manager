@@ -298,18 +298,24 @@ internal static class FusedReadChecks
         check(store.UsedBytes == used, "a page source gives its rooms and extracts back when disposed");
 
         // An extract refused (here by its allowance, the budget having room) unpacks the result in place instead, as before
-        // fused reads: the sort is the same and reads the pages as sealed.
+        // fused reads, after giving back the rooms and an earlier column's extract: the sort is the same, reads the pages
+        // as sealed, and the result holds only what unpacking added.
         var raw = Filled(Raw(), "ties raw");
         var expected = View(raw, [new(2, false, SortMode.Value)], []);
-        using (var fallback = new ViewSorter.PageSource(pages, Columns.Count) { ExtractAllowance = 0 })
+        var growth = Held.Unpacking(set);
+        using (var fallback = new ViewSorter.PageSource(pages, Columns.Count))
         {
+            fallback.Extract(3, CancellationToken.None);
+            var earlier = fallback.ExtractedBytes;
+            fallback.ExtractAllowance = 0;
             var fallbackKey = ViewSorter.Build(set, fallback, new ViewKey(2, false, SortMode.Value), null, Rows, CancellationToken.None, ref approximate);
             var fallbackOrder = Enumerable.Range(0, Rows).ToArray();
             var unpackedBefore = store.PackingSnapshot().PagesUnpacked;
             ViewSorter.Sort(fallbackOrder, 0, fallbackOrder.Length, new ViewSorter.Comparer([fallbackKey], null, CancellationToken.None));
             check(fallbackKey.ReadsCells && !set.HasPacked && fallback.ExtractedBytes == 0 && fallbackOrder.SequenceEqual(expected.Order)
-                && store.PackingSnapshot().PagesUnpacked == unpackedBefore && Enumerable.Range(0, pages.Length).All(fallback.IsRaw),
-                "a sort whose column extract is refused unpacks the result in place, reads its pages as sealed and sorts as unpacked");
+                && store.PackingSnapshot().PagesUnpacked == unpackedBefore && Enumerable.Range(0, pages.Length).All(fallback.IsRaw)
+                && earlier > 0 && fallback.Rooms!.Reserved == 0 && store.UsedBytes == used + growth,
+                "a sort whose column extract is refused gives back its rooms and earlier extracts, unpacks the result in place, reads its pages as sealed and sorts as unpacked");
         }
     }
 
@@ -418,7 +424,7 @@ internal static class FusedReadChecks
             using var source = new ViewSorter.PageSource(set.SealedSnapshot(), Columns.Count);
             ahead = Code(() => source.InOrder((index, page, view) => pagesRead++, CancellationToken.None));
         }
-        check(ahead == "TOO_LARGE: " + ViewSorter.NoRoomToRead && pagesRead <= 2 && Kept(),
+        check(ahead == "TOO_LARGE: " + ViewSorter.NoRoomToRead && pagesRead == 2 && Kept(),
             "an in-order pass refused the rooms for the batch it unpacks ahead stops with the refusal and gives back the rooms it had: " + ahead + " after " + pagesRead + " pages");
 
         // Through the service, a fused read refused while the computer is low on memory says so, as any refusal there does.

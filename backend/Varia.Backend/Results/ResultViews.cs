@@ -1195,10 +1195,6 @@ internal static partial class ViewSorter
             }
         }
 
-        /// <summary>Copies a column's cells out of the packed pages, page by page on the workers (each charged to the
-        /// result's budget as working memory, refused: TOO_LARGE), so that comparisons going back to that column's cells
-        /// (<see cref="Cell"/>) read the copy and never unpack a page again. Nothing for a source with no packed page, or a
-        /// column already extracted. Not concurrent with the column's comparisons: a key extracts once it is built.</summary>
         /// <summary>The most an extract may charge before it counts as refused (unbounded but in the checks, which use it to
         /// refuse an extract that the budget would allow).</summary>
         internal long ExtractAllowance { get; set; } = long.MaxValue;
@@ -1207,7 +1203,8 @@ internal static partial class ViewSorter
         /// (<see cref="Cell"/>) read them without unpacking a page. The copy is charged as working memory until the source
         /// is disposed. Refused, the result is unpacked in place instead, as before fused reads (its pages' growth reserved,
         /// <see cref="ResultSetBuffer.TryUnpackAll"/>), which can fit where the extract did not (a column that is most of
-        /// a result that packs little); refused that too, the operation's refusal.</summary>
+        /// a result that packs little); refused that too, the operation's refusal. Nothing for a source with no packed page,
+        /// or a column already extracted. Not concurrent with any reader: a key extracts once it is built.</summary>
         public void Extract(int column, CancellationToken token)
         {
             if (extracts is null || extracts[column] is not null) return;
@@ -1260,6 +1257,11 @@ internal static partial class ViewSorter
         internal void Rehydrate(CancellationToken token)
         {
             if (owner is null) return;
+            // Nothing reads a packed page once the result is unpacked, so the rooms and every extract go back first: the
+            // unpacking then has the room they held, as it had before fused reads.
+            rooms!.Dispose();
+            owner.ReturnWork(Interlocked.Exchange(ref extracted, 0));
+            Array.Clear(extracts!);
             if (!owner.TryUnpackAll(token)) throw Refusal();
             for (var i = 0; i < pages.Length; i++)
             {

@@ -26,11 +26,15 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
     /// <summary>A room for one reader, which disposes it (it goes back to the pool) when it stops reading.</summary>
     public PageRoom Rent()
     {
-        lock (made) if (disposed) throw new ObjectDisposedException(nameof(PageRooms));
-        if (free.TryTake(out var room))
+        PageRoom? room;
+        lock (made)
         {
-            room.Taken();
-            return room;
+            if (disposed) throw new ObjectDisposedException(nameof(PageRooms));
+            if (free.TryTake(out room))
+            {
+                room.Taken();
+                return room;
+            }
         }
         if (!set.TryReserveWork(length)) throw refusal();
         lock (made)
@@ -49,8 +53,7 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
 
     internal void Return(PageRoom room)
     {
-        lock (made) if (disposed) return;
-        free.Add(room);
+        lock (made) if (!disposed) free.Add(room);
     }
 
     /// <summary>Returns every room's reservation, once its readers have all stopped.</summary>

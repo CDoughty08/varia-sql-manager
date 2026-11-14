@@ -30,9 +30,9 @@ Zstandard built in. This version measures both on .NET 11, and the recommendatio
   1.2 s on 16 workers (0.36 s per GiB on 3 workers).
 - **Fused reads, built and measured:** a sort, a filter, a profile and a pivot of a packed result now read it in
   place, each worker unpacking the page it reads into a room of its own. They hold about 4 MiB (a page a worker)
-  instead of the result's whole raw size (525 MiB at 1 GiB, 2.1 GiB at 4 GiB) and cost 0 to 25 % more time than
+  instead of what unpacking adds (525 MiB at 1 GiB, 2.1 GiB at 4 GiB) and cost from 10 % less to 26 % more time than
   rehydrating. Sort ties that compare cells read a column extract made once. A plain Save unpacks a page at a time on
-  one thread, 1.9 to 2.5 times its raw time. See [Fused reads at 1 and 4 GiB](#fused-reads-at-1-and-4-gib).
+  one thread, 1.4 to 2.5 times its raw time. See [Fused reads at 1 and 4 GiB](#fused-reads-at-1-and-4-gib).
 - **This makes compressing much more actively possible,** as the owner suggested: every complete result can be
   compressed a few seconds after it is hidden, showing it again needs no wait, and a later step can keep even visible
   results compressed. See [Recommended design](#recommended-design).
@@ -190,50 +190,58 @@ arrays; "decompress first" is the time to do that on 16 workers.
 ### Fused reads at 1 and 4 GiB
 
 `--page-compression-bench <GiB> orders --fused` fills a real store, packs the result (zstd 2) and runs each operation
-three ways: on the raw result; **rehydrated** (every page unpacked on the workers first, with its raw size reserved, and
-packed again after; the unpacking is included in the time); and **fused** (the packed result read in place, each worker
-unpacking the page it is about to read into a room of its own). Median of three runs, seconds. "Budget" is the most
-working memory the store charged above the result during a run; "heap" is the most the managed heap grew, sampled
-every millisecond. 16 workers, `orders` packs 2.05 times.
+three ways: on the raw result; **rehydrated** (every page unpacked on the workers first, with the bytes that adds
+reserved, and packed again after; the unpacking is included in the time); and **fused** (the packed result read in
+place, each worker unpacking the page it is about to read into a room of its own). Median of three runs, seconds, from
+the second of two runs on a machine other sessions shared (the first run's medians differed by up to 0.4 s on the
+longest operations). "Budget" is the most working memory the store charged above the result during a run; "heap" is
+the most the managed heap grew, sampled every millisecond. 16 workers; `orders` packs 2.05 times. The pivot is its
+groups and figures (`ResultPivoter.Build`); writing its output (`RowAccess.Hold`) is not in these figures.
 
-1 GiB (3,686,386 rows, 4,022 pages; one-thread pack 2.5 s):
-
-| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Sort by a random `int` | 0.46 | 0.32 | 0.32 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
-| Sort by a text | 1.24 | 1.14 | 1.35 | 639 MiB | 118 MiB | 1,173 MiB | 204 MiB |
-| Sort with ties that compare cells (`decimal(38,10)`) | 1.43 | 1.46 | 1.69 | 525 MiB | 305 MiB | 1,083 MiB | 362 MiB |
-| Filter: IN on a low-cardinality column | 0.05 | 0.11 | 0.12 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
-| Profile of two columns | 0.23 | 0.19 | 0.21 | 525 MiB | 4 MiB | 1,039 MiB | 37 MiB |
-| Pivot: count, sum, max by status | 0.31 | 0.36 | 0.42 | 525 MiB | 8 MiB | 1,083 MiB | 122 MiB |
-| Save as CSV (one thread) | 0.62 | 0.67 | 1.17 | 525 MiB | one page | 1,010 MiB | 1 MiB |
-
-4 GiB (14,727,412 rows, 16,089 pages; one-thread pack 9.2 s):
+1 GiB (3,686,386 rows, 4,022 pages; one-thread pack 2.5 to 3.1 s):
 
 | Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Sort by a random `int` | 1.46 | 1.52 | 1.68 | 2,108 MiB | 4 MiB | 4,276 MiB | 231 MiB |
-| Sort by a text | 5.73 | 5.85 | 6.14 | 2,563 MiB | 459 MiB | 4,762 MiB | 800 MiB |
-| Sort with ties that compare cells | 8.07 | 8.27 | 9.28 | 2,108 MiB | 1,205 MiB | 4,390 MiB | 1,433 MiB |
-| Filter: IN on a low-cardinality column | 0.21 | 0.43 | 0.51 | 2,108 MiB | 4 MiB | 4,275 MiB | 241 MiB |
-| Profile of two columns | 0.45 | 0.66 | 0.83 | 2,108 MiB | 4 MiB | 4,070 MiB | 35 MiB |
-| Pivot: count, sum, max by status | 1.31 | 1.49 | 1.62 | 2,108 MiB | 8 MiB | 4,502 MiB | 464 MiB |
-| Save as CSV (one thread) | 2.41 | 3.46 | 6.02 | 2,108 MiB | one page | 4,040 MiB | 1 MiB |
+| Sort by a random `int` | 0.53 | 0.42 | 0.39 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
+| Sort by a text | 1.32 | 1.40 | 1.36 | 639 MiB | 118 MiB | 1,120 MiB | 204 MiB |
+| Sort by prose text with no room for whole keys (ties compare cells) | 1.89 | 1.89 | 1.93 | 525 MiB | 305 MiB | 1,083 MiB | 365 MiB |
+| Filter: IN on a low-cardinality column | 0.06 | 0.13 | 0.13 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
+| Profile of two columns | 0.15 | 0.19 | 0.21 | 525 MiB | 4 MiB | 1,037 MiB | 34 MiB |
+| Pivot: count, sum, max by status | 0.31 | 0.38 | 0.45 | 525 MiB | 8 MiB | 1,083 MiB | 122 MiB |
+| Save as CSV (one thread) | 0.85 | 0.96 | 1.38 | 525 MiB | 0.25 MiB | 1,010 MiB | 1 MiB |
 
-- **Fused reads hold about a page a worker instead of the whole raw result.** The 4 MiB is 16 rooms of one page. A
-  text sort's and a ties sort's extra is their key memory and, for ties, the column's extract (below), not pages. The
-  pivot's 8 MiB is two batches of rooms (one read while the next is unpacked).
-- **They cost 0 to 25 % more time than rehydrating** on the workers' operations (sort, filter, profile, pivot), about
-  0.05 s per GiB unpacked on 16 workers, now paid in each operation instead of once. Rehydrating keeps the raw copy
-  only for the operation, so a second operation pays again either way.
-- **Sort ties are measured.** A key whose comparisons go back to cells (long exact numbers that tie as doubles, text
-  kept as 8 bytes) extracts its column once after it is built: the column's cells of every page, charged as working
-  memory (300 MiB at 1 GiB for a 40-character decimal column, a quarter of the result). No comparison unpacks a page.
-  Unpacking a page for each comparison would have been unusable: a sort compares millions of ties.
-- **Save stays one thread and roughly doubles** (1.9 to 2.5 times raw). It unpacks each page just before writing it,
-  as estimated above (0.7 to 0.9 s per GiB). Decompressing ahead on a second thread was not built; a Save is a
-  background job with its own progress, so it was left for later.
-- The rehydrate heap column is the raw copy the operation would need; it is what fused reads avoid.
+4 GiB (14,727,412 rows, 16,089 pages; one-thread pack 9.2 to 10.5 s):
+
+| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sort by a random `int` | 1.56 | 1.80 | 1.68 | 2,108 MiB | 4 MiB | 4,276 MiB | 231 MiB |
+| Sort by a text | 6.07 | 5.91 | 6.17 | 2,563 MiB | 459 MiB | 4,735 MiB | 800 MiB |
+| Sort by prose text with no room for whole keys (ties compare cells) | 9.26 | 9.43 | 8.51 | 2,108 MiB | 1,205 MiB | 4,390 MiB | 1,433 MiB |
+| Filter: IN on a low-cardinality column | 0.22 | 0.46 | 0.43 | 2,108 MiB | 4 MiB | 4,275 MiB | 232 MiB |
+| Profile of two columns | 0.48 | 0.73 | 0.82 | 2,108 MiB | 4 MiB | 4,070 MiB | 35 MiB |
+| Pivot: count, sum, max by status | 1.29 | 1.50 | 1.71 | 2,108 MiB | 8 MiB | 4,502 MiB | 464 MiB |
+| Save as CSV (one thread) | 3.00 | 3.17 | 5.49 | 2,108 MiB | 0.25 MiB | 4,040 MiB | 1 MiB |
+
+- **Fused reads hold about a page a worker instead of what unpacking adds.** Rehydrating reserves the bytes unpacking
+  adds (raw size less packed size: 525 MiB at 1 GiB, 2.1 GiB at 4 GiB); a fused sort, filter or profile holds 16 rooms
+  of one page (4 MiB). A text sort's and a ties sort's extra is their key memory and, for ties, the column's extract
+  (below), not pages. The pivot's 8 MiB is two batches of rooms (one read while the next is unpacked). Save holds one
+  room (0.25 MiB).
+- **On the workers' operations (sort, filter, profile, pivot) fused reads cost from 10 % less to 26 % more time than
+  rehydrating** across the two runs, about 0.05 s per GiB unpacked on 16 workers, now paid in each operation instead
+  of once. Rehydrating keeps the raw copy only for the operation, so a second operation pays again either way.
+- **Sort ties are measured.** The ties sort orders `orders`' note (prose of 20 to 300 characters, half NULL) with no
+  key memory, so its key keeps 8-byte prefixes and compares cells on ties. A key whose comparisons go back to cells
+  (long exact numbers that tie as doubles, text kept as 8 bytes) extracts its column once after it is built: the
+  column's cells of every page, charged as working memory (300 MiB at 1 GiB for the note column, about a quarter of
+  the result). No comparison unpacks a page; unpacking a page for each comparison would have been unusable, as a sort
+  compares millions of ties. If the extract is refused, the result is unpacked in place as before (its rooms and
+  extracts given back first), so a sort that rehydrating could run still runs.
+- **Save stays one thread and costs 1.4 to 2.5 times its raw time** across the two runs. It unpacks each page just
+  before writing it, as estimated above (0.5 to 0.9 s per GiB). Decompressing ahead on a second thread was not built; a
+  Save is a background job with its own progress, so it was left for later.
+- The heap columns: rehydrating's is the raw copy the operation needs; fused rooms are plain arrays freed with the
+  operation, so they show in the fused column while it runs.
 
 ### Scrolling
 
