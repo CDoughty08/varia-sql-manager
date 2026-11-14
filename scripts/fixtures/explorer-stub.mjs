@@ -137,13 +137,18 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     })
     return { hits, total: hits.length, partial: false, elapsedMs: 1, index: indexStatus(true) }
   }
+  // This UI fixture replaces the request owner, so its verified receipts are acknowledged within the same fixture.
+  ipcMain.removeHandler('varia:connections-accept')
+  ipcMain.handle('varia:connections-accept', () => ok({ accepted: true, retained: true }))
   ipcMain.removeHandler('varia:request')
-  ipcMain.handle('varia:request', async (_event, method, params) => {
+  ipcMain.handle('varia:request', async (_event, method, params, context) => {
     stub.calls.push({ method, params: method === 'connections.connect' ? { server: params.server } : params })
     switch (method) {
       case 'system.health': return ok({ protocolVersion: 2, runtime: 'stub', platform: process.platform, smoVersion: 'stub', sqlClientVersion: 'stub' })
       case 'connections.connect': {
-        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1 }
+        const principalId = params.authentication.startsWith('entra') ? 'entra:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222' : 'sid:01020304'
+        const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1,
+          targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } }
         stub.connections[info.id] = info
         return ok(info)
       }
@@ -175,6 +180,12 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       })
       case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }
         : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
+      // View Dependencies: what depends on dbo.Orders is a view (which depends on Orders again: a cycle) and a foreign key; Orders
+      // depends on another database's table.
+      case 'explorer.dependencies': return ok(params.direction === 'uses'
+        ? { items: params.target.name === 'Orders' ? [{ name: 'Customers', schema: 'dbo', database: 'Crm' }] : [{ name: 'Orders', schema: 'dbo', kind: 'table', type: 'U' }], elapsedMs: 1 }
+        : { items: params.target.name === 'Orders' ? [{ name: 'OrderLines', schema: 'dbo', kind: 'table', type: 'U', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view', type: 'V', schemaBound: true }]
+          : params.target.name === 'vOrders' ? [{ name: 'Orders', schema: 'dbo', kind: 'table', type: 'U' }] : [], elapsedMs: 1 })
       case 'tables.columns': return ok({ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })

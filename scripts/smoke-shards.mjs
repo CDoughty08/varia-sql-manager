@@ -4,6 +4,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { acquire, entryMode } from './machine-lock.mjs'
 
 /** The smoke suites in `test:smoke` order. */
 export function smokeSuites() {
@@ -15,18 +16,21 @@ export function smokeSuites() {
  * Seconds each suite took in CI's smoke jobs (PR #166's run, 2026-11-08, after within() stopped the idle timers: Linux under xvfb with SQL Server, Windows without), to balance the
  * shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each platform
  * (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from.
+ * Connections, Activity Monitor, Explorer, results, live plans and menus use PR #469's 2026-11-13 run (43540439831).
+ * Windows live plans retain their prior weight because that platform's run had no SQL endpoint and skipped them.
+ * Hot exit adds the five-second replacement-window grace to its last green Linux/Windows measurements (17/18 seconds).
  */
 export const suiteSeconds = {
   linux: {
     'scripts/retained-plans-smoke.mjs': 20,
-    'scripts/live-plan-smoke.mjs': 64,
+    'scripts/live-plan-smoke.mjs': 47,
     'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 9, 'scripts/popout-smoke.mjs': 7,
-    'scripts/connections-smoke.mjs': 19, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
+    'scripts/connections-smoke.mjs': 54, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
     'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
-    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 38, 'scripts/menus-smoke.mjs': 70,
-    'scripts/explorer-smoke.mjs': 54, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
-    'scripts/results-smoke.mjs': 85, 'scripts/grouped-results-smoke.mjs': 4, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
-    'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 18, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
+    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 76,
+    'scripts/explorer-smoke.mjs': 60, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
+    'scripts/results-smoke.mjs': 91, 'scripts/grouped-results-smoke.mjs': 4, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
+    'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 22, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
     'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11
   },
@@ -34,12 +38,12 @@ export const suiteSeconds = {
     'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 2,
     'scripts/electron-smoke.mjs': 18, 'scripts/layout-smoke.mjs': 8, 'scripts/popout-smoke.mjs': 15,
-    'scripts/connections-smoke.mjs': 18, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10,
+    'scripts/connections-smoke.mjs': 42, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10,
     'scripts/backend-smoke.mjs': 30, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 32,
-    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 29, 'scripts/menus-smoke.mjs': 73,
-    'scripts/explorer-smoke.mjs': 42, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
-    'scripts/results-smoke.mjs': 66, 'scripts/grouped-results-smoke.mjs': 6, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
-    'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 13, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
+    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 103,
+    'scripts/explorer-smoke.mjs': 57, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
+    'scripts/results-smoke.mjs': 93, 'scripts/grouped-results-smoke.mjs': 6, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
+    'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 23, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11
   }
@@ -93,36 +97,47 @@ function killAll(pids) {
  * finishes). After `graceMs`, or once the suite has gone, every process the suite started, read before the SIGINT and again
  * then, gets SIGKILL with any group it leads, and so does the suite's group.
  */
-export function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [], signal } = {}) {
-  return new Promise(resolve => {
-    const posix = process.platform !== 'win32'
-    const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix })
-    let timedOut = false, interrupted = false, stopping = false, grace, seen = []
-    const finish = () => killAll([...new Set([child.pid, ...seen])])
-    const stop = () => {
-      if (stopping || child.exitCode !== null || child.signalCode !== null) return
-      stopping = true
-      if (!posix) {
-        try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
-        return
+export async function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [], signal, env = process.env } = {}) {
+  const childEnv = { ...env }, mode = entryMode(suite)
+  const interrupted = () => ({ status: null, signal: null, timedOut: false, interrupted: true })
+  let lease
+  try {
+    if (signal?.aborted) return interrupted()
+    // Queue time belongs to the machine lock, not the suite's execution budget. The child inherits only this lease.
+    if (mode) lease = await acquire(mode, { env: childEnv, label: suite, signal })
+    if (signal?.aborted) return interrupted()
+    return await new Promise(resolve => {
+      const posix = process.platform !== 'win32'
+      const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix, env: childEnv })
+      let timedOut = false, interrupted = false, stopping = false, grace, seen = []
+      const finish = () => killAll([...new Set([child.pid, ...seen])])
+      const stop = () => {
+        if (stopping || child.exitCode !== null || child.signalCode !== null) return
+        stopping = true
+        if (!posix) {
+          try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
+          return
+        }
+        seen = descendants(child.pid)
+        try { process.kill(-child.pid, 'SIGINT') } catch { /* Already gone. */ }
+        grace = setTimeout(() => { seen = [...seen, ...descendants(child.pid)]; finish() }, graceMs)
       }
-      seen = descendants(child.pid)
-      try { process.kill(-child.pid, 'SIGINT') } catch { /* Already gone. */ }
-      grace = setTimeout(() => { seen = [...seen, ...descendants(child.pid)]; finish() }, graceMs)
-    }
-    const timer = setTimeout(() => { timedOut = true; stop() }, limitMs)
-    const abort = () => { interrupted = true; stop() }
-    if (signal?.aborted) abort()
-    else signal?.addEventListener('abort', abort, { once: true })
-    const settle = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
-    child.once('error', error => { settle(); resolve({ status: null, signal: null, timedOut, interrupted, error }) })
-    child.once('exit', (status, exitSignal) => {
-      settle()
-      // The suite has gone; on POSIX whatever it started, reparented now, still gets the SIGKILL.
-      if (posix && stopping) { clearTimeout(grace); finish() }
-      resolve({ status, signal: exitSignal, timedOut, interrupted })
+      const timer = setTimeout(() => { timedOut = true; stop() }, limitMs)
+      const abort = () => { interrupted = true; stop() }
+      if (signal?.aborted) abort()
+      else signal?.addEventListener('abort', abort, { once: true })
+      const settle = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+      child.once('error', error => { settle(); resolve({ status: null, signal: null, timedOut, interrupted, error }) })
+      child.once('exit', (status, exitSignal) => {
+        settle()
+        // The suite has gone; on POSIX whatever it started, reparented now, still gets the SIGKILL.
+        if (posix && stopping) { clearTimeout(grace); finish() }
+        resolve({ status, signal: exitSignal, timedOut, interrupted })
+      })
     })
-  })
+  } catch (error) {
+    return signal?.aborted ? interrupted() : { status: null, signal: null, timedOut: false, interrupted: false, error }
+  } finally { lease?.release() }
 }
 
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */

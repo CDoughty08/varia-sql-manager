@@ -98,13 +98,14 @@ export const contextKeys = {
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },
   activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected and its connection was not lost." },
-  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A connection was lost when the SQL backend restarted and has not been reconnected or removed.' },
-  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
+  hasLostConnection: { type: 'boolean', scope: 'state', description: 'A remembered server is disconnected or was lost and has not been reconnected or removed.' },
+  activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's remembered server is disconnected or was lost." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   includeActualPlan: { type: 'boolean', scope: 'state', description: 'The active query will capture actual execution plans.' },
   includeLivePlan: { type: 'boolean', scope: 'state', description: 'The active query will show live execution plans.' },
   includeClientStatistics: { type: 'boolean', scope: 'state', description: 'The active query will collect client statistics.' },
-  hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
+  hasResults: { type: 'boolean', scope: 'state', description: 'The active query has results (result sets or captured execution plans), and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
+  hasResultSets: { type: 'boolean', scope: 'state', description: 'The active query has a result set a grid shows (rows, a Pivot, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized.' },
   panelTabsVisible: { type: 'boolean', scope: 'state', description: 'Window › Panel Tabs is on: a panel alone in its dock group shows its tab.' },
@@ -156,6 +157,7 @@ export const contextKeys = {
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
   explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerSelectionDependencies: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   ...actionKeys,
   ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
@@ -166,7 +168,7 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['background', 'folder', ...nodeKinds, ''],
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."
   },
-  explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a server whose connection was lost when the SQL backend restarted.' },
+  explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a disconnected server, including a connection lost when the SQL backend restarted.' },
   explorerFolderFilterable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that Filter Settings can filter.' },
   explorerFolderFiltered: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that has a filter.' },
   explorerFolder: {
@@ -174,6 +176,7 @@ export const contextKeys = {
     description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
   },
   explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
+  explorerNodeDependencies: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   explorerNodeStatus: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...nodeStatuses],

@@ -26,7 +26,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 - `npm run backend:test`: only the .NET checks. Add `-- --live-group k/3` to `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release` for one CI live group.
 - `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` needs the Release backend built).
-- `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`: benchmarks, not part of `check`;
+- `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`, `npm run bench:startup`: benchmarks, not part of `check`;
   `node scripts/check-bench.mjs` compares them with `tests/bench/floors.json`.
 - Other sessions share this machine. While developing, run only the checks that cover your change (one vitest file, the
   area's smoke suite); `check` once before committing, the full smoke and benchmarks only when the change calls for them.

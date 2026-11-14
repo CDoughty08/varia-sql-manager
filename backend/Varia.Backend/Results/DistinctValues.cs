@@ -254,7 +254,9 @@ internal static partial class ViewSorter
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to list its values.");
         var rows = (int)total;
-        var source = new PageSource(pages, set.Wires.Count);
+        // The snapshot keeps its source for later reads of its values, so it holds no rooms: SqlService unpacks a packed
+        // result first, and a packed page is otherwise read whole here, as before fused reads.
+        var source = new PageSource(pages, set.Wires.Count, eager: true);
         var approximate = false;
         var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
         if (stages is not null) stages.Key += Lap();

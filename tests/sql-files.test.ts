@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileCheckLimits, fileKinds, isReadOnly, protectedLinkRefused, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
+import { replaceFile } from '../src/main/json-file'
 
 let directory: string
 beforeEach(async () => {
@@ -198,7 +199,7 @@ describe('SQL file encodings and save hardening', () => {
   })
   it('replaces the file through replaceFile, which retries Windows\' brief holds', async () => {
     const calls: [string, string][] = []
-    const store = new SqlFileStore({ replace: async (from, to) => { calls.push([from, to]); await rename(from, to) } })
+    const store = new SqlFileStore({ replace: async (from, to) => { calls.push([from, to]); await replaceFile(from, to) } })
     const path = join(directory, 'held.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
@@ -531,7 +532,7 @@ describe('SQL file encodings and save hardening', () => {
       replace: async (from, to) => {
         seen.push({ target: (await stat(to)).mode & 0o777, saved: (await stat(from)).mode & 0o777 })
         await chmod(to, 0o644)
-        await rename(from, to)
+        await replaceFile(from, to)
       }
     })
     // Not refused as read-only, and the new file does not take the mode found through the link.

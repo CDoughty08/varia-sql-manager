@@ -343,8 +343,10 @@ describe('closing one result', () => {
     void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1 })], { planSets: [descriptor(7, { index: 0, columns: [plan] })], messages: [{ text: '(2 rows affected)', kind: 'info' }] }) })
     const summary = tab().summary, keys = tab().sets.map(set => set.key)
     expect(hasResultsView(tab())).toBe(true)
+    expect([results.context.getSnapshot().t1, results.resultSets.getSnapshot().t1]).toEqual([true, true])
     results.removeEntry('t1', keys[0])
     expect(tab().emptied).toBeUndefined()
+    expect(results.resultSets.getSnapshot().t1).toBe(true)
     results.removeEntry('t1', keys[1])
     // The status and the summary are the run's, unchanged; the flag sits beside them.
     expect(tab()).toMatchObject({ status: 'completed', emptied: true, sets: [], view: 'results', rowsRead: 4, numbered: 2, messages: [{ text: '(2 rows affected)' }] })
@@ -365,6 +367,8 @@ describe('closing one result', () => {
     expect(tab().planSets).toHaveLength(1)
     expect(client.handle(7)!.getSnapshot().state).toBe('complete')
     expect(results.context.getSnapshot().t1).toBe(true)
+    // No grid is left, though: hasResultSets, which Find and Save Results As need, is off.
+    expect(results.resultSets.getSnapshot().t1).toBeUndefined()
     expect(releases()).toEqual({ 1: 1, 2: 1 })
     // Close Results then releases the plans and reads closed, as it always has.
     results.closeResults('t1')

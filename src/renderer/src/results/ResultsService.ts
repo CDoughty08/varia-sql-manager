@@ -239,6 +239,9 @@ export interface TabResults {
   /** The run's last result was closed one at a time (not by Close Results): its status and summary stay as they were, and
    *  the Results view stays, saying so, in place of "returned no result sets". Captured plans are not affected. */
   readonly emptied?: true
+  /** The run was made with Discard results after execution on: its sets were read and none kept (plans are), so the
+   *  Results view says so in place of grids, whatever the setting is now. */
+  readonly discard?: true
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -339,6 +342,7 @@ interface Run {
   readonly held: Map<EntryKey, { shown?: ResultHandle; readonly views: Set<ResultView>; pins?: Map<ResultView, number> }>
   /** Its last entry was closed by `removeEntry`. */
   emptied: boolean
+  readonly discard: boolean
 }
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
@@ -357,6 +361,8 @@ const saveCancelled = 'Saving was cancelled. The file was not written.'
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+/** How many sets a run made with Discard results after execution read and did not keep. */
+const discardedSets = (run: Pick<Run, 'discard' | 'summary'>): number => run.discard ? run.summary?.discardedResultSets ?? 0 : 0
 /** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
 const truncatedClause = (cells: number): string => cells > 0 ? ` ${formatCount(cells)} ${cells === 1 ? 'value was' : 'values were'} truncated.` : ''
 /** What a transposed copy or save left out: the rows past those a transposed grid draws. */
@@ -433,8 +439,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Saves by job id: main allows one per window, but a second request must not lose track of the first. */
   private readonly saves = new Map<string, RunningJob>()
   private readonly contextStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
-  /** The tabs whose results can be saved or closed (`hasResults`); it publishes only when that set of tabs changes. */
+  /** The tabs whose results can be closed (`hasResults`): result sets or captured plans. It publishes only when that set of
+   *  tabs changes. */
   readonly context: ExternalStore<Readonly<Record<string, true>>> = this.contextStore
+  private readonly setsStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs with a result set a grid can show (`hasResultSets`), which Find and Save Results As need: an emptied run that
+   *  keeps captured plans is in `context` but not here. It publishes only when that set of tabs changes. */
+  readonly resultSets: ExternalStore<Readonly<Record<string, true>>> = this.setsStore
   private readonly turnedStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedOrientation>>> { set(value: Readonly<Record<string, FocusedOrientation>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
@@ -475,7 +486,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
    *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
    *  result), so its strip moves to the new run. */
-  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean } = {}): void {
+  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean } = {}): void {
     if (this.disposed) return
     // The focus follows a group by its ordinal into the next run, as names and highlights do; nothing derived is rebuilt,
     // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
@@ -490,7 +501,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -542,8 +553,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.endedAt = this.now()
     this.openStripFor(run, run.messages)
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
-    if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : 'messages'
-    this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
+    // A run that discarded its sets shows the Results view's notice that it did, unless it kept a plan to show.
+    if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : discardedSets(run) ? 'results' : 'messages'
+    // A screen reader hears why there are no sets, as the Results view's notice shows it; focus does not move there.
+    const discarded = discardedSets(run)
+    this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run))
+      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : ''))
     let retaining: Promise<void> | undefined
     if (end.planContext && this.retainedPlans) {
       const sources: SnapshotSource[] = []
@@ -1171,6 +1186,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.noticeTimers.clear()
     this.controllers.clear()
     this.contextStore.clear()
+    this.setsStore.clear()
     this.turnedStore.clear()
     this.clearListeners()
   }
@@ -1757,16 +1773,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     if (changed || Object.keys(current).length !== Object.keys(next).length) this.turnedStore.set(next)
   }
-  /** `hasResults` per tab: a set the backend still holds, in results neither closed nor lost with the backend. */
+  /** `hasResults` per tab: a set or captured plan the backend still holds, in results neither closed nor lost with the
+   *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, plan sets and comparisons). */
   private updateContext(): void {
-    const current = this.contextStore.getSnapshot(), next: Record<string, true> = {}
-    let changed = false
+    const results: Record<string, true> = {}, sets: Record<string, true> = {}
     for (const [tabId, run] of this.runs) {
-      if (run.status === 'closed' || run.status === 'lost' || !(run.sets.some(held) || run.planSets.some(held))) continue
-      next[tabId] = true
-      if (!current[tabId]) changed = true
+      if (run.status === 'closed' || run.status === 'lost') continue
+      const grids = run.sets.some(held)
+      if (grids) sets[tabId] = true
+      if (grids || run.planSets.some(held)) results[tabId] = true
     }
-    if (changed || Object.keys(current).length !== Object.keys(next).length) this.contextStore.set(next)
+    publishTabs(this.contextStore, results)
+    publishTabs(this.setsStore, sets)
   }
 
   private snapshotOf(run: Run): TabResults {
@@ -1780,13 +1798,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}
+      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {}
     }
   }
 
   private mint(): EntryKey { return 'e' + ++this.minted }
 
   private entry(run: Run | undefined, key: EntryKey): ResultSetEntry | undefined { return run?.entries.get(key) }
+}
+
+/** Publishes a set of tabs only when it differs from the one the store holds. */
+function publishTabs(store: { getSnapshot(): Readonly<Record<string, true>>; set(value: Readonly<Record<string, true>>): void }, next: Record<string, true>): void {
+  const current = store.getSnapshot(), keys = Object.keys(next)
+  if (keys.length !== Object.keys(current).length || keys.some(tabId => !current[tabId])) store.set(next)
 }
 
 const table: ViewOrientation = { transposed: false }, turnedPlain: ViewOrientation = { transposed: true }

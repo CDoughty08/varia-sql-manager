@@ -43,6 +43,33 @@ function fixture() {
 }
 
 describe('file commands', () => {
+  it('preflights every dirty query before closing any and keeps an explicitly saved file if a later prompt cancels', async () => {
+    const f = fixture(), first = f.documents.create('first.sql', 'SELECT 1', 'Sales', 'server-a', true), second = f.documents.create('second.sql', 'SELECT 2', 'Accounts', 'server-a', true)
+    f.api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'save' }).mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    expect(await f.files.prepareQueryClose([first.id, second.id])).toBeUndefined()
+    expect(f.documents.get(first.id)?.dirty).toBe(false)
+    expect(f.documents.get(second.id)?.dirty).toBe(true)
+    expect(f.api.closeQuerySession).not.toHaveBeenCalled()
+    expect(f.api.releaseSqlFile).not.toHaveBeenCalled()
+  })
+  it('rejects an edit to an earlier query during a later save prompt without closing anything', async () => {
+    const f = fixture(), first = f.documents.create('first.sql', 'SELECT 1', 'Sales', 'server-a', true), second = f.documents.create('second.sql', 'SELECT 2', 'Accounts', 'server-a', true)
+    f.api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'discard' }).mockImplementationOnce(async () => {
+      f.model(first.id).edit('SELECT 3')
+      return { ok: true, value: 'discard' }
+    })
+    await expect(f.files.prepareQueryClose([first.id, second.id])).rejects.toThrow('changed while confirming disconnect')
+    expect(f.documents.get(first.id)).toBeDefined()
+    expect(f.documents.get(second.id)).toBeDefined()
+    expect(f.api.closeQuerySession).not.toHaveBeenCalled()
+  })
+  it('rejects changed target/database associations after close approval', async () => {
+    const f = fixture(), first = f.documents.create('first.sql', 'SELECT 1', 'Sales', 'server-a')
+    const prepared = await f.files.prepareQueryClose([first.id])
+    f.documents.update(first.id, { database: 'Other', connectionId: 'server-b' })
+    expect(() => f.files.validateQueryClose(prepared!)).toThrow('changed while confirming disconnect')
+    expect(f.api.closeQuerySession).not.toHaveBeenCalled()
+  })
   it('creates a group-header query on that group\'s shown server and database despite focus elsewhere', async () => {
     const { documents, commands, groups, explorer } = fixture()
     const shown = documents.create('group.sql', 'SELECT 1', 'Orders', 'server-b')

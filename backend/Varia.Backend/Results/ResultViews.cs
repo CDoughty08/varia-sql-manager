@@ -111,6 +111,8 @@ internal static partial class ViewSorter
     /// <summary>The most values rows are grouped by without sorting them (<see cref="Key.Coded"/>); more are sorted.</summary>
     internal const int MaxGroups = 1 << 16;
     internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
+    internal const string SortTooLarge = "There is not enough result memory to sort these rows. Close other results and try again.";
+    internal const string FilterTooLarge = "There is not enough result memory to filter these rows. Close other results and try again.";
 
     internal static readonly WorkerGate Gate = new(() => Workers);
 
@@ -348,7 +350,8 @@ internal static partial class ViewSorter
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to sort.");
         var rows = (int)total;
-        var source = new PageSource(pages, set.Wires.Count);
+        // A packed result is read fused: its rooms and extracts go back with the build.
+        using var source = new PageSource(pages, set.Wires.Count, filters.Count > 0 ? FilterTooLarge : SortTooLarge);
         var approximate = false;
         var values = new Dictionary<int, Key>();
         Key ValueKey(int column)
@@ -802,20 +805,24 @@ internal static partial class ViewSorter
         // Pages are independent: each is read once, in order, on whichever thread takes it. A key that gave up ranking its
         // values asks for the pages again.
         var inexact = 0;
-        using var threads = Gate.Take(Math.Min(Workers, source.Count));
         bool again;
         do
         {
         again = false;
-        key.Begin();
+        key.Begin(token);
+        // The lease is taken after the sample and let go before an extract: those read a packed result on leases of their
+        // own, which a lease held here, idle, would leave one thread.
+        var threads = Gate.Take(Math.Min(Workers, source.Count));
+        try
+        {
         do
-            threads.For(source.Count, () => new Scratch(), (index, scratch) =>
+            threads.For(source.Count, () => new Scratch(source), (index, scratch) =>
             {
                 var page = source.Page(index);
                 var first = (int)page.FirstRow;
                 var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
                 if (start == stop) return;
-                var view = source.View(index);
+                var view = source.Read(index, scratch.Room(index));
                 key.BeginPage(scratch, index);
                 for (var row = start; row < stop; row++)
                 {
@@ -847,6 +854,8 @@ internal static partial class ViewSorter
                 key.EndPage(scratch, index);
             }, token);
         while (key.Finish());
+        }
+        finally { threads.Dispose(); }
         if (key is InstantKey { Declined: true })
         {
             key = new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null);
@@ -854,6 +863,9 @@ internal static partial class ViewSorter
         }
         } while (again);
         if (inexact != 0) approximate = true;
+        // Comparisons that go back to cells (ties of long numbers, equal 8 bytes of text) read a packed result's from a copy
+        // of the column, made once here, not by unpacking a page for every comparison.
+        if (source.Packed && key.ReadsCells) source.Extract(column, token);
         return key;
     }
 
@@ -1029,58 +1041,353 @@ internal static partial class ViewSorter
         return (BinaryPrimitives.ReadUInt64BigEndian(ordered), BinaryPrimitives.ReadUInt64BigEndian(ordered[8..]));
     }
 
-    /// <summary>The sealed pages a sort reads, each parsed once, and a row's cell found again by binary search.</summary>
-    internal sealed class PageSource
+    /// <summary>What a page source refuses when its result's budget has no room for a fused read's rooms or a column's
+    /// cells.</summary>
+    internal const string NoRoomToRead = "There is not enough result memory to read these rows. Close other results and try again.";
+
+    /// <summary>Reads one row of the page a <see cref="PageSource.ForRows{TState}"/> reader is on.</summary>
+    internal delegate void RowReader<TState>(int place, PageView view, int local, TState state);
+    /// <summary>Reads one page of <see cref="PageSource.InOrder"/>.</summary>
+    internal delegate void PageReader(int index, StoredPage page, PageView view);
+
+    /// <summary>The sealed pages an operation reads, and a row's cell found again by binary search. Pages the store holds as
+    /// sealed are parsed once and read in place. Packed pages are read fused (docs/page-compression-findings.md): a
+    /// reader on one thread takes a room (<see cref="Rent"/>, reserved from the result's budget) and unpacks into it the
+    /// page it is about to read (<see cref="Read"/>), so the operation holds about a page a worker and the result stays
+    /// packed. Comparisons that go back to cells at random (a sort's ties) read a packed page's cells from an extract of
+    /// their column (<see cref="Extract"/>), made page by page on the workers once, rather than unpacking the page again for
+    /// every comparison. Dispose the source when the operation is done: its rooms and extracts go back to the budget.</summary>
+    internal sealed class PageSource : IDisposable
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
-        private readonly byte[][] bodies;
-        private readonly int[][] layouts;
+        // Null for a packed page, which is read through a room.
+        private readonly byte[]?[] bodies;
+        private readonly int[]?[] layouts;
         private readonly int[] blobStarts;
         private readonly int columns;
+        private readonly ResultSetBuffer? owner;
+        private readonly PageRooms? rooms;
+        private readonly ColumnCells?[]? extracts;
+        private readonly string tooLarge;
+        private readonly int packedPages;
+        private long extracted;
 
-        public PageSource(StoredPage[] pages, int columns)
+        /// <param name="tooLarge">What the operation answers (TOO_LARGE) when the budget refuses a room or an extract.</param>
+        /// <param name="eager">Reads every page whole now, as before fused reads (packed ones through their set's
+        /// accessor): for a source kept after its operation (a distinct snapshot's), which holds no rooms.</param>
+        public PageSource(StoredPage[] pages, int columns, string tooLarge = NoRoomToRead, bool eager = false)
         {
             this.pages = pages;
             this.columns = columns;
+            this.tooLarge = tooLarge;
             starts = new long[pages.Length];
             bodies = new byte[pages.Length][];
             layouts = new int[pages.Length][];
             blobStarts = new int[pages.Length];
+            var largest = 0;
             for (var i = 0; i < pages.Length; i++)
             {
-                starts[i] = pages[i].FirstRow;
-                var view = PageView.Parse(bodies[i] = pages[i].Body(), columns);
+                var page = pages[i];
+                starts[i] = page.FirstRow;
+                var body = !eager && page.Set is { } set ? set.Raw(page) : page.Body();
+                if (body is null)
+                {
+                    owner = page.Set;
+                    largest = Math.Max(largest, page.Length);
+                    packedPages++;
+                    continue;
+                }
+                var view = PageView.Parse(bodies[i] = body, columns);
                 layouts[i] = view.Layout;
                 blobStarts[i] = view.BlobStart;
             }
+            if (owner is null) return;
+            rooms = new PageRooms(owner, largest, PageView.ScratchLength(columns), Refusal);
+            extracts = new ColumnCells?[columns];
         }
+
+        private RequestException Refusal() => new("TOO_LARGE", tooLarge);
 
         public int Count => pages.Length;
         public StoredPage Page(int index) => pages[index];
+        /// <summary>Whether a page is held as sealed, so it is read in place without a room.</summary>
+        public bool IsRaw(int index) => bodies[index] is not null;
+        /// <summary>Whether any page is packed, so that its readers need rooms.</summary>
+        public bool Packed => rooms is not null;
+        /// <summary>The rooms packed pages are read through (null when none is packed), for the checks and benchmarks.</summary>
+        internal PageRooms? Rooms => rooms;
+        /// <summary>Working memory the column extracts hold.</summary>
+        internal long ExtractedBytes => Interlocked.Read(ref extracted);
 
         public IEnumerable<(int Index, StoredPage Page)> Pages()
         {
             for (var i = 0; i < pages.Length; i++) yield return (i, pages[i]);
         }
 
-        public PageView View(int index) => PageView.At(bodies[index], blobStarts[index], layouts[index], pages[index].FirstRow, pages[index].Rows, columns);
+        /// <summary>A room for one reader of packed pages (null when none is packed), disposed when the reader stops.</summary>
+        public PageRoom? Rent() => rooms?.Rent();
 
-        /// <summary>Row <paramref name="row"/>'s stored bytes in a column (empty for NULL).</summary>
-        public ReadOnlySpan<byte> Cell(int row, int column)
+        /// <summary>A page held as sealed, parsed once. A packed page is read with <see cref="Read"/>.</summary>
+        public PageView View(int index)
         {
-            var index = Array.BinarySearch(starts, (long)row);
-            if (index < 0) index = ~index - 1;
-            return View(index).Span(column, (int)(row - starts[index]));
+            var body = bodies[index] ?? throw new InvalidOperationException("A packed page is read through a room.");
+            return PageView.At(body, blobStarts[index], layouts[index]!, pages[index].FirstRow, pages[index].Rows, columns);
         }
 
-        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells).</summary>
-        public PageView ViewOf(int row, out int local)
+        /// <summary>A page for a reader on one thread: in place when held as sealed; a packed one unpacked into the reader's
+        /// room (<see cref="Rent"/>), which it occupies until the room's next read.</summary>
+        public PageView Read(int index, PageRoom? room)
+        {
+            if (bodies[index] is not null) return View(index);
+            if (room is null) throw new InvalidOperationException("A packed page is read through a room.");
+            var page = pages[index];
+            var body = page.Set!.Read(page, room.Bytes);
+            return PageView.Parse(body.AsSpan(0, page.Length), columns, room.Layout);
+        }
+
+        private int IndexOf(int row)
         {
             var index = Array.BinarySearch(starts, (long)row);
-            if (index < 0) index = ~index - 1;
+            return index < 0 ? ~index - 1 : index;
+        }
+
+        /// <summary>Row <paramref name="row"/>'s stored bytes in a column (empty for NULL). On a packed page, from its column's
+        /// extract (<see cref="Extract"/>), or else through the set's accessor, unpacked again: correct, but slow, so the
+        /// keys that compare cells extract their column first.</summary>
+        public ReadOnlySpan<byte> Cell(int row, int column)
+        {
+            var index = IndexOf(row);
+            var local = (int)(row - starts[index]);
+            if (bodies[index] is not null) return View(index).Span(column, local);
+            if (extracts![column] is { } cells) return cells.Cell(index, local);
+            return Unpacked(index).Span(column, local);
+        }
+
+        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells). A
+        /// packed page is read through its set's accessor: for reads of a few rows (a sample is read with
+        /// <see cref="ForRows{TState}"/>).</summary>
+        public PageView ViewOf(int row, out int local)
+        {
+            var index = IndexOf(row);
             local = (int)(row - starts[index]);
-            return View(index);
+            return bodies[index] is not null ? View(index) : Unpacked(index);
+        }
+
+        private PageView Unpacked(int index) => PageView.Parse(pages[index].Body(), columns);
+
+        /// <summary>Rows, ascending, as their pages show them, each page read once: on this thread when every page is held as
+        /// sealed, otherwise page by page on the workers, each with its own room and state.</summary>
+        public void ForRows<TState>(int[] rows, Func<TState> state, RowReader<TState> read, CancellationToken token)
+        {
+            if (rooms is null)
+            {
+                var own = state();
+                for (var place = 0; place < rows.Length; place++)
+                {
+                    var view = ViewOf(rows[place], out var local);
+                    read(place, view, local, own);
+                }
+                return;
+            }
+            // The runs of rows that share a page: (page, first place, end place).
+            var runs = new List<(int Index, int From, int To)>();
+            for (var place = 0; place < rows.Length;)
+            {
+                var index = IndexOf(rows[place]);
+                var to = place + 1;
+                while (to < rows.Length && rows[to] < starts[index] + pages[index].Rows) to++;
+                runs.Add((index, place, to));
+                place = to;
+            }
+            using var threads = Gate.Take(Math.Min(Workers, runs.Count));
+            threads.For(runs.Count, () => new Reader<TState>(null, state()), (run, reader) =>
+            {
+                var (index, from, to) = runs[run];
+                if (bodies[index] is null) reader.Room ??= Rent();
+                var view = Read(index, reader.Room);
+                for (var place = from; place < to; place++) read(place, view, (int)(rows[place] - starts[index]), reader.State);
+            }, token);
+        }
+
+        /// <summary>Every page in order on this thread. Packed pages are unpacked ahead on the workers, a batch at a time,
+        /// each into a room of its own: the next batch is unpacked while this thread reads the one before, so two batches'
+        /// rooms are held. Pages held as sealed are read in place as before.</summary>
+        public void InOrder(PageReader read, CancellationToken token)
+        {
+            if (rooms is null)
+            {
+                for (var i = 0; i < pages.Length; i++) read(i, pages[i], View(i));
+                return;
+            }
+            var batch = Math.Clamp(Workers, 1, packedPages);
+            // Two halves: one being read, one being unpacked.
+            var held = new PageRoom?[2, batch];
+            var bytes = new byte[2][][];
+            bytes[0] = new byte[batch][];
+            bytes[1] = new byte[batch][];
+            void Fill(int half, int start)
+            {
+                var end = Math.Min(pages.Length, start + batch);
+                var packed = 0;
+                for (var i = start; i < end; i++)
+                {
+                    if (bodies[i] is not null) continue;
+                    held[half, i - start] ??= rooms.Rent();
+                    packed++;
+                }
+                if (packed == 0) return;
+                // A lease a batch, so threads go back to other operations between batches.
+                using var threads = Gate.Take(Math.Min(Workers, packed));
+                threads.For(end - start, k =>
+                {
+                    if (bodies[start + k] is null) bytes[half][k] = pages[start + k].Set!.Read(pages[start + k], held[half, k]!.Bytes);
+                }, token);
+            }
+            Task? ahead = null;
+            try
+            {
+                Fill(0, 0);
+                for (int start = 0, half = 0; start < pages.Length; start += batch, half ^= 1)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var next = start + batch;
+                    var other = half ^ 1;
+                    ahead = next < pages.Length ? Task.Run(() => Fill(other, next), token) : null;
+                    var end = Math.Min(pages.Length, start + batch);
+                    for (var i = start; i < end; i++)
+                    {
+                        if (bodies[i] is not null) read(i, pages[i], View(i));
+                        else read(i, pages[i], PageView.Parse(bytes[half][i - start].AsSpan(0, pages[i].Length), columns, held[half, i - start]!.Layout));
+                    }
+                    ahead?.GetAwaiter().GetResult();
+                    ahead = null;
+                }
+            }
+            finally
+            {
+                // A batch still being unpacked finishes (or fails) before its rooms go back.
+                try { ahead?.Wait(); } catch (AggregateException) { }
+                foreach (var room in held) room?.Dispose();
+            }
+        }
+
+        /// <summary>The most an extract may charge before it counts as refused (unbounded but in the checks, which use it to
+        /// refuse an extract that the budget would allow).</summary>
+        internal long ExtractAllowance { get; set; } = long.MaxValue;
+
+        /// <summary>How much of an extract is taken between asks of the system's memory load (its pages are reserved one by
+        /// one, each far below <see cref="ResultStore.WorkCheckBytes"/>); smaller only in the checks.</summary>
+        internal long ExtractCheckBytes { get; set; } = ResultStore.WorkCheckBytes;
+
+        /// <summary>Copies one column's cells out of every packed page, once, so that comparisons that go back to cells
+        /// (<see cref="Cell"/>) read them without unpacking a page. The copy is charged as working memory until the source
+        /// is disposed. Refused, the result is unpacked in place instead, as before fused reads (its pages' growth reserved,
+        /// <see cref="ResultSetBuffer.TryUnpackAll"/>), which can fit where the extract did not (a column that is most of
+        /// a result that packs little); refused that too, the operation's refusal. Nothing for a source with no packed page,
+        /// or a column already extracted. Not concurrent with any reader: a key extracts once it is built.</summary>
+        public void Extract(int column, CancellationToken token)
+        {
+            if (extracts is null || extracts[column] is not null) return;
+            var cells = new ColumnCells(pages.Length);
+            long charged = 0;
+            try
+            {
+                using var threads = Gate.Take(Math.Min(Workers, packedPages));
+                threads.For(pages.Length, () => new Reader<object?>(null, null), (index, reader) =>
+                {
+                    if (bodies[index] is not null) return;
+                    reader.Room ??= Rent();
+                    var view = Read(index, reader.Room);
+                    var rows = pages[index].Rows;
+                    var size = rows == 0 ? 0 : (int)view.SpanBytes(column, 0, rows - 1);
+                    var charge = size + 4L * (rows + 1);
+                    var total = Interlocked.Add(ref charged, charge);
+                    // Under high system memory load an extract is refused as one reservation of its size would be.
+                    var ask = charge >= ResultStore.WorkCheckBytes || total / ExtractCheckBytes != (total - charge) / ExtractCheckBytes;
+                    if (total > ExtractAllowance || !owner!.TryReserveWork(charge, ask))
+                    {
+                        Interlocked.Add(ref charged, -charge);
+                        throw Refusal();
+                    }
+                    Interlocked.Add(ref extracted, charge);
+                    var data = new byte[size];
+                    var offsets = new int[rows + 1];
+                    var at = 0;
+                    for (var r = 0; r < rows; r++)
+                    {
+                        var cell = view.Span(column, r);
+                        cell.CopyTo(data.AsSpan(at));
+                        at += cell.Length;
+                        offsets[r + 1] = at;
+                    }
+                    cells.Set(index, data, offsets);
+                }, token);
+            }
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == tooLarge)
+            {
+                // The column's partial copy goes back first, so the unpacking has all the room there is.
+                owner!.ReturnWork(charged);
+                Interlocked.Add(ref extracted, -charged);
+                Rehydrate(token);
+                return;
+            }
+            extracts[column] = cells;
+        }
+
+        /// <summary>Unpacks the result in place and reads every page as sealed from then on: no room or extract is needed
+        /// after it. Called only between reads (before comparisons, with no reader running). Refused: the operation's
+        /// refusal, changing nothing.</summary>
+        internal void Rehydrate(CancellationToken token)
+        {
+            if (owner is null) return;
+            // Nothing reads a packed page once the result is unpacked, so the rooms and every extract go back first: the
+            // unpacking then has the room they held, as it had before fused reads.
+            rooms!.Dispose();
+            owner.ReturnWork(Interlocked.Exchange(ref extracted, 0));
+            Array.Clear(extracts!);
+            if (!owner.TryUnpackAll(token)) throw Refusal();
+            for (var i = 0; i < pages.Length; i++)
+            {
+                if (bodies[i] is not null) continue;
+                var body = owner.Raw(pages[i]) ?? throw Refusal();
+                var view = PageView.Parse(body, columns);
+                layouts[i] = view.Layout;
+                blobStarts[i] = view.BlobStart;
+                bodies[i] = body;
+            }
+        }
+
+        public void Dispose()
+        {
+            rooms?.Dispose();
+            owner?.ReturnWork(Interlocked.Exchange(ref extracted, 0));
+            if (extracts is not null) Array.Clear(extracts);
+        }
+
+        /// <summary>A reader's room and state; disposing it gives the room back.</summary>
+        private sealed class Reader<TState>(PageRoom? room, TState state) : IDisposable
+        {
+            public PageRoom? Room = room;
+            public TState State { get; } = state;
+            public void Dispose()
+            {
+                Room?.Dispose();
+                Room = null;
+            }
+        }
+
+        /// <summary>One column's cells copied out of packed pages: each page's bytes end to end and where each row's start.</summary>
+        private sealed class ColumnCells(int pages)
+        {
+            private readonly byte[][] data = new byte[pages][];
+            private readonly int[][] offsets = new int[pages][];
+            public void Set(int index, byte[] bytes, int[] starts)
+            {
+                data[index] = bytes;
+                offsets[index] = starts;
+            }
+            public ReadOnlySpan<byte> Cell(int index, int row) => data[index].AsSpan(offsets[index][row], offsets[index][row + 1] - offsets[index][row]);
         }
     }
 
@@ -1101,7 +1408,7 @@ internal static partial class ViewSorter
         public virtual void BeginPage(Scratch scratch, int page) { }
         public virtual void EndPage(Scratch scratch, int page) { }
         /// <summary>Before the first page: what the key learns from a sample of its rows.</summary>
-        public virtual void Begin() { }
+        public virtual void Begin(CancellationToken token) { }
         /// <summary>Every page is filled. True to fill them all again (the key changed how it holds its rows).</summary>
         public virtual bool Finish() => false;
         /// <summary>How the key holds its rows, for the checks.</summary>
@@ -1112,6 +1419,9 @@ internal static partial class ViewSorter
         public virtual ulong Code(int row) => 0;
         /// <summary>The share of comparisons expected to read both cells again from their pages (<see cref="ThrowIfSlow"/>).</summary>
         public virtual double TieShare => 0;
+        /// <summary>Whether a comparison may read cells again from their pages (<see cref="PageSource.Cell"/>), once the key
+        /// is built: a packed result's column is then extracted (<see cref="PageSource.Extract"/>).</summary>
+        public virtual bool ReadsCells => false;
         /// <summary>Gives back what the key holds beyond its rows' fixed bytes; it compares no more.</summary>
         public virtual void Drop() { }
         /// <summary>Two non-NULL rows, ascending.</summary>
@@ -1151,6 +1461,7 @@ internal static partial class ViewSorter
             return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
         }
         public override bool Coded => !exact || !textTies;
+        public override bool ReadsCells => exact && textTies;
         /// <summary>The double's bits, with the two zeros as one and every NaN as one, as they compare.</summary>
         public override ulong Code(int row)
         {
@@ -1215,9 +1526,21 @@ internal static partial class ViewSorter
         }
     }
 
-    /// <summary>What one thread filling a key's pages reuses from page to page.</summary>
-    internal sealed class Scratch
+    /// <summary>What one thread filling a key's pages reuses from page to page, with the room it reads a packed result's
+    /// pages through, taken at its first packed page and given back when its worker stops.</summary>
+    internal sealed class Scratch(PageSource? source = null) : IDisposable
     {
+        private PageRoom? room;
+        public PageRoom? Room(int index)
+        {
+            if (room is null && source is { Packed: true } packed && !packed.IsRaw(index)) room = packed.Rent();
+            return room;
+        }
+        public void Dispose()
+        {
+            room?.Dispose();
+            room = null;
+        }
         public char[] Chars = new char[256];
         public byte[] SortKey = new byte[512];
         /// <summary>The page's sort keys end to end, <see cref="Used"/> bytes of them.</summary>
@@ -1291,16 +1614,19 @@ internal static partial class ViewSorter
 
         public override string Layout => (ranked ? "ranked" : blocks is null ? "prefix" : "whole") + ", " + shared.Length + " shared, " + odds + " odd";
 
-        public override void Begin()
+        public override void Begin(CancellationToken token)
         {
             var count = prefixes.Length;
-            var scratch = new Scratch();
-            var values = new List<byte[]>();
-            foreach (var place in Places(count, Sampled))
+            var places = Places(count, Sampled);
+            for (var i = 0; i < places.Length; i++) places[i] = Row(places[i]);
+            // Each sampled page is read once: a packed result's on the workers, each through a room.
+            var found = new byte[]?[places.Length];
+            Source.ForRows(places, () => new Scratch(), (place, view, local, scratch) =>
             {
-                var view = Source.ViewOf(Row(place), out var local);
-                if (!view.IsNull(Column, local)) values.Add(Bytes(view.Span(Column, local), scratch).ToArray());
-            }
+                if (!view.IsNull(Column, local)) found[place] = Bytes(view.Span(Column, local), scratch).ToArray();
+            }, token);
+            var values = new List<byte[]>(found.Length);
+            foreach (var value in found) if (value is not null) values.Add(value);
             values.Sort(ByteComparer.Instance);
             var taken = values.Count;
             var distinct = taken == 0 ? 0 : 1;
@@ -1468,6 +1794,8 @@ internal static partial class ViewSorter
         public override double TieShare => tieShare;
         public override bool Coded => ranked;
         public override ulong Code(int row) => prefixes[row];
+        // Ranks and kept values compare without the pages; 8 bytes alone read equal ones' cells again.
+        public override bool ReadsCells => !ranked && blocks is null;
 
         public override void Drop()
         {

@@ -80,7 +80,7 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
   open(node: ExplorerMenuNode): void {
     if (this.disposed) return
     if (this.current) throw new Error('Close the open dialog first.')
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!connection || node.ref.type !== 'folder' || node.folder !== 'integrationServicesCatalogs') throw new Error('Select Integration Services Catalogs on a connected server.')
     const open: OpenCreateCatalog = {
       id: ++this.dialogs, connectionId: node.connectionId, nodeId: node.id, server: connection.server, ...(connection.login ? { login: connection.login } : {}),
@@ -200,7 +200,7 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
   /** A server that disconnects leaves only Close; its request is cancelled. */
   private connectionsChanged(): void {
     const open = this.current
-    if (!open || open.phase === 'disconnected' || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost)) return
+    if (!open || open.phase === 'disconnected' || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))) return
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
     this.update(open, { phase: 'disconnected', stopping: undefined, error: failure('CONNECTION_LOST', open.phase === 'executing' ? createCatalogMessages.unknown : createCatalogMessages.disconnected) })
   }

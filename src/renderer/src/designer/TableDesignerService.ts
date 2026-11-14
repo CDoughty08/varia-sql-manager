@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import { actionLimits, unknownOutcomeMessage } from '../../../shared/actions/catalog.ts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -69,9 +70,9 @@ export interface DesignerState {
 }
 export interface DesignerSnapshot { readonly designers: Readonly<Record<string, DesignerState>> }
 
-export interface TableDesignerServiceOptions {
+export interface TableDesignerServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly files: { saveCopy(name: string, content: string): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
@@ -97,19 +98,23 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   private readonly contextStore = new (class extends SnapshotStore<DesignerContextState> { set(value: DesignerContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {}, saving: false })
   private readonly saving = new Map<string, Promise<boolean>>()
   /** The request each designer has in flight (describe, script or save), so Stop and a disconnect can cancel it. */
-  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'script' | 'save'; dropped: boolean }>()
+  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'script' | 'save'; readonly connectionId?: string; dropped: boolean }>()
   private readonly prompts = new Map<string, (value: string | undefined) => void>()
   /** Each mounted grid's cell editor: commits what is typed in it, which Save and Generate Change Script read first. */
   private readonly editors = new Map<string, () => void>()
   private tables = 0
   private rowKeys = 0
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: TableDesignerServiceOptions) {
     super({ designers: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
+    const follow = () => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } }
+    const stopConnections = options.connections.subscribe(follow), stopDocuments = options.documents.subscribe(follow)
+    this.unsubscribe = () => { stopConnections(); stopDocuments() }
   }
 
   /** The designers' context keys (activeDocumentIsDesigner, designerEditable, …). */
@@ -125,12 +130,13 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('The table designer is not available.')
     const owner = node.ref.type === 'folder' && node.ref.folder === 'tables' ? node.ref.owner : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     const database = owner?.kind === 'database' ? owner.name : owner?.kind === 'schema' ? owner.database : undefined
     if (!owner || !database || !owner.name) throw new Error('Select the Tables folder of a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
     const name = defaultTableName(++this.tables), schema = owner.kind === 'schema' ? owner.name : 'dbo'
     const document = this.options.documents.openCustom('tableDesigner', designerCaption(connection.server, database, schema, name), connection.id, database)
+    this.targetBindings.bind(document.id, connection.id)
     const state: DesignerState = {
       id: document.id, server: connection.server, database, folderNodeId: node.id, phase: 'loading', name, schema, ...owner.kind === 'schema' ? { folderSchema: owner.name } : {}, nameChosen: false, rows: [], primaryKey: [], selected: [],
       current: { row: 0, column: 'name' }, revision: 0, dirty: false, propertiesVisible: false, identityExpanded: true, order: 'categorized', scripting: false
@@ -353,6 +359,10 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     if (this.requests.get(id)?.id === requestId) this.requests.delete(id)
     // A disconnect while it ran has already said the outcome is unknown.
     if (this.disposed || !this.get(id) || request?.dropped) return false
+    if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+      this.patch(id, { phase: 'ready', error: unknownOutcomeMessage })
+      return false
+    }
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
       const label = `${design.schema}.${design.name}`
@@ -443,9 +453,10 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   canClose(id: string): string | undefined { return this.get(id)?.phase === 'saving' ? designerStrings.saving : undefined }
   revision(id: string): number { return this.get(id)?.revision ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  /** A designer stays bound to the server it was opened on (its caption names it), as SSMS's is: a reconnect moves it only
-   *  to a connection to that same server. */
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   /** The grid's cell editor registers here while it is mounted. */
   registerEditor(id: string, commit: () => void): Disposable {
     this.editors.set(id, commit)
@@ -455,6 +466,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     try { this.editors.get(id)?.() } catch (failure) { onUnexpectedError(failure) }
   }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const request = this.requests.get(id)
     if (request) { this.requests.delete(id); this.cancel([request.id]) }
     this.prompts.get(id)?.(undefined)
@@ -467,6 +479,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     for (const resolve of this.prompts.values()) resolve(undefined)
     this.prompts.clear()
     this.cancel([...this.requests.values()].map(request => request.id))
@@ -531,11 +544,11 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'script' | 'save'): string {
     const requestId = this.newId()
-    this.requests.set(id, { id: requestId, kind, dropped: false })
+    this.requests.set(id, { id: requestId, kind, connectionId: this.connectionOf(id), dropped: false })
     this.publishContext()
     return requestId
   }
@@ -544,7 +557,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     const request = this.requests.get(id)
     if (request?.id === requestId) this.requests.delete(id)
     this.publishContext()
-    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped
+    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped && request.connectionId === this.connectionOf(id) && this.live(id)
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

@@ -12,7 +12,7 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
@@ -717,6 +717,32 @@ try {
   await enlargeOutput(page)
   console.log('Results checks: at the default split the Messages strip yields to the grids and shows the first error in its line.')
 
+  // 4d. Discard results after execution: while it is on the status bar says so, and its item opens Options on the setting.
+  // A run keeps no set, and the Results view says why, with the one step that turns it off; the next run keeps its rows.
+  const discardItem = () => statusBar(page).getByRole('button', { name: 'Results discarded', exact: true })
+  await expect(discardItem()).toHaveCount(0)
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.discardResults': true }))).ok).toBe(true)
+  await expect(discardItem()).toBeVisible()
+  await run('-- varia-fake: sets=N1*3,N1*5')
+  await expect(outputTab('Results, not kept')).toHaveAttribute('aria-selected', 'true')
+  await expect(anyResultGrid(page)).toHaveCount(0)
+  await expect(emptyStateTitle(outputEmpty(page))).toHaveText('Results were not kept')
+  await expect(emptyStateDetail(outputEmpty(page))).toContainText('2 result sets were read and not kept.')
+  await page.screenshot({ path: resolve('artifacts', 'results-discarded.png') })
+  await discardItem().click()
+  const optionsDialog = page.getByRole('dialog', { name: 'Options', exact: true })
+  await expect(optionsDialog.getByRole('checkbox', { name: 'Discard results after execution', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(optionsDialog).toHaveCount(0)
+  await outputEmpty(page).getByRole('button', { name: 'Turn off Discard results', exact: true }).click()
+  await expect(discardItem()).toHaveCount(0)
+  await expect(outputEmpty(page).getByRole('button', { name: 'Execute again', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(outputTab('Results, 2 result sets')).toHaveAttribute('aria-selected', 'true')
+  await expect(anyResultGrid(page)).toHaveCount(2)
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.discardResults': null }))).ok).toBe(true)
+  console.log('Results checks: Discard results after execution shows in the status bar and in place of the grids, and one step turns it off.')
+
   // 5. ARIA: after each grid key the active descendant is a selected gridcell at the active row and column, labelled
   // with its text and what it is.
   await run('-- varia-fake: sets=N1*300')
@@ -1199,6 +1225,22 @@ try {
   expect(await editorText()).toContain('<unavailable-plan')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
+  // Its only grid closed, the run keeps its captured plans (hasResults) but has no result set (hasResultSets): the palette
+  // offers Close Results, and shows Find, Find Next and Save Results As disabled, not as commands that do nothing.
+  await outputTab(/^Results/).click()
+  await resultClose(page, 'Result 1').click()
+  await expect(outputEmpty(page)).toHaveText('Results were closed. Execute the query again to see them.')
+  await expect(outputTab(/^Execution plan/)).toHaveAccessibleName('Execution plan, 2 plans')
+  for (const [typed, name, disabled] of [['find in results', 'Find in Results', true], ['find next in results', 'Find Next in Results', true], ['save results as', 'Save Results As…', true], ['close results', 'Close Results', false]]) {
+    await page.keyboard.press('F1')
+    await page.keyboard.type(typed)
+    const option = quickInput(page).getByRole('option', { name: new RegExp(`^Query: ${name}(,|$)`) })
+    await expect(option).toHaveCount(1)
+    if (disabled) await expect(option).toHaveAttribute('aria-disabled', 'true')
+    else await expect(option).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Escape')
+    await expect(quickInput(page)).toHaveCount(0)
+  }
   const holdPlans = join(control, 'hold', 'mixed-plan-summary')
   await writeFile(holdPlans, '')
   await run('SELECT 42 -- MIXED_PLAN_FIXTURE', { running: true })
@@ -1412,26 +1454,48 @@ try {
   await expect(queryTabs()).toHaveCount(1)
   await expect.poll(async () => { const now = await stats(); return [now.grids, now.client.uiWindows] }).toEqual([baseline.grids, baseline.client.uiWindows])
   await run('-- varia-fake: sets=W1*3')
+  const resultsConnection = await server().inputValue()
+  const resultsServerLabel = await server().locator('option:checked').textContent()
   await server().selectOption('')
-  await expect(server()).toHaveValue('')
+  await expect(server()).toHaveValue(/^remembered:.+$/)
+  const rememberedResultsTarget = await server().inputValue()
+  await expect(server().locator('option:checked')).toHaveText(`${resultsServerLabel} Disconnected`)
+  await expect(server().locator('option:checked')).toBeDisabled()
   await expect(cell(2, 1)).toHaveText(w1(2)[1])
   await cell(0, 0).click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe(tsv([0, 1, 2].map(w1)))
+  await expect(server()).toHaveValue(rememberedResultsTarget)
   console.log('Results checks: results are freed on re-run and tab close, and stay readable and copyable after Disconnect.')
 
   // 12. Memory: both backend budgets, with a preview on hover and a pinned breakdown on click.
-  await server().selectOption({ index: 1 })
+  await server().selectOption(resultsConnection)
+  await expect(server()).toHaveValue(resultsConnection)
   await run('-- varia-fake: sets=W1*10 memory=0.92')
   const memory = memoryIndicator(page)
   const memoryDetails = memoryBreakdown(page)
   const resultsMemory = memoryUsage(page, 'results')
+  // Preview dismissal follows pointer/focus events immediately. Read its admission and both boxes in one renderer
+  // task: a visible assertion followed by separate boundingBox calls can read a panel that has already disappeared.
+  const previewGeometry = () => memory.evaluate(trigger => {
+    const details = trigger.ownerDocument.getElementById(trigger.getAttribute('aria-controls') ?? '')
+    // Nerd metrics is the panel's first button; only a preview keeps it out of the tab order.
+    const state = { hovered: trigger.matches(':hover'), expanded: trigger.getAttribute('aria-expanded') === 'true',
+      preview: details?.querySelector('button')?.tabIndex === -1,
+      visible: !!details && !details.hidden && details.checkVisibility({ visibilityProperty: true }) && details.getClientRects().length > 0 }
+    if (!state.hovered || !state.expanded || !state.preview || !state.visible || !trigger.checkVisibility({ visibilityProperty: true })) return { admitted: false, ...state }
+    return { admitted: true, triggerBox: trigger.getBoundingClientRect().toJSON(), detailsBox: details.getBoundingClientRect().toJSON() }
+  })
   await expect(memory).toHaveAttribute('data-level', 'warning')
   await expect(memory).toHaveAccessibleName(/Results 91%|Results 92%/)
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memoryDetails).toBeHidden()
   await memory.hover()
+  let geometry
+  await expect.poll(async () => { geometry = await previewGeometry(); return geometry.admitted || geometry }).toBe(true)
+  expect(geometry.detailsBox.y + geometry.detailsBox.height).toBeCloseTo(geometry.triggerBox.y, 0)
+  expect(geometry.detailsBox.x).toBeGreaterThanOrEqual(0)
   await expect(memoryDetails).toBeVisible()
   await expect(memoryDetails).toContainText('New results may be truncated.')
   // A preview keeps Nerd metrics' heading out of the tab order: the next Tab from the window's last control wraps to the
@@ -1439,14 +1503,13 @@ try {
   await expect(memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })).toHaveAttribute('tabindex', '-1')
   await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
   await expect(resultsMemory).toHaveText('236 MB / 256 MB')
-  const triggerBox = await memory.boundingBox(), detailsBox = await memoryDetails.boundingBox()
-  expect(detailsBox.y + detailsBox.height).toBeCloseTo(triggerBox.y, 0)
-  expect(detailsBox.x).toBeGreaterThanOrEqual(0)
   await memoryDetails.hover()
   await expect(memoryDetails).toBeVisible()
   await page.mouse.move(5, 80)
   await expect(memoryDetails).toBeHidden()
+  expect(await previewGeometry()).toMatchObject({ admitted: false, hovered: false, expanded: false, visible: false })
   await memory.click()
+  expect(await previewGeometry()).toMatchObject({ admitted: false, expanded: true, preview: false, visible: true })
   await page.mouse.move(5, 80)
   await expect(memoryDetails).toBeVisible()
   await page.keyboard.press('Escape')
@@ -2610,7 +2673,10 @@ try {
   const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
   await connect.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connect).toHaveCount(0)
-  await expect(queryStatus(page)).not.toContainText('connection lost')
+  await expect(server().locator('option:checked')).toHaveText(resultsServerLabel)
+  await expect(server().locator('option:checked')).not.toBeDisabled()
+  // Reconnect deliberately reveals and focuses Explorer on its next frame; wait for that before focusing the editor.
+  await expect(explorerTree(page)).toBeFocused()
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')

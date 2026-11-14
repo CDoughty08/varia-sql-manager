@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { domFocusAdapter, focusToReturn, returnFocusTo } from '../src/renderer/src/core/focus'
 import { focusWhenDrawn } from '../src/renderer/src/core/modal'
+import { windows } from '../src/renderer/src/core/windows'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 afterEach(() => { vi.unstubAllGlobals() })
@@ -65,7 +66,7 @@ describe('focusWhenDrawn', () => {
     let modal: FakeElement | null = null
     vi.stubGlobal('document', Object.assign(doc, { body, querySelector: (selector: string) => selector === '[aria-modal="true"]' ? modal : body.querySelector(selector) }))
     const frames: (() => void)[] = []
-    const later = () => focusWhenDrawn(callback => frames.push(callback), () => control.focus())
+    const later = (options?: { preserveUserInput?: boolean }) => focusWhenDrawn(callback => frames.push(callback), () => control.focus(), options)
     const drawn = () => { for (const frame of frames.splice(0)) frame() }
     return { doc, control, palette, item, menubar, field, later, drawn, openDialog: () => { modal = dialog; field.focus() } }
   }
@@ -93,6 +94,29 @@ describe('focusWhenDrawn', () => {
     openDialog()
     drawn()
     expect([doc.activeElement, control.focusCalls]).toEqual([field, 0])
+  })
+  it('lets a Connect focus request yield to newer input, including input in a popout', () => {
+    const { doc, control, field, later, drawn } = page()
+    const input = new EventTarget()
+    const view = { closed: false, document: { ...doc, hasFocus: () => false },
+      addEventListener: (type: string, listener: EventListener) => input.addEventListener(type, listener),
+      removeEventListener: (type: string, listener: EventListener) => input.removeEventListener(type, listener) }
+    const registered = windows.add(view as unknown as Window)
+    try {
+      // Dialog cleanup can restore an editor automatically; without newer input the requested focus still transfers.
+      later({ preserveUserInput: true })
+      field.focus()
+      drawn()
+      expect(doc.activeElement).toBe(control)
+      for (const type of ['pointerdown', 'keydown']) {
+        later({ preserveUserInput: true })
+        field.focus()
+        input.dispatchEvent(new Event(type))
+        drawn()
+        expect(doc.activeElement).toBe(field)
+      }
+      expect(control.focusCalls).toBe(1)
+    } finally { registered.dispose() }
   })
 })
 

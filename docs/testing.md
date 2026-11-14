@@ -22,8 +22,9 @@ the rules that keep it lean.
 - `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
   --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
-- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
-  (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
+- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`, `npm run bench:grid [-- --live]` and
+  `npm run bench:startup` (Electron, need `out/`): the IPC, results grid, and startup and memory benchmarks, not part of
+  `check`. `node scripts/check-bench.mjs
   [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
 - The pivot benchmarks are run by hand and enforce nothing: `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
@@ -65,6 +66,9 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
 - An exclusive run that is waiting goes ahead of shared runs that arrive after it; it then waits for the shared runs already
   going. Each smoke suite takes the lock as it starts, so another session's check can run between two suites of
   `test:smoke`.
+- The shard runner takes each suite's lock before spawning it and starting its execution watchdog. Waiting for the
+  machine does not spend the suite's test budget. Interrupting a queued suite releases only its own reservation and
+  launches no test process; a running suite keeps the existing whole-process-tree cleanup.
 - Each check plans for its share of the machine: the CPUs divided among the shared slots (12 of 24 with the default),
   which picks its lane layout and caps each vitest lane's workers (`vitestWorkers` in `scripts/check.mjs`: the main lane
   leaves room for the build and .NET lanes beside it, the Release-backend files get two), so two checks about fill the
@@ -142,6 +146,10 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
 
 ## Testing expectations
 
+- The existing connections Electron suite includes `scripts/fixtures/connection-lifecycle.mjs`, which uses the actual
+  main request/credential owners with an isolated fake backend and test-only cipher. It covers reuse and distinct
+  credentials, all details-dialog choices, dirty-close cancellation, retained results, selective close and mixed
+  startup reconnect outcomes without automatic query execution. Its sample secrets are never real credentials.
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
@@ -153,7 +161,11 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
   compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a
   budget by what a result holds as sealed (`Held.AsSealed`), and a check about something other than pages (GC
-  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`.
+  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A sort, filter, profile or pivot reads a
+  packed result fused and holds rooms rather than its unpacked pages, so sizing its budget by `Held.AsSealed` leaves it
+  slack: a check that leaves just enough room for one adds `Held.Rooms` (an upper bound; how many rooms are made depends
+  on the threads), and a check whose margin must be exact (a thread-count retry) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`, except one that sets each store's packing itself
+  (`FusedReadChecks`, which compares every fused operation with the same rows unpacked).
   The checks also run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails. Live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
@@ -163,7 +175,8 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
   classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
   the roles and names stable.
-- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
+- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs`, `scripts/grid-bench.mjs` and
+  `scripts/startup-bench.mjs` only measure; a new
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.

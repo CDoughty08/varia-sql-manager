@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { platformSeconds, runSuite, shardSuites, smokeSuites, suiteSeconds } from '../scripts/smoke-shards.mjs'
+import { acquire } from '../scripts/machine-lock.mjs'
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 
@@ -67,4 +68,66 @@ describe('smoke shards', () => {
   it('let a suite that ends in time end by itself', async () => {
     expect(await runSuite('tests/fixtures/hung-suite.mjs', 15000, { stdio: 'ignore', args: ['--exit', '3'] })).toEqual({ status: 3, signal: null, timedOut: false, interrupted: false })
   }, 20000)
+
+  function queuedFixture() {
+    mkdirSync('artifacts', { recursive: true })
+    const dir = mkdtempSync(resolve('artifacts', 'suite-lock-')), lockDir = join(dir, 'lock'), marker = join(dir, 'started')
+    const env = { ...process.env, CI: 'false', VARIA_LOCK: 'on', VARIA_LOCK_HELD: undefined, VARIA_LOCK_DIR: lockDir }
+    return { dir, lockDir, marker, env }
+  }
+
+  it('queues before arming the execution watchdog, then passes and releases only its own inherited lease', async () => {
+    const { dir, lockDir, marker, env } = queuedFixture()
+    const blocker = await acquire('shared', { env: {}, dir: lockDir })
+    const parentFlag = process.env.VARIA_LOCK_HELD, timer = vi.spyOn(globalThis, 'setTimeout'), limitMs = 9973
+    const running = runSuite('tests/fixtures/queued-smoke.mjs', limitMs, { stdio: 'ignore', args: [marker, '3'], env })
+    try {
+      await vi.waitFor(() => expect(existsSync(join(lockDir, 'exclusive.lock'))).toBe(true))
+      expect(timer.mock.calls.some(([, ms]) => ms === limitMs)).toBe(false)
+      expect(existsSync(marker)).toBe(false)
+      expect(env.VARIA_LOCK_HELD).toBeUndefined()
+      blocker.release()
+      expect(await running).toEqual({ status: 3, signal: null, timedOut: false, interrupted: false })
+      expect(timer.mock.calls.filter(([, ms]) => ms === limitMs)).toHaveLength(1)
+      expect(readFileSync(marker, 'utf8')).toBe('exclusive')
+      expect(readdirSync(lockDir)).toEqual([])
+      expect(process.env.VARIA_LOCK_HELD).toBe(parentFlag)
+      expect(env.VARIA_LOCK_HELD).toBeUndefined()
+    } finally { blocker.release(); await running; timer.mockRestore(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('interrupts a queued suite without launching it or removing the shared holder', async () => {
+    const { dir, lockDir, marker, env } = queuedFixture()
+    const blocker = await acquire('shared', { env: {}, dir: lockDir }), shared = join(lockDir, 'shared-0.lock')
+    const originalHolder = readFileSync(shared, 'utf8'), listeners = process.listenerCount('exit'), interrupt = new AbortController()
+    const running = runSuite('tests/fixtures/queued-smoke.mjs', 9973, { stdio: 'ignore', args: [marker], env, signal: interrupt.signal })
+    try {
+      await vi.waitFor(() => expect(existsSync(join(lockDir, 'exclusive.lock'))).toBe(true))
+      interrupt.abort()
+      expect(await running).toEqual({ status: null, signal: null, timedOut: false, interrupted: true })
+      expect(existsSync(marker)).toBe(false)
+      expect(existsSync(join(lockDir, 'exclusive.lock'))).toBe(false)
+      expect(readFileSync(shared, 'utf8')).toBe(originalHolder)
+      expect(process.listenerCount('exit')).toBe(listeners)
+    } finally { interrupt.abort(); await running; blocker.release(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('reports pre-start interruption and acquisition errors without aborting subsequent suites', async () => {
+    const { dir, lockDir, marker, env } = queuedFixture(), interrupt = new AbortController()
+    try {
+      interrupt.abort()
+      expect(await runSuite('tests/fixtures/queued-smoke.mjs', 9973, { stdio: 'ignore', args: [marker], env, signal: interrupt.signal }))
+        .toEqual({ status: null, signal: null, timedOut: false, interrupted: true })
+      expect(existsSync(lockDir)).toBe(false)
+      expect(existsSync(marker)).toBe(false)
+      writeFileSync(lockDir, 'not a directory')
+      const failed = await runSuite('tests/fixtures/queued-smoke.mjs', 9973, { stdio: 'ignore', args: [marker], env })
+      expect(failed).toMatchObject({ status: null, timedOut: false, interrupted: false, error: expect.any(Error) })
+      rmSync(lockDir)
+      expect(await runSuite('tests/fixtures/queued-smoke.mjs', 9973, { stdio: 'ignore', args: [marker], env }))
+        .toEqual({ status: 0, signal: null, timedOut: false, interrupted: false })
+      expect(readFileSync(marker, 'utf8')).toBe('exclusive')
+      expect(readdirSync(lockDir)).toEqual([])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 })

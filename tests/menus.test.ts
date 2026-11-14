@@ -197,7 +197,7 @@ describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
     expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'query.estimatePlan', 'query.estimateSessionPlan', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
-      'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
+      'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith', 'edit.goToDefinition', 'edit.peekDefinition'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.reopenClosed', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.increaseTabRows', 'editor.decreaseTabRows', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
@@ -358,8 +358,8 @@ describe('menu state', () => {
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
-      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.openPeekTab', 'peek.refresh', 'explorer.cancelScripting', 'explorer.copyName', 'search.revealHit', 'search.copyName', 'search.copySchemaName', 'search.copyQualifiedName', 'search.copyBracketedName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
-      'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
+      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.openPeekTab', 'explorer.viewDependencies', 'peek.refresh', 'explorer.cancelScripting', 'explorer.copyName', 'search.revealHit', 'search.copyName', 'search.copySchemaName', 'search.copyQualifiedName', 'search.copyBracketedName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
+      'connection.removeLost', 'connection.removeFromExplorer', 'connection.disconnectAndRemove', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.copyColumnName', 'output.fitColumn', 'output.revealError', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // Main runs AutoRecover's save as Windows ends the session; no menu shows it.
       'file.autoRecoverNow',
@@ -381,6 +381,8 @@ describe('menu state', () => {
       'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop',
       // The Restore Database document's header verbs.
       'restoreDatabase.run', 'restoreDatabase.stop', 'restoreDatabase.refresh',
+      // Go To Definition and Peek Definition: the query editor's menu and its keys, as in SSMS.
+      'edit.goToDefinition', 'edit.peekDefinition',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
       'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.close',
       // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.

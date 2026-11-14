@@ -20,18 +20,18 @@ export const queryResultsSettings = [
   },
   {
     key: 'queryResults.grid.maxResultSets', page: 'queryResults.sqlServer.grid', label: 'Maximum result sets kept per execution', type: 'integer', min: 1, max: 1000, default: 1000,
-    varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit'],
+    varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit', 'max result sets', 'result set limit'],
     description: 'Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so.'
   },
   {
     key: 'queryResults.grid.maxRows', page: 'queryResults.sqlServer.grid', label: 'Maximum rows kept per execution (0: no limit)', type: 'integer', min: 0, max: 2_147_483_647, default: 0,
-    varia: true, applies: 'nextExecution', keywords: ['rows', 'limit', 'truncated', 'large', 'million', 'top'],
+    varia: true, applies: 'nextExecution', keywords: ['rows', 'limit', 'truncated', 'large', 'million', 'top', 'max rows', 'row limit', 'rows kept'],
     description: 'Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row.'
   },
   {
     key: 'queryResults.grid.memoryLimitGiB', page: 'queryResults.sqlServer.grid', label: 'Result memory limit in GiB (0: automatic)', type: 'integer', min: 0, max: 1024, default: 0,
     varia: true, applies: 'immediately', keywords: ['memory', 'budget', 'limit', 'rows', 'truncated', 'large', 'million'],
-    description: 'How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer\'s memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer\'s memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them.'
+    description: 'How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer\'s memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer\'s memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them. Closing results may keep the memory they used for new results instead of giving it back to the computer: Varia gives memory back after a close, once more than 64 MiB has been closed, or the last results are, and what remains is no more than has been closed since it last gave memory back, and no more than 8 GiB unless memory runs short, because giving memory back pauses Varia while it moves what stays, about a second for every 8 GiB that stays; with a limit over 8 GiB, results that stay stored past 8 GiB can keep the memory of closed results until enough of them are closed.'
   },
   {
     key: 'queryResults.grid.showColumnTypes', page: 'queryResults.sqlServer.grid', label: 'Show column data types in the column headers', type: 'boolean', default: true,

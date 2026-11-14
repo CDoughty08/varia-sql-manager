@@ -57,14 +57,15 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Refresh cancels obsolete language work before rebuilding metadata, so it must reach an occupied metadata lane.
   'language.refresh': { kind: 'unary', lane: 'control', deadlineMs: 30_000 },
   'language.close': control,
+  'language.definition': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   'plans.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   // EstimatedPlanCapture: 30 s acquisition + 2 s isolated-session cleanup, inside this fixed deadline.
   'plans.estimate': { kind: 'unary', lane: 'query', deadlineMs: 35_000 },
   'system.health': control,
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.
-  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true },
-  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => 45_000 + signIn(params), sensitive: true },
+  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true },
+  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true },
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
   'connections.disconnect': { ...control, deadlineMs: 30_000 },
@@ -122,6 +123,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDefinition': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
+  'explorer.dependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },

@@ -86,6 +86,12 @@ if (args is ["--sql-language-checks"])
     Console.WriteLine("Passed " + passed + " SQL language checks.");
     return;
 }
+if (args is ["--sql-definition-checks"])
+{
+    await SqlDefinitionChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL definition checks.");
+    return;
+}
 if (args is ["--sql-language-live"])
 {
     await SqlLanguageLiveChecks.RunAsync(Check);
@@ -102,6 +108,21 @@ if (args is ["--sql-completion-checks"])
 {
     await SqlCompletionChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " SQL completion checks.");
+    return;
+}
+if (args is ["--connection-principal-checks"])
+{
+    await ConnectionPrincipalChecks.RunAsync(Check);
+    await EntraChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " connection principal and Entra checks.");
+    return;
+}
+if (args is ["--authentication-catalog-checks"])
+{
+    await ScriptingChecks.RunAsync(Check);
+    await ActionChecks.RunAsync(Check);
+    await SsisChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " scripting, action and SSIS authentication catalog checks.");
     return;
 }
 var liveGroup = LiveGroups.Parse(args);
@@ -349,6 +370,7 @@ if (liveGroup is null)
     (string Name, Func<Task> Run)[] offlineSuites = [
         ("LspTransport", () => LspTransportChecks.RunAsync(Check)),
         ("SqlLanguage", () => SqlLanguageChecks.RunAsync(Check)),
+        ("SqlDefinition", () => SqlDefinitionChecks.RunAsync(Check)),
         ("SqlLanguageDiagnostics", () => SqlLanguageDiagnosticChecks.RunAsync(Check)),
         ("SqlCompletion", () => SqlCompletionChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
@@ -364,6 +386,7 @@ if (liveGroup is null)
         ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),
+        ("ConnectionPrincipal", () => ConnectionPrincipalChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
         ("View", Sync(() => ViewChecks.Run(Check))),
         ("WorkerGate", Sync(() => WorkerGateChecks.Run(Check))),
@@ -378,6 +401,7 @@ if (liveGroup is null)
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
+        ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
@@ -407,7 +431,8 @@ if (liveGroup is null)
         ("ActivityQuery", Sync(() => ActivityQueryChecks.Run(Check))),
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
-        ("Updater", Sync(() => UpdaterChecks.Run(Check)))
+        ("Updater", Sync(() => UpdaterChecks.Run(Check))),
+        ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)

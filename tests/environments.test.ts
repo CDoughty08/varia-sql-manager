@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
+import { ConnectionAuthenticationGuard } from '../src/main/connection-authentication'
 import { validateRequest } from '../src/main/validation'
 import { connectionDefaults, connectionKey, connectionLibrarySchema, connectionOptionsSchema, credentialBinding, savedConnection } from '../src/shared/connections'
 import type { ConnectionInfo, ConnectionOptions } from '../src/shared/contracts'
@@ -79,7 +80,7 @@ describe('environment in the connection options', () => {
   it('keeps a saved label when a connect does not carry one, unless the user set the form\'s Environment', async () => {
     const { path, store } = await tempStore()
     await store.save({ options: { ...base, environment: 'Production' }, favorite: true })
-    const deps: ConnectionRequestDeps = { connections: store, savedPasswords: { get: async () => undefined, set: async () => {}, forget: async () => {}, forgetCredentials: async () => {}, reconcile: async () => ({ ids: [] }) } }
+    const deps: ConnectionRequestDeps = { connections: store, authentication: new ConnectionAuthenticationGuard(), savedPasswords: { storageAvailable: async () => true, get: async () => undefined, getReferenced: async () => undefined, reference: async () => undefined, set: async () => {}, forget: async () => {}, forgetCredentials: async () => {}, forgetRejected: async () => {}, reconcile: async () => ({ ids: [] }) } }
     const connect = async (options: ConnectionOptions, context?: unknown) => {
       const info: ConnectionInfo = { id: crypto.randomUUID(), server: options.server, database: options.database, serverVersion: '17.0', generation: 1 }
       const settled = await settle(await prepare('connections.connect', validateRequest('connections.connect', options), context, deps), { ok: true, value: info }, deps)
@@ -111,9 +112,32 @@ describe('environment in the connection options', () => {
     expect(savedEntry(profiles, keys, { ...base, server: '' })).toBeUndefined()
     expect(savedEntry(profiles, keys, { ...base, authentication: 'sql' })).toBeUndefined()
   })
+  it('resolves shared-settings aliases by explicit selection or unique presentation, never library order', () => {
+    const first = { id: crypto.randomUUID(), options: { ...base, displayName: 'First', environment: 'Production' }, favorite: true, registered: false }
+    const second = { id: crypto.randomUUID(), options: { ...base, displayName: 'Second', environment: 'Staging' }, favorite: true, registered: false }
+    const profiles = [first, second], keys = new Map(profiles.map(profile => [profile.id, entryKey(profile.options)]))
+    expect(savedEntry(profiles, keys, second.options)).toBe(second)
+    expect(savedEntry(profiles, keys, second.options, first.id)).toBe(first)
+    expect(savedEntry(profiles, keys, base)).toBeUndefined()
+    const duplicate = { ...second, id: crypto.randomUUID() }
+    expect(savedEntry([...profiles, duplicate], new Map([...keys, [duplicate.id, entryKey(duplicate.options)]]), second.options)).toBeUndefined()
+  })
 })
 
 describe('Set Connection Environment', () => {
+  it('labels an adopted target without editing its saved profile or a different target', async () => {
+    const connections = new ConnectionService(), targetId = crypto.randomUUID(), handle = crypto.randomUUID()
+    const attempt = connections.beginConnect(base, 1, targetId)!
+    expect(connections.accept(connectionInfo(handle), base, targetId, { principal: { provider: 'sqlServer', authentication: 'windows', id: 'CONTOSO\\reader' } }, attempt).status).toBe('accepted')
+    connections.add(connectionInfo('other'), base)
+    const setEnvironment = vi.fn(async () => { throw new Error('The profile must stay unchanged.') })
+    expect(await applyEnvironment({ connections, setEnvironment }, handle, 'Production')).toEqual({ ok: true, environment: 'Production' })
+    expect(connections.connectionTargets.get(targetId)?.details.environment).toBe('Production')
+    expect(connections.get('other')?.options.environment).toBeUndefined()
+    expect(setEnvironment).not.toHaveBeenCalled()
+    connections.dispose()
+    connections.connectionTargets.dispose()
+  })
   function service() {
     const connections = new ConnectionService()
     connections.add(connectionInfo('a'), { ...base, password: 'never-keep-this' })
@@ -129,20 +153,20 @@ describe('Set Connection Environment', () => {
     const setEnvironment = vi.fn(async (input: unknown) => { try { return { ok: true as const, value: await library.setEnvironment(input) } } catch (error) { return { ok: false as const, error: (error as Error).message } } })
     return { ...store, setEnvironment }
   }
-  it('changes only the label of the entry in connections.json, then shows it on every connection to that entry', async () => {
+  it('saves the profile label and changes only the selected target, even when another has the same profile settings', async () => {
     const connections = service(), { store, path, setEnvironment } = await mainSide()
     const { id } = await store.rememberEntry(base)
     // Edited after connecting (Save changes): the label must not revert the name or colour to the connect-time options.
     await store.save({ id, options: { ...base, displayName: 'Sales (prod)', color: '#3366cc' }, favorite: true })
     expect(await applyEnvironment({ connections, setEnvironment }, 'a', 'production')).toEqual({ ok: true, environment: 'Production' })
     expect(setEnvironment.mock.calls).toEqual([[{ options: base, environment: 'Production' }]])
-    expect(connections.getSnapshot().map(connection => connection.options.environment)).toEqual(['Production', 'Production', undefined])
+    expect(connections.getSnapshot().map(connection => connection.options.environment)).toEqual(['Production', undefined, undefined])
     expect(JSON.stringify(setEnvironment.mock.calls)).not.toContain('never-keep-this')
     const saved = JSON.parse(await readFile(path, 'utf8')).profiles
     expect(saved).toHaveLength(1)
     expect(saved[0]).toMatchObject({ id, favorite: true, lastConnected: expect.any(String), options: { ...base, displayName: 'Sales (prod)', color: '#3366cc', environment: 'Production' } })
     // None removes it, and only it.
-    expect(await applyEnvironment({ connections, setEnvironment }, 'b', undefined)).toEqual({ ok: true })
+    expect(await applyEnvironment({ connections, setEnvironment }, 'a', undefined)).toEqual({ ok: true })
     expect(setEnvironment.mock.calls[1]).toEqual([{ options: base }])
     expect(connections.getSnapshot().map(connection => 'environment' in connection.options)).toEqual([false, false, false])
     expect(JSON.parse(await readFile(path, 'utf8')).profiles[0].options).toEqual({ ...base, displayName: 'Sales (prod)', color: '#3366cc' })
@@ -195,7 +219,8 @@ describe('Set Connection Environment', () => {
     const connections = service()
     connections.markLostBefore(2)
     expect(connections.relabel('a', 'Production')).toEqual({ ...base, environment: 'Production' })
-    expect(connections.get('b')).toMatchObject({ lost: true, options: { environment: 'Production' } })
+    expect(connections.get('a')).toMatchObject({ lost: true, options: { environment: 'Production' } })
+    expect(connections.get('b')?.options.environment).toBeUndefined()
     expect(connections.relabel('gone', 'Production')).toBeUndefined()
   })
 })

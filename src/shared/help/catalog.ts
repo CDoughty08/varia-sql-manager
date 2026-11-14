@@ -22,22 +22,22 @@ export const guideCatalog = {
     title: 'Connect to SQL Server', summary: 'Choose a server and sign-in method, then find your databases.',
     keywords: ['connection', 'authentication', 'login', 'password', 'Entra', 'TLS'],
     sections: [{ id: 'prepare', title: 'Before you connect' }, { id: 'sign-in', title: 'Choose your sign-in' }, { id: 'next', title: 'Connect and explore' }, { id: 'trouble', title: 'If connecting fails' }],
-    related: ['run-query'], commands: [{ id: 'connection.connect', context: 'workbench' }], settings: [], gestures: [],
-    sourceAreas: ['src/renderer/src/ConnectDialog.tsx', 'src/shared/auth.ts']
+    related: ['run-query'], commands: [{ id: 'connection.connect', context: 'workbench' }, { id: 'connection.reconnect', context: 'workbench' }, { id: 'connection.removeFromExplorer', context: 'workbench' }], settings: ['environment.connections.autoReconnect'], gestures: [],
+    sourceAreas: ['src/renderer/src/ConnectDialog.tsx', 'src/renderer/src/explorer/', 'src/renderer/src/services/connections.ts', 'src/shared/auth.ts', 'src/renderer/src/services/startup-reconnect.ts']
   },
   'run-query': {
     title: 'Run your first query', summary: 'Create a query, choose its database and understand what Execute runs.',
-    keywords: ['SQL', 'selection', 'execute', 'editor', 'messages', 'cancel'],
+    keywords: ['SQL', 'selection', 'execute', 'editor', 'font', 'zoom', 'messages', 'cancel'],
     sections: [{ id: 'new', title: 'Open a query' }, { id: 'execute', title: 'Choose what runs' }, { id: 'read', title: 'Read the outcome' }],
-    related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: [],
-    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts']
+    related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: ['editor.wheelZoom'],
+    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts', 'src/renderer/src/editor/create-editor.ts']
   },
   results: {
     title: 'Work with query results', summary: 'Sort and filter returned rows, select cells and copy with confidence.',
     keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection'],
     sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
     related: ['run-query'], commands: [{ id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
-    settings: ['queryResults.grid.includeColumnHeaders'], gestures: ['grid.addToSelection'],
+    settings: ['queryResults.grid.includeColumnHeaders', 'queryResults.grid.discardResults'], gestures: ['grid.addToSelection'],
     sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/shared/settings/query-results.ts']
   }
 } as const satisfies Record<string, GuideMetadata>

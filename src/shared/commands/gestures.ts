@@ -24,6 +24,7 @@ export type GestureKind = 'modifier' | 'pointerCommand' | 'fixed'
 /** Where a gesture works; titles follow the Shortcuts page's scopes. */
 export const gestureScopes = {
   global: 'Global',
+  queryEditor: 'SQL Query Editor',
   resultsGrid: 'Results Grid',
   messages: 'Query Messages',
   tableDesigner: 'Table Designer',
@@ -95,9 +96,14 @@ export const gestureCatalog = {
     locked: 'Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard.', keyboard: ['output.fitColumn']
   },
   'global.wheelZoom': {
-    title: 'Zoom', description: 'Zooms the window, except over a document tab shelf where Control+wheel changes its row count.',
-    kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
+    title: 'Zoom', description: 'Zooms the window outside surfaces with their own wheel gestures.',
+    kind: 'fixed', scope: 'global', action: 'wheel', target: 'the workbench', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
+  },
+  'editor.wheelZoom': {
+    title: 'Zoom Editor Text', description: 'Scroll up to enlarge editor text or down to shrink it for this session.',
+    kind: 'fixed', scope: 'queryEditor', action: 'wheel', target: 'editor text', modifiers: ['ctrl'],
+    locked: 'Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work.'
   },
   'connections.connect': {
     title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
@@ -114,6 +120,12 @@ export const gestureCatalog = {
     title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
+  },
+  // VS Code's Ctrl+click (⌘-click on macOS); Alt for those who moved Monaco's multi-cursor click to Ctrl (textEditor.multiCursorModifier).
+  'editor.goToDefinition': {
+    title: 'Go To Definition', description: 'Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does.',
+    kind: 'pointerCommand', scope: 'queryEditor', action: 'click', target: 'an object name', modifiers: ['mod'],
+    choices: [['mod'], ['alt']], keyboard: ['edit.goToDefinition']
   },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',

@@ -239,6 +239,7 @@ internal static class EntraChecks
 
     private static async Task ProviderAsync(Action<bool, string> check, EntraService service)
     {
+        using var initialAuthentication = new EntraConnectScope(CancellationToken.None, allowUnpinned: true);
         var fake = new FakeSource { Silent = (_, _) => Task.FromResult<EntraToken?>(Token("silent")) };
         service.Source = fake;
         var provider = (EntraAuthenticationProvider)SqlAuthenticationProvider.GetProvider(SqlAuthenticationMethod.ActiveDirectoryInteractive)!;
@@ -288,6 +289,16 @@ internal static class EntraChecks
         try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 1)); }
         catch (EntraProviderException) { }
         check(watch.ElapsedMilliseconds < 8_000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
+        // The background request's token reaches the provider even when the stored connect timeout is unlimited.
+        using (var background = new CancellationTokenSource())
+        {
+            background.Cancel();
+            using var scope = new EntraConnectScope(background.Token, allowUnpinned: true);
+            id = Guid.NewGuid();
+            try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 0)); }
+            catch (EntraProviderException) { }
+            check(service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a background request cancels the provider inside an unlimited login");
+        }
         fake = new FakeSource { Other = (_, _, _) => throw new MsalServiceException("invalid_client", "AADSTS7000215: Invalid client secret provided.") };
         service.Source = fake;
         id = Guid.NewGuid();
@@ -315,9 +326,10 @@ internal static class EntraChecks
         var start = "Data Source=sql.contoso.database.windows.net;Authentication=\"Active Directory Interactive\"";
         using (var request = new CancellationTokenSource())
         {
-            var (connection, connectionString) = await service.OpenForUserAsync(start, "sql.contoso.database.windows.net", Open, NoId, request.Token);
+            var (connection, connectionString, _) = await service.OpenForUserAsync(start, "sql.contoso.database.windows.net", Open, NoId, request.Token);
             check(connection == "connection" && fake.Count("interactive") == 1 && fake.Calls.Last().Request == Request() && opened.Count == 2
-                && new SqlConnectionStringBuilder(connectionString).UserID == "alice@contoso.com" && opened[1] == connectionString,
+                && new SqlConnectionStringBuilder(connectionString).UserID == "alice@contoso.com" && new SqlConnectionStringBuilder(opened[1]).UserID == "alice@contoso.com"
+                && !new SqlConnectionStringBuilder(opened[1]).Pooling && new SqlConnectionStringBuilder(connectionString).Pooling,
                 "Connect signs in through the browser once, with the attempt's authority and resource, then opens a new connection, named for the account that signed in");
         }
         // A pool open (Object Explorer, a query session) never signs in.
@@ -384,7 +396,7 @@ internal static class EntraChecks
             Exception? stopped = null;
             try { await first.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception error) { stopped = error; }
             gate.SetResult();
-            var (other, _) = await second.WaitAsync(TimeSpan.FromSeconds(15));
+            var (other, _, _) = await second.WaitAsync(TimeSpan.FromSeconds(15));
             check(stopped is OperationCanceledException && other == "connection", "Stop on one waiting connect leaves the other to sign in and connect");
         }
         // The 3-minute limit (shortened here) answers its own message.
@@ -475,6 +487,7 @@ internal static class EntraChecks
     /// already has a token).</summary>
     private static async Task AccountsAsync(Action<bool, string> check, EntraService service)
     {
+        using var initialAuthentication = new EntraConnectScope(CancellationToken.None, allowUnpinned: true);
         var accounts = new List<string>();
         var next = "alice@contoso.com";
         service.Source = new FakeSource
@@ -499,8 +512,9 @@ internal static class EntraChecks
         // Load databases signs in (unpooled), then Connect finds that token silently.
         await service.OpenForUserAsync(anonymous + ";Pooling=false", "srv", Login, id => id, CancellationToken.None);
         opened.Clear();
-        var (_, kept) = await service.OpenForUserAsync(anonymous, "srv", Login, id => id, CancellationToken.None);
+        var (_, kept, _) = await service.OpenForUserAsync(anonymous, "srv", Login, id => id, CancellationToken.None);
         var connectOpens = opened.ToList();
+        check(service.Attempts.Count == 0, "the account and principal recorded for the connect are taken by it");
         // A second account signs in to the same tenant (another server's connect), then a query tab opens on the first server.
         next = "adm-alice@contoso.com";
         accounts.Add(next);
@@ -509,7 +523,6 @@ internal static class EntraChecks
         catch (SqlException) { session = "sign-in needed"; }
         check(new SqlConnectionStringBuilder(kept).UserID == "alice@contoso.com" && session == "opened" && connectOpens.Count == 1 && !new SqlConnectionStringBuilder(connectOpens[0]).Pooling,
             "Connect without a user name that finds a token silently keeps the account it is for (its open unpooled, so the provider is asked), so later opens find it when another account signs in: " + session);
-        check(service.Attempts.Count == 0, "the account recorded for the connect is taken by it");
         service.Attempts.Clear();
     }
 
@@ -535,6 +548,31 @@ internal static class EntraChecks
         // Connect and Load databases sign in through the browser when the login needs it, and Stop ends that wait.
         var waiting = new TaskCompletionSource();
         fake.Interactive = async (_, token) => { waiting.TrySetResult(); await Task.Delay(Timeout.Infinite, token); return Token("never"); };
+        service.OpenUser = (_, _, _) =>
+        {
+            opens++;
+            var id = Guid.NewGuid();
+            service.Entra.Attempts.Record(id, new InteractionRequired(Request()));
+            throw ProviderFailure(id);
+        };
+        var backgroundTimeout = 0;
+        service.OpenUser = (text, _, _) =>
+        {
+            backgroundTimeout = new SqlConnectionStringBuilder(text).ConnectTimeout;
+            var id = Guid.NewGuid();
+            service.Entra.Attempts.Record(id, new InteractionRequired(Request()));
+            throw ProviderFailure(id);
+        };
+        foreach (var run in new Func<Task>[] {
+            () => service.ConnectAsync(Options("entraMfa") with { NonInteractive = true, Advanced = new(ConnectTimeout: 0) }, CancellationToken.None),
+            () => service.DiscoverDatabasesAsync(Options("entraMfa") with { NonInteractive = true, Advanced = new(ConnectTimeout: 0) }, CancellationToken.None) })
+        {
+            fake.Calls.Clear();
+            RequestException? required = null;
+            try { await run(); } catch (RequestException error) { required = error; }
+            check(required is { Code: "AUTH_ENTRA" } && fake.Count("interactive") == 0 && backgroundTimeout == 15,
+                "background reconnect and database discovery never open a browser and cap an unlimited login at 15 seconds");
+        }
         service.OpenUser = (_, _, _) =>
         {
             opens++;

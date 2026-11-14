@@ -11,7 +11,7 @@ static class OfflineSuites
     // Suites that change process-wide state run alone, before the lanes start: Entra redirects the console and sets
     // IDENTITY_ENDPOINT, Store measures the managed heap across forced collections, and Scripting sets
     // ScriptingCulture.Override.
-    public static readonly string[] Alone = ["Entra", "Store", "Scripting"];
+    public static readonly string[] Alone = ["Entra", "ConnectionPrincipal", "Store", "Scripting"];
 
     // Measured seconds per suite, from a serial run's 'Offline suite' lines (VARIA_TEST_OFFLINE_LANES=1, Windows, 2026-11-08, after the timing checks were hardened for starved runners);
     // suites under 0.3 s are left out and count as 0.1 s. Refresh it when a suite moves by more than a second. Text is CPU-bound,
@@ -21,7 +21,7 @@ static class OfflineSuites
         ["Host"] = 12.5, ["Ssis"] = 7.7, ["Explorer"] = 7.1, ["ActivityAction"] = 6.2, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
         ["Live"] = 4.4, ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4, ["Text"] = 12.0,
         ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["ActionProgress"] = 1.8, ["LspTransport"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
-        ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["SqlLanguage"] = 6.0, ["SqlLanguageDiagnostics"] = 1.0, ["SqlCompletion"] = 1.0, ["Page"] = 0.4, ["ParallelResult"] = 3.5, ["ActivitySource"] = 0.4,
+        ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["SqlLanguage"] = 6.0, ["SqlLanguageDiagnostics"] = 1.0, ["SqlCompletion"] = 1.0, ["Page"] = 0.4, ["ParallelResult"] = 3.5, ["FusedRead"] = 5.8, ["ActivitySource"] = 0.4,
     };
 
     // Six lanes. The lanes mostly wait, so more lanes than CI's 3 to 4 vCPUs still help: locally, 1 lane took 65 s, 4 took

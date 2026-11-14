@@ -18,7 +18,9 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a save that has
   already started writing its file finishes. The run summary and its row count do not change. Closing the last result
   leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
-  execution plans stay. Closing one view is unavailable while the query is executing, and there is no undo.
+  execution plans stay, and so does Close Results, which releases those plans. Find in Results, Find Next and Previous,
+  Save Results As, Pivot, Compare and Transpose are then unavailable, as they need a grid. Closing one view is
+  unavailable while the query is executing, and there is no undo.
 - When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
   grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
   Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or
@@ -57,7 +59,9 @@ and column widths you set on columns whose names appear once in both; its filter
 the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
 window (the builder says when one waits for the others), and a busy SQL backend is asked again after
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+is built again. Like the Compare picker, the builder goes with the results themselves: **Close Results**, a run that
+leaves no result, or closing its last result closes it, and the next run does not reopen it; each result's draft is kept
+for the next **Pivot…**. A Pivot's strip says when the result it was built from holds only part of its query's rows.
 
 A Pivot records the filters of the result it was built from. When that result's filters change (a filter added, removed
 or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
@@ -197,6 +201,23 @@ A results grid drawn transposed (its columns as rows) copies and saves what it s
 - A JSON save is one object per column, with every value as text and NULL as `null`.
 - The first 4,095 rows of the view are written, the ones the transposed grid draws. When rows are left out, the toolbar
   says how many; filter the results to copy or save others.
+
+## Discard results after execution
+
+With **Discard results after execution** on (Tools › Options › Query Results › SQL Server › Results to Grid), every query
+reads its rows and keeps none. While it is on, the status bar shows **Results discarded**; pressing it opens Options with
+the setting focused. A run that read result sets and kept none shows a notice where its grid would be, saying how many
+sets were read, with **Turn off Discard results**. Once the setting is off the notice offers **Execute again**, so the
+next run keeps its rows; turned off from the notice, focus moves to Execute again, and turned off from Options opened by
+the status bar item, focus goes to the active document. While the run is still going the notice says rows are not being
+kept. A run that also kept an execution plan opens the Execution plan view as before, with the notice on its Results tab,
+which screen readers name "Results, not kept"; the run's completion announcement says how many sets were read and not
+kept. Select Top 1000 Rows from Object Explorer runs the same way. Runs made with the setting off show none of this, even
+when sets past the result-set limit were not kept, and results you close say they were closed.
+
+![The Results view after a discarded run in the dark theme: Results were not kept, with Turn off Discard results, and Results discarded in the status bar](images/results-discarded-dark.png)
+
+![The same view in the light theme](images/results-discarded-light.png)
 
 ## Error source navigation
 
