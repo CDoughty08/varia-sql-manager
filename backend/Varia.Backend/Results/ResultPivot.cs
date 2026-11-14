@@ -84,6 +84,7 @@ internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int 
 internal static class ResultPivoter
 {
     public const int MaxRowFields = 8, MaxValues = 16, MaxRowGroups = 100_000, MaxColumnGroups = 256, MaxCells = 4_000_000;
+    internal const string TooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
     /// <summary>The longest column-group name, in UTF-16 units, before "…".</summary>
     public const int MaxLabelChars = 128;
     private const int CancelEvery = 1 << 14;
@@ -123,7 +124,8 @@ internal static class ResultPivoter
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to pivot.");
         var rows = (int)total;
-        var source = new ViewSorter.PageSource(pages, set.Wires.Count);
+        // A packed result is read fused: its rooms and extracts go back with the build.
+        using var source = new ViewSorter.PageSource(pages, set.Wires.Count, TooLarge);
         var approximate = false;
         var keys = new Dictionary<int, ViewSorter.Key>();
         ViewSorter.Key KeyOf(int column)
@@ -196,9 +198,9 @@ internal static class ResultPivoter
         var extremes = figures.Where(item => item.Value.Aggregate is PivotAggregate.Min or PivotAggregate.Max).Select(item => (Figures: item, Key: KeyOf(item.Value.Column))).ToArray();
         var counter = 0;
         var aggregating = Stopwatch.GetTimestamp();
-        foreach (var (index, page) in source.Pages())
+        // In order on this thread; a packed result's pages are unpacked ahead on the workers, a batch at a time.
+        source.InOrder((index, page, view) =>
         {
-            var view = source.View(index);
             var first = (int)page.FirstRow;
             for (var r = 0; r < page.Rows; r++)
             {
@@ -239,7 +241,7 @@ internal static class ResultPivoter
                     Extreme(item.Best, totalCell, row, key, max);
                 }
             }
-        }
+        }, token);
         if (stages is not null) stages.Aggregation += Stopwatch.GetTimestamp() - aggregating;
         // Distinct counts place each cell's rows together first, which takes a bound per cell: without room for them, one
         // sort by cell and value does.
@@ -567,7 +569,7 @@ internal static class PivotOutput
         return new ResultColumn(name, "decimal(38," + scale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: 38, Scale: scale);
     }
 
-    public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model)
+    public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model, CancellationToken token = default)
     {
         using var pin = source.Pin();
         var columns = new List<ResultColumn>();
@@ -580,7 +582,11 @@ internal static class PivotOutput
             lengths.Add(source.Lengths[column]);
         }
         var access = new RowAccess(pages, source.Wires.Count);
-        var groups = model.ColumnReps.Select(row => GroupName(source, access, spec.Column, row)).ToList();
+        // The pivot was built over a packed result without unpacking it: the column groups' rows are read together, charged.
+        var held = access.Hold(source, model.ColumnReps, ResultPivoter.TooLarge, token);
+        List<string> groups;
+        try { groups = [.. model.ColumnReps.Select(row => GroupName(source, access, spec.Column, row))]; }
+        finally { source.ReturnWork(held); }
         if (spec.Column >= 0) groups.Add("Total");
         else groups.Add("");
         Distinguish(groups, spec.Column >= 0);
@@ -632,8 +638,13 @@ internal static class PivotOutput
     {
         using var pin = source.Pin();
         var access = new RowAccess(pages, source.Wires.Count);
+        long held = 0;
         try
         {
+            // The pivot was built over a packed result without unpacking it: the rows its output copies (each row group's
+            // first row, and each lowest and highest) are read together, charged as working memory until it is written.
+            held = access.Hold(source, model.RowReps.Concat(model.Figures.Where(figures => figures.Value.Aggregate is PivotAggregate.Min or PivotAggregate.Max).SelectMany(figures => figures.Best)),
+                ResultPivoter.TooLarge, token);
             for (var g = 0; g < model.RowReps.Length; g++)
             {
                 if ((g & 1023) == 1023) token.ThrowIfCancellationRequested();
@@ -652,7 +663,11 @@ internal static class PivotOutput
                 if (!set.TryCommitRow(truncated)) break;
             }
         }
-        finally { set.Complete(); }
+        finally
+        {
+            set.Complete();
+            source.ReturnWork(held);
+        }
     }
 
     private static int Figure(PageBuilder builder, RowAccess access, ResultSetBuffer source, PivotFigures figures, int cell)

@@ -1591,10 +1591,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             });
         }
         var complete = set.IsComplete;
+        // A packed result stays packed: the build reads it fused, page by page on its workers (ViewSorter.PageSource).
         using var pin = set.Pin();
-        await Unpack(filters.Length > 0
-            ? "There is not enough result memory to filter these rows. Close other results and try again."
-            : "There is not enough result memory to sort these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1610,6 +1608,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
         try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
+        // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
+        // answers as it would anywhere else.
+        // Only those: a limit with its own reason (too many values, rows or comparisons) is answered as it is.
+        catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message is ViewSorter.SortTooLarge or ViewSorter.FilterTooLarge or ViewSorter.NoRoomToRead)
+        {
+            store.Return(set.Budget, working + kept);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            throw TooLarge(error.Message);
+        }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -1733,8 +1740,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        // A packed result stays packed: each of the profile's runs unpacks the page it reads into a room of its own.
         using var pin = set.Pin();
-        await Unpack("There is not enough result memory to profile these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -2121,8 +2128,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
+        // A packed result stays packed: the build reads it fused, and its output reads the rows it copies together.
         using var pin = set.Pin();
-        await Unpack(tooLarge, token, set);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -2141,9 +2148,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 // later and is not an error, the build sorts by cell and value instead.
                 throw figures.LowMemory ? NotStored(set.Budget, new RequestException("TOO_LARGE", LowMemory), (set, args.ResultId)) : NotStored(set.Budget, tooLarge, (set, args.ResultId));
             }
+            // A packed result's rooms and extracts (a fused read) refused: why, as for the figures.
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
-            var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
+            IReadOnlyList<ResultColumn> columns;
+            IReadOnlyList<WireKind> wires;
+            IReadOnlyList<ColumnLength> lengths;
+            try { (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model, token); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
                 ?? throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
             void Release()
@@ -2152,7 +2165,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             try
             {
-                await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set);
+                // The rows it copies from a packed result are read together (RowAccess.Hold): refused, why, as above.
+                try { await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
                 // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
                 if (pivot.Describe().RowsStored < model.RowGroups) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
                 var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);

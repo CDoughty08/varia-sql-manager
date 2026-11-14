@@ -447,6 +447,7 @@ internal sealed class ResultJobs(ResultStore store)
         long total = 0;
         var set = source.Set;
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];
+        using var room = new ReadRoom(set);
         foreach (var plan in plans)
         {
             if (headers) total += ResultTextWriter.EstimateHeader(set.Columns, plan.Columns, eolBytes);
@@ -454,14 +455,45 @@ internal sealed class ResultJobs(ResultStore store)
                 foreach (var page in Pages(source, first, last))
                 {
                     var (from, to) = Within(page, first, last);
-                    total += EstimatePage(page, from, to, plan.Columns, eolBytes, scratch, set.Columns.Count);
+                    total += ResultTextWriter.EstimateCopyRows(PageView.Parse(room.Body(page), set.Columns.Count, scratch), from, to, plan.Columns, eolBytes);
                 }
         }
         return total;
     }
 
-    private static long EstimatePage(StoredPage page, int from, int to, int[] columns, int eolBytes, int[] scratch, int columnCount) =>
-        ResultTextWriter.EstimateCopyRows(PageView.Parse(page.Body(), columnCount, scratch), from, to, columns, eolBytes);
+    /// <summary>The room a plain Copy or Save unpacks a packed page into before it reads it (a fused read on one thread):
+    /// one page, the largest met, reserved from the result's budget as working memory while the job reads and returned
+    /// when it ends. Without room, or for a view's pages (built for the read), a page is read through its set's accessor
+    /// as before, so a Copy or Save is never refused for it. Pages held as sealed are read in place.</summary>
+    private sealed class ReadRoom(ResultSetBuffer set) : IDisposable
+    {
+        private byte[]? bytes;
+        private long reserved;
+        private bool refused;
+
+        public ReadOnlySpan<byte> Body(StoredPage page)
+        {
+            if (page.Set != set) return page.Body();
+            if (set.Raw(page) is { } raw) return raw;
+            if (!refused && (bytes is null || bytes.Length < page.Length))
+            {
+                if (set.TryReserveWork(page.Length - reserved))
+                {
+                    reserved = page.Length;
+                    bytes = new byte[page.Length];
+                }
+                else refused = true;
+            }
+            return bytes is not null && bytes.Length >= page.Length ? set.Read(page, bytes).AsSpan(0, page.Length) : page.Body();
+        }
+
+        public void Dispose()
+        {
+            set.ReturnWork(reserved);
+            reserved = 0;
+            bytes = null;
+        }
+    }
 
     /// <summary>The pages holding rows [first, last], fetched a bounded batch at a time; a view's are built in its order.</summary>
     private static IEnumerable<StoredPage> Pages(Source source, long first, long last)
@@ -494,11 +526,13 @@ internal sealed class ResultJobs(ResultStore store)
     {
         var set = source.Set;
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];
+        using var room = new ReadRoom(set);
         foreach (var page in Pages(source, first, last))
         {
             token.ThrowIfCancellationRequested();
             var (from, to) = Within(page, first, last);
-            WritePage(page, set.Columns.Count, writer, columns, from, to, scratch);
+            var view = PageView.Parse(room.Body(page), set.Columns.Count, scratch);
+            for (var row = from; row <= to; row++) writer.Row(view, row, columns);
             AfterPage?.Invoke();
             await drain();
         }
@@ -523,12 +557,6 @@ internal sealed class ResultJobs(ResultStore store)
             AfterPage?.Invoke();
             await drain();
         }
-    }
-
-    private static void WritePage(StoredPage page, int columnCount, ResultTextWriter writer, int[] columns, int from, int to, int[] scratch)
-    {
-        var view = PageView.Parse(page.Body(), columnCount, scratch);
-        for (var row = from; row <= to; row++) writer.Row(view, row, columns);
     }
 
     private static string Size(long bytes) => bytes >= 1024 * 1024

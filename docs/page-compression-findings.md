@@ -28,6 +28,11 @@ Zstandard built in. This version measures both on .NET 11, and the recommendatio
 - **Whole-result operations cost what they cost on raw pages once their pages are decompressed.** Sort, filter,
   profile, pivot and Save matched their raw times within noise. Decompressing all of an 8 GiB result first takes 1.1 to
   1.2 s on 16 workers (0.36 s per GiB on 3 workers).
+- **Fused reads, built and measured:** a sort, a filter, a profile and a pivot of a packed result now read it in
+  place, each worker unpacking the page it reads into a room of its own. They hold about 4 MiB (a page a worker)
+  instead of what unpacking adds (525 MiB at 1 GiB, 2.1 GiB at 4 GiB) and cost from 10 % less to 26 % more time than
+  rehydrating. Sort ties that compare cells read a column extract made once. A plain Save unpacks a page at a time on
+  one thread, 1.4 to 2.5 times its raw time. See [Fused reads at 1 and 4 GiB](#fused-reads-at-1-and-4-gib).
 - **This makes compressing much more actively possible,** as the owner suggested: every complete result can be
   compressed a few seconds after it is hidden, showing it again needs no wait, and a later step can keep even visible
   results compressed. See [Recommended design](#recommended-design).
@@ -178,9 +183,65 @@ arrays; "decompress first" is the time to do that on 16 workers.
   `log`, whose raw Save is unusually fast (5 GB/s of long text). Brotli added 3 to 4 s per GiB (4 to 12 times).
   Decompressing ahead on a second thread would hide most of it. The operations that already run on the
   workers (key builds, profile, search) would pay about 0.05 s per GiB if each worker decompressed its own pages
-  (the "decompress 1 GiB, all" column). That fused path was not measured as such.
+  (the "decompress 1 GiB, all" column). The fused path is measured below.
 - **On a small machine:** with 3 workers (`VARIA_BENCH_CORES=4`), decompressing all of 1 GiB of `orders` took 0.36 s
   (0.15 s on 16), so about 3 s for 8 GiB (extrapolated).
+
+### Fused reads at 1 and 4 GiB
+
+`--page-compression-bench <GiB> orders --fused` fills a real store, packs the result (zstd 2) and runs each operation
+three ways: on the raw result; **rehydrated** (every page unpacked on the workers first, with the bytes that adds
+reserved, and packed again after; the unpacking is included in the time); and **fused** (the packed result read in
+place, each worker unpacking the page it is about to read into a room of its own). Median of three runs, seconds, from
+the second of two runs on a machine other sessions shared (the first run's medians differed by up to 0.4 s on the
+longest operations). "Budget" is the most working memory the store charged above the result during a run; "heap" is
+the most the managed heap grew, sampled every millisecond. 16 workers; `orders` packs 2.05 times. The pivot is its
+groups and figures (`ResultPivoter.Build`); writing its output (`RowAccess.Hold`) is not in these figures.
+
+1 GiB (3,686,386 rows, 4,022 pages; one-thread pack 2.5 to 3.1 s):
+
+| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sort by a random `int` | 0.53 | 0.42 | 0.39 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
+| Sort by a text | 1.32 | 1.40 | 1.36 | 639 MiB | 118 MiB | 1,120 MiB | 204 MiB |
+| Sort by prose text with no room for whole keys (ties compare cells) | 1.89 | 1.89 | 1.93 | 525 MiB | 305 MiB | 1,083 MiB | 365 MiB |
+| Filter: IN on a low-cardinality column | 0.06 | 0.13 | 0.13 | 525 MiB | 4 MiB | 1,069 MiB | 61 MiB |
+| Profile of two columns | 0.15 | 0.19 | 0.21 | 525 MiB | 4 MiB | 1,037 MiB | 34 MiB |
+| Pivot: count, sum, max by status | 0.31 | 0.38 | 0.45 | 525 MiB | 8 MiB | 1,083 MiB | 122 MiB |
+| Save as CSV (one thread) | 0.85 | 0.96 | 1.38 | 525 MiB | 0.25 MiB | 1,010 MiB | 1 MiB |
+
+4 GiB (14,727,412 rows, 16,089 pages; one-thread pack 9.2 to 10.5 s):
+
+| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sort by a random `int` | 1.56 | 1.80 | 1.68 | 2,108 MiB | 4 MiB | 4,276 MiB | 231 MiB |
+| Sort by a text | 6.07 | 5.91 | 6.17 | 2,563 MiB | 459 MiB | 4,735 MiB | 800 MiB |
+| Sort by prose text with no room for whole keys (ties compare cells) | 9.26 | 9.43 | 8.51 | 2,108 MiB | 1,205 MiB | 4,390 MiB | 1,433 MiB |
+| Filter: IN on a low-cardinality column | 0.22 | 0.46 | 0.43 | 2,108 MiB | 4 MiB | 4,275 MiB | 232 MiB |
+| Profile of two columns | 0.48 | 0.73 | 0.82 | 2,108 MiB | 4 MiB | 4,070 MiB | 35 MiB |
+| Pivot: count, sum, max by status | 1.29 | 1.50 | 1.71 | 2,108 MiB | 8 MiB | 4,502 MiB | 464 MiB |
+| Save as CSV (one thread) | 3.00 | 3.17 | 5.49 | 2,108 MiB | 0.25 MiB | 4,040 MiB | 1 MiB |
+
+- **Fused reads hold about a page a worker instead of what unpacking adds.** Rehydrating reserves the bytes unpacking
+  adds (raw size less packed size: 525 MiB at 1 GiB, 2.1 GiB at 4 GiB); a fused sort, filter or profile holds 16 rooms
+  of one page (4 MiB). A text sort's and a ties sort's extra is their key memory and, for ties, the column's extract
+  (below), not pages. The pivot's 8 MiB is two batches of rooms (one read while the next is unpacked). Save holds one
+  room (0.25 MiB).
+- **On the workers' operations (sort, filter, profile, pivot) fused reads cost from 10 % less to 26 % more time than
+  rehydrating** across the two runs, about 0.05 s per GiB unpacked on 16 workers, now paid in each operation instead
+  of once. Rehydrating keeps the raw copy only for the operation, so a second operation pays again either way.
+- **Sort ties are measured.** The ties sort orders `orders`' note (prose of 20 to 300 characters, half NULL) with no
+  key memory, so its key keeps 8-byte prefixes and compares cells on ties. A key whose comparisons go back to cells
+  (long exact numbers that tie as doubles, text kept as 8 bytes) extracts its column once after it is built: the
+  column's cells of every page, charged as working memory (300 MiB at 1 GiB for the note column, about a quarter of
+  the result). No comparison unpacks a page; unpacking a page for each comparison would have been unusable, as a sort
+  compares millions of ties. If the extract is refused, the result is unpacked in place as before (its rooms and
+  extracts given back first), so a sort that rehydrating could run still runs.
+- **Save stays one thread and costs 1.4 to 2.5 times its raw time** across the two runs. It unpacks each page just
+  before writing it, as estimated above (0.5 to 0.9 s per GiB). Decompressing ahead on a second thread was not built; a
+  Save is a background job with its own progress, so it was left for later.
+- The heap columns: rehydrating's is the raw copy the operation needs; fused rooms are plain arrays freed with the
+  operation, so they show in the fused column while it runs.
 
 ### Scrolling
 
@@ -250,13 +311,12 @@ per-result cache of decompressed pages, charged to the budget as working memory:
 - **`results.read` of a plain grid:** the pages it needs, through a cache of six pages (0.3 ms a read).
 - **`results.read` through a view:** the distinct pages behind the rows asked for, decompressed in parallel on the
   workers (about 5 ms a screen on 16 workers, 15 ms on 3), through the same cache.
-- **Whole-result operations** (view and key builds, filters, distinct values, profile, pivot, diff, search, row
-  identity, Copy and Save): at first, **rehydrate** the result (decompress every page on the workers into raw pages,
-  after reserving their raw size from the budget; 0.15 s per GiB on 16 workers, 0.36 s on 3), run, and let it be
-  compressed again later. Later, each worker decompresses its own pages as it reads them, so no raw copy is needed
-  and no raw budget either. That needs every reader to read page by page through the accessor (most already do: key
-  builds, profile and search run per page on the workers), and the readers that revisit cells at random (ties in a
-  sort that re-read cells, pivot output, diff) to go through the cache.
+- **Whole-result operations:** a sort, a filter, a profile, a pivot and a plain Copy or Save read the packed result
+  fused (step 6 below): each worker unpacks the page it is about to read into a room of its own, reserved as working
+  memory, so the operation holds about a page a worker and the result stays packed. A sort whose ties compare cells
+  extracts that column once. Distinct values, row identity, diff, search and a transposed Copy or Save still
+  **rehydrate** first (unpack every page on the workers into raw pages, after reserving what that adds, raw less packed; 0.15 s per GiB
+  on 16 workers, 0.36 s on 3): their readers keep pages or revisit cells at random.
 
 ### When a result is compressed
 
@@ -381,8 +441,9 @@ forecast.
 5. **Stage 1 policy.** Compress complete, unpinned, hidden results of 1 MiB or more after 5 s, through the worker
    gate. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
    README, status-bar memory docs, CHANGELOG, and the Getting Started guides that show the status bar.
-6. **Fused reads.** Whole-result operations decompress page by page on their workers instead of rehydrating; measure
-   sort ties and Save with decompression ahead.
+6. **Fused reads.** Done: sort, filter, profile, pivot and plain Copy/Save read packed pages fused, sort ties through a
+   column extract (measured above). Left: distinct values, row identity, diff, search and transposed Copy/Save still
+   rehydrate; Save does not decompress ahead.
 7. **Stage 2 policy.** Compress idle visible results too, after measuring scrolling and sorting in the app.
 
 ## Not measured
@@ -390,8 +451,8 @@ forecast.
 - Real sessions: how big users' results are and how many tabs hold them.
 - Binary columns (`varbinary`, images) and documents (xml, json, plans). The `L1` and `B1` synthetic shapes exist but
   repeat one document, so they would overstate the ratio. They were left out rather than reported.
-- The fused path (each worker decompressing its own pages inside an operation), and sort ties re-reading compressed
-  cells. The cost is estimated from the parallel decompression figures, not measured.
+- Fused reads with fewer workers (`VARIA_BENCH_CORES`), on `wide` and `log`, and under contention with other
+  operations on the worker gate. Only `orders` on 16 workers was measured. Save with decompression ahead.
 - zstd 2 with a reused encoder per thread, and zstd dictionaries (.NET 11 can train one per result, which might help
   pages of one result share their repeated text).
 - Compressing a result while the grid reads it, and the worker gate's priority under contention.

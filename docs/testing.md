@@ -154,7 +154,11 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
   compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a
   budget by what a result holds as sealed (`Held.AsSealed`), and a check about something other than pages (GC
-  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`.
+  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A sort, filter, profile or pivot reads a
+  packed result fused and holds rooms rather than its unpacked pages, so sizing its budget by `Held.AsSealed` leaves it
+  slack: a check that leaves just enough room for one adds `Held.Rooms` (an upper bound; how many rooms are made depends
+  on the threads), and a check whose margin must be exact (a thread-count retry) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`, except one that sets each store's packing itself
+  (`FusedReadChecks`, which compares every fused operation with the same rows unpacked).
   The checks also run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails. Live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
