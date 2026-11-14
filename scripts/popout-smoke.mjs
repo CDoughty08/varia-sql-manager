@@ -9,6 +9,7 @@ import {
   backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
   popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
 } from './fixtures/ui.mjs'
+import { pinStackedResults } from './fixtures/results-pane.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'popout-profile-'))
@@ -34,6 +35,8 @@ async function ready() {
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
+  await pinStackedResults(page)
 }
 async function run(sql) {
   await page.locator('.monaco-editor [role="textbox"]').focus()

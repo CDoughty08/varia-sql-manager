@@ -6,6 +6,8 @@ import 'monaco-editor/languages/definitions/sql/register.js'
 import 'monaco-editor/languages/definitions/xml/register.js'
 import 'monaco-editor/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard.js'
+// With text drag-and-drop enabled, this also places the caret when a selection is clicked without dragging.
+import 'monaco-editor/editor/contrib/dnd/browser/dnd.js'
 import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js'
 import 'monaco-editor/editor/contrib/comment/browser/comment.js'
 // Insert Snippet and Surround With insert through it; it adds only Tab, Shift+Tab and Escape while a snippet is active.
