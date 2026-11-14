@@ -34,7 +34,7 @@ export function pivotContribution({ commands, pivot, compare, results, documents
       if (!offered(target)) return
       // A grid the command names is the one the builder follows from now on.
       if (target.key !== undefined) results.focusEntry(target.tabId, target.key)
-      // The builder takes the Compare picker's place.
+      // A Compare popover open in the tab closes, as it would on any press outside it.
       compare.close(target.tabId)
       pivot.open(target.tabId, target.key ?? results.getSnapshot()[target.tabId]?.focused)
       results.setView(target.tabId, 'results')

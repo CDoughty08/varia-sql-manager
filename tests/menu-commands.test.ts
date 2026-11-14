@@ -811,13 +811,12 @@ describe('Query Output commands', () => {
     expect(builder().source).toBe(key(1))
     expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compareWithPrevious', on('grid', { place })))).toEqual([false, true, false, false, false])
     // Compare… is offered for a Table another Table shares a column with, never for a Pivot, a plan set or a comparison;
-    // it opens the picker in the pivot builder's place, on the menu's grid.
+    // it opens the popover on the menu's grid, beside that grid (the toolbar passes its button as the anchor).
     expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compare', on('grid', { place })))).toEqual([true, true, false, false, false])
     expect(await commands.execute('output.compare', on('grid', { place: 0 }), 'menu')).toBe(true)
-    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1) })
-    expect(builder().open).toBe(false)
+    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1), anchor: 'grid' })
     expect(results.getSnapshot()[tab.id].focused).toBe(key(0))
-    // And Pivot… takes its place back.
+    // Pivot… closes it.
     expect(await commands.execute('output.pivot', on('grid', { place: 0 }), 'menu')).toBe(true)
     expect(compare.getSnapshot().pickers[tab.id]).toBeUndefined()
     // The toolbar names its tab: a grid focused in another tab is not the one it acts on.

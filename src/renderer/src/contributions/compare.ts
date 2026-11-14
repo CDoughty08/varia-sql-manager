@@ -7,10 +7,10 @@ import { focusedOutput } from './output'
  * Compare… (the picker) and Compare with Previous Result with its Exact Text form (CompareService): the menu's grid, else
  * the focused one. Compare… opens the picker on that Table while another group's Table of the run shares a column with it;
  * Compare with Previous compares it at once with the nearest earlier one. Tables of rows that have every row only: never a
- * Pivot, a comparison, a plan set or a Peek grid. The picker takes the pivot builder's place, so opening it closes the
- * builder (and Pivot… closes the picker).
+ * Pivot, a comparison, a plan set or a Peek grid. The picker is a popover beside what opened it: the toolbar's Compare
+ * button (which passes itself as `anchor`), else the grid it opens on.
  */
-export function compareContribution({ commands, compare, pivot, results, documents, menuTargets }: Pick<Workbench, 'commands' | 'compare' | 'pivot' | 'results' | 'documents' | 'menuTargets'>): Disposable {
+export function compareContribution({ commands, compare, results, documents, menuTargets }: Pick<Workbench, 'commands' | 'compare' | 'results' | 'documents' | 'menuTargets'>): Disposable {
   /** The grid a command names (a menu's), else the focused grid of the tab it names (the toolbar's) or of any tab (the
    *  palette's), else the focused entry of that tab or of the active document: never another tab's grid. */
   const gridOf = (args?: CommandArgs) => {
@@ -38,9 +38,8 @@ export function compareContribution({ commands, compare, pivot, results, documen
       run: (args?: CommandArgs) => {
         const target = pickerOf(args)
         if (!target) return
-        pivot.close(target.tabId)
         results.focusEntry(target.tabId, target.key)
-        compare.open(target.tabId, target.key)
+        compare.open(target.tabId, target.key, args?.anchor ? 'toolbar' : 'grid')
         results.setView(target.tabId, 'results')
       }
     })

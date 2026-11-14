@@ -169,7 +169,7 @@ being true.
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
 - A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
-  any other kind). The Compare picker's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
+  any other kind). The Compare popover's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
   pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both
   read: change the rule in both and add a case. Names compare through one fixed table, `src/shared/ordinal-casing.ts`, in
   the backend (`OrdinalNames`, which embeds the file), the renderer and the fake backend, not through an ICU's casing,
