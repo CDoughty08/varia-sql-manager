@@ -92,12 +92,13 @@ internal static class PeekLiveChecks
             var v1 = await Level(service, connectionId, Own("view", "V1"), "usedBy", json);
             var v2 = await Level(service, connectionId, Own("view", "V2"), "usedBy", json);
             var p3 = await Level(service, connectionId, Own("procedure", "P3"), "usedBy", json);
-            check(t is { Error: null, Truncated: null } && t.Items.Any(item => item is { Name: "V1", Kind: "view", Type: "V", SchemaBound: true, Database: null, Server: null } && item.Schema == schema)
-                && t.Items.Any(item => item is { Name: "TR", Kind: "trigger", Type: "TR" } && item.Parent is { Kind: "table", Name: "T]'表" } && item.Parent.Schema == schema)
+            // A trigger ON the table names it only in its ON clause, which sys.sql_expression_dependencies does not record: the table's
+            // level is the view alone, and the trigger shows up below P3, which it runs.
+            check(t is { Error: null, Truncated: null } && t.Items.Count == 1 && t.Items[0] is { Name: "V1", Kind: "view", Type: "V", SchemaBound: true, Database: null, Server: null } && t.Items[0].Schema == schema
                 && v1.Items.Count == 1 && v1.Items[0] is { Name: "V2", Kind: "view", SchemaBound: null }
                 && v2.Items.Count == 1 && v2.Items[0] is { Name: "P3", Kind: "procedure", Type: "P", Subtype: "sql" }
                 && p3.Items.Count == 1 && p3.Items[0] is { Name: "TR", Kind: "trigger" } && p3.Items[0].Parent?.Name == "T]'表",
-                "Objects that depend on a hostile-named table go three levels down, one level a request, the schema-bound view marked so and its trigger named below the table: "
+                "Objects that depend on a hostile-named table go three levels down, one level a request, the schema-bound view marked so and the trigger that runs P3 named below its table: "
                 + Names(t) + " | " + Names(v1) + " | " + Names(v2) + " | " + Names(p3));
             // Up the chain, from the trigger: what it depends on, then what that depends on.
             var tr = await Level(service, connectionId, new ObjectRefDto("trigger", database, null, "TR", new ParentRefDto("table", schema, "T]'表")), "uses", json);
