@@ -115,6 +115,7 @@ const api: VariaApi = {
   cancel: queryId => request('query.cancel', { queryId }),
   closeQuerySession: (sessionId, transaction) => request('query.session.close', transaction ? { sessionId, transaction } : { sessionId }),
   querySessionState: sessionId => request('query.session.state', { sessionId }),
+  setResultVisibility: params => request('results.visibility', params),
   getBackendState: () => ipcRenderer.invoke('varia:backend-state-get'),
   onBackendState: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: BackendState) => callback(state)

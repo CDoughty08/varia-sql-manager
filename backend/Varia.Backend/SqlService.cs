@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -91,6 +91,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
+    private readonly ResultVisibility visibility;
     private readonly ResultJobs jobs;
     private readonly bool hooks;
     private readonly Func<object, bool>? publish;
@@ -98,6 +99,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private long reportedGlobalBytes = -1;
+    /// <summary>A summary's budget counted as a report but carries no detail: the next check sends the store's detail once.</summary>
+    private bool detailPending;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
@@ -168,6 +171,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThreadPoolFloor.Ensure();
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
+        visibility = new ResultVisibility(id => this.store.Find(id) is not null);
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
@@ -314,7 +318,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -367,6 +371,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
@@ -2251,11 +2256,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
         var closed = store.Release(args.ResultIds);
+        visibility.Forget(args.ResultIds);
         // The fall goes out as an event before this answer, in order with the other results.memory events; the status bar
         // follows only those, so an answer overtaken by a newer event cannot show stale usage.
         if (closed > 0) ReportMemory();
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
+
+    /// <summary>Which results' grids are shown in any window (the whole set, replacing the last): bookkeeping only, for a
+    /// memory policy over hidden results (<see cref="ResultVisibility"/>). Ids of results not stored are ignored.</summary>
+    private ResultsVisibilityResult SetVisibility(ResultsVisibilityArgs args)
+    {
+        if (args.Visible is not { Length: <= ResultVisibility.MaxResults } ids || ids.Contains(0u) || ids.Distinct().Count() != ids.Length
+            || args.Seq is not (>= 1 and <= int.MaxValue) || args.Source is not { Length: 36 } text || !Guid.TryParseExact(text, "D", out var source))
+            throw new RequestException("INVALID_PARAMS", $"A source ID, a sequence number and at most {ResultVisibility.MaxResults} distinct result IDs are required.");
+        var applied = visibility.Set(source, args.Seq.Value, ids, out var kept);
+        return new ResultsVisibilityResult(kept, applied);
+    }
+
+    /// <summary>Which results are shown, for a memory policy over hidden ones and for the checks.</summary>
+    internal ResultVisibility Visibility => visibility;
 
     /// <summary>The most a user's limit is, in GiB, as Tools › Options allows (queryResults.grid.memoryLimitGiB).</summary>
     internal const int MaxMemoryLimitGiB = 1024;
@@ -2310,18 +2330,22 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
     /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage or the budget changes. The timer checks
-    /// once a second and results.close checks before it answers. A refused event is retried at the next check.</summary>
+    /// once a second and results.close checks before it answers. A refused event is retried at the next check. Its detail
+    /// (the Memory panel's Nerd metrics) is read only when an event goes out, so it adds no work to an unchanged check. A
+    /// query summary's budget counts as a report but has no detail, so the next check after one sends an event even when the
+    /// figures are unchanged, and the panel's results follow the query.</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            if (publish is null || used == reportedBytes && global == reportedGlobalBytes) return;
-            if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
+            if (publish is null || used == reportedBytes && global == reportedGlobalBytes && !detailPending) return;
+            if (!publish(new ResultsMemoryEvent(used, global, memorySeq + 1, store.MemoryDetail()))) return;
             memorySeq++;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = false;
         }
     }
 
@@ -2350,6 +2374,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var global = store.GlobalBytes;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = true;
             return new ResultBudget(used, global, store.QueryBytes, ++memorySeq, stoppedBytes);
         }
     }
@@ -2675,6 +2700,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         homes.Clear();
         connections.Clear();
         store.ReleaseAll();
+        visibility.Clear();
         SqlConnection.ClearAllPools();
     }
 }

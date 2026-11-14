@@ -62,6 +62,9 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
   // Keybinding labels in menus; the highlighted item shows them in menu.selectionForeground.
   ...text(['descriptionForeground'], ['menu.background']),
+  // The status bar Memory panel (a menu surface): a result's Raw and Packed state chips in Nerd metrics.
+  ...text(['memoryPanel.rawForeground'], ['menu.background', 'memoryPanel.rawBackground']),
+  ...text(['memoryPanel.packedForeground'], ['menu.background', 'memoryPanel.packedBackground']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
   // The kind badges of Search Objects results: the letters on each tone.

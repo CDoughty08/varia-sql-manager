@@ -52,6 +52,7 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query's Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release. Not in SSMS. |
 | `environment.layout.panelTabs` | Show panel tabs | Boolean | False |  | All | At once | Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs. Not in SSMS. Not shown in Options. |
+| `environment.statusBar.memoryNerdMetrics` | Show nerd metrics in the Memory panel | Boolean | False |  | All | At once | Whether the status bar's Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec's counters and the managed heap. The section's heading opens and closes it, and Varia remembers the choice. Not in SSMS. Not shown in Options. |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
 ### Environment › AutoRecover
@@ -309,4 +310,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (114 today).
+A patch holds at most one entry per setting (115 today).

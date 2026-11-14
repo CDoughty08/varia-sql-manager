@@ -45,7 +45,7 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
 /// query, and nothing more while the operating system reports high memory load. Reading from SQL Server never waits for
 /// the UI; a full budget truncates what is stored, with the reason. Results are released only by results.close, the next
 /// query on the same session (tab), or the process ending: closing a session or disconnecting keeps them, as SSMS does.</summary>
-internal sealed class ResultStore
+internal sealed partial class ResultStore
 {
     /// <summary>Bookkeeping charged per sealed page on top of its bytes.</summary>
     public const long PageOverhead = 96;
