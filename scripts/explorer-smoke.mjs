@@ -9,6 +9,7 @@ import {
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
+import { pinStackedResults } from './fixtures/results-pane.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -34,6 +35,8 @@ async function launch() {
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
+  await pinStackedResults(page)
   // Unsaved queries make exit ask first; answer Don't Save.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
 }
