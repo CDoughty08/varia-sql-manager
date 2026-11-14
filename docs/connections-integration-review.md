@@ -107,6 +107,9 @@ configuration-dependent Vitest cases were skipped. The 178 focused native checks
 cover the added security boundaries. Live group 2 passed 475 checks; the other live groups' failures were resolved and
 their affected suites rerun serially, including scripting, login/password pools, exact SID replacement, cancellation,
 restore, own-pool protection and SSIS Stop. Current Electron and cross-platform CI results are recorded in the PR.
+After the clean merge with current main `e9e68ee2`, the full check passed again in 110.1 seconds: 2,722 offline .NET
+checks and 5,075 Vitest tests. A separate integration-impact review found no connection, cancellation or result-lease
+issues from main's fair worker gate.
 
 One opt-in local SQL Server 2025 Windows Extended Events assertion remains a baseline limitation: its password-redaction
 test fails identically on an isolated build of unchanged main `733b2917`. The login/SSIS SQL and that assertion are
