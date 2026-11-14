@@ -32,6 +32,14 @@ if (args is [PivotBench.Argument, ..])
     PivotBench.Run(args);
     return;
 }
+// The page compression benchmark, run by hand (docs/page-compression-findings.md), one size and shape a process:
+// measures only, no checks.
+if (args is [PageCompressionBench.Argument, _, _, ..])
+{
+    PageCompressionBench.Run(args);
+    return;
+}
+
 // How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
 if (args is [FairnessBench.Argument, ..])
 {
