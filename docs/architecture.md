@@ -132,6 +132,12 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
+  the grids `ResultGrid` registers (one shared ResizeObserver per window, PaneService for the dock's `visibility:
+  hidden` tabs, document visibility, no timers), as the whole set when it changes and again each time the backend
+  becomes ready or the results port's generation changes; once main has reported a state, only while it and the results
+  port agree on the generation; ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`, outside the
+  store's page code, as a hint: it never releases, pins or changes a result by itself.
 - The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
   sent by main alone when Tools › Options' limit changes and as each generation becomes ready). They are replaced whole and
   each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
@@ -189,17 +195,39 @@ being true.
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
+  Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
+  identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
+  `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
+  meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
+  So no pin outlasts the reading: an operation over the whole result runs through `SqlService.UntilReleased`, which the
+  release cancels (`ResultSetBuffer.Released`, answering `RESULT_RELEASED`), and results.read pins only to take or build a
+  page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
+  The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
+  (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
+  (`ResultSetBuffer.RequirePins`).
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
   `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
   representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
-  SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
+  SQL-returned plan set; the backend's `results.pivot` refuses anything but `rows` too) and replaces the group's Pivot in
+  place (`replaceSet`: same entry key, next `revision`, new provenance in `ResultSlot.pivot`, then the old result is
+  released; the old one is never released early to make room); a bare run (Peek's, `begin`'s
   `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
   already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
+  any other kind). The Compare picker's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
+  pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both
+  read: change the rule in both and add a case. Names compare through one fixed table, `src/shared/ordinal-casing.ts`, in
+  the backend (`OrdinalNames`, which embeds the file), the renderer and the fake backend, not through an ICU's casing,
+  whose Unicode version differs by platform; `DiffChecks.OrdinalCasing` checks it against the runtime wherever the runtime
+  knows the letter, and `VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test` rewrites it from the runtime's casing. Pivot builds and comparisons share the window's `DerivedJobs` (four at once, a
+  busy refusal retried) and count each other's new results in flight against a run's 1,000 (`adding`), one comparison per pair and exact-text choice at a time. A comparison's source links come from
+  its frozen `ResultSlot.sources` and go only to an entry whose set key is still the one compared; otherwise they read
+  closed.
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
   stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
   goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's

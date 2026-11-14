@@ -63,6 +63,8 @@ export const limits = {
   timers: { helloMs: 20_000, pingMs: 5000, unresponsiveMs: 15_000, stopGraceMs: 2000, backstopMs: 5000, progressPerSecond: 10, messagesFlushMs: 100 },
   restart: { delaysMs: [0, 1000, 2000], breakerLosses: 3, breakerWindowMs: 120_000, resetAfterMs: 300_000 },
   ids: { maxRequestId: 2 ** 31 - 1 },
+  /** results.visibility: the most result ids one set names (ResultVisibility.MaxResults in C#). */
+  visibility: { maxResults: 4096 },
   registries: { lostConnections: 1024, abandonedRequests: 4096, ownedResults: 100_000, stderrLines: 32, stderrCharacters: 512 },
   /** Copy and Save Results As (one of each per window). Copy text is capped before any work; progress is pushed at most
    *  4 times a second. */

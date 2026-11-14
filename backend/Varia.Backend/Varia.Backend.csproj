@@ -26,6 +26,8 @@
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="11.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The column-name casing table the renderer and the fake backend share (OrdinalNames reads its ranges). -->
+    <EmbeddedResource Include="../../src/shared/ordinal-casing.ts" LogicalName="Varia.Backend.Results.ordinal-casing.ts" />
     <!-- Generated from src/shared/explorer/catalog.ts by tests/explorer-catalog.test.ts. -->
     <EmbeddedResource Include="Explorer/explorer-catalog.json" LogicalName="Varia.Backend.Explorer.explorer-catalog.json" />
     <!-- Generated from src/shared/scripting/catalog.ts by tests/scripting-catalog.test.ts. -->

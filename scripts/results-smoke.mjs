@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, pivotSource, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1439,6 +1439,9 @@ try {
   await memory.hover()
   await expect(memoryDetails).toBeVisible()
   await expect(memoryDetails).toContainText('New results may be truncated.')
+  // A preview keeps Nerd metrics' heading out of the tab order: the next Tab from the window's last control wraps to the
+  // menubar, as before (menus-smoke).
+  await expect(memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })).toHaveAttribute('tabindex', '-1')
   await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
   await expect(resultsMemory).toHaveText('236 MB / 256 MB')
   const triggerBox = await memory.boundingBox(), detailsBox = await memoryDetails.boundingBox()
@@ -1455,6 +1458,22 @@ try {
   await expect(memoryDetails).toBeHidden()
   await memory.press('Enter')
   await expect(memoryDetails).toBeVisible()
+  // Nerd metrics start collapsed; the heading opens them (a saved setting) with what the store holds, nothing compressed,
+  // and the largest results named by their tab and Results caption.
+  const nerd = memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })
+  await expect(nerd).toHaveAttribute('aria-expanded', 'false')
+  // Pinned by Enter, the panel's heading is the next stop after the Memory control.
+  await page.keyboard.press('Tab')
+  await expect(nerd).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(nerd).toHaveAttribute('aria-expanded', 'true')
+  await expect(memoryDetails.getByRole('img', { name: 'In memory now: 236 MB. Raw pages 236 MB', exact: true })).toBeVisible()
+  const biggest = memoryDetails.getByRole('list', { name: 'Biggest results', exact: true }).getByRole('listitem')
+  await expect(biggest).toHaveCount(1)
+  await expect(biggest.first()).toContainText(/ · Result \d+.*Raw$/)
+  await expect(memoryDetails).toContainText('Compression off')
+  await page.keyboard.press('Space')
+  await expect(nerd).toHaveAttribute('aria-expanded', 'false')
   await page.mouse.click(5, 80)
   await expect(memoryDetails).toBeHidden()
   await run('-- varia-fake: sets=W1*10 memory=0.96')
@@ -1514,14 +1533,14 @@ try {
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
   await expect(resultsMemory).toHaveText('0 MB / 256 MB')
-  console.log('Results checks: both memory rings, hover and click details, the 90 % and 95 % Results thresholds, and memory released on close.')
+  console.log('Results checks: both memory rings, hover and click details, Nerd metrics, the 90 % and 95 % Results thresholds, and memory released on close.')
 
   // 13. Menu: Shift+F10 on the grid lists its commands; a right-click on an unselected cell selects it first.
   await cell(1, 1).click()
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1631,14 +1650,17 @@ try {
   await cell(0, 0, pivoted).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Pivot Results…', exact: true }).click()
   await expect(pivotSource(page)).toHaveText('Result 1')
-  await expect(pivoting).toContainText('Building again replaces Pivot of Result 1.')
-  // A second build, without Max of id, replaces the group's Pivot: still one Pivot, now of two columns.
+  await expect(pivoting).toContainText('Building again replaces Pivot of Result 1 once the new one is built.')
+  // A second build, without Max of id, replaces the group's Pivot in place: still one Pivot, in the same slot (its entry
+  // key), now of two columns.
+  const pivotEntry = await resultEntryKey(pivoted)
   await pivoting.getByRole('button', { name: 'Remove value 2', exact: true }).click()
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
   await expect(pivoted.getByRole('columnheader', { name: /^Count of rows/ })).toHaveCount(1)
   await expect(pivoted.getByRole('columnheader', { name: /^Max of id/ })).toHaveCount(0)
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(pivoted).toHaveCount(1)
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()
@@ -1657,7 +1679,8 @@ try {
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
   await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
-  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  // The builder has two live regions (its error, and its waiting notes): the refusal is in one of them.
+  await expect(pivoting.getByRole('status').filter({ hasText: 'The column group has 300 distinct values, and a pivot can have at most 256 column groups.' })).toBeVisible()
   await expect(anyResultGrid(page)).toHaveCount(1)
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await run('-- varia-fake: sets=W1*100')
@@ -2125,8 +2148,9 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transposed gives way in a narrow window (it is in the grid's menu and the palette), so the other groups fit.
+  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups fit.
   await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
@@ -2280,6 +2304,46 @@ try {
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
   console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked; highlights and search matches show over its tones.')
+
+  // 14g. The Compare picker (grouped results PR 16): on Result 1's grid it offers the other Table, Result 2 (never the
+  // comparison), as the old side with Result 1 as the new. Swapped, it is the comparison the run has, so Show It goes to
+  // it; the other way round makes a second one, whose strip links to its inputs and reads one closed once it is closed.
+  // The picker stays open through all of it until the user closes it.
+  await cell(0, 0, grid('Result 1')).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
+  const picker = page.getByRole('complementary', { name: 'Compare', exact: true })
+  await expect(picker.getByRole('radio')).toHaveCount(1)
+  await expect(picker.getByRole('radio', { name: /^Result 2/ })).toBeChecked()
+  await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 2')
+  await expect(picker.getByRole('group', { name: 'New side' })).toContainText('Result 1')
+  await expect(picker).toContainText('Every column pairs.')
+  await picker.getByRole('button', { name: 'Swap old and new' }).click()
+  await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 1')
+  await picker.getByRole('button', { name: 'Show It', exact: true }).click()
+  await expect(diff).toBeFocused()
+  await expect(picker).toBeVisible()
+  await picker.getByRole('button', { name: 'Swap old and new' }).click()
+  await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 2')
+  await picker.getByRole('button', { name: 'Compare', exact: true }).click()
+  const second = grid('Result 4')
+  await expect(second).toBeFocused()
+  await expect(picker.getByRole('button', { name: 'Show It', exact: true })).toBeVisible()
+  await expect(page.getByText('Differences: Result 2 → Result 1', { exact: true })).toBeVisible()
+  await expect(strip('Result 4')).toContainText('Result 2 → Result 1, rows matched by ItemId:')
+  await expect(strip('Result 4')).toContainText('Filters and sorts on the inputs were not applied.')
+  await strip('Result 4').getByRole('button', { name: 'Result 2', exact: true }).click()
+  await expect(grid('Result 2')).toBeFocused()
+  await cell(0, 0, grid('Result 2')).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Close Just This Result', exact: true }).click()
+  await expect(strip('Result 4')).toContainText('Result 2 (closed) → Result 1')
+  await expect(strip('Result 4').getByRole('button', { name: 'Result 2', exact: true })).toHaveCount(0)
+  await expect(strip('Result 4').getByRole('button', { name: 'Result 1', exact: true })).toHaveCount(1)
+  // Its target closed, the picker stays on Result 1 with nothing to compare it with, until the user closes it.
+  await expect(picker.getByRole('radio')).toHaveCount(0)
+  await expect(picker.getByRole('button', { name: 'Compare', exact: true })).toBeDisabled()
+  await picker.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(picker).toHaveCount(0)
+  console.log('Results checks: the Compare picker offers the other Table only, swaps its sides, shows a comparison the run has, makes a new one that takes the focus while it stays open, and its strip links to its inputs and reads a closed one closed.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

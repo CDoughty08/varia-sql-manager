@@ -588,6 +588,70 @@ Outcome, accepted by the owner:
 10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
+    - **What PR 10 settled or left** (`tests/results-pivot.test.ts`, `tests/results-derived-jobs.test.ts` and
+      `PivotChecks.cs` hold its checks):
+      - A rebuilt Pivot keeps its slot's entry key, number, name and place; `ResultsService.addSet` swaps the new result
+        into the slot (`replaceSet`), raises `revision`, records the new provenance, publishes at once (not on the next
+        frame, so no snapshot points a grid at a released handle), and only then releases the old result. The grid is built again over the new result (the stack keys `ResultGrid` by set key under the
+        stable item), so nothing outside the service sees a new key. `run.pivots` is gone.
+      - What a rebuild keeps, as the lifecycle says: the focus and the group's selected view, collapse and splitter
+        share, the orientation, and the sort keys, user-set widths and header column of each column whose name is unique
+        in both results (`uniqueNames`, `carriedState`; GridView measures a carried state's NaN widths as new columns).
+        It drops the filters (the toolbar says "Pivot of Result N was built again, so its filters were removed."), the
+        selection, the scroll and the transposed layout's per-row widths (its shared width and name column stay). A copy of the old result in progress is
+        cancelled. Highlights rebind to the new result by identity, as they do after a sort; that is not a rule the plan
+        named.
+      - Provenance is `ResultSlot.pivot` (`PivotProvenance`): the recipe, the resolved filters of the view the build
+        read (none for stored rows), input rows, and whether the Table was truncated, incomplete or approximate. The
+        strip adds "Result N holds only part of its query's rows, so the pivot counts those." for the first two. PR 11
+        compares `filters`.
+      - The stored recipe and the draft: drafts stay per group by ordinal (PR 9); opening the builder on the Pivot's grid
+        (Pivot Results… there, or the toolbar while it has the focus) resets the draft to the Pivot's recipe. Opening it
+        on the Table keeps the draft as it is, so an edit not yet built survives there.
+      - Failure, cancellation and refusal keep the old Pivot. The builder says why: the backend's sentence; for
+        `TOO_LARGE` on a replacement it adds ", or close Pivot of Result N and build it again."; a user's cancel of a
+        replacement says "Building was cancelled, so Pivot of Result N still shows its last build." (a first build's
+        cancel says nothing, as before). The old Pivot is never released early.
+      - Late answers: a build is given up when its run changes, its Table closes or the Pivot it would replace closes
+        (closing the Pivot does not let a rebuild come back as a slot the user closed), or a newer build of its group
+        starts. An answer that arrives anyway is released through `ResultsService.discard`.
+      - `results.pivot` takes only `rows` in `SqlService.PivotAsync` and the fake backend (`INVALID_PARAMS`, "Only a query's
+        results can be pivoted.", before anything is reserved). The renderer already refused it in `addSet` and
+        `pivotGroup`; `ResultClient` does not check the kind (its handle state has no kind).
+      - Parallel builds: `DerivedJobs` (`results/derived-jobs.ts`, one per window as `workbench.derivedJobs`) gives four
+        places for pivot builds, which PR 16 gave comparisons too. A free place is taken in the same task, so
+        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots and comparisons to finish" (or, while it
+        waits to ask a busy backend again, that it is asked again in a moment). `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
+        never `TIMEOUT`. Builds of different groups no longer block each other (`PivotTab.busy` is gone, `queued` is
+        new); a newer build of the same group cancels the older.
+      - A build reads the Table's view the grid showed at the click, held through `ResultsService.holdView` from then
+        until the build ends, so a grid re-sorted or re-filtered while the build waits for a place or for a busy backend
+        changes nothing it reads, and does not close it. On `VIEW_NOT_FOUND` (the backend evicted it) the build runs once more: over the
+        grid's current view when the grid has built another since, else over the same order and filters built again for
+        the build alone and closed after it. The grid's own evicted view is not rebuilt here. A second failure says the
+        backend's sentence and keeps the old Pivot.
+      - The 1,000 rule: a group's first Pivot is refused before the backend is asked when the run's sets plus other
+        groups' first Pivots in flight in that tab reach 1,000; a refused build leaves the group's build in flight alone.
+        A replacement is never refused by it. The count reads the published snapshot, which may be a frame behind, and
+        does not count comparisons in flight; `addSet` still refuses past 1,000 whoever asks, so the worst case is a
+        build released unused.
+      - A Save Results As of the old Pivot in progress during a rebuild keeps the old result until the save ends (its
+        file dialog may still be open, before main checks the result is there), then releases it; its strip sits on the
+        rebuilt Pivot's slot until it ends. A Copy of the old Pivot in progress is cancelled, as for a close.
+      - Not done, as the plan chose: holding a build back by its budget estimate (the findings' `rows × (16 × keys + 16)`
+        suggestion). Two large builds of one query can still refuse each other with `TOO_LARGE`, and for a replacement
+        the old Pivot's own memory counts against the new one.
+      - **The cap of four stands**, measured again now that a build sorts on several threads (`--pivot-bench --only
+        parallel`, same 24-core machine, other sessions running on it; each figure is one cold build, as the bench
+        runs it). Five million rows at 1 GiB a query: one build 1.29 to 1.32 s; two at once 2.6 to 3.1 s each (no faster
+        than one after the other); four at once 2.3 to 4.0 s each, all four done in 2.5 to 4.1 s against 5.2 s one after
+        another; eight refuse three by the budget. Twenty million rows at 8 GiB a query: one 5.3 s, two 17.4 s each, four
+        14.4 to 19.4 s, eight 14.9 to 19.4 s with none refused. At 1 GiB a query a 20-million-row build is now refused
+        alone (725 MB of keys beside a 347 MB source), in under 0.1 s. So a build no longer runs on one thread while others
+        wait: builds at once share the cores, each takes about twice as long, and four together still finish well before
+        four in turn. Nothing starves, which is what the cap is for; two at once gain nothing over one after the other, so
+        a lower cap would cost little either, but the plan's four is kept. [Pivot performance findings](pivot-performance-findings.md#measured-again-for-pr-10)
+        has the table.
 11. **Out of date and Update.**
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
@@ -601,6 +665,54 @@ Outcome, accepted by the owner:
     benchmark case, not smoke.
 15. **Save names, narrow and short panes, popouts.**
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
+    - **What PR 16 settled or left** (`tests/results-compare.test.ts`, `tests/compare-pairing.test.ts`,
+      `tests/results-derived-jobs.test.ts`, `DiffChecks.cs` and `results-smoke` step 14g hold its checks):
+      - The picker is a side panel in the builder's place (`ComparePanel`): opening Compare closes the Pivot builder and
+        Pivot… closes the picker. It is opened by a new command, `output.compare` ("Compare Results…" in the palette, a
+        Compare toggle in the results toolbar). Its grid-menu title is **Compare…** (p): to free p, Copy
+        Column Name took y and the Transpose submenu n.
+      - Targets are a radio group, not the mock's listbox: the keyboard lint allows no key listener of its own, and radios
+        bring the arrow keys. The default target is the Table Compare with Previous Result would pick, else the first.
+      - The picker stays on the Table it was opened on when the focus moves (the mock closes it); Compare… on another grid
+        moves it. Only the user closes it (Close, the head's close button, the toolbar toggle, Pivot…). It follows its
+        Table and target by group number into the next run, waiting while the query runs; while the run has no such
+        Table it says so and offers nothing. A target that closes leaves it with nothing picked. It goes only with the
+        tab's results: the tab closing, Close Results, a finished run with no result, or its last result closed (nothing
+        to show it beside). A group whose number now holds a plan set counts as no Table. Cancel is said in the picker.
+      - While its pair runs the picker offers Cancel and shows a failure there; success leaves it open (its button then
+        reads Show It) and focuses the comparison unless the user moved the focus meanwhile (`focusStamp`). The run's comparison of the same two inputs,
+        the same way round and exact-text choice is shown (Show It), not made again.
+      - Parallel comparisons go through PR 10's `DerivedJobs`, the workbench's one instance that Pivot builds use (this PR's
+        own `DerivedWork` was dropped when PR 10 landed first): four builds and comparisons at once, the rest queued in
+        order, a `TOO_MANY_REQUESTS` or `BUSY` refusal retried after 1, 4 and 16 s with the place given back meanwhile,
+        never `TIMEOUT`. The Pivot builder's wait now says "other pivots and comparisons".
+      - The 1,000 rule counts this run's comparisons and first Pivots in flight in both services (`compareFullText`, and
+        the Pivot refusal): each takes the other's `adding(tabId)`, wired in the workbench.
+      - The backend refuses any kind but `rows` on either side with `INVALID_PARAMS` and `SqlService.NotTablesSentence`;
+        the fake backend does the same, and now pairs by wire and `OrdinalIgnoreCase` as `ResultDiffer.Pairs` does
+        (it paired by lower-cased name only). No protocol change.
+      - The backend (`ResultDiffer.Pairs` through `OrdinalNames`), the renderer and the fake backend compare names with
+        one fixed table, `src/shared/ordinal-casing.ts`: `OrdinalIgnoreCase` code point by code point, as the generating
+        runtime cased it. Neither `OrdinalIgnoreCase` itself nor `toUpperCase` could be shared: each follows its own ICU
+        and so its own Unicode version (and JavaScript maps ſ to S and ı to I). `DiffChecks.OrdinalCasing` checks the table
+        against the runtime wherever it knows the letter and against the count and checksum its generator wrote into it (a
+        lost range shows); `VARIA_UPDATE_ORDINAL_CASING=1` rewrites it. `tests/fixtures/compare-pairing` has cases
+        for the Kelvin sign, ı, ſ, a letter past the BMP and one whose full upper case is two letters. A target sharing more columns than a diff can show
+        (`ResultDiffer.MaxPairs`) is not offered.
+      - Source links: the strip starts with the two inputs from `ResultSlot.sources`, each a link while an entry of that
+        key still shows that set key, else "Result N (closed)". A link focuses the input's grid, which scrolls the stack
+        to it; a layout that mounts the grid only when selected (Tabs, PR 13) gets the focus a frame later. The strip
+        also says that the inputs' filters and sorts were not applied.
+      - Compare… from the toolbar acts on its own tab's focused grid, never another tab's; from the palette with no grid
+        focused, on the active document's focused result (as Pivot… does). Compare with Previous Result now falls back the
+        same way.
+      - On success the keyboard focus goes from the Compare button to the comparison's grid (`focusResultGrid`, looked for
+        over the next few frames while the stack draws it), unless the user put it somewhere else meanwhile. While its
+        comparison runs the button is `aria-disabled`, not disabled, so the focus stays on it and a failure meets it there.
+      - Left: a target's row count in the picker is its stored rows, not its view's; the picker does not warn when an
+        input is still loading (such a Table is simply not offered). A re-run releases the old results before any new
+        one arrives, so the results view (the picker with it) is not drawn until the first set comes, and a keyboard focus
+        inside it falls to the page, as it does from a grid; the picker's state waits in `CompareService` meanwhile.
 17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
     took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.

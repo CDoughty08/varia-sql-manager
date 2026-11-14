@@ -79,8 +79,8 @@ internal static class LiveTableChecks
         var query = Fill(store.BeginQuery("query"));
         var livePages = live.PagesFor(0, int.MaxValue);
         var queryPages = query.PagesFor(0, int.MaxValue);
-        check(livePages.Count > 10 && livePages.All(page => page.Body.Length < 85_000) && queryPages.Max(page => page.Body.Length) > 200_000 && live.RowsAvailable == 20_000,
-            "a live table seals 64 KiB pages (off the large object heap) while a query's pages stay 256 KiB: " + livePages.Max(page => page.Body.Length) + " and " + queryPages.Max(page => page.Body.Length));
+        check(livePages.Count > 10 && livePages.All(page => page.Length < 85_000) && queryPages.Max(page => page.Length) > 200_000 && live.RowsAvailable == 20_000,
+            "a live table seals 64 KiB pages (off the large object heap) while a query's pages stay 256 KiB: " + livePages.Max(page => page.Length) + " and " + queryPages.Max(page => page.Length));
         var before = store.FreedSinceCollect;
         store.Release(live.ResultId);
         var afterLive = store.FreedSinceCollect;

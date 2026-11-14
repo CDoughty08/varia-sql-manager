@@ -95,7 +95,9 @@ export const shapes = {
  * The directive on a script's first line: `-- varia-fake: sets=W1*200000@50000,N1*100 messages=40 errors=2 memory=0.92 hold`.
  * `@rate` streams that many rows a second; `M1*n` is n one-row sets; `hold` keeps the script running while the control
  * file hold/query.execute exists; `truncated=queryBudget` (or another TruncationReason) reports each set as having stopped
- * keeping rows for that reason, having read twice the rows it kept. Returns undefined when the script has no directive.
+ * keeping rows for that reason, having read twice the rows it kept. `packed=2.4` reports every kept set but the first as
+ * compressed at that ratio in results.memory's detail (the second unpacking when there are three or more), for the
+ * Memory panel's Nerd metrics. Returns undefined when the script has no directive.
  */
 export function parseDirective(sql) {
   const match = /^--\s*varia-fake:(.*)$/m.exec(sql.split('\n', 1)[0])
@@ -106,6 +108,10 @@ export function parseDirective(sql) {
     if (key === 'hold') directive.hold = true
     else if (key === 'messages' || key === 'errors') directive[key] = Number(value)
     else if (key === 'memory') directive.memory = Number(value)
+    else if (key === 'packed') {
+      directive.packed = Number(value)
+      if (!(directive.packed >= 1 && directive.packed <= 20)) throw new RangeError('A packed ratio is 1 to 20: ' + value)
+    }
     else if (key === 'truncated') {
       if (!['rowLimit', 'queryBudget', 'globalBudget', 'systemMemory'].includes(value)) throw new RangeError('Unknown truncation reason: ' + value)
       directive.truncated = value

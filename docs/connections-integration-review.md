@@ -161,10 +161,13 @@ on a later callback-authenticated query. Existing README and Getting Started seq
 shortcut or fictional sample behavior changed in this corrective pass.
 
 Independent cross-reviews closed an additional deferred-prune race, three accepted-startup/preemption cases and a
-database-cache rollback regression. The final passes found no remaining actionable findings in these corrected paths.
+database-cache rollback regression.
 Before merging newer main, the full check passed in 90.9 seconds: 2,762 offline .NET checks, 5,106 Vitest tests,
 TypeScript and the production build; 24 configuration-dependent cases were skipped. Focused real-driver validation
 passed 29 live checks and 31 Login Properties checks. The owned SQL fixtures were cleaned up.
+The combined tree through main `310e1b7f` passed the full check in 99.2 seconds: 2,805 offline .NET checks and 5,193
+Vitest tests, with the same 24 configuration-dependent skips, TypeScript and the production build. Generated command
+and settings references were regenerated from the merged catalogs.
 
 ## Initial local validation and limits
 

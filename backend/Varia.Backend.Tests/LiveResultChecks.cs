@@ -44,7 +44,7 @@ internal static class LiveResultChecks
     {
         var stored = store.Find(set.ResultId) ?? throw new InvalidOperationException("Result " + set.ResultId + " is no longer stored.");
         var rows = new List<PageCell[]>();
-        foreach (var page in stored.PagesFor(0, int.MaxValue)) rows.AddRange(PageReader.Read(page.Body, stored.Wires).Rows);
+        foreach (var page in stored.PagesFor(0, int.MaxValue)) rows.AddRange(PageReader.Read(PinnedPage.Body(page), stored.Wires).Rows);
         return rows;
     }
 
@@ -344,7 +344,7 @@ internal static class LiveResultChecks
             writer.Header(all);
             foreach (var page in store.Find(set.ResultId)!.PagesFor(0, int.MaxValue))
             {
-                var view = PageView.Parse(page.Body, all.Length);
+                var view = PageView.Parse(PinnedPage.Body(page), all.Length);
                 for (var row = 0; row < view.Rows; row++) writer.Row(view, row, all);
             }
             check(written.WrittenSpan.SequenceEqual(File.ReadAllBytes(paths["csv"])), "the exported file holds exactly ResultTextWriter's bytes over the stored pages");

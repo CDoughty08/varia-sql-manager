@@ -150,7 +150,7 @@ internal static class LiveChecks
         var sorted = Next(host, 1, ref frame);
         var sortedTable = sorted?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0];
         var set = sortedTable is { } t ? Stored(store, t) : null;
-        var page = set?.PagesFor(0, 10) is [{ } stored] ? PageReader.Read(stored.Body, set.Wires) : null;
+        var page = set?.PagesFor(0, 10) is [{ } stored] ? PageReader.Read(PinnedPage.Body(stored), set.Wires) : null;
         var sortedSample = sorted?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe);
         var resorted = sortedSample?.TryGetProperty("resorted", out var mark) == true && mark.GetBoolean();
         check(updated?.Header.Id == 2 && Result(updated).GetProperty("applied").GetBoolean() && sortedTable?.GetProperty("revision").GetInt64() == 4
@@ -165,7 +165,7 @@ internal static class LiveChecks
         var cleared = host.Next(FrameKind.Response);
         var unsorted = Next(host, 1, ref frame)?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0];
         var plainSet = unsorted is { } u ? Stored(store, u) : null;
-        var plainPage = plainSet?.PagesFor(0, 10) is [{ } plainStored] ? PageReader.Read(plainStored.Body, plainSet.Wires) : null;
+        var plainPage = plainSet?.PagesFor(0, 10) is [{ } plainStored] ? PageReader.Read(PinnedPage.Body(plainStored), plainSet.Wires) : null;
         // The source's order is ascending ids, whether the revision re-sorts the last sample or is a new one.
         var plainIds = plainPage?.Rows.Select(row => long.Parse(row[0].Text!, System.Globalization.CultureInfo.InvariantCulture)).ToList() ?? [];
         check(cleared?.Header.Id == 20 && Result(cleared).GetProperty("applied").GetBoolean() && unsorted?.GetProperty("revision").GetInt64() == 5

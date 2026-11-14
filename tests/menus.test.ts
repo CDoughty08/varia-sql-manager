@@ -404,7 +404,7 @@ describe('menu state', () => {
       // Search in results: the results toolbar's search box, its keys in a grid, and the palette.
       'output.find', 'output.findNext', 'output.findPrevious',
       // The results toolbar's Profile and Row size toggles, also in the grid's menu.
-      'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.pivot', 'output.closeResult',
+      'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.compare', 'output.pivot', 'output.closeResult',
       // The grid menu's Transpose submenu, also the results toolbar's Transposed and Headers.
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))

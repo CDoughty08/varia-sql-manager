@@ -118,7 +118,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }` |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -247,6 +247,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
+| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again each time the backend becomes ready or the results port's generation changes; once main has reported a state (read at start, then pushed), only while it reports the backend ready in the port's generation; one request in flight at a time | unary | control | 10 s. Takes `{ source, seq, visible }`: a UUID per renderer load, a number rising from 1 (at most 2^31 - 1), and the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last. Answers `{ visible, applied }`: how many ids the backend's visible set holds, and false for a set from the same source not numbered above the last one applied (control requests run concurrently, and one past its deadline still runs). Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
@@ -1129,12 +1130,31 @@ ignores a query's events once its summary has arrived.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. A summary has no `detail`, so the next check after one sends the event once even when use is unchanged. |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
 
 Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
 pairs each sequence with the backend generation, retains the latest report for each feature, and replays both when a new
 results port opens.
+
+`results.memory` also carries `detail`, what the result store holds, for the status bar Memory panel's Nerd metrics
+([status-bar-memory.md](status-bar-memory.md)). It is read only when an event goes out, at the moments above, so it adds
+no timer and nothing to a check that finds no change; a query summary's `budget` has none, so main keeps the last
+event's with it until the check after the summary sends a new one. `resultMemoryDetailSchema` (`src/shared/ipc/port-messages.ts`) and `ResultMemoryDetail`
+(`Contracts.cs`) define it:
+
+| Field | Meaning |
+| --- | --- |
+| `logicalBytes` | The rows as read: every stored result's pages uncompressed |
+| `storedBytes` | What holds them now: raw pages plus compressed ones |
+| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
+| `cacheBytes` | Decompressed pages kept for reads |
+| `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
+| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
+| `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
+
+Nothing is compressed yet: `storedBytes` equals `logicalBytes`, the compressed and cache figures and the codec's counters
+are 0, every result is `raw`, and the codec has no name.
 
 ## Result pages
 
@@ -1237,6 +1257,23 @@ Results stay in backend memory, never on disk (`ResultStore`).
   exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
   SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
   `RESULT_RELEASED` after the current page and stops storing at once.
+- **Visibility.** `results.visibility` tells the backend which query results' grids are shown in any window, popouts
+  included (result sets, pivots, comparisons and Peek's rows; not live views' tables, which are replaced every tick, so
+  a stored live table always counts as hidden and a policy must exclude live tables). A grid is shown while it is
+  rendered with a size (a query tab not shown has unmounted it; a hidden or collapsed Results panel and a detached panel
+  have no size; a dock tab behind another, or a panel beside a maximized group, is `visibility: hidden`, which the
+  renderer reads when PaneService publishes and again after the main window's next frame, where the dock un-hides a
+  panel) and its window is visible (main's word for the main window while popouts keep its document visible; a popout's
+  own document). The renderer sends the whole set when it changes (one message per task's changes, never on a timer),
+  and again each time the backend becomes ready, so a lost, refused or stale message only delays what reads it, until
+  the next change or the next return to ready (nothing retries on a timer; a set flushed as main restarts the backend
+  can still reach the next one, since the request carries no generation, until the set sent at its ready replaces it).
+  `ResultVisibility` (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it
+  became hidden (or was first asked about). Nothing is evicted by age: results.close forgets released results at once,
+  and other released results' entries are swept once the table has doubled since the last sweep, so it stays within
+  twice its size after the last sweep. It changes nothing in the store: `IsHidden(resultId, out since)` is the query for
+  a later policy that compresses hidden results (stage 1 of the page compression plan), which must not call it while
+  holding the store's locks.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
@@ -1563,14 +1600,18 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 
 ## Result diffs
 
-Compare with Previous Result compares two results of one query in the backend (`Results/ResultDiff.cs`); the renderer
-receives a new result to read like any other, never rows to compare.
+Compare with Previous Result and the Compare picker compare two results of one query in the backend
+(`Results/ResultDiff.cs`); the renderer receives a new result to read like any other, never rows to compare. The renderer
+runs at most four comparisons at once per window (`DerivedJobs`, whose places Pivot builds share) and asks again after a `TOO_MANY_REQUESTS` or `BUSY`
+refusal (after 1, 4 and 16 s), as highlights do; the backend is unchanged by that.
 
 - **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
-  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
-  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
+  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise) and be a
+  query's own result sets, kind `rows` (`INVALID_PARAMS`, "Only a query's own result sets can be compared: not a pivot, a
+  comparison or an execution plan set."), and complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
   have stopped storing (`BUDGET_STOPPED`, as a pivot). Columns pair by name,
-  case-insensitively, in `left`'s order, when both hold text or both binary; at least one must pair (`INVALID_PARAMS`), at
+  case-insensitively (`OrdinalIgnoreCase` through one fixed table, `src/shared/ordinal-casing.ts`, so every platform pairs alike), in `left`'s order, when both hold text or both binary, a repeated name with the
+  next unused one (`tests/fixtures/compare-pairing/cases.json` pins the rule for the backend and the picker's copy of it); at least one must pair (`INVALID_PARAMS`), at
   most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
   name up to 64 that do not, which are not compared.
 - **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,
@@ -1627,7 +1668,8 @@ receives a new result to read like any other, never the rows it grouped.
   `count`, `countDistinct`, `sum`, `avg`, `min` and `max`, and only `count` may leave out the column (it then counts rows,
   COUNT(*)). Columns must be within the result, and `sum` and `avg` need an exact or approximate numeric column other than
   bit (`INVALID_PARAMS`, "Sum and Average need a numeric column."). The result must be complete (`RESULT_OPEN`) and be a
-  query's rows or another pivot (`INVALID_PARAMS` for a diff or any other kind). Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
+  query's own rows (`INVALID_PARAMS`, "Only a query's results can be pivoted.", for a pivot, a diff, a plan set or any other
+  kind, before anything is reserved). Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
   answer counts the rows read.
 - **Grouping.** Values group as GROUP BY would, by the sort's comparison ([Sorted views](#sorted-views)): text by its
   collation, ignoring trailing spaces, exact numerics by value, NULL as a group of its own. Groups come in ascending
@@ -1678,11 +1720,19 @@ receives a new result to read like any other, never the rows it grouped.
   cell of 65,536 rows or more is sorted on several threads and its runs counted in parts. Without room for the bounds it
   sorts the rows by cell and value in one sort, on several threads too. The counts are one thread's either way. The
   worker's `cancel` stops it (`CANCELLED`), every thread with it.
-- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
-  panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
-  N", whose grid strip says what was read and how many groups it has; a refusal shows in the panel, which keeps the draft. A new run gives up a pivot in flight, and
-  `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
-  which follows its columns by name if the query now returns them in another order (`remapDraft`).
+- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each
+  group's draft and shows the pivot as the group's Pivot, named "Pivot of Result N", whose grid strip says what was read
+  and how many groups it has; a refusal shows in the panel, which keeps the draft. A group's Pivot is replaced atomically:
+  the old result stays held and readable while the new one is built, so for that time the query's budget holds both,
+  and `addSet` puts the new one in the same slot under the same entry key (the slot's `revision` counts builds) before
+  releasing the old one. Builds of different groups run at once through `DerivedJobs`: at most four a window together with
+  comparisons, the rest waiting in the renderer, and `BUSY` or `TOO_MANY_REQUESTS` asked again after 1, 4 and
+  16 s (a new request each time, never on `TIMEOUT`). A build reads the Table's view the grid showed at the click and holds it
+  (`ResultsService.holdView`) from then until it ends and, when the backend evicted that view (`VIEW_NOT_FOUND`), builds once more: over the grid's current
+  view if it has built another, else over a view of the same order and filters built for the pivot alone and closed after. A run holds at most 1,000 results: a group's first Pivot that would pass that, counting first Pivots in flight,
+  is refused before the backend is asked. A new run, the Table closed or the Pivot being replaced closed gives a build
+  up, and an answer that comes anyway is released (`ResultsService.discard`). A re-run keeps the draft, which follows its
+  columns by name if the query now returns them in another order (`remapDraft`).
 
 ## Transposed
 
@@ -2746,6 +2796,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Shown results a set names | `results.visibility`: 0 – 4,096 distinct result ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |

@@ -5,14 +5,14 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, filteredColumns, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
-import { compareText } from '../results/CompareService'
+import { compareDetails, compareSources, compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
 import { formatBytes, formatCount } from '../results/status'
-import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec, type StripLead } from './GridShell'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
@@ -68,7 +68,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility } = useWorkbench()
   // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
   // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
   const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
@@ -76,7 +76,14 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const running = runningId !== undefined && runningId === resultsRun
   const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
-  const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
+  const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().info.get(setKey(entry.descriptor)))
+  // A comparison's inputs, each the entry its link goes to while that exact result is open (else it reads closed), as a
+  // string so the grid renders again only when one closes.
+  const sourceKeys = useSyncExternalStore(results.subscribe, () => {
+    if (!compared) return ''
+    const tab = results.getSnapshot()[tabId]
+    return compareSources(tab, slotOf(tab, entry.key)?.sources ?? []).map(source => source.entry ?? '').join('|')
+  })
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
@@ -131,7 +138,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
     const unsubscribe = panes.subscribe(() => view.panesChanged())
+    // The backend learns which results are shown in any window (results.visibility) while the grid lives.
+    const shown = resultVisibility.track({ generation: entry.descriptor.generation, resultId: entry.descriptor.resultId }, view.root)
     return () => {
+      shown.dispose()
       unsubscribe()
       registration.dispose()
       view.dispose()
@@ -176,15 +186,27 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const source = useMemo(() => resultsFilterSource(results, tabId, key), [results, tabId, key])
   const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
+  const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
-  const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : highlightText(marked) : undefined
+  const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
+  const compareNote = compared ? compareText(compared, sources) : undefined
+  const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked)) : highlightText(marked)) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
   const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
+  // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
+  const rootEl = useRef<HTMLDivElement | null>(null)
+  const goTo = useCallback((target: EntryKey) => {
+    results.focusEntry(tabId, target)
+    focusResultGrid(rootEl.current?.ownerDocument, tabId, target)
+  }, [results, tabId])
+  const lead: StripLead | undefined = compared && sources?.length === 2 && note === compareNote
+    ? { links: sources.map(source => source.entry === undefined ? { label: source.name, closed: true, title: `${source.name} was closed after it was compared` } : { label: source.name, title: `Go to ${source.name}`, run: () => goTo(source.entry!) }), detail: compareDetails(compared) }
+    : undefined
   // While the query that filled the budget still runs, the strip can stop it: the catalogue's Cancel Executing Query, for this
   // grid's tab, whose running state stands in for the active tab's in the command's precondition.
   const stop = running && other !== undefined && other === truncation && stopsQuery(snapshot.truncated)
@@ -204,7 +226,16 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note, ...stop ? { action: stop } : {} } : undefined} />
+    strip={note ? { text: note, ...stop ? { action: stop } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl} />
+}
+
+/** Gives the keyboard focus to a result's grid in `owner` (a popped-out pane has its own document). A grid just added, or
+ *  one a layout mounts only once it is selected (Tabs), is drawn a few frames later: it is looked for at each of the next
+ *  few frames, and given up on after them. */
+export function focusResultGrid(owner: Document | undefined, tabId: string, key: EntryKey, frames = 10): void {
+  const grid = owner?.querySelector<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"][data-result-entry="${CSS.escape(key)}"]`)
+  if (grid) grid.focus()
+  else if (frames > 0) owner?.defaultView?.requestAnimationFrame(() => focusResultGrid(owner, tabId, key, frames - 1))
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */

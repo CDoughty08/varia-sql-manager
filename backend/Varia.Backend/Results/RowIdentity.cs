@@ -48,6 +48,7 @@ internal static class RowIdentity
 
     public static (int Column, bool Unique, bool Approximate, long[] Ids) Build(ResultSetBuffer set, StoredPage[] pages, IdentityBy by, int column, CancellationToken token)
     {
+        using var pin = set.Pin();
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
@@ -90,7 +91,7 @@ internal static class RowIdentity
         // The first thread to start uses the caller's hasher (results.identify reserves for no more), the others forks.
         var given = 0;
         threads.For(pages.Length, () => (Hasher: Interlocked.Exchange(ref given, 1) == 0 ? hasher : hasher.Fork(), Scratch: new int[PageView.ScratchLength(hasher.Count)]),
-            (index, own) => read(own.Hasher, pages[index], PageView.Parse(pages[index].Body, own.Hasher.Count, own.Scratch)), token);
+            (index, own) => read(own.Hasher, pages[index], PageView.Parse(pages[index].Body(), own.Hasher.Count, own.Scratch)), token);
     }
 
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row), the pages in runs on
@@ -111,7 +112,7 @@ internal static class RowIdentity
             foreach (var page in pages)
             {
                 token.ThrowIfCancellationRequested();
-                var view = PageView.Parse(page.Body, hasher.Count, scratch);
+                var view = PageView.Parse(page.Body(), hasher.Count, scratch);
                 var first = (int)page.FirstRow;
                 for (var r = 0; r < page.Rows && probed < Probe; r++, probed++)
                 {

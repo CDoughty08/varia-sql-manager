@@ -337,7 +337,7 @@ explorer.context, for a login
 output.context, for a results grid with selected cells
   &Copy  ⌘C  ++++
   Copy with &Headers  ⇧⌘C  ++++
-  Copy Column &Name  ++++
+  Cop&y Column Name  ++++
   ---
   Select &All  ⌘A  ++++
   ---
@@ -371,8 +371,9 @@ output.context, for a results grid with selected cells
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
+  Com&pare…  ++++
   Pivot Res&ults…  ++++
-  Trans&pose >
+  Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ++++
     ---
@@ -393,7 +394,7 @@ output.context, for a results grid with selected cells
 output.context, for a results grid without
   &Copy  ⌘C  ----
   Copy with &Headers  ⇧⌘C  ----
-  Copy Column &Name  ----
+  Cop&y Column Name  ----
   ---
   Select &All  ⌘A  ++++
   ---
@@ -427,8 +428,9 @@ output.context, for a results grid without
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
+  Com&pare…  ++++
   Pivot Res&ults…  ++++
-  Trans&pose >
+  Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ----
     ---
