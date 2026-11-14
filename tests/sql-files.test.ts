@@ -398,7 +398,7 @@ describe('SQL file encodings and save hardening', () => {
     calls.length = 0
     expect(await store.read(alias, { targets: store.targets() })).toMatchObject({ id: registered[1]?.id })
     expect(calls).toContain(paths[0])
-  })
+  }, 60_000)
   it('registers a file and a link to it once when one Open dialog selection reads both at the same time', async () => {
     const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
     // A slow volume: every resolution takes a while, so both reads look for an owner before either has registered.
@@ -438,7 +438,7 @@ describe('SQL file encodings and save hardening', () => {
     const viaOther = await store.read(other)
     expect(await store.read(real)).toMatchObject({ id: viaOther.id, path: other })
     expect(await readFile(real, 'utf8')).toBe('SELECT 1')
-  })
+  }, 60_000)
   it('opens two spellings of one file on a case-insensitive volume as one tab, whatever the platform', async ({ skip }) => {
     const real = join(directory, 'Q', 'Report.sql'), other = join(directory, 'q', 'report.sql')
     await mkdir(dirname(real))
@@ -738,22 +738,26 @@ describe('the save prompts', () => {
 
 describe('changes made outside', () => {
   const later = (seconds: number) => new Date(Date.now() + seconds * 1000)
+  // The app gives each comparison 2 s (fileCheckLimits) and skips a late one until a later check. A starved Windows runner
+  // took longer than that for a stat and read, so checks that are not about the time limit came up short. These get room;
+  // the tests about late comparisons set their own short times.
+  const roomy = { ...fileCheckLimits, timeoutMs: 15_000 }
   it('reports a changed file once, and a touched file that kept its content never', async () => {
     const store = new SqlFileStore()
     const path = join(directory, 'one.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
     // The same content with a new time is no change.
     await utimes(path, later(10), later(10))
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
     await writeFile(path, 'SELECT 2')
     await utimes(path, later(20), later(20))
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'modified' }])
+    expect(await store.check(roomy)).toEqual([])
     // Reading it again keeps its id and takes its content.
     expect(await store.reload(opened.id)).toMatchObject({ id: opened.id, content: 'SELECT 2' })
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
   })
   it('reports a deleted file once, and one written back with the same content as unchanged', async () => {
     const store = new SqlFileStore()
@@ -765,16 +769,16 @@ describe('changes made outside', () => {
     await writeFile(other, 'SELECT 3')
     await utimes(other, later(10), later(10))
     // In registration order.
-    expect(await store.check()).toEqual([{ fileId: gone.id, change: 'deleted' }, { fileId: kept.id, change: 'modified' }])
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([{ fileId: gone.id, change: 'deleted' }, { fileId: kept.id, change: 'modified' }])
+    expect(await store.check(roomy)).toEqual([])
     await writeFile(path, 'SELECT 1')
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
     // Save writes a deleted file again, without asking whether it changed.
     await rm(path)
     expect(await store.changedOnDisk(gone.id)).toBe(false)
     await store.save('SELECT 4', gone.id)
     expect(await readFile(path, 'utf8')).toBe('SELECT 4')
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
   })
   it('keeps asking before a Save over a change the user did not reload, until the file is saved or reloaded', async () => {
     const store = new SqlFileStore()
@@ -787,21 +791,21 @@ describe('changes made outside', () => {
     // Not yet checked: Save still sees the change.
     expect(await store.changedOnDisk(opened.id)).toBe(true)
     // A check reports it once; the No answer leaves it changed for Save.
-    expect(await store.check()).toHaveLength(1)
+    expect(await store.check(roomy)).toHaveLength(1)
     expect(await store.changedOnDisk(opened.id)).toBe(true)
     await store.save('SELECT mine', opened.id)
     expect(await store.changedOnDisk(opened.id)).toBe(false)
     await writeFile(path, 'SELECT outside again')
     await utimes(path, later(20), later(20))
-    expect(await store.check()).toHaveLength(1)
+    expect(await store.check(roomy)).toHaveLength(1)
     await store.reload(opened.id)
     expect(await store.changedOnDisk(opened.id)).toBe(false)
     // A change the user kept, then the file deleted: Save writes it again without asking.
     await writeFile(path, 'SELECT outside once more')
     await utimes(path, later(30), later(30))
-    expect(await store.check()).toHaveLength(1)
+    expect(await store.check(roomy)).toHaveLength(1)
     await rm(path)
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'deleted' }])
+    expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'deleted' }])
     expect(await store.changedOnDisk(opened.id)).toBe(false)
   })
   it('does not hide a change behind a second Open of the same file', async () => {
@@ -812,7 +816,7 @@ describe('changes made outside', () => {
     await writeFile(path, 'SELECT 2')
     await utimes(path, later(10), later(10))
     expect((await store.read(path)).id).toBe(opened.id)
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'modified' }])
   })
   it('counts a file it cannot look at in time as unchanged, and reports it when it can', async () => {
     // A share that answers after the check gave up on it, as a slow network drive does.
@@ -833,7 +837,7 @@ describe('changes made outside', () => {
     answered()
     slow = false
     await vi.waitFor(async () => expect(await store.check({ concurrency: 2, timeoutMs: 30_000 })).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 30_000, interval: 20 })
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
   }, 45_000)
   it('does not compare a file again while its last comparison hangs, and lets at most two hang', async () => {
     // A share that never answers (a hard NFS mount, an unplugged VPN): each call would hold one of libuv's four threads.
@@ -866,7 +870,7 @@ describe('changes made outside', () => {
     expect(calls).toBe(1)
     // Checks skip the file until its comparison settles, then compare it once more.
     answered()
-    await vi.waitFor(async () => expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 10_000, interval: 20 })
+    await vi.waitFor(async () => expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 10_000, interval: 20 })
     expect(calls).toBe(2)
   })
   it('hashes a saved value larger than a query may be in full, so touching it is no change', async () => {
@@ -907,7 +911,7 @@ describe('changes made outside', () => {
     const opened = []
     for (const path of paths) opened.push(await store.read(path))
     for (const path of paths) { await writeFile(path, 'SELECT 2'); await utimes(path, later(10), later(10)) }
-    expect((await store.check()).map(change => change.fileId)).toEqual(opened.map(file => file.id))
+    expect((await store.check(roomy)).map(change => change.fileId)).toEqual(opened.map(file => file.id))
     expect(most).toBe(fileCheckLimits.concurrency)
   })
   it('asks File changed before Save replaces a change, and before Save as Unicode, only while detection is on', async () => {
@@ -943,13 +947,13 @@ describe('changes made outside', () => {
     const opened = await store.read(path)
     const checkpoint = store.sessionFile(opened.id)!
     await writeFile(path, 'SELECT external changes')
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'modified' }])
     expect(store.sessionFile(opened.id)).toEqual(checkpoint)
 
     store.clear()
     const restored = (await store.register(path, 'sql', { baseSha256: checkpoint.fileSha256 }))!
     expect(store.sessionFile(restored.id)).toEqual(checkpoint)
-    expect(await store.check()).toEqual([])
+    expect(await store.check(roomy)).toEqual([])
     const cancelled = prompts()
     expect(await saveDocument(store, request('SELECT mine', restored.id), undefined, cancelled.value, true)).toBeNull()
     expect(cancelled.asked).toEqual(['changed pinned.sql'])
@@ -975,7 +979,7 @@ describe('changes made outside', () => {
     expect(await store.changedOnDisk(legacy.id)).toBe(true)
     await rm(path)
     expect(await store.changedOnDisk(legacy.id)).toBe(false)
-    expect(await store.check()).toEqual([{ fileId: legacy.id, change: 'deleted' }])
+    expect(await store.check(roomy)).toEqual([{ fileId: legacy.id, change: 'deleted' }])
     expect(await store.changedOnDisk(legacy.id)).toBe(false)
   })
   it('verifies restored file bytes on save when a later external edit preserves the size and timestamp', async () => {
