@@ -37,6 +37,12 @@ successful Connect records the selected preference; omitted metadata preserves t
 manual Connect changes only the exact selected profile's policy without repeating recency or transport settlement.
 Background reconnect never edits profile policy. The details confirmation separately controls the open target's policy.
 
+A rejected saved revision remains quarantined until fresh authentication proves the exact secret and principal again.
+A typed retry of that rejected secret cannot establish current validity by reusing an existing SQL session. Main may
+open and dispose a temporary proof handle while retaining the accepted transport and its query sessions. Successful
+storage and exact revision/secret readback are required before readmitting the reference; ordinary reuse cannot do so.
+Retry comparison material is bounded, process-local HMAC data and never leaves main.
+
 ## Administrative binding changes
 
 Login password and initial-database changes preserve the existing runtime sessions, so their comparison evidence must
@@ -108,6 +114,9 @@ delete its saved profile or credentials.
 Backend generation loss invalidates old transports, pending work and process-local affinity. Cleanup is always
 generation-scoped; an old handle cannot be sent into a replacement backend. Backend shutdown owns accepted transport
 disposal. Main retains only the nonsecret authentication pins needed to validate explicit or silent reconnect.
+Replacement-page restoration reconciles pins against the trusted saved workspace before restoring its identities,
+protecting current live, pending and delivered owners. Empty workspaces retire orphan pins too. Stale disk readers
+cannot prune a newer page's pins, and late credential settlement cannot reintroduce an old page's orphan target.
 
 ## Verification
 

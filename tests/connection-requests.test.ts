@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { connectContext, prepare, secretRejected, settle, type ConnectionRequestDeps, type Settled } from '../src/main/connection-requests'
+import { connectContext, prepare, secretRejected, settle, settleReused, type ConnectionRequestDeps, type Settled } from '../src/main/connection-requests'
 import { BackendError } from '../src/main/backend/errors'
 import { ConnectionStore } from '../src/main/connection-store'
 import { ConnectionAuthenticationGuard } from '../src/main/connection-authentication'
@@ -175,6 +175,51 @@ describe('remembered password requests', () => {
     expect(outcome).toMatchObject({ ok: false, credentialRejected: true })
     expect(outcome.ok || outcome.passwordForgotten).toBeFalsy()
     expect(await readFile(join(directory, 'saved-passwords.json'), 'utf8')).toBe(before)
+    await expect(prepare('connections.connect', empty, context, deps)).rejects.toThrow('was rejected')
+  })
+  it('readmits an unchanged rejected revision only after fresh same-account authentication and exact saved-secret proof', async () => {
+    const { remembered, deps, savedPasswords } = await setup()
+    const id = await remembered(), credential = (await savedPasswords.reference(id, empty))!
+    const context = backgroundTarget(deps, credential)
+    const reject = async () => {
+      const prepared = await prepare('connections.connect', empty, context, deps)
+      expect(await settle(prepared, { ok: false, error: new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 1 }) }, deps)).toMatchObject({ ok: false, credentialRejected: true })
+    }
+    await reject()
+    const retryContext = { ...context, mode: 'interactive', credentialIntent: 'update-credentials', credentialPolicy: 'remember' }
+    const typed = await prepare('connections.connect', options, retryContext, deps)
+    expect(typed.requireFreshAuthentication).toBe(true)
+    expect(await settle(typed, { ok: true, value: info() }, deps)).toMatchObject({ ok: true })
+    expect(await savedPasswords.reference(id, empty)).toEqual(credential)
+    const resumed = await prepare('connections.connect', empty, context, deps)
+    expect((resumed.params as ConnectionOptions).password).toBe(marker)
+    resumed.release?.()
+    await reject()
+    const changedAccount = await prepare('connections.connect', options, retryContext, deps)
+    expect(await settle(changedAccount, { ok: true, value: { ...info(), principalId: 'sid:05060708' } }, deps)).toMatchObject({ ok: false })
+    await expect(prepare('connections.connect', empty, context, deps)).rejects.toThrow('was rejected')
+  })
+  it('keeps a rejection and reports unavailable sealed-secret proof even after a successful typed Remember write', async () => {
+    const { remembered, deps, savedPasswords } = await setup()
+    const id = await remembered(), credential = (await savedPasswords.reference(id, empty))!
+    const context = backgroundTarget(deps, credential)
+    const saved = await prepare('connections.connect', empty, context, deps)
+    await settle(saved, { ok: false, error: new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 1 }) }, deps)
+    const typed = await prepare('connections.connect', options, { ...context, mode: 'interactive', credentialIntent: 'update-credentials', credentialPolicy: 'remember' }, deps)
+    vi.spyOn(savedPasswords, 'getReferenced').mockRejectedValueOnce(new Error('Keyring locked.'))
+    expect(await settle(typed, { ok: true, value: info() }, deps)).toMatchObject({ ok: true, value: { historyWarning: expect.stringContaining('saved credential could not be verified') } })
+    expect(await savedPasswords.reference(id, empty)).toEqual(credential)
+    await expect(prepare('connections.connect', empty, context, deps)).rejects.toThrow('was rejected')
+  })
+  it('does not readmit a rejected revision from ordinary live-session equality without fresh password proof', async () => {
+    const { remembered, deps, savedPasswords } = await setup()
+    const id = await remembered(), credential = (await savedPasswords.reference(id, empty))!
+    const context = backgroundTarget(deps, credential)
+    const saved = await prepare('connections.connect', empty, context, deps)
+    await settle(saved, { ok: false, error: new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 1 }) }, deps)
+    const typed = await prepare('connections.connect', options, { ...context, mode: 'interactive', credentialIntent: 'update-credentials', credentialPolicy: 'remember' }, deps)
+    expect(typed.requireFreshAuthentication).toBe(true)
+    expect(await settleReused(typed, { ...info(), targetId: context.targetId, authentication: { principal: context.expectedPrincipal, credential } }, deps)).toMatchObject({ ok: true })
     await expect(prepare('connections.connect', empty, context, deps)).rejects.toThrow('was rejected')
   })
   it('fills in the remembered password for an empty Password and a matching entry; a typed one wins; other credentials get none', async () => {

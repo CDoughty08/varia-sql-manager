@@ -43,6 +43,29 @@ describe('authoritative main connection reuse', () => {
     expect(dispose).not.toHaveBeenCalled()
   })
 
+  it('proves a rejected secret freshly, retires only the proof handle and preserves principal-specific reuse', async () => {
+    const { coordinator, dispose } = fixture(), open = vi.fn(async () => answer())
+    await coordinator.connect(request(), open)
+    const verified = await coordinator.connect(request(1, { forceAuthenticate: true, expectedPrincipal: answer().principal }), async () => answer(51))
+    expect(verified).toEqual({ status: 'reused', targetId: id(1), ...answer(), authenticated: true })
+    expect(dispose).toHaveBeenCalledExactlyOnceWith(answer(51).connection)
+    const changed = await coordinator.connect(request(2, { forceAuthenticate: true }), async () => answer(52, 1, 'sql', 'different-sid'))
+    expect(changed).toMatchObject({ status: 'connected', targetId: id(2), principal: { id: 'different-sid' }, authenticated: true })
+    expect(await coordinator.connect(request(1, { principal: answer().principal }), open)).toEqual({ status: 'reused', targetId: id(1), ...answer() })
+    expect(open).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('can reverify an existing target at the live target cap without admitting an extra target', async () => {
+    const { coordinator, dispose } = fixture()
+    for (let index = 0; index < 200; index++) expect((await coordinator.connect(request(index + 1, { options: { ...options, server: `server-${index}` } }), async () => answer(1000 + index))).status).toBe('connected')
+    const proof = vi.fn(async () => answer(9999))
+    expect(await coordinator.connect(request(1, { options: { ...options, server: 'server-0' }, forceAuthenticate: true }), proof)).toMatchObject({ status: 'reused', targetId: id(1), authenticated: true })
+    expect(dispose).toHaveBeenCalledExactlyOnceWith(answer(9999).connection)
+    expect(await coordinator.connect(request(201, { options: { ...options, server: 'new-server' } }), proof)).toEqual({ status: 'busy' })
+    expect(proof).toHaveBeenCalledOnce()
+  })
+
   it('never matches by profile keys, observed server names, credentials or partial settings', async () => {
     const { coordinator } = fixture()
     await coordinator.connect(request(), async () => answer())

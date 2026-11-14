@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ConnectionOpenService, validateOpenedConnection } from '../src/main/connection-open'
 import { ConnectionSessionCheckpoint } from '../src/main/connection-session-checkpoint'
-import { hasPendingCredentialRequests } from '../src/main/connection-requests'
+import { hasPendingCredentialRequests, prepare, settle } from '../src/main/connection-requests'
 import type { SessionInput } from '../src/main/session-store'
 import { ConnectionAuthenticationGuard } from '../src/main/connection-authentication'
 import { ConnectionStore } from '../src/main/connection-store'
@@ -48,6 +48,147 @@ async function fixture() {
 }
 
 describe('main connection ownership', () => {
+  it('retires abandoned previous-page pins across more than the target cap and frees room before disk restore', async () => {
+    const { service, request, authentication } = await fixture()
+    const retained = randomUUID(), credential = { profileId: randomUUID(), revision: randomUUID() }
+    authentication.remember(retained, options, { principal, credential })
+    for (let page = 0; page < 41; page++) {
+      const abandoned = Array.from({ length: 5 }, () => randomUUID())
+      for (const id of abandoned) authentication.remember(id, options, { principal })
+      service.reset({ replaceRenderer: true })
+      service.retainTargets([retained])
+      expect(authentication.resolve(retained)?.expectedPrincipal).toEqual(principal)
+      expect(authentication.resolve(retained)?.credential).toEqual(credential)
+      for (const id of abandoned) expect(authentication.resolve(id)).toBeUndefined()
+    }
+    const restored = Array.from({ length: 200 }, () => ({ id: randomUUID(), options: connectionTargetOptions(options), details: { autoReconnect: 'inherit' as const }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal }))
+    service.reset({ replaceRenderer: true })
+    service.retainTargets(restored.map(target => target.id))
+    authentication.restore({ version: 1, targets: restored })
+    expect(authentication.resolve(retained)).toBeUndefined()
+    expect(authentication.resolve(restored[199].id)?.expectedPrincipal).toEqual(principal)
+    service.reset({ replaceRenderer: true })
+    service.retainTargets([])
+    expect(await service.connect(options, request())).toMatchObject({ ok: true })
+  })
+
+  it('keeps current accepted, pending and delivered target pins while reconciling a restored workspace', async () => {
+    const { service, request, open, authentication } = await fixture()
+    const accepted = request()
+    expect(await service.connect(options, accepted)).toMatchObject({ ok: true })
+    await service.accept(accepted.requestId)
+    service.retainTargets([])
+    expect(authentication.resolve(accepted.targetId)?.expectedPrincipal).toEqual(principal)
+    const pending = request({ credentialIntent: 'update-credentials' }), entered = deferred<void>(), reply = deferred<ConnectionInfo>()
+    const other = { ...options, server: 'other-server' }
+    authentication.remember(pending.targetId, other, { principal })
+    open.mockImplementationOnce(async () => { entered.resolve(); return reply.promise })
+    const opening = service.connect(other, pending)
+    await entered.promise
+    service.retainTargets([])
+    expect(authentication.resolve(pending.targetId)?.expectedPrincipal).toEqual(principal)
+    reply.resolve(info())
+    expect(await opening).toMatchObject({ ok: true })
+    service.retainTargets([])
+    expect(authentication.resolve(pending.targetId)?.expectedPrincipal).toEqual(principal)
+    service.cancel([pending.requestId])
+    expect(await service.accept(pending.requestId)).toEqual({ accepted: false, retained: false })
+    expect(authentication.resolve(pending.targetId)).toBeUndefined()
+    service.backendState({ status: 'stopped' })
+    service.retainTargets([])
+    expect(authentication.resolve(accepted.targetId)?.expectedPrincipal).toEqual(principal)
+    expect(service.pruneTargets([accepted.targetId])).toBe(1)
+    service.retainTargets([])
+    expect(authentication.resolve(accepted.targetId)).toBeUndefined()
+  })
+
+  it('does not let a cancelled previous page reintroduce a pin after its credential write drains', async () => {
+    const { service, request, authentication, savedPasswords } = await fixture()
+    const entered = deferred<void>(), release = deferred<void>(), original = savedPasswords.set.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await release.promise; return original(...args) })
+    const context = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, context)
+    await entered.promise
+    expect(authentication.resolve(context.targetId)).toBeDefined()
+    service.reset({ replaceRenderer: true })
+    service.retainTargets([])
+    expect(authentication.resolve(context.targetId)).toBeUndefined()
+    release.resolve()
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    expect(authentication.resolve(context.targetId)).toBeUndefined()
+  })
+
+  it('retires pins from a cancelled reused receipt whose vault settlement finishes after replacement', async () => {
+    const { service, request, authentication, savedPasswords } = await fixture()
+    const first = request({ credentialPolicy: 'remember' }), initial = await service.connect(options, first)
+    if (!initial.ok) throw initial.error
+    await service.accept(first.requestId)
+    const targetId = (initial.value as ConnectionInfo).targetId!
+    const entered = deferred<void>(), release = deferred<void>(), original = savedPasswords.set.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await release.promise; return original(...args) })
+    const connecting = service.connect(options, request({ credentialPolicy: 'remember' }))
+    await entered.promise
+    service.reset({ replaceRenderer: true })
+    service.retainTargets([])
+    release.resolve()
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    expect(authentication.resolve(targetId)).toBeUndefined()
+  })
+
+  it('finishes a deferred target prune when the backend stops during its pending reconnect', async () => {
+    const { service, request, open, authentication, generation } = await fixture()
+    const first = request({ credentialPolicy: 'remember' }), initial = await service.connect(options, first)
+    if (!initial.ok) throw initial.error
+    await service.accept(first.requestId)
+    const connection = initial.value as ConnectionInfo, targetId = connection.targetId!
+    await service.disconnect(connection.id)
+    service.retainTargets([targetId])
+    const entered = deferred<void>(), reply = deferred<ConnectionInfo>()
+    open.mockImplementationOnce(async () => { entered.resolve(); return reply.promise })
+    const reconnecting = service.connect({ ...options, password: undefined }, request({ targetId, mode: 'background' }))
+    await entered.promise
+    expect(service.pruneTargets([targetId])).toBe(0)
+    generation(undefined)
+    service.backendState({ status: 'stopped' })
+    expect(authentication.resolve(targetId)).toBeUndefined()
+    expect(await reconnecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    reply.resolve(info())
+  })
+
+  it('freshly verifies rejected typed credentials before reusing an accepted transport and can recover again after another rejection', async () => {
+    const deps = await fixture(), { service, request, open, close, savedPasswords } = deps
+    const first = request({ credentialPolicy: 'remember' }), initial = await service.connect(options, first)
+    if (!initial.ok) throw initial.error
+    await service.accept(first.requestId)
+    const connected = initial.value as ConnectionInfo, credential = connected.authentication!.credential!
+    const background = { targetId: connected.targetId, mode: 'background', credentialPolicy: 'preserve' } as const
+    const empty = { ...options, password: '' }
+    for (let rejection = 0; rejection < 2; rejection++) {
+      const rejected = await prepare('connections.connect', empty, background, deps)
+      expect(await settle(rejected, { ok: false, error: new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 1 }) }, deps)).toMatchObject({ credentialRejected: true })
+      await expect(prepare('connections.connect', empty, background, deps)).rejects.toThrow('was rejected')
+      if (rejection === 0) {
+        open.mockRejectedValueOnce(new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 8 }))
+        expect(await service.connect(options, request({ targetId: connected.targetId, credentialIntent: 'update-credentials', credentialPolicy: 'remember' }))).toMatchObject({ ok: false })
+        expect(close).not.toHaveBeenCalled()
+        await expect(prepare('connections.connect', empty, background, deps)).rejects.toThrow('was rejected')
+      }
+      const proof = info()
+      open.mockResolvedValueOnce(proof)
+      const retry = request({ targetId: connected.targetId, credentialIntent: 'update-credentials', credentialPolicy: 'remember' })
+      expect(await service.connect(options, retry)).toMatchObject({ ok: true, value: { id: connected.id, targetId: connected.targetId } })
+      await service.accept(retry.requestId)
+      expect(close).toHaveBeenLastCalledWith(proof)
+      expect(close.mock.calls.some(([handle]) => handle.id === connected.id)).toBe(false)
+      expect(await savedPasswords.reference(credential.profileId, empty)).toEqual(credential)
+      const resumed = await prepare('connections.connect', empty, background, deps)
+      expect((resumed.params as ConnectionOptions).password).toBe(options.password)
+      resumed.release?.()
+    }
+    expect(open).toHaveBeenCalledTimes(4)
+  })
+
   it('rejects a Connect baseline changed after backend registration but before its reply', async () => {
     const { service, open, close, request, authentication } = await fixture(), registered = deferred<void>(), reply = deferred<void>()
     const handle = info()

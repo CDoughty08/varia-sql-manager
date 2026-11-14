@@ -91,6 +91,42 @@ internal static class LoginPropertiesLiveChecks
         string Remember(string password) { secrets.Add(password); return password; }
         bool Clean(object reply) { var text = JsonSerializer.Serialize(reply, json); return !secrets.Any(secret => text.Contains(secret, StringComparison.Ordinal)); }
         var connectivity = ConnectionSettings.Build(live("master")).ConnectionString;
+        // User SQL can change a password without producing an administrative binding receipt. A new Connect must
+        // authenticate the supplied password even while the old literal pool still contains an authenticated session.
+        var pooledLogin = scratch.OwnLogin("pool");
+        var pooledPassword = Remember(NewPassword());
+        var replacementPassword = Remember(NewPassword());
+        var pooledSetup = await Sql("CREATE LOGIN " + Bracket(pooledLogin) + " WITH PASSWORD = " + Literal(pooledPassword) + ", CHECK_POLICY = OFF;");
+        check(pooledSetup.Status == "completed", "the out-of-band password regression creates its own disposable login");
+        var pooledOptions = live("master") with { Authentication = "sql", Username = pooledLogin, Password = pooledPassword, Database = "master" };
+        var literalPool = SqlService.ConnectBuilder(pooledOptions).ConnectionString;
+        using (var poolHandle = new SqlConnection(literalPool))
+        {
+            ConnectionInfo? retiredPasswordConnection = null, replacementConnection = null;
+            try
+            {
+                await poolHandle.OpenAsync();
+                var warmPhysicalId = poolHandle.ClientConnectionId;
+                poolHandle.Close();
+                var changedOutside = await Sql("ALTER LOGIN " + Bracket(pooledLogin) + " WITH PASSWORD = " + Literal(replacementPassword) + ";");
+                check(changedOutside.Status == "completed", "the throwaway password changes through user SQL without a binding receipt");
+                await poolHandle.OpenAsync();
+                check(poolHandle.ClientConnectionId == warmPhysicalId, "the old literal password pool still has its authenticated physical session");
+                poolHandle.Close();
+                RequestException? rejected = null;
+                try { retiredPasswordConnection = await Call<ConnectionInfo>("connections.connect", pooledOptions); } catch (RequestException error) { rejected = error; }
+                replacementConnection = await Call<ConnectionInfo>("connections.connect", pooledOptions with { Password = replacementPassword });
+                check(retiredPasswordConnection is null && rejected is { Code: "SQL_ERROR", Details.Number: 18456 } && replacementConnection.PrincipalId is { Length: > 0 },
+                    "a new SQL Connect refuses an out-of-band retired password despite its warm idle pool and accepts the replacement password");
+            }
+            finally
+            {
+                poolHandle.Close();
+                SqlConnection.ClearPool(poolHandle);
+                if (retiredPasswordConnection is not null) await Call<object>("connections.disconnect", new ConnectionArgs(retiredPasswordConnection.Id));
+                if (replacementConnection is not null) await Call<object>("connections.disconnect", new ConnectionArgs(replacementConnection.Id));
+            }
+        }
         async Task<int> SignIn(string name, string password)
         {
             var builder = new SqlConnectionStringBuilder(connectivity) { IntegratedSecurity = false, UserID = name, Password = password, Pooling = false, ConnectTimeout = 30, ApplicationName = "Varia checks" };
@@ -176,7 +212,7 @@ internal static class LoginPropertiesLiveChecks
             var tab = Guid.NewGuid().ToString();
             var held = await Call<QueryResult>("query.execute", new QueryArgs(self.Id, tab, "master", "CREATE TABLE #credential_pool_state (value int); INSERT #credential_pool_state VALUES (731);", Guid.NewGuid().ToString(), 10, 30));
             check(held.Status == "completed", "the password-pool regression holds an accepted query session with temporary state");
-            // The initial Connect left its plain pool warm; warm a role pool too, so both old credential keys must retire.
+            // Warm a role pool so known password rotation must retire its old credential key.
             await using (var warm = ((Varia.Backend.Explorer.IExplorerHost)service).Connection(self.Id, "master"))
                 await ((Varia.Backend.Explorer.IExplorerHost)service).OpenAsync(warm, CancellationToken.None);
             var selfDescribed = await Describe(login, self.Id);

@@ -66,6 +66,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal static readonly TimeSpan EarlyStopLifetime = TimeSpan.FromMinutes(1);
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
+    private readonly ConcurrentDictionary<string, EntraPoolAuthentication> entraPools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
     /// <summary>Connections whose server-scope pools open in master since an object action freed their own database (critic A5).</summary>
     private readonly ConcurrentDictionary<string, byte> serverScopeInMaster = new();
@@ -191,8 +192,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             catch (Exception error)
             {
-                // A rejected physical session must never return to a pool, nor reach a caller's SQL.
-                if (expected is not null) { SqlConnection.ClearPool(connection); await connection.DisposeAsync(); }
+                // Retire untrusted sessions, but do not evict unrelated healthy pool members for cancellation or a lost socket.
+                if (expected is not null)
+                {
+                    if (error is RequestException { Code: "AUTH_IDENTITY" }) SqlConnection.ClearPool(connection);
+                    await connection.DisposeAsync();
+                }
                 if (error is RequestException { Code: "AUTH_IDENTITY" } && owner is not null) await language.ForgetConnectionAsync(owner.ConnectionId);
                 throw;
             }
@@ -295,6 +300,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var principal = profile.PrincipalId;
             if (principal is not null)
                 connection.ConnectionString = new SqlConnectionStringBuilder(connection.ConnectionString) { ConnectRetryCount = 0 }.ConnectionString;
+            if (entraPools.TryGetValue(connectionId, out var authentication)) authentication.Configure(connection);
             var pooled = new SqlConnectionStringBuilder(connection.ConnectionString).Pooling;
             var owner = new Owner(connectionId, pooled, principal) { Own = own };
             owners.AddOrUpdate(connection, owner);
@@ -554,10 +560,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal string Register(string connectionString, ServerProfile profile, string database)
     {
         var id = Guid.NewGuid().ToString();
-        if (profile.PrincipalId?.StartsWith("entra:", StringComparison.Ordinal) == true)
-            connectionString = ConnectionPrincipal.IsolatePool(connectionString, id);
         lock (bindingGate)
         {
+            if (profile.PrincipalId?.StartsWith("entra:", StringComparison.Ordinal) == true)
+                entraPools[id] = new(entra, connectionString, profile.PrincipalId);
             profiles[id] = profile;
             homes[id] = database;
             connections[id] = connectionString;
@@ -746,10 +752,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (sessions.TryRemove(item.Key, out var session)) session.Close();
         // Results stay readable, copyable and saveable after a disconnect, as in SSMS.
         // Each initial catalog has its own pool; clear every one this connection used.
+        entraPools.TryRemove(args.ConnectionId, out var authentication);
         if (removed && pools.TryRemove(args.ConnectionId, out var used))
             foreach (var pooled in used.Keys)
             {
                 using var connection = new SqlConnection(pooled);
+                authentication?.Configure(connection);
                 SqlConnection.ClearPool(connection);
             }
         await language.ForgetConnectionAsync(args.ConnectionId);
@@ -866,6 +874,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             if (!string.Equals(DatabaseOf(connectionId, pooled), database, StringComparison.OrdinalIgnoreCase)) continue;
             using var connection = new SqlConnection(pooled);
+            if (entraPools.TryGetValue(connectionId, out var authentication)) authentication.Configure(connection);
             SqlConnection.ClearPool(connection);
             cleared = true;
         }
@@ -2738,6 +2747,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();
         pools.Clear();
+        entraPools.Clear();
         profiles.Clear();
         serverScopeInMaster.Clear();
         homes.Clear();

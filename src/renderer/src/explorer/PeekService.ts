@@ -10,6 +10,7 @@ import { SnapshotStore } from '../core/store'
 import type { ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { ResultsService } from '../results/ResultsService'
+import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
@@ -76,7 +77,7 @@ export type PeekResults = Pick<ResultsService, 'begin' | 'finish' | 'release'>
 export interface PeekServiceOptions {
   readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
     | 'tableColumns' | 'execute' | 'closeQuerySession'>
-  readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
+  readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
   readonly scriptingOptions: ExternalStore<{ readonly options: ScriptingOptions }>
   /** Where Top rows' result sets live; without it the tab says it cannot read them. */
@@ -168,7 +169,7 @@ export class PeekReads {
   get isDisposed(): boolean { return this.disposed }
 
   isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection))
   }
 
   /**

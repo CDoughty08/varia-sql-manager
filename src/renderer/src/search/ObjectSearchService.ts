@@ -8,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import type { ConnectionService, LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { RevealPath, SeekOutcome } from '../explorer/ExplorerService'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
@@ -234,7 +235,7 @@ interface Fanout {
   readonly settle: () => void
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
-const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
+const live = isLiveConnection<LiveConnection>
 
 /**
  * Search Objects: builds each connected server's object index in the backend (explorer.index: names, and module definitions

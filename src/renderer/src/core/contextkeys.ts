@@ -15,6 +15,7 @@ import type { QuerySnapshot } from '../services/queries'
 import type { RecoverySnapshot } from '../services/recovery'
 import type { BackendSnapshot } from '../services/backend'
 import type { LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import type { ExplorerContextState } from '../explorer/ExplorerService'
 import type { InputModeSnapshot } from './input-mode'
 import type { NotificationSnapshot } from './notifications'
@@ -83,7 +84,7 @@ export interface ContextInputs {
   readonly focus?: FocusFacts
   readonly documents: DocumentSnapshot
   readonly queries: QuerySnapshot
-  readonly connections: readonly Pick<LiveConnection, 'id' | 'lost' | 'targetId' | 'lifecycle'>[]
+  readonly connections: readonly Pick<LiveConnection, 'id' | 'lost' | 'targetId' | 'lifecycle' | 'inExplorer'>[]
   readonly quickInputVisible: boolean
   readonly wordWrap: boolean
   /** View White Space and line numbers in the query editor; without them, those keys are false. */
@@ -138,7 +139,7 @@ export interface ContextInputs {
 export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const { documents, connections } = inputs, focus = inputs.focus ?? noFocus
   const active = documents.documents.find(document => document.id === documents.activeId)
-  const connected = (connection: ContextInputs['connections'][number]) => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
+  const connected = isLiveConnection
   const offline = (connection: ContextInputs['connections'][number]) => !!connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'disconnected' || connection.lifecycle.state === 'lost')
   const activeConnection = active?.connectionId ? connections.find(connection => connection.id === active.connectionId) : undefined
   const rememberedConnection = activeConnection ?? (active?.targetId ? connections.find(connection => connection.targetId === active.targetId) : undefined)
@@ -166,7 +167,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
     activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
-    hasConnection: connections.some(connected), hasLostConnection: connections.some(offline),
+    hasConnection: connections.some(connected), hasLostConnection: connections.some(connection => connection.inExplorer !== false && offline(connection)),
     activeDocumentConnected: !!activeConnection && connected(activeConnection), activeConnectionLost: !!rememberedConnection && offline(rememberedConnection),
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && connected(connection))),
     queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,

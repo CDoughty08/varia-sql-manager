@@ -24,7 +24,7 @@ export function ssisContribution({ commands, explorer, ssisProperties, operation
     if (selected && !selected.lost && connections.isLive(selected.connectionId)) return selected.connectionId
     const active = documents.active?.connectionId
     if (active && connections.isLive(active)) return active
-    const live = connections.getSnapshot().filter(connection => !connection.lost)
+    const live = connections.live()
     return live.length === 1 ? live[0].id : undefined
   }
   const documentOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return operations.get(id) ? id : undefined }

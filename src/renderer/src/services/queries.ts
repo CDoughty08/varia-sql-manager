@@ -11,6 +11,7 @@ import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
 import type { PlanExecutionContext, RetainedPlansService } from '../plans/RetainedPlansService'
+import { isLiveConnection, type ConnectionAvailability } from './connection-availability'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate'; readonly estimateMode?: EstimatedPlanMode }
 export interface EstimatedPlanState { readonly requestId: string; readonly mode?: EstimatedPlanMode; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
@@ -46,7 +47,7 @@ export const newSessionMessage = 'This query opened a new SQL session. The previ
 export const lostSessionMessage = 'This query opened a new SQL session. The previous session was lost (SQL Server ended it, or its connection broke), so SQL Server rolled back its open transaction, and its SET options and temporary tables no longer exist.'
 const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: newSessionMessage, lost: lostSessionMessage }
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
-type QueryConnection = ConnectionInfo & { readonly lost?: true; readonly targetId?: string; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
+type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
@@ -93,7 +94,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   canExecute(id = this.documents.getSnapshot().activeId): boolean {
     const document = this.documents.get(id)
     const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
-    return !this.disposed && !this.documents.getSnapshot().busy && !!connection && !connection.lost && !this.isRunning(id)
+    return !this.disposed && !this.documents.getSnapshot().busy && isLiveConnection(connection) && !this.isRunning(id)
   }
   /**
    * Reads the open transaction of an idle query's session from the backend (query.session.state), as SSMS asks its
@@ -113,7 +114,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       return nothingOpen
     } catch { return mayBeOpen }
   }
-  /** Whether the query is on a live connection, so it may have a session to read. */
+  /** Teardown may still need to inspect an existing session while its connection is disconnecting. */
   private connected(id: string): boolean {
     // Only a query has a session: a table designer's connection is not one to read.
     const document = this.documents.get(id), connectionId = isQueryDocument(document) ? document?.connectionId : undefined, connection = connectionId ? this.getConnection(connectionId) : undefined

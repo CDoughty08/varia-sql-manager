@@ -221,6 +221,7 @@ describe('ExplorerService: loading', () => {
     expect([root.sublabel, root.icon, root.expanded, root.level]).toEqual(['(SQL Server 16.0.4135.4 - sa)', 'server', true, 1])
     expect(f.explorer.getSnapshot().selected).toBe(root.id)
     expect(serverSublabel({ serverVersion: '15.0', productVersion: undefined, login: undefined })).toBe('(SQL Server 15.0)')
+    expect(serverSublabel({ serverVersion: '', productVersion: undefined, login: undefined })).toBe('(SQL Server)')
     expect(serverSublabel({ serverVersion: '15.0', productVersion: '15.0.2000.5', login: undefined })).toBe('(SQL Server 15.0.2000.5)')
   })
   it('shows a folder\'s static subfolders before its rows, and positions count every child', async () => {

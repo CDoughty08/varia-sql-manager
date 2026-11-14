@@ -32,6 +32,14 @@ const input = (fields: Partial<QueryContextInput> = {}): QueryContextInput =>
   ({ connectionId: 'a', database: 'AppData', connections: [live('a'), live('b')], databases: databases('master', 'AppData'), query: true, running: false, busy: false, ...fields })
 
 describe('query context lists', () => {
+  it('keeps the disconnecting query server as a disabled value and excludes other disconnecting choices', () => {
+    const closing = (id: string) => live(id, { lifecycle: { state: 'disconnecting', attemptId: crypto.randomUUID(), handle: { id, generation: 1 } } })
+    const model = queryContextModel(input({ connections: [closing('a'), closing('b'), live('c')] }))
+    expect(model.live).toBe(false)
+    expect(model.databaseDisabled).toBe(true)
+    expect(model.databases).toEqual(['AppData'])
+    expect(model.servers.map(server => [server.id, server.disabled])).toEqual([['', false], ['a', true], ['c', false]])
+  })
   it('list Disconnected and every live server, and the databases of the query\'s own one', () => {
     const model = queryContextModel(input({ connections: [live('a', { displayName: 'Orders' }), live('b')] }))
     expect(model.servers).toEqual([{ id: '', label: 'Disconnected', disabled: false }, { id: 'a', label: 'Orders (a.example)', disabled: false }, { id: 'b', label: 'b.example', disabled: false }])

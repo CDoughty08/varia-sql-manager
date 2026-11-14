@@ -44,8 +44,8 @@ internal sealed class EntraService
 
     /// <summary>Opens a connection the user is choosing (connect and Load databases). When MFA has no cached token, signs in
     /// through the browser under the request's token (Stop cancels it), then opens once more with a new connection, which
-    /// now finds the token. Windows/Kerberos user opens are unpooled so switching tickets cannot borrow the prior account's
-    /// physical session. Every Entra user open is unpooled (SqlClient otherwise reuses a pool's token without asking the
+    /// now finds the token. Every initial user open is unpooled: ticket changes and out-of-band password changes cannot
+    /// borrow an already authenticated physical session. Every Entra user open is unpooled (SqlClient otherwise reuses a pool's token without asking the
     /// provider), so the provider proves which account it used. For anonymous MFA, the string returned names that account: later
     /// opens then find that account's token even when several are signed in. Other Entra failures answer AUTH_ENTRA with the
     /// dialog's details; anything else is left to the caller.</summary>
@@ -62,10 +62,9 @@ internal sealed class EntraService
             if (!UsesEntra(text))
             {
                 var builder = new SqlConnectionStringBuilder(text);
-                if (builder.IntegratedSecurity) builder.Pooling = false;
-                // SQL pools use the literal submitted string as their key. Preserve exactly the string Register keeps
-                // for cleanup; only the unpooled Windows authentication probe needs a different physical-open string.
-                return (await open(builder.IntegratedSecurity ? builder.ConnectionString : text, token).ConfigureAwait(false), text, null);
+                builder.Pooling = false;
+                // Retain the exact requested string for later factory and pool cleanup keys.
+                return (await open(builder.ConnectionString, token).ConfigureAwait(false), text, null);
             }
             var opened = await open(new SqlConnectionStringBuilder(text) { Pooling = false }.ConnectionString, token).ConfigureAwait(false);
             var served = Attempts.Take(idOf(opened)) as Served;
@@ -104,7 +103,7 @@ internal sealed class EntraService
             // A later open uses its guarded target scope, not a second retained identity cache.
             Attempts.Take(connection.ClientConnectionId);
         }
-        catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connection.ConnectionString) is { } attempt)
+        catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connection.ConnectionString, connection.AccessTokenCallback is not null) is { } attempt)
         {
             throw EntraFailures.Describe(attempt, error, connection.DataSource, details: false);
         }
@@ -113,11 +112,11 @@ internal sealed class EntraService
     /// <summary>What the provider recorded for a failed open. When it recorded nothing (if SqlClient stopped giving the
     /// exception the attempt's ClientConnectionId, say) but SqlClient reports its provider's failure (error 0, class 11) on
     /// an Entra connection, SqlClient's own text is the answer, as AUTH_ENTRA; any other failure is left to the caller.</summary>
-    private EntraAttempt? Failure(SqlException error, string connectionString)
+    private EntraAttempt? Failure(SqlException error, string connectionString, bool callback = false)
     {
         // A Served entry means the token was given and the login failed after it (18456, say): that is SQL Server's answer.
         if (Attempts.Take(error.ClientConnectionId) is (InteractionRequired or EntraFailure) and var recorded) return recorded;
-        if (!UsesEntra(connectionString) || error.Errors.Count == 0 || error.Errors[0] is not { Number: 0, Class: 11 }) return null;
+        if (!(callback || UsesEntra(connectionString)) || error.Errors.Count == 0 || error.Errors[0] is not { Number: 0, Class: 11 }) return null;
         var text = EntraFailures.Sanitize(error.Message);
         return new EntraFailure("AUTH_ENTRA", text.Length > 0 ? text : EntraFailures.Messages.SignInFailed);
     }

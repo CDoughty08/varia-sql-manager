@@ -40,6 +40,11 @@ export class ConnectionAuthenticationGuard {
   /** The reuse owner calls this only after pruning a target with no documents, live transport or pending attempt. */
   forget(id: string): void { if (this.pins.delete(id)) this.version++ }
 
+  /** Main's restored workspace and current request owners define which previous-page pins are still reachable. */
+  retain(targetIds: ReadonlySet<string>): void {
+    for (const id of this.pins.keys()) if (!targetIds.has(id)) this.forget(id)
+  }
+
   prepare(options: ConnectionOptions, context: ConnectContext = {}): ConnectContext {
     const targetId = context.targetId ?? randomUUID(), pin = this.pins.get(targetId)
     if (!pin) {

@@ -70,12 +70,14 @@ being true.
   ConnectionService projects its authenticated targets for runtime-handle consumers. `connection-open.ts` in main
   owns validation, credential resolution, live/pending reuse and receipt acceptance. Cancellation releases only that
   request's ownership; it cannot close a transport another accepted caller uses. The renderer adopts only verified
-  receipts and acknowledges them through the bounded main-only IPC. `docs/connections-persistence-integration.md`
-  records the assembled workbench hooks; `docs/connections-explorer-main-seam.md` describes main ownership.
+  receipts and acknowledges them through the bounded main-only IPC. `docs/connection-ownership.md` describes main's
+  authentication, receipt, checkpoint and pruning contracts. Replacement pages reconcile obsolete pins against their
+  trusted saved workspace while protecting current live/pending/delivered owners, including late credential settlement.
 - Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
   targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
-  validate that pinned principal before caller SQL. Entra uses target-private pools, and identity-bound connections
-  disable idle connection recovery so a newly selected account cannot silently replace the pinned one. Failed identity
+  validate that pinned principal before caller SQL. Entra uses target-private token-callback pool keys while preserving
+  the submitted Application Name. Identity-bound connections disable idle connection recovery so a newly selected
+  account cannot silently replace the pinned one. Failed identity
   checks close the physical connection and invalidate language context. Entra token acquisition requires an explicit
   request scope: initial Connect/database discovery may establish an account, while later native opens carry the
   pinned principal. Unscoped driver background replenishment cannot acquire a token or seed a target's pool.
@@ -83,8 +85,10 @@ being true.
   closing synchronously inside SqlClient's Open state callback can wait on the same unfinished Open. The existing
   SqlClient diagnostic listener enforces the command fence, with synchronous single-instance initialization; real-driver
   regressions must continue to prove refusal before command send when upgrading the driver.
-  Initial Windows/Kerberos and Entra authentication use a fresh physical session; later guarded opens retain the
+  Initial SQL, Windows/Kerberos and Entra authentication use a fresh physical session; later guarded opens retain the
   requested pooling preference. Known password rotation retires affected old pools before publishing its binding.
+  A SID probe preserves transient/session-lost SQL errors; only missing or different account proof becomes AUTH_IDENTITY.
+  Cancelled or failed guarded opens dispose their connection; pool retirement is reserved for rejected identity.
   A missing logical registration/profile fails closed at factory ownership and Open admission, including during
   Disconnect. Optional metadata fallback must preserve fatal connection errors and their authentication details.
   SQL Tools Service remains a separate process
@@ -94,12 +98,17 @@ being true.
 - Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
   dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
   password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
-  connect timeout; an interaction-required response never escalates to browser sign-in. Only actual saved-secret
-  rejection invalidates that revision; unavailable keyring, network, certificate and database errors retain ciphertext.
+  connect timeout; an interaction-required response never escalates to browser sign-in. A server login refusal can
+  quarantine its exact saved revision without deleting ciphertext; coarse SQL client states need not identify whether
+  the secret itself was wrong. Fresh typed authentication and exact stored-secret verification can readmit it.
+  Unavailable keyring, network, certificate and database failures retain ciphertext.
   The initial startup/reload pass starts only after session restoration, successfully loaded settings and backend
   readiness; it runs at most two attempts concurrently with no timer retries. An unexpected backend restart in the
   same window does not start another pass. Explicit disconnect, Stop and removal clear resume intent. Background
   attachment follows only exact query targets with attachment intent; it never resumes custom-document sampling.
+  Document tasks pause admission and defer receipt adoption/attachment without spending queued eligibility. Manual
+  Connect preempts unaccepted work temporarily; unrelated interrupted targets resume afterward. Its exact target is
+  superseded even when that manual attempt fails, and accepted targets finish attachment unless explicitly cancelled.
   Every capture/checkpoint includes the target workspace, including target-only sessions, and revalidates it after
   asynchronous writes before allowing final close/reload.
   Main's `ConnectionSessionCheckpoint` separately projects current authentication pins and checks their revision
@@ -115,6 +124,9 @@ being true.
   App mounts one prompt service and coordinator; Explorer, palette and popout commands use the same path. Custom
   providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
   reject replies from replaced handles, and retain drafts with dependent operations disabled while disconnected.
+  A failed native disconnect restores the same operation's prior resume preference. New work requires a connected
+  lifecycle; a retained disconnecting handle may still be inspected for transaction teardown. Cached database lists
+  remain available for failed-disconnect rollback, without admitting new metadata reads during teardown.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own

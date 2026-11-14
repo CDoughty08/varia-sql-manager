@@ -84,6 +84,8 @@ export class ConnectionOpenService {
   private generation = 0
   private mutation?: Mutation
   private mutationSettlements = 0
+  private readonly pageTargets = new Set<string>()
+  private restoredTargets?: Set<string>
 
   get mutationPending(): boolean { return !!this.mutation || this.mutationSettlements > 0 }
 
@@ -112,6 +114,7 @@ export class ConnectionOpenService {
       const result = await this.reuse.connect({
         targetId: request.context!.targetId!, generation, options: comparisonOptions,
         expectedPrincipal: request.context?.expectedPrincipal, credentialIntent: request.context?.credentialIntent,
+        forceAuthenticate: request.requireFreshAuthentication,
         signal: active.controller.signal
       }, async signal => {
         const connection = await this.deps.open(request.params, generation, signal)
@@ -156,7 +159,8 @@ export class ConnectionOpenService {
       let info = { ...initialized }
       if (!ownsSettlement) {
         ownsSettlement = true
-        const outcome = await abortable(settleReused(request, info, this.deps), active.controller.signal)
+        const settlement = settleReused(request, info, this.deps, result.authenticated === true).finally(() => this.retainReachablePins())
+        const outcome = await abortable(settlement, active.controller.signal)
         if (!outcome.ok) throw new OpenFailure(outcome)
         info = outcome.value as ConnectionInfo
       }
@@ -182,6 +186,7 @@ export class ConnectionOpenService {
       return { accepted: false, retained: !!receipt.handle && this.handles.has(receipt.handle) }
     }
     owner.accepted = true
+    this.pageTargets.add(owner.info.targetId!)
     this.pendingPrunes.delete(owner.info.targetId!)
     owner.receipts.delete(requestId)
     receipt.state = 'accepted'
@@ -215,11 +220,31 @@ export class ConnectionOpenService {
     return this.flushPrunes()
   }
 
+  /** Only main's strict session reader supplies this set; renderer snapshots cannot retire account evidence. */
+  retainTargets(targetIds: readonly string[]): void {
+    this.restoredTargets = new Set(targetIds)
+    this.retainReachablePins()
+  }
+
+  private retainReachablePins(): void {
+    if (!this.restoredTargets) return
+    const retained = new Set([...this.restoredTargets, ...this.pageTargets])
+    for (const owner of this.handles.values()) if (owner.info.targetId) retained.add(owner.info.targetId)
+    for (const receipt of this.receipts.values()) if (receipt.targetId && (receipt.state === 'pending' || receipt.state === 'delivered')) retained.add(receipt.targetId)
+    this.deps.authentication.retain(retained)
+  }
+
   private flushPrunes(): number {
     let pruned = 0
     for (const id of this.pendingPrunes) {
       if (this.reuse.hasTarget(id) || [...this.receipts.values()].some(receipt => receipt.targetId === id && (receipt.state === 'pending' || receipt.state === 'delivered'))) continue
-      if (this.reuse.removeTarget(id)) { this.deps.authentication.forget(id); this.pendingPrunes.delete(id); pruned++ }
+      if (this.reuse.removeTarget(id)) {
+        this.deps.authentication.forget(id)
+        this.pageTargets.delete(id)
+        this.restoredTargets?.delete(id)
+        this.pendingPrunes.delete(id)
+        pruned++
+      }
     }
     return pruned
   }
@@ -237,6 +262,7 @@ export class ConnectionOpenService {
       this.reuse.finishDisconnect(owner.info, true)
       this.handles.delete(handleKey(owner.info))
       this.flushPrunes()
+      this.retainReachablePins()
       return result
     } catch (error) {
       this.reuse.finishDisconnect(owner.info, false)
@@ -277,7 +303,7 @@ export class ConnectionOpenService {
         applied.add(key)
         const after = this.reuse.binding(handle)!, pin = this.deps.authentication.resolve(before.targetId)
         if (!pin?.expectedPrincipal) { this.reuse.invalidateBinding(handle); return [] }
-        if (change.passwordChanged && pin.credential) rejectCredentialReference(this.deps.savedPasswords, pin.credential)
+        if (change.passwordChanged && pin.credential) rejectCredentialReference(this.deps.savedPasswords, pin.credential, before.options)
         const authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: change.passwordChanged ? null : pin.credential ?? null })
         this.deps.authentication.rebind(before.targetId, before.options, after.options, authentication)
         return [{ change, handle, key, owner, before, after, principal: pin.expectedPrincipal, previousCredential: pin.credential }]
@@ -334,17 +360,19 @@ export class ConnectionOpenService {
     if ('lost' in state && state.lost) this.markLostBefore(state.lost.generation + 1)
   }
 
-  reset(): void {
+  reset({ replaceRenderer = false }: { replaceRenderer?: boolean } = {}): void {
     this.epoch++
     for (const receipt of this.receipts.values()) if (receipt.state !== 'accepted') receipt.controller.abort()
     this.receipts.clear()
     this.cancelledIds.clear()
-    this.pendingPrunes.clear()
+    if (replaceRenderer) this.pendingPrunes.clear()
     this.handles.clear()
     this.mutation = undefined
     this.reuse.dispose()
     this.reuse = this.coordinator()
     this.generation = 0
+    if (replaceRenderer) { this.pageTargets.clear(); this.restoredTargets = undefined }
+    else this.flushPrunes()
   }
 
   private markLostBefore(generation: number): void {
@@ -357,16 +385,21 @@ export class ConnectionOpenService {
   }
 
   private async initialize(owner: Owned, prepared: PreparedRequest, equivalentTarget: boolean): Promise<ConnectionInfo> {
-    const outcome = await settle(prepared, { ok: true, value: { ...owner.info } }, { ...this.deps, disconnect: async () => { await this.close(owner) } })
-    if (!outcome.ok) throw new OpenFailure(outcome)
-    const info = outcome.value as ConnectionInfo
-    if (!info.authentication || !info.targetId) {
-      await this.close(owner)
-      throw new OpenFailure({ ok: false, error: new Error('The authenticated connection receipt is incomplete.') })
+    try {
+      const outcome = await settle(prepared, { ok: true, value: { ...owner.info } }, { ...this.deps, disconnect: async () => { await this.close(owner) } })
+      if (!outcome.ok) throw new OpenFailure(outcome)
+      const info = outcome.value as ConnectionInfo
+      if (!info.authentication || !info.targetId) {
+        await this.close(owner)
+        throw new OpenFailure({ ok: false, error: new Error('The authenticated connection receipt is incomplete.') })
+      }
+      if (equivalentTarget && prepared.context?.mode !== 'background' && (prepared.context?.credentialPolicy === 'remember' || prepared.context?.credentialPolicy === 'forget' || prepared.context?.remember !== undefined)) info.credentialUpdated = true
+      owner.info = Object.freeze(info)
+      return owner.info
+    } finally {
+      // A cancelled old page can finish its authenticated vault write after the replacement's restore completed.
+      this.retainReachablePins()
     }
-    if (equivalentTarget && prepared.context?.mode !== 'background' && (prepared.context?.credentialPolicy === 'remember' || prepared.context?.credentialPolicy === 'forget' || prepared.context?.remember !== undefined)) info.credentialUpdated = true
-    owner.info = Object.freeze(info)
-    return owner.info
   }
 
   private release(receipt: Receipt): void {
@@ -391,6 +424,7 @@ export class ConnectionOpenService {
         this.reuse.finishDisconnect(owner.info, true)
         if (this.handles.get(handleKey(owner.info)) === owner) this.handles.delete(handleKey(owner.info))
         this.flushPrunes()
+        this.retainReachablePins()
         return true
       } catch {
         this.reuse.finishDisconnect(owner.info, false)

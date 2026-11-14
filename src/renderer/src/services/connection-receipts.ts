@@ -9,7 +9,7 @@ interface ConnectionReceiptApi {
 }
 
 /** Main retains transport ownership until this receipt is accepted. Renderer cancellation never closes a handle. */
-export async function acceptConnectionReceipt({ api, connections, info, options, details, attempt, requestId, current = () => true, explicitlyCancelled = () => false }: {
+export async function acceptConnectionReceipt({ api, connections, info, options, details, attempt, requestId, current = () => true, explicitlyCancelled = () => false, onAdopted }: {
   api: ConnectionReceiptApi
   connections: ConnectionService
   info: TargetConnectionInfo & { readonly credentialUpdated?: true }
@@ -20,6 +20,8 @@ export async function acceptConnectionReceipt({ api, connections, info, options,
   current?: () => boolean
   /** The picker's Stop/close intent, distinct from a foreground lease aborting background work. */
   explicitlyCancelled?: () => boolean
+  /** Synchronous canonical ownership notification, before main's asynchronous receipt acknowledgement. */
+  onAdopted?: (connection: OpenedConnection) => void
 }): Promise<OpenedConnection | undefined> {
   const release = () => api.cancelConnectionRequests([requestId]).catch(() => {})
   if (!current() || !info.targetId || !info.authentication) {
@@ -33,6 +35,7 @@ export async function acceptConnectionReceipt({ api, connections, info, options,
     await release()
     return
   }
+  onAdopted?.(opened)
   const accepted = await api.acceptConnectionRequest(requestId)
   // A failed IPC says nothing about shared transport ownership. Only main's explicit retained:false is proof of loss.
   if (!accepted.ok) throw new Error(accepted.error)

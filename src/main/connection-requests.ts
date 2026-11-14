@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto'
 import { canRememberPassword, connectionKey, connectContextSchema, credentialBinding, type ConnectContext, type ConnectionLibrary } from '../shared/connections'
 import { connectionAuthenticationSchema, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
 import type { ConnectionInfo, ConnectionOptions } from '../shared/contracts'
@@ -20,26 +21,38 @@ export interface ConnectionRequestDeps {
  * A validated request about to be sent. `params` is what the backend gets: the validated options, with the remembered
  * password when main injected one. `validated` never holds that password, so nothing that stores or echoes it can.
  */
-export interface PreparedRequest { method: string; validated: unknown; params: unknown; context?: ConnectContext; injected: boolean; injectedCredential?: ConnectionCredentialReference; release?: () => void }
+export interface PreparedRequest { method: string; validated: unknown; params: unknown; context?: ConnectContext; injected: boolean; injectedCredential?: ConnectionCredentialReference; requireFreshAuthentication?: boolean; release?: () => void }
 export type Settled = { ok: true; value: unknown } | { ok: false; error: unknown; passwordForgotten?: true; credentialRejected?: true; connectionFailure?: ConnectionFailureReason }
 export class ConnectionPreparationError extends Error {
   constructor(readonly reason: ConnectionFailureReason, message: string) { super(message) }
 }
 
 const gates = new WeakMap<object, Map<string, Promise<void>>>()
-const rejected = new WeakMap<object, Set<string>>()
+const rejectionKey = randomBytes(32)
+const rejectedSecret = (password: string) => createHmac('sha256', rejectionKey).update(password).digest('base64url')
+const rejected = new WeakMap<object, Map<string, { binding: string; secret?: string }>>()
 const pending = new WeakMap<object, number>()
 const attempts = new WeakMap<object, number>()
 /** Includes cancelled callers whose authenticated storage settlement is still draining under its owned lease. */
 export const hasPendingCredentialRequests = (store: object): boolean => (attempts.get(store) ?? 0) > 0
-export function rejectCredentialReference(store: object, reference: ConnectionCredentialReference): void {
+export function rejectCredentialReference(store: object, reference: ConnectionCredentialReference, options: ConnectionOptions): void {
   let revisions = rejected.get(store)
-  if (!revisions) { revisions = new Set(); rejected.set(store, revisions) }
-  revisions.add(reference.revision)
-  if (revisions.size > 512) revisions.delete(revisions.values().next().value!)
+  if (!revisions) { revisions = new Map(); rejected.set(store, revisions) }
+  revisions.set(reference.revision, { binding: credentialBinding(options), ...options.password ? { secret: rejectedSecret(options.password) } : {} })
+  if (revisions.size > 512) revisions.delete(revisions.keys().next().value!)
 }
 /** Only trusted authentication/storage proof can readmit a revision whose exact saved secret is current again. */
 export function admitVerifiedCredentialReference(store: object, reference: ConnectionCredentialReference): void { rejected.get(store)?.delete(reference.revision) }
+async function readmitAuthenticatedCredential(prepared: PreparedRequest, reference: ConnectionCredentialReference | undefined, deps: ConnectionRequestDeps): Promise<boolean> {
+  const params = prepared.params as ConnectionOptions
+  if (!reference || !rejected.get(deps.savedPasswords)?.has(reference.revision)) return true
+  if (!params.password) return false
+  // Exact authenticated secret and current sealed storage revision must agree; a successful set() alone is not proof.
+  try {
+    if (await deps.savedPasswords.getReferenced(reference, params) === params.password) { admitVerifiedCredentialReference(deps.savedPasswords, reference); return true }
+  } catch { /* Keep the rejection when storage proof is unavailable. */ }
+  return false
+}
 async function acquire(store: object, binding: string): Promise<() => void> {
   const count = pending.get(store) ?? 0
   if (count >= 16) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending credential requests.')
@@ -115,6 +128,11 @@ export async function prepare(method: string, validated: unknown, value: unknown
     const profileId = reference?.profileId ?? context?.profileId
     if (!profileId || options.password) {
       if (background && canRememberPassword(options.authentication)) throw new ConnectionPreparationError('credentials-required', 'Enter credentials to reconnect this target.')
+      // A live session can survive a password change. A typed retry of a rejected binding must authenticate anew.
+      if (options.password) {
+        const binding = credentialBinding(options), secret = rejectedSecret(options.password)
+        if ([...(rejected.get(deps.savedPasswords)?.values() ?? [])].some(value => value.binding === binding && value.secret === secret)) prepared.requireFreshAuthentication = true
+      }
       return prepared
     }
     if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
@@ -158,7 +176,7 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
       && outcome.error.details?.number === 18456 && (outcome.error.details.state === undefined || outcome.error.details.state === 1)
     if (!prepared.injected || !profileId || !erase && !ambiguousLogin) return outcome
     if (prepared.injectedCredential) {
-      rejectCredentialReference(deps.savedPasswords, prepared.injectedCredential)
+      rejectCredentialReference(deps.savedPasswords, prepared.injectedCredential, params)
     }
     // A redacted SQL login failure does not prove a bad password; keep its ciphertext while stopping queued replays.
     if (!erase) return { ...outcome, credentialRejected: true }
@@ -226,6 +244,7 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
       deps.authentication.remember(context.targetId, validated, info.authentication, established || policy === 'forget' ? 'update-credentials' : context.credentialIntent)
       info.targetId = context.targetId
     }
+    if (verified && !await readmitAuthenticatedCredential(prepared, reference, deps)) info.historyWarning = 'Connected successfully, but the saved credential could not be verified. Enter credentials to reconnect.'
   }
   return outcome
 }
@@ -235,7 +254,7 @@ const libraryOf = async (deps: Pick<ConnectionRequestDeps, 'connections'>): Prom
 }
 
 /** Main calls this only after the reuse coordinator proved identical live credentials/settings. No new history/open. */
-export async function settleReused(prepared: PreparedRequest, connected: ConnectionInfo, deps: ConnectionRequestDeps): Promise<Settled> {
+export async function settleReused(prepared: PreparedRequest, connected: ConnectionInfo, deps: ConnectionRequestDeps, freshlyAuthenticated = false): Promise<Settled> {
   try {
     if (!connected.targetId) throw new Error('The live connection has no authenticated target.')
     const pin = deps.authentication.resolve(connected.targetId)
@@ -273,6 +292,7 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
         info.authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: reference })
       }
       deps.authentication.remember(connected.targetId, options, info.authentication, 'update-credentials')
+      if (freshlyAuthenticated && !await readmitAuthenticatedCredential(prepared, info.authentication.credential ?? undefined, deps)) info.historyWarning = 'Connected successfully, but the saved credential could not be verified. Enter credentials to reconnect.'
       info.credentialUpdated = true
     } catch {
       info.historyWarning = policy === 'forget' ? 'Connected successfully, but the saved password could not be removed.' : 'Connected successfully, but the password could not be saved.'

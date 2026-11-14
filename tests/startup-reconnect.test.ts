@@ -13,7 +13,7 @@ const credential = { profileId: id(90), revision: id(91) }
 const saved = (value: number) => record(value, {
   options: { server: 'sql-prod', database: 'Sales', authentication: 'sql', username: 'alex', trustServerCertificate: false }, credential
 })
-function fixture(records: readonly PersistedConnectionTarget[], globalDefault = () => true) {
+function fixture(records: readonly PersistedConnectionTarget[], globalDefault = () => true, canStart = () => true) {
   const registry = new ConnectionTargetService()
   registry.restore({ version: 1, targets: records })
   const attempts: { target: ConnectionTarget; request: StartupReconnectAttempt; resolve: (result: StartupReconnectResult) => void; reject: (error: Error) => void }[] = []
@@ -21,8 +21,11 @@ function fixture(records: readonly PersistedConnectionTarget[], globalDefault = 
   const service = new StartupReconnectService(registry, (target, request) => new Promise((resolve, reject) => {
     attempts.push({ target, request, resolve, reject })
     for (const notify of started.get(target.id) ?? []) notify()
-  }), globalDefault)
-  const next = (value: number) => attempts.some(attempt => attempt.target.id === id(value)) ? Promise.resolve() : new Promise<void>(resolve => started.set(id(value), [...started.get(id(value)) ?? [], resolve]))
+  }), globalDefault, canStart)
+  const next = (value: number, count = 1) => {
+    const ready = () => attempts.filter(attempt => attempt.target.id === id(value)).length >= count
+    return ready() ? Promise.resolve() : new Promise<void>(resolve => started.set(id(value), [...started.get(id(value)) ?? [], () => { if (ready()) resolve() }]))
+  }
   return { registry, service, attempts, next }
 }
 
@@ -76,21 +79,102 @@ describe('startup reconnect scheduling', () => {
     service.dispose()
   })
 
-  it('gives manual attempts priority and resumes only unattempted queued targets', async () => {
+  it('gives manual attempts priority and resumes interrupted and unattempted targets in target order', async () => {
     const { service, attempts, next } = fixture([record(1), record(2), record(3)])
     service.start(1)
     const manual = service.beginManual()
     expect(attempts.every(attempt => attempt.request.signal.aborted)).toBe(true)
-    attempts.forEach(attempt => attempt.resolve({}))
+    attempts.forEach(attempt => attempt.resolve({ interrupted: true }))
     // A second manual attempt keeps the queue paused until both have ended.
     const secondManual = service.beginManual()
     manual.dispose()
+    await Promise.resolve()
     expect(attempts).toHaveLength(2)
     secondManual.dispose()
+    await next(2, 2)
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(1), id(2)])
+    attempts[2].resolve({})
+    await next(3)
+    attempts[3].resolve({})
+    attempts[4].resolve({})
+    await service.whenIdle()
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(1), id(2), id(3)])
+    service.dispose()
+  })
+
+  it('pauses queued admission while documents are busy without consuming targets', async () => {
+    let idle = false
+    const { service, attempts, next } = fixture([record(1), record(2), record(3)], () => true, () => idle)
+    service.start(1)
+    expect(attempts).toHaveLength(0)
+    idle = true
+    service.refresh()
+    expect(attempts).toHaveLength(2)
+    idle = false
+    attempts[0].resolve({})
+    attempts[1].resolve({})
+    await Promise.resolve()
+    expect(attempts).toHaveLength(2)
+    idle = true
+    service.refresh()
     await next(3)
     attempts[2].resolve({})
     await service.whenIdle()
-    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(3)])
+    service.dispose()
+  })
+
+  it('does not let foreground preemption undo adoption or drop its final attachment work', async () => {
+    const { service, attempts, next } = fixture([record(1), record(2), record(3)])
+    service.start(1)
+    expect(attempts[0].request.beginAcceptance()).toBe(true)
+    const foreground = service.beginManual()
+    expect(attempts[0].request.signal.aborted).toBe(false)
+    expect(attempts[1].request.signal.aborted).toBe(true)
+    expect(attempts[1].request.beginAcceptance()).toBe(false)
+    attempts[0].resolve({})
+    attempts[1].resolve({ interrupted: true })
+    await Promise.resolve()
+    foreground.dispose()
+    await next(2, 2)
+    await next(3)
+    attempts[2].resolve({})
+    attempts[3].resolve({})
+    await service.whenIdle()
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(2), id(3)])
+    service.dispose()
+  })
+
+  it('does not revive explicitly cancelled or removed preempted targets', async () => {
+    const { registry, service, attempts, next } = fixture([record(1), record(2), record(3)])
+    service.start(1)
+    const foreground = service.beginManual()
+    service.cancel(id(1))
+    registry.removeFromExplorer(id(3))
+    attempts[0].resolve({ interrupted: true })
+    attempts[1].resolve({ interrupted: true })
+    await Promise.resolve()
+    foreground.dispose()
+    await next(2, 2)
+    attempts[2].resolve({})
+    await service.whenIdle()
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(2)])
+    service.dispose()
+  })
+
+  it('does not retry an already completed failure merely because foreground work preempted its reply', async () => {
+    const { service, attempts, next } = fixture([record(1), record(2), record(3)])
+    service.start(1)
+    const foreground = service.beginManual()
+    attempts[0].resolve({})
+    attempts[1].resolve({ interrupted: true })
+    await Promise.resolve()
+    foreground.dispose()
+    await next(2, 2)
+    await next(3)
+    attempts[2].resolve({})
+    attempts[3].resolve({})
+    await service.whenIdle()
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(1), id(2), id(2), id(3)])
     service.dispose()
   })
 

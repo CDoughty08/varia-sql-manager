@@ -97,6 +97,8 @@ internal static class ConnectionPrincipalChecks
             "an Entra open missing provider evidence is disposed before metadata or backend target registration");
         await ScopesAsync(check, expected);
         await WindowsInitialAsync(check);
+        await SidFailuresAsync(check);
+        await PoolCallbacksAsync(check, expected);
         await FailedProfileAuthenticationAsync(check);
         await LostBeforePublicationAsync(check);
         await CancelledBeforePublicationAsync(check);
@@ -133,8 +135,8 @@ internal static class ConnectionPrincipalChecks
         }
         var sqlText = SqlService.ConnectBuilder(new("offline", "master", "sql", "reader", "password-marker", true)).ConnectionString;
         var (physical, retained, _) = await auth.OpenForUserAsync(sqlText, "offline", (text, _) => Task.FromResult(text), _ => Guid.Empty, CancellationToken.None);
-        check(physical == sqlText && retained == sqlText,
-            "SQL authentication opens the exact connection string registered for pool cleanup without incidental reserialization");
+        check(!new SqlConnectionStringBuilder(physical).Pooling && retained == sqlText,
+            "initial SQL authentication uses a fresh physical session while preserving the exact requested later pool key");
         using var service = new SqlService();
         var attempts = new List<SqlConnectionStringBuilder>();
         service.OpenUser = (text, _, _) => { attempts.Add(new(text)); throw new InvalidOperationException("fresh-windows-open"); };
@@ -143,6 +145,94 @@ internal static class ConnectionPrincipalChecks
             try { await request(); } catch (InvalidOperationException error) when (error.Message == "fresh-windows-open") { }
         check(attempts.Count == 2 && attempts.All(attempt => attempt.IntegratedSecurity && !attempt.Pooling),
             "real Connect and Load Databases entry points cannot reuse a prior Kerberos account's pooled authentication");
+    }
+
+    private static async Task SidFailuresAsync(Action<bool, string> check)
+    {
+        using var connection = new SqlConnection("Data Source=offline");
+        foreach (var (number, severity) in new (int, byte)[] { (-2, 11), (10054, 20), (10054, 11), (233, 20), (229, 14), (18456, 14) })
+        {
+            var failure = ConnectionFailureChecks.Sql(number, 1, severity, "offline", "probe failure");
+            SqlException? actual = null;
+            try { await ConnectionPrincipal.ProbeSidAsync(connection, CancellationToken.None, (_, _) => Task.FromException<object?>(failure)); }
+            catch (SqlException error) { actual = error; }
+            check(ReferenceEquals(actual, failure), "an unanswered SID probe preserves its original SQL error instead of claiming an account change: " + number);
+            if (number is -2 or 10054 or 233)
+                check(!LiveErrors.From("probe", failure).Terminal && ExplorerErrors.From(failure, ErrorPhase.Statement, "server", null).Retryable,
+                    "a SID timeout or transport error stays retryable in live views and Explorer: " + number);
+        }
+        using var stopped = new CancellationTokenSource();
+        stopped.Cancel();
+        var cancelled = false;
+        try { await ConnectionPrincipal.ProbeSidAsync(connection, stopped.Token, (_, _) => Task.FromException<object?>(ConnectionFailureChecks.Sql(-2))); }
+        catch (OperationCanceledException) { cancelled = true; }
+        check(cancelled, "an SQL error after a cancelled SID check retains the request's cancellation");
+        check(await ConnectionPrincipal.ProbeSidAsync(connection, CancellationToken.None, (_, _) => Task.FromResult<object?>(new byte[] { 1 })) == "sid:01"
+            && await ConnectionPrincipal.ProbeSidAsync(connection, CancellationToken.None, (_, _) => Task.FromResult<object?>(null)) is null,
+            "only an answered SID probe returns actual identity evidence or explicitly missing evidence");
+    }
+
+    private static async Task PoolCallbacksAsync(Action<bool, string> check, string expected)
+    {
+        var fake = new EntraChecks.FakeSource
+        {
+            Silent = (_, _) => Task.FromResult<EntraToken?>(new(Jwt(Claims()), DateTimeOffset.UtcNow.AddHours(1), null)),
+            Other = (_, _, _) => Task.FromResult(new EntraToken(Jwt(Claims()), DateTimeOffset.UtcNow.AddHours(1), null))
+        };
+        var service = new EntraService(fake);
+        foreach (var (mode, kind) in new[] { ("entraMfa", "silent"), ("entraPassword", "password"), ("entraIntegrated", "integrated"),
+            ("entraServicePrincipal", "servicePrincipal"), ("entraManagedIdentity", "managedIdentity"), ("entraDefault", "default") })
+        {
+            var settings = ConnectionSettings.Build(new("sql.contoso.database.windows.net", "appdb", mode, "account-hint", "secret-marker", true,
+                Advanced: new(ApplicationName: "original application")));
+            var authentication = new EntraPoolAuthentication(service, settings.ConnectionString, expected);
+            using var connection = authentication.Configure(new SqlConnection(settings.ConnectionString));
+            var physical = new SqlConnectionStringBuilder(connection.ConnectionString);
+            check(physical.ApplicationName == settings.ApplicationName && physical.UserID == settings.UserID && physical.Authentication == SqlAuthenticationMethod.NotSpecified
+                && physical.Password.Length == 0 && physical.Pooling == settings.Pooling && connection.AccessTokenCallback == authentication.Callback,
+                "callback authentication preserves APP_NAME, login hint and pool preference without conflicting authentication fields: " + mode);
+            var id = Guid.NewGuid();
+            using (var scope = new EntraConnectScope(CancellationToken.None, expected))
+            {
+                var token = await connection.AccessTokenCallback!(Parameters(id), CancellationToken.None);
+                var call = fake.Calls[^1];
+                check(token.AccessToken == Jwt(Claims()) && call.Kind == kind && call.Request.User == (string.IsNullOrWhiteSpace(settings.UserID) ? null : settings.UserID)
+                    && (call.Secret ?? "") == (EntraModes.UsesPassword(mode) ? "secret-marker" : "")
+                    && service.Attempts.Take(id) is Served { PrincipalId: var served } && served == expected,
+                    "the target callback retains the original Entra mode, credential inputs and verified principal: " + mode);
+            }
+            var calls = fake.Calls.Count;
+            foreach (var other in new string?[] { null, $"entra:{Tenant}:{OtherObject}" })
+            {
+                using var scope = new EntraConnectScope(CancellationToken.None, other);
+                id = Guid.NewGuid();
+                var refused = false;
+                try { await authentication.Callback(Parameters(id), CancellationToken.None); }
+                catch (EntraProviderException) { refused = service.Attempts.Take(id) is EntraFailure { Code: "AUTH_IDENTITY" }; }
+                check(refused && fake.Calls.Count == calls, "unscoped pool maintenance and another target's scope cannot acquire a token for this private pool: " + mode);
+            }
+        }
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fake.Other = async (_, _, token) =>
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+            throw new Exception("A cancelled callback token source completed unexpectedly.");
+        };
+        using var cancelled = new CancellationTokenSource();
+        using (var scope = new EntraConnectScope(CancellationToken.None, expected))
+        {
+            var settings = ConnectionSettings.Build(new("sql.contoso.database.windows.net", "appdb", "entraServicePrincipal", "client-id", "secret-marker", true));
+            var authentication = new EntraPoolAuthentication(service, settings.ConnectionString, expected);
+            var id = Guid.NewGuid();
+            var pending = authentication.Callback(Parameters(id), cancelled.Token);
+            await entered.Task;
+            cancelled.Cancel();
+            var stopped = false;
+            try { await pending; } catch (EntraProviderException) { stopped = service.Attempts.Take(id) is EntraFailure { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.TokenTimedOut }; }
+            check(stopped && EntraConnectScope.ExpectedPrincipal == expected,
+                "the callback links SqlClient's cancellation budget without losing or leaking the authorized target scope");
+        }
     }
 
     private static async Task FailedProfileAuthenticationAsync(Action<bool, string> check)
@@ -387,10 +477,10 @@ internal static class ConnectionPrincipalChecks
         try
         {
             sql.Entra.Source = new EntraChecks.FakeSource { Silent = (_, _) => Task.FromResult<EntraToken?>(new(actual, DateTimeOffset.UtcNow.AddHours(1), "same-name@contoso.com")) };
-            async Task ProviderOpen(SqlConnection _, CancellationToken cancel)
+            async Task ProviderOpen(SqlConnection connection, CancellationToken cancel)
             {
                 var id = Guid.NewGuid();
-                try { await sql.Entra.Provider.AcquireTokenAsync(Parameters(id, "same-name@contoso.com")); }
+                try { await connection.AccessTokenCallback!(Parameters(id, "same-name@contoso.com"), cancel); }
                 catch (EntraProviderException) { throw EntraChecks.ProviderFailure(id); }
             }
             sql.OpenConnection = ProviderOpen;
@@ -402,12 +492,19 @@ internal static class ConnectionPrincipalChecks
             using var secondPool = ((IExplorerHost)sql).Connection(second, "appdb");
             var firstBuilder = new SqlConnectionStringBuilder(firstPool.ConnectionString);
             var secondBuilder = new SqlConnectionStringBuilder(secondPool.ConnectionString);
-            check(firstBuilder.Pooling && secondBuilder.Pooling && firstBuilder.ApplicationName.Length <= 128
-                && firstBuilder.ApplicationName.StartsWith("Varia#" + Guid.Parse(first).ToString("N"), StringComparison.Ordinal)
-                && secondBuilder.ApplicationName.StartsWith("Varia#" + Guid.Parse(second).ToString("N"), StringComparison.Ordinal)
-                && firstBuilder.ApplicationName != secondBuilder.ApplicationName && firstBuilder.ApplicationName.EndsWith(" - Object Explorer", StringComparison.Ordinal)
-                && SqlService.OwnSuffixes.All(suffix => suffix.Length <= 40),
-                "each Entra target has its own pooled physical sessions, with bounded private prefixes and complete role suffixes even for maximum application names");
+            using var samePool = ((IExplorerHost)sql).Connection(first, "appdb");
+            var group = typeof(SqlConnection).GetProperty("PoolGroup", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("SqlClient's pool-group property changed; update the callback pool-isolation regression.");
+            check(firstBuilder.Pooling && secondBuilder.Pooling && firstBuilder.ApplicationName.Length == 128
+                && firstBuilder.ApplicationName.StartsWith(new string('x', 100), StringComparison.Ordinal) && firstBuilder.ApplicationName.EndsWith(" - Object Explorer", StringComparison.Ordinal)
+                && firstBuilder.ApplicationName == secondBuilder.ApplicationName && firstPool.AccessTokenCallback != secondPool.AccessTokenCallback
+                && firstPool.AccessTokenCallback == samePool.AccessTokenCallback && ReferenceEquals(group.GetValue(firstPool), group.GetValue(samePool))
+                && !ReferenceEquals(group.GetValue(firstPool), group.GetValue(secondPool)),
+                "Entra targets preserve the requested program name and normal role suffix, reuse their own SqlClient pool group, and never share another target's pool group");
+            var authentications = (IDictionary<string, EntraPoolAuthentication>)typeof(SqlService).GetField("entraPools", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sql)!;
+            using var cleanupHandle = authentications[first].Configure(new SqlConnection(firstPool.ConnectionString));
+            check(ReferenceEquals(group.GetValue(firstPool), group.GetValue(cleanupHandle)),
+                "a pool cleanup handle retains the exact target callback and SqlClient pool group of the physical factory connection");
             var probes = 0;
             sql.ProbePrincipal = (_, _) => { probes++; return Task.FromResult<string?>("sid:01"); };
             await sql.Open(firstPool, CancellationToken.None);
@@ -479,6 +576,10 @@ internal static class ConnectionPrincipalChecks
             check(!ExplorerErrors.SignIn(identityError).Retryable && LiveErrors.SignIn("probe", identityError).Terminal
                 && ActivityErrors.SignIn(identityError) is { Code: "AUTH_IDENTITY", Retryable: false },
                 "identity failures preserve their reason and stop automatic retries across Explorer, live probes and session actions");
+            await sql.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(first), HostChecks.Json), HostChecks.Json);
+            check(!authentications.ContainsKey(first) && authentications.ContainsKey(second), "Disconnect releases only its exact Entra callback owner after clearing that owner's private pools");
+            await sql.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second), HostChecks.Json), HostChecks.Json);
+            check(authentications.Count == 0, "no target callback or retained authentication inputs remain registered after both Entra targets disconnect");
         }
         finally { sql.Entra.Source = source; sql.Entra.Attempts.Clear(); }
     }
@@ -487,6 +588,7 @@ internal static class ConnectionPrincipalChecks
     /// Open is still pending while StateChange runs. Both native API paths must refuse and clean up without sending SQL.</summary>
     internal static async Task LiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo info)
     {
+        await FailurePoolsAsync(check, service, info);
         var cleanup = service.CloseRejectedConnection;
         try
         {
@@ -544,5 +646,51 @@ internal static class ConnectionPrincipalChecks
             }
         }
         finally { service.CloseRejectedConnection = cleanup; }
+    }
+
+    private static async Task FailurePoolsAsync(Action<bool, string> check, SqlService service, ConnectionInfo info)
+    {
+        var suffix = " - Pool checks " + Guid.NewGuid().ToString("N");
+        SqlConnection Create() => ((ILiveHost)service).PoolConnection(info.Id, "master", suffix);
+        var open = service.OpenConnection;
+        var principal = service.ProbePrincipal;
+        using var handle = Create();
+        try
+        {
+            Guid physicalId;
+            using (var warm = Create())
+            {
+                await service.Open(warm, CancellationToken.None);
+                physicalId = warm.ClientConnectionId;
+            }
+            foreach (var failure in new Exception[] { new OperationCanceledException(), ConnectionFailureChecks.Sql(-2), ConnectionFailureChecks.Sql(10054, 1, 20, "offline", "Socket lost.") })
+            {
+                service.OpenConnection = (_, _) => Task.FromException(failure);
+                using var rejected = Create();
+                Exception? actual = null;
+                try { await service.Open(rejected, CancellationToken.None); } catch (Exception error) { actual = error; }
+                check(ReferenceEquals(actual, failure) && rejected.ConnectionString.Length == 0,
+                    "a failed guarded open preserves its cancellation or transport error and disposes that connection");
+                service.OpenConnection = open;
+                using var healthy = Create();
+                await service.Open(healthy, CancellationToken.None);
+                check(healthy.ClientConnectionId == physicalId, "cancelling or losing one guarded open leaves an already healthy idle pool session available");
+            }
+            service.ProbePrincipal = (_, _) => Task.FromResult<string?>("sid:identity-mismatch");
+            using var mismatch = Create();
+            RequestException? refused = null;
+            try { await service.Open(mismatch, CancellationToken.None); } catch (RequestException error) { refused = error; }
+            service.ProbePrincipal = principal;
+            using var fresh = Create();
+            await service.Open(fresh, CancellationToken.None);
+            check(refused is { Code: "AUTH_IDENTITY" } && fresh.ClientConnectionId != physicalId,
+                "an identity refusal still retires the untrusted physical pool connection before another guarded connection can use it");
+        }
+        finally
+        {
+            service.OpenConnection = open;
+            service.ProbePrincipal = principal;
+            SqlConnection.ClearPool(handle);
+        }
     }
 }

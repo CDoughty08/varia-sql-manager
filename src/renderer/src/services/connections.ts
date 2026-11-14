@@ -3,6 +3,7 @@ import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTarg
 import { SnapshotStore } from '../core/store'
 import { ConnectionTargetService, type ConnectionCompletion, type ConnectionCredentialIntent, type ConnectionOperation } from './connection-targets'
 import type { ConnectionBindingsChanged } from '../../../shared/connection-bindings'
+import { isLiveConnection } from './connection-availability'
 
 /** Connection settings without the password, which the renderer never keeps: a reconnect asks for it again, unless main
  *  remembers one for the same credentials (Remember password) and fills it in itself. */
@@ -44,7 +45,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   /** Connections that can still run queries. */
   live(): LiveConnection[] { return this.getSnapshot().filter(connection => this.isLive(connection.id)) }
   /** The connection is still there and was not lost with its backend generation. */
-  isLive(id: string): boolean { const connection = this.get(id); return !!connection && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected') }
+  isLive(id: string): boolean { return isLiveConnection(this.get(id)) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
   bindingsChanged(update: ConnectionBindingsChanged): boolean {
     const accepted = this.connectionTargets.applyBindings(update)

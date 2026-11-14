@@ -15,6 +15,8 @@ export interface ConnectionReuseRequest {
   readonly principal?: ConnectionPrincipalEvidence
   readonly expectedPrincipal?: ConnectionPrincipalEvidence
   readonly credentialIntent?: 'preserve' | 'update-credentials'
+  /** Main requires a fresh password proof after a saved binding was rejected, even if an old session is still live. */
+  readonly forceAuthenticate?: boolean
   /** Cancels this caller's interest, without disposing a handle another caller accepted. */
   readonly signal?: AbortSignal
 }
@@ -26,7 +28,7 @@ export interface AuthenticatedConnection<T extends BackendConnectionHandle> {
 }
 
 export type ConnectionReuseOutcome<T extends BackendConnectionHandle> =
-  | { readonly status: 'connected' | 'reused'; readonly targetId: string; readonly connection: T; readonly principal: ConnectionPrincipalEvidence }
+  | { readonly status: 'connected' | 'reused'; readonly targetId: string; readonly connection: T; readonly principal: ConnectionPrincipalEvidence; readonly authenticated?: true }
   | { readonly status: 'cancelled' | 'identity-changed' | 'invalid' | 'busy' }
   | { readonly status: 'failed'; readonly error: unknown }
 
@@ -87,7 +89,8 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     const parsed = connectionOptionsSchema.safeParse(request.options)
     if (!targetIdSchema.safeParse(request.targetId).success || !parsed.success || !Number.isSafeInteger(request.generation) || request.generation < 0
       || (request.principal && !validPrincipal(request.principal)) || (request.expectedPrincipal && !validPrincipal(request.expectedPrincipal))
-      || (request.credentialIntent !== undefined && request.credentialIntent !== 'preserve' && request.credentialIntent !== 'update-credentials')) return Promise.resolve({ status: 'invalid' })
+      || (request.credentialIntent !== undefined && request.credentialIntent !== 'preserve' && request.credentialIntent !== 'update-credentials')
+      || (request.forceAuthenticate !== undefined && typeof request.forceAuthenticate !== 'boolean')) return Promise.resolve({ status: 'invalid' })
     if (this.#disposed || request.generation < this.#generation || request.signal?.aborted) return Promise.resolve({ status: 'cancelled' })
     if (this.#bindingBusy) return Promise.resolve({ status: 'busy' })
     this.markLostBefore(request.generation)
@@ -99,18 +102,18 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     if (key && [...this.#live.values()].some(value => value.key === key && value.disconnecting)) return Promise.resolve({ status: 'busy' })
     const candidatePrincipal = candidate.principal ?? candidate.expectedPrincipal
     const live = key ? this.#matchingLive(key, candidatePrincipal) : undefined
-    if (live) {
+    if (live && !candidate.forceAuthenticate) {
       if ((candidate.expectedPrincipal && !samePrincipal(candidate.expectedPrincipal, live.principal))
         || (candidate.principal && !samePrincipal(candidate.principal, live.principal))) return Promise.resolve({ status: 'identity-changed' })
       return Promise.resolve(this.#outcome(live, 'reused'))
     }
-    if (key && candidatePrincipal && this.#matchingLive(key)) return Promise.resolve({ status: 'identity-changed' })
+    if (!live && key && candidatePrincipal && this.#matchingLive(key)) return Promise.resolve({ status: 'identity-changed' })
     // A target already being disconnected cannot acquire a replacement transport during its close preflight/mutation.
-    if ([...this.#live.values()].some(value => value.targetId === candidate.targetId)) return Promise.resolve({ status: 'busy' })
-    const joinKey = key ? JSON.stringify([key, candidate.credentialIntent ?? 'preserve', candidate.expectedPrincipal ?? null]) : undefined
+    if ([...this.#live.values()].some(value => value.targetId === candidate.targetId) && !(candidate.forceAuthenticate && live?.targetId === candidate.targetId)) return Promise.resolve({ status: 'busy' })
+    const joinKey = key ? JSON.stringify([key, candidate.credentialIntent ?? 'preserve', candidate.expectedPrincipal ?? null, candidate.forceAuthenticate === true]) : undefined
     const joined = joinKey ? this.#joins.get(joinKey) : undefined
     if (joined) return joined.waiters.size < connectionTargetLimits.targets ? this.#wait(joined, candidate) : Promise.resolve({ status: 'busy' })
-    if (this.#pending.size >= connectionTargetLimits.targets || this.#live.size >= connectionTargetLimits.targets) return Promise.resolve({ status: 'busy' })
+    if (this.#pending.size >= connectionTargetLimits.targets || this.#live.size >= connectionTargetLimits.targets && !(candidate.forceAuthenticate && live)) return Promise.resolve({ status: 'busy' })
     const pending: Pending<T> = { request: candidate, joinKey, controller: new AbortController(), waiters: new Set(), cancelled: false }
     this.#pending.add(pending)
     if (joinKey) this.#joins.set(joinKey, pending)
@@ -242,8 +245,8 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     return first && matches.every(value => samePrincipal(first.principal, value.principal)) ? first : undefined
   }
 
-  #outcome(live: Live<T>, status: 'connected' | 'reused'): ConnectionReuseOutcome<T> {
-    return Object.freeze({ status, targetId: live.targetId, connection: live.connection, principal: live.principal })
+  #outcome(live: Live<T>, status: 'connected' | 'reused', authenticated = false): ConnectionReuseOutcome<T> {
+    return Object.freeze({ status, targetId: live.targetId, connection: live.connection, principal: live.principal, ...authenticated ? { authenticated: true as const } : {} })
   }
 
   #wait(pending: Pending<T>, request: ConnectionReuseRequest): Promise<ConnectionReuseOutcome<T>> {
@@ -303,7 +306,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
           await this.#cleanup(answer.connection)
           // Cleanup crosses an await: a disconnect or generation change may have taken that handle in the meantime.
           outcome = !pending.cancelled && !this.#disposed && this.#live.get(handleKey(equivalent.connection)) === equivalent
-            && !equivalent.disconnecting && request.generation === this.#generation ? this.#outcome(equivalent, 'reused') : { status: 'cancelled' }
+            && !equivalent.disconnecting && request.generation === this.#generation ? this.#outcome(equivalent, 'reused', request.forceAuthenticate) : { status: 'cancelled' }
         } else if (!key || occupied || [...this.#live.values()].some(value => value.targetId === request.targetId || value.key === key && value.disconnecting)) {
           await this.#cleanup(answer.connection)
           outcome = { status: key ? 'busy' : 'identity-changed' }
@@ -318,7 +321,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
           // second handle to that target after an explicit credential update opened a different live key.
           for (const [offlineKey, value] of this.#offline) if (offlineKey === selectedAffinityKey || value.targetId === targetId) this.#offline.delete(offlineKey)
           this.#live.set(handleKey(live.connection), live)
-          outcome = this.#outcome(live, 'connected')
+          outcome = this.#outcome(live, 'connected', request.forceAuthenticate)
         }
       }
     } catch (error) { outcome = pending.cancelled || this.#disposed ? { status: 'cancelled' } : { status: 'failed', error } }

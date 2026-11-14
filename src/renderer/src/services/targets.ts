@@ -1,5 +1,6 @@
 import { isQueryDocument, type QueryDocument } from '../documents'
 import type { ConnectionService } from './connections'
+import { isLiveConnection } from './connection-availability'
 import type { DocumentService } from './documents'
 import { unfinished, type FileService } from './files'
 import type { QueryService } from './queries'
@@ -23,8 +24,8 @@ export class TargetService {
   subscribe = (listener: () => void): (() => void) => this.registry?.subscribe(listener) ?? (() => {})
   targetForConnection(connectionId: string): string | undefined {
     const connection = this.connections.get(connectionId)
-    if (!connection || connection.lost) return undefined
-    return this.getSnapshot().find(target => (target.lifecycle.state === 'connected' || target.lifecycle.state === 'disconnecting')
+    if (!isLiveConnection(connection)) return undefined
+    return this.getSnapshot().find(target => target.lifecycle.state === 'connected'
       && target.lifecycle.handle.id === connectionId && target.lifecycle.handle.generation === connection.generation)?.id
   }
   update(tabId: string, patch: TargetPatch): void {
@@ -52,7 +53,8 @@ export class TargetService {
     const document = this.documents.get(tabId)
     if (!document || !isQueryDocument(document)) return
     const candidate = connectionId === undefined ? undefined : this.connections.get(connectionId)
-    const next = candidate?.lost ? undefined : candidate
+    if (connectionId !== undefined && !isLiveConnection(candidate)) { this.files.reportError('The selected connection is not connected. Choose its connection again.'); return }
+    const next = candidate
     if (document.connectionId === next?.id) {
       if (!connectionId && document.attachWanted) this.documents.update(tabId, { attachWanted: false })
       return
@@ -65,7 +67,7 @@ export class TargetService {
       await this.documents.endSession(tabId, plan.get(tabId))
       if (next) {
         const current = this.connections.get(next.id)
-        if (!current || current.lost || current.generation !== next.generation || targetId && this.targetForConnection(next.id) !== targetId)
+        if (!isLiveConnection(current) || current.generation !== next.generation || targetId && this.targetForConnection(next.id) !== targetId)
           throw new Error('The selected connection changed while ending the query session. Choose its connection again.')
       }
       this.update(tabId, { connectionId: next?.id, database, targetId, attachWanted: !!next })

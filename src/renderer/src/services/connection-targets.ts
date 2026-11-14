@@ -16,7 +16,7 @@ interface ConnectionOperationBase {
 }
 export type ConnectionCredentialIntent = 'preserve' | 'update-credentials'
 export type ConnectionOperation = ConnectionOperationBase & (
-  { readonly kind: 'connect'; readonly credentialIntent: ConnectionCredentialIntent } | { readonly kind: 'disconnect' }
+  { readonly kind: 'connect'; readonly credentialIntent: ConnectionCredentialIntent } | { readonly kind: 'disconnect'; readonly resumeWanted: boolean }
 )
 export type ConnectionCompletion =
   | { readonly status: 'accepted' | 'already-current' }
@@ -222,10 +222,10 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
 
   failDisconnect(operation: ConnectionOperation): boolean {
     if (!this.matches(operation, 'disconnect')) return false
-    const target = this.get(operation.targetId)!
-    if (target.lifecycle.state !== 'disconnecting') return false
+    const target = this.get(operation.targetId)!, current = this.operations.get(operation.targetId)
+    if (target.lifecycle.state !== 'disconnecting' || current?.kind !== 'disconnect') return false
     this.operations.delete(target.id)
-    this.replace(target.id, persisted(target), { state: 'connected', handle: target.lifecycle.handle })
+    this.replace(target.id, { ...persisted(target), resumeWanted: current.resumeWanted }, { state: 'connected', handle: target.lifecycle.handle })
     return true
   }
 
@@ -281,7 +281,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
 
   private begin(targetId: string, attemptId: string, generation: number, kind: ConnectionOperation['kind'], credentialIntent: ConnectionCredentialIntent = 'preserve'): ConnectionOperation {
     const base = { targetId, attemptId, generation, revision: ++this.revision }
-    const operation: ConnectionOperation = kind === 'connect' ? Object.freeze({ ...base, kind, credentialIntent }) : Object.freeze({ ...base, kind })
+    const operation: ConnectionOperation = kind === 'connect' ? Object.freeze({ ...base, kind, credentialIntent }) : Object.freeze({ ...base, kind, resumeWanted: this.get(targetId)!.resumeWanted })
     this.operations.set(targetId, operation)
     return operation
   }

@@ -89,6 +89,7 @@ describe('server disconnect coordinator', () => {
     expect(f.state.docs).toBe(before)
     expect(f.host.closeQueries).not.toHaveBeenCalled()
     expect(f.targets.get(id(1))?.lifecycle.state).toBe('connected')
+    expect(f.targets.get(id(1))?.resumeWanted).toBe(true)
   })
   it('reports already completed transactions if a later commit fails without claiming a rollback', async () => {
     const f = fixture()

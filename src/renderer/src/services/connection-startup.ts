@@ -29,8 +29,20 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
 }) {
   const registry = connections.connectionTargets
   let disposed = false, restored = false, started = false
+  const whenDocumentsIdle = (signal: AbortSignal): Promise<boolean> => {
+    if (disposed || signal.aborted) return Promise.resolve(false)
+    if (!documents.getSnapshot().busy) return Promise.resolve(true)
+    return new Promise(resolve => {
+      const finish = (ready: boolean) => { stop(); signal.removeEventListener('abort', abort); resolve(ready) }
+      const abort = () => finish(false)
+      const stop = documents.subscribe(() => { if (!documents.getSnapshot().busy) finish(!disposed && !signal.aborted) })
+      signal.addEventListener('abort', abort, { once: true })
+      if (disposed || signal.aborted) finish(false)
+      else if (!documents.getSnapshot().busy) finish(true)
+    })
+  }
   const scheduler = new StartupReconnectService(registry, async (target, pending) => {
-    if (disposed || pending.signal.aborted || documents.getSnapshot().busy) return {}
+    if (disposed || pending.signal.aborted) return {}
     const { autoReconnect: _autoReconnect, ...presentation } = target.details
     const options = { ...target.options, ...presentation }, requestId = crypto.randomUUID()
     const attempt = connections.beginConnect(options, pending.generation, target.id, target.details)
@@ -42,14 +54,22 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
     }
     pending.signal.addEventListener('abort', abort, { once: true })
     try {
+      if (pending.signal.aborted) { connections.failAttempt(attempt, 'cancelled'); return { interrupted: true } }
       const result = await api.connect(options, { targetId: target.id, requestId, mode: 'background', credentialPolicy: 'preserve', credentialIntent: 'preserve', credential: target.credential, expectedPrincipal: target.expectedPrincipal })
       if (!result.ok) {
         connections.failAttempt(attempt, result.connectionFailure ?? failureReason(result.code))
-        return result.credentialRejected ? { credentialRejected: true as const } : {}
+        return { ...result.credentialRejected ? { credentialRejected: true as const } : {}, ...result.code === 'CANCELLED' ? { interrupted: true as const } : {} }
       }
+      while (documents.getSnapshot().busy) if (!await whenDocumentsIdle(pending.signal)) return { interrupted: true }
+      if (!pending.beginAcceptance()) return { interrupted: true }
       const opened = await acceptConnectionReceipt({ api, connections, info: result.value, options, details: target.details, attempt, requestId,
-        current: () => !disposed && !pending.signal.aborted && !documents.getSnapshot().busy })
+        current: () => !disposed && !pending.signal.aborted,
+        onAdopted: value => pending.adopted(value.targetId!, { id: value.id, generation: value.generation }) })
       if (!opened?.targetId) return {}
+      while (documents.getSnapshot().busy) if (!await whenDocumentsIdle(pending.signal)) return {}
+      if (disposed || pending.signal.aborted) return {}
+      const current = connections.get(opened.id)
+      if (!current || !connections.isLive(opened.id) || current.generation !== opened.generation || current.targetId !== opened.targetId || !pending.finishAttachment()) return {}
       if (opened.sourceTargetId && opened.sourceTargetId !== opened.targetId) {
         targets.coalesceTarget(opened.sourceTargetId, opened.targetId, opened.id)
         registry.removeFromExplorer(opened.sourceTargetId)
@@ -64,7 +84,7 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
       pending.signal.removeEventListener('abort', abort)
       connections.failAttempt(attempt, pending.signal.aborted ? 'cancelled' : 'unknown')
     }
-  }, () => settings.get('environment.connections.autoReconnect'))
+  }, () => settings.get('environment.connections.autoReconnect'), () => !documents.getSnapshot().busy)
   const start = () => {
     if (disposed || started || !restored || documents.getSnapshot().busy) return
     const configuration = settings.getSnapshot(), state = backend.getSnapshot().state
@@ -75,7 +95,7 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
   }
   const stopBackend = backend.subscribe(start)
   const stopSettings = settings.subscribe(() => { scheduler.refresh(); start() })
-  const stopDocuments = documents.subscribe(start)
+  const stopDocuments = documents.subscribe(() => { scheduler.refresh(); start() })
   void ready.then(() => { if (!disposed) { restored = true; start() } })
   return { scheduler, dispose: () => { disposed = true; stopBackend(); stopSettings(); stopDocuments(); scheduler.dispose() } }
 }

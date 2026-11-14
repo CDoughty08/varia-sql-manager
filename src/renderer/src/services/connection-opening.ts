@@ -28,7 +28,7 @@ export function adoptConnection(connections: ConnectionService, info: TargetConn
   const result = connections.accept(info, options, authoritativeTarget, info.authentication, attempt)
   if (result.status !== 'accepted' && result.status !== 'already-current') { if (attempt) connections.failAttempt(attempt); rejected?.(result); return undefined }
   const connection = connections.get(authoritativeTarget)
-  if (!connection || connection.lost) return undefined
+  if (!connection || !connections.isLive(connection.id)) return undefined
   const reused = !!previous && !(attempt?.created && previous.targetId === attempt.operation.targetId)
   if (!reused) connections.setDetails(connection.id, selected)
   return { id: connection.id, targetId: connection.targetId, generation: connection.generation, bindingRevision: connections.bindingRevision(connection), previousId: reused ? previous?.id : undefined, sourceTargetId: attempt?.operation.targetId, reused, current, selected }

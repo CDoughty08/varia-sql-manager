@@ -7,6 +7,9 @@ transactions or SET state.
 
 Connect retry settings apply to initial connection attempts. Once connected, idle-session recovery is disabled so a
 lost session cannot silently authenticate under a different account; an explicit reconnect opens a fresh session.
+New physical connections authenticate without borrowing an idle pooled login, including SQL authentication. Equivalent
+connections can still reuse an already accepted target and its existing query sessions. Entra authentication preserves
+the configured Application Name for server classifiers, logon triggers and auditing.
 
 Connected roots offer Disconnect and Disconnect and Remove from Explorer. Offline roots offer Reconnect and Remove
 from Explorer. The toolbar, server menu and command palette share these commands. Removing Explorer membership does
@@ -46,12 +49,17 @@ Disconnect stays respected. Startup restores labels immediately, attempts eligib
 leaves failures available for explicit Reconnect. Missing credentials, unavailable OS secret storage, sign-in, network,
 certificate and database errors do not block unrelated targets. Browser sign-in remains explicit. OS keychain access
 may still request unlock. Query buffers are never executed automatically.
+File operations can pause this work without discarding queued servers. Manual Connect takes priority; unrelated
+interrupted targets continue afterward. A failed Disconnect keeps the previous resume preference when the connection
+stays open. Temporary identity-probe transport failures retain their ordinary connection error and recovery behavior.
 
 Saved credentials use the existing OS-protected vault. Connection snapshots contain nonsecret settings and opaque
 credential revision references. Server, database and account metadata remain readable in local session JSON under the
 user's file permissions; the complete workspace is not encrypted. Account/destination changes cannot silently redirect
 existing query tabs or custom drafts. See [hot exit and query tabs](hot-exit.md#connections) for restoration and local
 storage details.
+If a saved revision is rejected, entering the same corrected credentials with Remember can restore its eligibility
+after fresh authentication and successful storage. Existing live-session reuse alone does not verify a rejected secret.
 
 Changing a login password through Varia also updates the encrypted copy for affected connections that already remember
 it. Unremembered passwords stay unremembered. If storage cannot be updated, Varia reports a warning and requires

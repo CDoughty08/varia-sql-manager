@@ -181,7 +181,7 @@ const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEditio
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
-  return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
+  return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : connection.serverVersion ? `(SQL Server ${connection.serverVersion})` : '(SQL Server)'
 }
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**

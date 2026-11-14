@@ -2,6 +2,7 @@ import type { DatabaseInfo } from '../../shared/contracts'
 import type { LiveConnection } from './services/connections'
 import type { ConnectionTarget } from '../../shared/connection-targets'
 import { queryConnectionPresentation } from './query-connection'
+import { isLiveConnection } from './services/connection-availability'
 
 /** Tooltip text with the command's key on this platform, such as "Open File… (Ctrl+O)". */
 export function withKey(text: string, label: { text: string } | undefined): string { return label ? `${text} (${label.text})` : text }
@@ -48,10 +49,10 @@ export const serverLabel = (connection: Pick<LiveConnection, 'displayName' | 'se
 export function queryContextModel({ connectionId, targetId, target, lastServer, database, connections, databases, query, running, busy }: QueryContextInput): QueryContextModel {
   const connection = connectionId ? connections.find(value => value.id === connectionId) : undefined
   const presentation = queryConnectionPresentation({ targetId, lastServer }, connection, target)
-  const live = !presentation.disconnected
+  const live = isLiveConnection(connection) && !presentation.disconnected
   const serverValue = connection?.id ?? (presentation.server ? `remembered:${targetId ?? lastServer}` : '')
-  const servers = [{ id: '', label: 'Disconnected', disabled: false }, ...connections.filter(value => !value.lost || value === connection)
-    .map(value => ({ id: value.id, label: value === connection ? presentation.label : `${serverLabel(value)}${value.lost ? ' Disconnected' : ''}`, disabled: value === connection ? !live : !!value.lost }))]
+  const servers = [{ id: '', label: 'Disconnected', disabled: false }, ...connections.filter(value => isLiveConnection(value) || value === connection)
+    .map(value => ({ id: value.id, label: value === connection ? presentation.label : serverLabel(value), disabled: value === connection ? !live : !isLiveConnection(value) }))]
   if (!connection && presentation.server) servers.push({ id: serverValue, label: presentation.label, disabled: true })
   const listed = live ? databases.map(value => value.name) : []
   return {

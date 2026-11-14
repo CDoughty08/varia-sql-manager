@@ -294,7 +294,8 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   endPreview()
   resultsPort?.reset()
   resultsJobs?.reset()
-  connectionOpen?.reset()
+  connectionOpen?.reset({ replaceRenderer: true })
+  if (!hotExitAvailable) connectionOpen?.retainTargets([])
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -1157,6 +1158,8 @@ app.whenReady().then(async () => {
       if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
       throw error
     }
+    if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
+    connectionOpen?.retainTargets(record?.workspace?.targets.map(target => target.id) ?? [])
     if (record?.workspace) {
       if (checkpoint.kind === 'disk') connectionAuthentication.restore(record.workspace)
       record = { ...record, workspace: connectionAuthentication.project(record.workspace) }

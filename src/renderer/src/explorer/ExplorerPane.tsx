@@ -15,6 +15,7 @@ import { explorerSearchId } from '../search/ObjectSearchService'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 import PeekCard from './PeekCard'
+import { isLiveConnection } from '../services/connection-availability'
 
 /** `pressed`: a toggle button's state (aria-pressed). */
 interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly hint?: string; readonly args?: CommandArgs; readonly pressed?: boolean }
@@ -136,7 +137,7 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
   }
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
-  const live = servers.filter(value => !value.lost).length
+  const live = servers.filter(isLiveConnection).length
   const tools: Tool[] = [
     { id: 'connection.connect', icon: 'plug', label: 'Connect Object Explorer' },
     connectionTool(offline ? 'connection.reconnect' : 'connection.disconnect', offline ? 'plug' : 'debug-disconnect'),

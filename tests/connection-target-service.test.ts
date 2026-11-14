@@ -122,7 +122,8 @@ describe('durable connection targets', () => {
     const first = service.beginDisconnect(id(1), id(30))!
     expect(service.get(id(1))).toMatchObject({ inExplorer: true, resumeWanted: false, lifecycle: { state: 'disconnecting' } })
     expect(service.failDisconnect(first)).toBe(true)
-    expect(service.get(id(1))?.lifecycle.state).toBe('connected')
+    expect(service.get(id(1))).toMatchObject({ resumeWanted: true, lifecycle: { state: 'connected' } })
+    expect(service.exportWorkspace().targets[0].resumeWanted).toBe(true)
     const second = service.beginDisconnect(id(1), id(31))!
     expect(service.completeDisconnect(first)).toBe(false)
     expect(service.completeDisconnect(second)).toBe(true)
@@ -133,6 +134,8 @@ describe('durable connection targets', () => {
     service.markLostBefore(2)
     expect(service.completeDisconnect(interrupted)).toBe(false)
     expect(service.get(id(1))).toMatchObject({ resumeWanted: false, lifecycle: { state: 'lost' } })
+    expect(service.failDisconnect(interrupted)).toBe(false)
+    expect(service.get(id(1))?.resumeWanted).toBe(false)
   })
 
   it('does not publish unknown targets or invalid backend generations, and rejects invalid snapshot payloads', () => {

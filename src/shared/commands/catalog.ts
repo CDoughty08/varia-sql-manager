@@ -342,7 +342,7 @@ export const commandCatalog = {
   },
   // An offline server's menu reconnects that target; elsewhere, the active query's target or one the user picks.
   'connection.reconnect': {
-    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['disconnected', 'lost', 'restart'], precondition: 'hasLostConnection && backendReady',
+    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['disconnected', 'lost', 'restart'], precondition: '(hasLostConnection || activeConnectionLost) && backendReady',
     unavailableHint: 'No server is disconnected.',
     menus: [
       { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },

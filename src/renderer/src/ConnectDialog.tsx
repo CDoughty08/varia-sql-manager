@@ -358,6 +358,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       await connectionReady
       if (!alive.current || controller.signal.aborted) return
       const targetId = matchingTarget(labelled)
+      // This explicit target now belongs to the foreground attempt, including when that attempt fails.
+      if (targetId) startupReconnect.cancel(targetId)
       const prior = targetId ? connections.connectionTargets.get(targetId) : initialTarget(labelled)
       const credentialPolicy = canRememberPassword(labelled.authentication) && storage?.available ? remember ? 'remember' : 'forget' : 'preserve'
       const credentialIntent = prior && (labelled.password || rememberEdited.current || (credentialPolicy === 'remember' && !prior.credential) || (credentialPolicy === 'forget' && prior.credential)) ? 'update-credentials' : 'preserve'

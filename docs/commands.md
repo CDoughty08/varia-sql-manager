@@ -197,7 +197,7 @@ keys it uses are listed below.
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
 | Disconnect and Remove from Explorer | `connection.disconnectAndRemove` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect and Remove from Explorer |
 | Set Connection Environment… | `connection.environment` | — | — | — | `hasConnection && !documentBusy` | Query › Connection › Environment…; Object Explorer context menu › Environment… |
-| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
+| Reconnect… | `connection.reconnect` | — | — | — | `(hasLostConnection \|\| activeConnectionLost) && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
 | Remove from Explorer | `connection.removeFromExplorer` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove from Explorer |
 | Remove Lost Connection… (not in the palette) | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | — |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |

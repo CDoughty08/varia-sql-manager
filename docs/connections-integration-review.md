@@ -132,6 +132,40 @@ unchanged. It was neither skipped nor weakened. The test records no secret value
 sessions were removed. Version, OS and configuration causes have not been isolated. No real Kerberos account switch
 or Entra tenant was available locally.
 
+## Lifecycle review after the first green integration
+
+A subsequent review of `e694f588` exposed lifecycle cases the earlier review missed. The supplied findings were
+checked against the current source; the fixes retain main-owned authentication and exact target/session boundaries.
+
+| Finding | Correction and regression coverage |
+| --- | --- |
+| 1. Pins across replacement pages | Reconcile against the trusted restored workspace before loading pins, including an empty workspace; retain live, pending and delivered ownership. Stale readers and late credential settlement cannot restore orphan pins. Explicit prune already handled an absent reuse entry; a separate deferred-prune/backend-stop race now retains that prune intent. |
+| 2. Transient SID failures | Preserve the original SQL failure/cancellation. Only absent or different identity evidence becomes AUTH_IDENTITY; timeout/socket failures no longer claim that the account changed. |
+| 3. Rejected saved credentials | A successful typed retry can readmit the exact saved revision after fresh account proof, storage and exact readback. An equivalent accepted transport stays open while a temporary proof handle is disposed. Ordinary reuse, failed proof and storage failure cannot readmit it. |
+| 4–5. Startup admission and manual priority | Busy documents pause admission and defer adoption/attachment. Only interrupted work is requeued after foreground Connect; real failures spend their attempt. Exact-target manual attempts supersede that startup target. Accepted attachment survives policy changes and canonical-target coalescing while explicit cancellation/removal/loss still wins. |
+| 6. Initial SQL authentication | All initial user opens authenticate without pooling. A real SQL regression keeps the old password's idle physical session alive, changes the password through ordinary SQL, and proves a new Connect rejects the old secret and accepts the new one. |
+| 7. Entra Application Name | Preserve the submitted name and use a stable per-target AccessTokenCallback delegate as SqlClient's pool key. Existing token scope, account, resource, cancellation and noninteractive policy remain enforced. Driver pool-group tests prove same-target sharing and cross-target separation. |
+| 8. Failed Disconnect | Restore the same operation's previous resumeWanted only when it rolls back to connected; a stale failure cannot override newer intent. |
+| 9. Hidden targets | Global recovery pickers count only visible Explorer candidates. An active query can explicitly reconnect its hidden target without opening an empty picker; hidden roots cannot be removed again. |
+| 10. Disconnecting consumers | Shared admission checks cover query execution/attachment, pickers, search, Peek, scripting, language requests and server actions. Existing session inspection remains available to teardown. Cached database lists survive a failed-disconnect rollback without admitting reads during teardown. |
+| 11. Pool churn | Dispose ordinary failed/cancelled opens without clearing healthy peers. Actual identity refusal still retires its pool; real-driver physical-session checks cover both sides. |
+| 12. Repository hygiene | Remove applied patch files and obsolete track/plan handoffs; keep current contracts in connection-ownership.md and the architecture guide. Repair their links, the split Fixed list and unknown-version server tooltips. |
+
+The Entra discriminator follows the installed driver's
+[callback pool-key setter](https://github.com/dotnet/SqlClient/blob/29ce2d856cb5a9450f79ea62c0afc744fd337fde/src/Microsoft.Data.SqlClient/src/Microsoft/Data/SqlClient/SqlConnection.cs#L817).
+The same audit traced its callback connection ID and the pool cleanup timer's suppressed ExecutionContext; background
+pool maintenance cannot inherit an authorized target scope. Factories, clones and pool cleanup use the same target's
+delegate, without changing the application name.
+No real Entra tenant or Kerberos ticket switch was available locally. The opt-in tenant regression checks APP_NAME()
+on a later callback-authenticated query. Existing README and Getting Started sequences remain accurate; no setting,
+shortcut or fictional sample behavior changed in this corrective pass.
+
+Independent cross-reviews closed an additional deferred-prune race, three accepted-startup/preemption cases and a
+database-cache rollback regression. The final passes found no remaining actionable findings in these corrected paths.
+Before merging newer main, the full check passed in 90.9 seconds: 2,762 offline .NET checks, 5,106 Vitest tests,
+TypeScript and the production build; 24 configuration-dependent cases were skipped. Focused real-driver validation
+passed 29 live checks and 31 Login Properties checks. The owned SQL fixtures were cleaned up.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,

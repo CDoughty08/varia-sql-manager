@@ -2795,7 +2795,7 @@ The main-only `varia:connection-bindings-changed` event, exposed by `onConnectio
 an optional bounded warning, and at most 200 changes with target ID, handle, increasing main revision, sanitized options
 and authentication evidence. Strict schemas reject unknown/secret fields. Renderer consumers must match the current
 target, handle, generation and principal; this channel cannot establish another account or endpoint. See
-[main connection ownership](connections-explorer-main-seam.md) for mutation and checkpoint ordering.
+[main connection ownership](connection-ownership.md) for mutation and checkpoint ordering.
 
 ## Error codes and fixed sentences
 

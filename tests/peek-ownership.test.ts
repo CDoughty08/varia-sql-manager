@@ -11,6 +11,7 @@ import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { fakeResults, summary } from './fixtures/peek-results'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import type { ConnectionLifecycle } from '../src/shared/connection-targets'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
 const connectionId = '11111111-1111-4111-8111-111111111111'
@@ -36,7 +37,7 @@ function setup(options: { columns?: ApiResult<TableColumns> } = {}) {
     execute: vi.fn((query: QueryOptions) => new Promise<ApiResult<QueryResult>>(resolve => { executes.push({ options: query, resolve }) })),
     closeQuerySession: vi.fn(async () => ok({ closed: true }))
   }
-  let live: { id: string; lost?: boolean }[] = [{ id: connectionId }]
+  let live: { id: string; lost?: boolean; lifecycle?: ConnectionLifecycle }[] = [{ id: connectionId }]
   const listeners = new Set<() => void>()
   const connections = { getSnapshot: () => live, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
   let ids = 0
@@ -47,11 +48,23 @@ function setup(options: { columns?: ApiResult<TableColumns> } = {}) {
   return {
     service, api, results, executes, columns: (value: ApiResult<TableColumns>) => columns(value),
     lose: () => { live = []; for (const listener of [...listeners]) listener() },
+    disconnecting: () => { live = [{ id: connectionId, lifecycle: { state: 'disconnecting', attemptId: crypto.randomUUID(), handle: { id: connectionId, generation: 1 } } }]; for (const listener of [...listeners]) listener() },
     reconnect: (id = connectionId) => { live = [{ id }]; for (const listener of [...listeners]) listener() }
   }
 }
 
 describe('Peek Top rows on the results grid', () => {
+  it('closes its card and refuses new reads while its server is disconnecting', () => {
+    const { service, disconnecting, api } = setup()
+    service.peek(node('procedure'), 'menu')
+    expect(api.explorerPeek).toHaveBeenCalledOnce()
+    disconnecting()
+    expect(service.getSnapshot().open).toBeUndefined()
+    expect(service.canPeek(node('procedure'))).toBe(false)
+    service.peek(node('procedure'), 'menu')
+    expect(api.explorerPeek).toHaveBeenCalledOnce()
+    service.dispose()
+  })
   it('runs Select Top N Rows\' script with N = peekLimits.rows in a session and results entry of its own, and closes the session once the run settles', async () => {
     const { service, api, results, executes, columns } = setup()
     service.peek(node('table'), 'menu')

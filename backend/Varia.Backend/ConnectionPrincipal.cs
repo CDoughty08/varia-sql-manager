@@ -10,17 +10,6 @@ internal static class ConnectionPrincipal
     internal const string ProbeSidSql = "SELECT SUSER_SID();";
     internal const string ChangedMessage = "The account used by this connection changed or could not be verified. Disconnect, then connect again to choose the account.";
 
-    /// <summary>A private pool key: unrelated authenticated targets never inherit each other's physical Entra session.
-    /// Put it first so a role's bounded application-name suffix cannot truncate it. This string stays in the backend.</summary>
-    internal static string IsolatePool(string connectionString, string targetId)
-    {
-        var builder = new SqlConnectionStringBuilder(connectionString);
-        var prefix = "Varia#" + Guid.Parse(targetId).ToString("N") + " ";
-        // Leave room for the longest internal role suffix, which remains visible to the own-session ledger.
-        builder.ApplicationName = prefix + builder.ApplicationName[..Math.Min(builder.ApplicationName.Length, 88 - prefix.Length)];
-        return builder.ConnectionString;
-    }
-
     internal static void Match(string expected, string? actual)
     {
         if (expected != actual) throw new RequestException("AUTH_IDENTITY", ChangedMessage);
@@ -29,16 +18,20 @@ internal static class ConnectionPrincipal
     internal static string? FromSid(byte[]? sid) => sid is { Length: > 0 and <= 85 } ? "sid:" + Convert.ToHexStringLower(sid) : null;
 
     /// <summary>The identity-only fallback does not depend on optional engine/version/capability metadata or privileges.</summary>
-    internal static async Task<string?> ProbeSidAsync(SqlConnection connection, CancellationToken token)
+    internal static Task<string?> ProbeSidAsync(SqlConnection connection, CancellationToken token) => ProbeSidAsync(connection, token, null);
+
+    internal static async Task<string?> ProbeSidAsync(SqlConnection connection, CancellationToken token,
+        Func<SqlCommand, CancellationToken, Task<object?>>? execute)
     {
         try
         {
             await using var command = connection.CreateCommand();
             command.CommandText = ProbeSidSql;
             command.CommandTimeout = 15;
-            return FromSid(await command.ExecuteScalarAsync(token) as byte[]);
+            return FromSid(await (execute is null ? command.ExecuteScalarAsync(token) : execute(command, token)) as byte[]);
         }
-        catch (SqlException) { token.ThrowIfCancellationRequested(); return null; }
+        // An unanswered probe is not evidence of a different account. Preserve transport, timeout and permission errors.
+        catch (SqlException) { token.ThrowIfCancellationRequested(); throw; }
     }
 
     /// <summary>Reads only oid/tid from the exact token our trusted provider supplies. This does not validate a token or
