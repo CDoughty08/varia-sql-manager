@@ -7,7 +7,7 @@ import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { blockPrimaryPaste } from './primary-selection'
-import { DocumentService, settingsDocumentOptions } from '../services/documents'
+import { DocumentService, settingsDocumentOptions, welcomeQueryText } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
@@ -467,6 +467,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
+    resultSets: results.resultSets,
     resultsTurned: results.turned,
     scripting: scripting.running,
     bookmarks,
@@ -737,7 +738,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   userShortcuts.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
-  const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
+  const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
     .catch(() => {}).then(() => { connectionRestored(); if (!disposed) void recovery.start() })
   else { welcome(); connectionRestored(); void recovery.start() }

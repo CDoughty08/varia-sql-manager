@@ -256,6 +256,22 @@ replaceFile title; the spy now delegates to the actual production replacement he
 and exact-content assertions. Its 51 focused file checks passed with seven existing skips; retry policy and deadlines
 were unchanged. No newly reviewed main, renderer or smoke finding remained after these corrections.
 
+## Current-main integration review
+
+The merge through main `49361180` combines the new result-set context, Pivot updates, editor mouse behavior and
+welcome-query startup optimization with connection restoration. Both the real workbench and its fixture subscribe to
+result-set availability while retaining live-connection admission, visible-only recovery candidates, exact target
+restoration and the startup readiness barrier. Generated command, gesture, settings and Monaco references are checked
+from the combined catalogs. The query guide keeps its target/session guidance and the editor's new gesture references.
+
+An independent review found the new startup benchmark used Playwright's raw Windows launcher without the existing
+owned-process-tree cleanup. A timeout could kill only its command wrapper and leave Electron or the backend running
+after machine-lock release. The raw launch now registers that same synchronous ownership helper without adding smoke
+instrumentation or changing launch arguments, timing observers, profile, sample count or limits. Ownership ends when
+that exact child exits; a late kill cannot affect a replacement process with the same PID. Focused ownership, source,
+machine-lock and benchmark-floor checks passed 41 cases with one Linux-only case skipped on Windows. Final combined
+check, benchmark and CI outcomes are recorded in the PR.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,

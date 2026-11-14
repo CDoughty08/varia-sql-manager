@@ -2,8 +2,8 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-// Compares the benchmark results (artifacts/bench/node.json from npm run bench, e2e.json from npm run bench:e2e, and
-// grid.json from npm run bench:grid) with tests/bench/floors.json, prints a markdown table, and appends it to
+// Compares the benchmark results (artifacts/bench/node.json from npm run bench, e2e.json from npm run bench:e2e,
+// grid.json from npm run bench:grid, and startup.json from npm run bench:startup) with tests/bench/floors.json, prints a markdown table, and appends it to
 // $GITHUB_STEP_SUMMARY. With --enforce it exits 1 when a value is worse than its floor or a metric with a floor was not
 // measured (a live metric only when its harness ran --live). Without it, it only reports (Windows and macOS CI).
 
@@ -12,7 +12,7 @@ const show = (value, unit) => `${Math.abs(value) >= 1000 ? Math.round(value).toL
 const bound = (better, value, unit) => value === null || value === undefined ? '—' : `${better === 'higher' ? '≥' : '≤'} ${show(value, unit)}`
 const meets = (better, value, limit) => better === 'higher' ? value >= limit : value <= limit
 
-/** A metric's harness is the first segment of its id: `node`, `e2e` or `grid`. */
+/** A metric's harness is the first segment of its id: `node`, `e2e`, `grid` or `startup`. */
 const harnessOf = id => id.split('.')[0]
 
 /**
@@ -53,7 +53,7 @@ export function failed(rows) { return rows.filter(row => row.status === 'below' 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const enforce = process.argv.includes('--enforce')
   const floors = JSON.parse(readFileSync(resolve('tests/bench/floors.json'), 'utf8'))
-  const results = ['node', 'e2e', 'grid'].map(name => resolve('artifacts/bench', name + '.json')).filter(path => existsSync(path)).map(path => JSON.parse(readFileSync(path, 'utf8')))
+  const results = ['node', 'e2e', 'grid', 'startup'].map(name => resolve('artifacts/bench', name + '.json')).filter(path => existsSync(path)).map(path => JSON.parse(readFileSync(path, 'utf8')))
   const rows = compare(floors, results)
   const table = markdown(rows, results)
   console.log(table)

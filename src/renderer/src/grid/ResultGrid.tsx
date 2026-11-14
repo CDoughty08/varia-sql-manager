@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, filteredColumns, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, filteredColumns, groupOf, pivotOutOfDate, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareDetails, compareSources, compareText } from '../results/CompareService'
@@ -85,6 +85,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     return compareSources(tab, slotOf(tab, entry.key)?.sources ?? []).map(source => source.entry ?? '').join('|')
   })
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
+  // A group's Pivot whose Table's filters changed since it was built says so first in its strip.
+  const outOfDate = useSyncExternalStore(results.subscribe, () => {
+    if (!pivoted) return false
+    const tab = results.getSnapshot()[tabId], group = groupOf(tab, entry.key)
+    return !!tab && group?.pivot?.key === entry.key && pivotOutOfDate(tab, group)
+  })
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
   const viewRef = useRef<GridView | undefined>(undefined), apiRef = useRef<GridShellApi | undefined>(undefined)
@@ -191,7 +197,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   const compareNote = compared ? compareText(compared, sources) : undefined
-  const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked)) : highlightText(marked)) : undefined
+  const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked), outOfDate) : highlightText(marked)) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
@@ -199,7 +205,20 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
-  const rootEl = useRef<HTMLDivElement | null>(null)
+  const rootEl = useRef<HTMLDivElement | null>(null), hadFocus = useRef(false)
+  useLayoutEffect(() => {
+    const element = rootEl.current, owner = element?.ownerDocument
+    if (!element || !owner) return
+    const active = owner.activeElement
+    if (handoff?.owner === owner && handoff.tabId === tabId && handoff.key === key && (!active || active === owner.body)) element.focus({ preventScroll: true })
+    return () => {
+      // A removed element gets no blur, so the focus it had is read before it goes, or from the last focus it saw.
+      if (!hadFocus.current && !element.contains(owner.activeElement)) return
+      const mark = { owner, tabId, key }
+      handoff = mark
+      queueMicrotask(() => { if (handoff === mark) handoff = undefined })
+    }
+  }, [tabId, key])
   const goTo = useCallback((target: EntryKey) => {
     results.focusEntry(tabId, target)
     focusResultGrid(rootEl.current?.ownerDocument, tabId, target)
@@ -222,7 +241,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
       // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
       // menus' toggle and the pivot builder follow.
-      onFocus: () => onFocus(key)
+      onFocus: () => { hadFocus.current = true; onFocus(key) },
+      onBlur: event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) hadFocus.current = false }
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
@@ -237,6 +257,13 @@ export function focusResultGrid(owner: Document | undefined, tabId: string, key:
   if (grid) grid.focus()
   else if (frames > 0) owner?.defaultView?.requestAnimationFrame(() => focusResultGrid(owner, tabId, key, frames - 1))
 }
+
+/**
+ * A grid that unmounts holding the focus, kept until the end of its commit. A rebuilt Pivot (Update, Build Pivot) keeps
+ * its entry key but brings a new result, and the layouts key a grid by its result, so the grid the user was in is
+ * replaced by a new one in the same commit; that one takes the focus, or the grid's keys would fall to the page.
+ */
+let handoff: { readonly owner: Document; readonly tabId: string; readonly key: EntryKey } | undefined
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export default function ResultGrid(props: ResultGridProps) {

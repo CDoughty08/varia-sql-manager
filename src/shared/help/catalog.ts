@@ -27,10 +27,10 @@ export const guideCatalog = {
   },
   'run-query': {
     title: 'Run your first query', summary: 'Create a query, choose its database and understand what Execute runs.',
-    keywords: ['SQL', 'selection', 'execute', 'editor', 'messages', 'cancel'],
+    keywords: ['SQL', 'selection', 'execute', 'editor', 'font', 'zoom', 'messages', 'cancel'],
     sections: [{ id: 'new', title: 'Open a query' }, { id: 'execute', title: 'Choose what runs' }, { id: 'read', title: 'Read the outcome' }],
-    related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: [],
-    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts']
+    related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: ['editor.wheelZoom'],
+    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts', 'src/renderer/src/editor/create-editor.ts']
   },
   results: {
     title: 'Work with query results', summary: 'Sort and filter returned rows, select cells and copy with confidence.',

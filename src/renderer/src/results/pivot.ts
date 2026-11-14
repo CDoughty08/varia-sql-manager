@@ -111,9 +111,14 @@ export interface PivotInfo {
   readonly partial?: boolean
 }
 
-/** A pivot grid's strip: what was pivoted, then what its highlights say, if anything. */
-export function pivotStrip(info: PivotInfo, highlight: string | undefined): string {
-  return highlight ? `${pivotText(info)} ${highlight}` : pivotText(info)
+/** What an out-of-date Pivot's strip says first: its Table's filters changed since it was built, and what Update does. */
+export const outOfDateText = (sourceLabel: string): string =>
+  `Out of date: ${sourceLabel}'s filters changed after this Pivot was built. Update builds it again from ${sourceLabel} as it is filtered now.`
+
+/** A pivot grid's strip: whether it is out of date, what was pivoted, then what its highlights say, if anything. */
+export function pivotStrip(info: PivotInfo, highlight: string | undefined, outOfDate = false): string {
+  const text = outOfDate ? `${outOfDateText(info.sourceLabel)} ${pivotText(info)}` : pivotText(info)
+  return highlight ? `${text} ${highlight}` : text
 }
 
 /** The strip: what was pivoted, how many groups, and whether long values were grouped by a prefix. */

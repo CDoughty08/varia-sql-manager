@@ -449,6 +449,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
+    resultSets: results.resultSets,
     resultsTurned: results.turned,
     scripting: scripting.running,
     bookmarks,

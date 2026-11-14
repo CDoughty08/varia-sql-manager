@@ -107,8 +107,10 @@ export interface ContextInputs {
   readonly panelTabs?: boolean
   /** The Object Explorer selection's keys; without them, those keys are false or ''. */
   readonly explorer?: ExplorerContextState
-  /** The tabs with results to save or close (`ResultsService.context`). */
+  /** The tabs with results to close (`ResultsService.context`): result sets or captured plans. */
   readonly results?: Readonly<Record<string, true>>
+  /** The tabs with a result set a grid can show (`ResultsService.resultSets`). */
+  readonly resultSets?: Readonly<Record<string, true>>
   /** The tabs whose focused results grid is drawn transposed (`ResultsService.turned`). */
   readonly resultsTurned?: Readonly<Record<string, unknown>>
   readonly scriptingRunning?: boolean
@@ -172,7 +174,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasConnection: connections.some(connected), hasLostConnection: connections.some(connection => connection.inExplorer !== false && offline(connection)),
     activeDocumentConnected: !!activeConnection && connected(activeConnection), activeConnectionLost: !!rememberedConnection && offline(rememberedConnection),
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && connected(connection))),
-    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
+    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], hasResultSets: !!active && !!inputs.resultSets?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
     includeActualPlan: isQueryDocument(active) && !!active?.includeActualPlan,
     includeLivePlan: isQueryDocument(active) && !!active?.includeLivePlan,
     includeClientStatistics: isQueryDocument(active) && !!active?.includeClientStatistics,
@@ -197,6 +199,8 @@ export interface ContextKeyOptions {
   readonly shell?: ExternalStore<ShellOptions>
   readonly explorer?: ExternalStore<ExplorerContextState>
   readonly results?: ExternalStore<Readonly<Record<string, true>>>
+  /** The tabs with a result set a grid can show (`hasResultSets`). */
+  readonly resultSets?: ExternalStore<Readonly<Record<string, true>>>
   /** The tabs whose focused results grid is drawn transposed (`resultsGridTransposed`). */
   readonly resultsTurned?: ExternalStore<Readonly<Record<string, unknown>>>
   /** Whether a Script As request is running (`scriptingRunning`). */
@@ -238,14 +242,14 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.resultsTurned, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.newDatabase, options.restore, options.notifications, options.updates, options.activity, options.ssis, options.editorGroups, options.settings].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.resultSets, options.resultsTurned, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.newDatabase, options.restore, options.notifications, options.updates, options.activity, options.ssis, options.editorGroups, options.settings].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], resultsColumnProfile: options.settings?.getSnapshot().values['queryResults.grid.columnProfile'], resultsRowSize: options.settings?.getSnapshot().values['queryResults.grid.rowSize'], resultsLayout: options.settings?.getSnapshot().values['queryResults.grid.layout'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
-      panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
+      panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultSets: options.resultSets?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(), newDatabase: options.newDatabase?.getSnapshot(), restore: options.restore?.getSnapshot(),
       notifications: !!options.notifications && options.notifications.getSnapshot().visible.length > 0, update: options.updates?.getSnapshot(), activity: options.activity?.getSnapshot(), ssis: options.ssis?.getSnapshot(), editorGroups: options.editorGroups?.getSnapshot()
@@ -254,7 +258,7 @@ export class ContextKeyService implements Disposable {
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.resultsTurned?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.newDatabase?.getSnapshot(), options.restore?.getSnapshot(), options.notifications?.getSnapshot(), options.updates?.getSnapshot(), options.activity?.getSnapshot(), options.ssis?.getSnapshot(), options.editorGroups?.getSnapshot(), options.settings?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.resultSets?.getSnapshot(), options.resultsTurned?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.newDatabase?.getSnapshot(), options.restore?.getSnapshot(), options.notifications?.getSnapshot(), options.updates?.getSnapshot(), options.activity?.getSnapshot(), options.ssis?.getSnapshot(), options.editorGroups?.getSnapshot(), options.settings?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }
