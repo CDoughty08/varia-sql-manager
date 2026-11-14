@@ -23,6 +23,7 @@
 
 ### Improved
 
+- **Lighter startup:** opening Varia no longer starts the SQL IntelliSense service for the untouched welcome query, which saves about 110 MB of memory for the first minute. Error checking begins with your first edit.
 - **Runtime:** the SQL backend now runs on .NET 11 (it was .NET 10). Nothing to install: Varia ships the runtime with the backend. Building from source needs the .NET 11 SDK.
 - **Transposed is now a view, not a copy:** Transpose Results draws the same grid with its columns as rows and turns it back again, instead of adding a new result. It costs no result memory, works while rows are still arriving and on a query whose result memory is full, and follows the grid's sort, filters, selection and highlights. Transpose Selected Rows keeps the selected rows as a filter first. Using Column as Headers is a setting of the view, changed from Headers beside the toolbar button. The first 4,095 rows are drawn as columns, with a strip that says so. Shortcuts assigned to the three commands keep working. Copy and Save Results As write the grid as drawn. The transposed names and rows can no longer be sorted, filtered or profiled as a result of their own.
 - **Results:** the Results tab's badge counts the query's own results, not their pivots or comparisons. After a re-run, commands act again on the result whose grid you last used. Peek's top rows show the grid alone, without a caption, and no longer offer Pivot, Compare or Close Results, which did nothing useful there.
