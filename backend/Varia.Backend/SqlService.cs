@@ -28,7 +28,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public static readonly string[] MethodNames =
     [
         "plans.parse", "plans.estimate",
-        "language.status", "language.complete", "language.hover", "language.diagnostics", "language.refresh", "language.close",
+        "language.status", "language.complete", "language.hover", "language.diagnostics", "language.refresh", "language.close", "language.definition",
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
@@ -81,6 +81,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// tables.columns) included: what freeing a database waits for (critic A5). The Activity Monitor trusts ownSessions only.</summary>
     private readonly OwnSessionLedger poolSessions = new();
     private readonly ExplorerService explorer;
+    private readonly DefinitionService definitions;
     private readonly ObjectSearchService search;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
@@ -209,6 +210,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             finally { if (owner is not null) owner.Opening = false; }
         };
         explorer = new ExplorerService(this);
+        definitions = new DefinitionService(this);
         search = new ObjectSearchService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this, catalog: actionsCatalog);
@@ -427,6 +429,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "language.diagnostics" => await language.DiagnosticsAsync(Read<LanguageRefreshRequest>(parameters, json), Token(context)),
         "language.refresh" => await language.RefreshAsync(Read<LanguageRefreshRequest>(parameters, json), Token(context)),
         "language.close" => await language.CloseAsync(Read<LanguageCloseArgs>(parameters, json).DocumentId, Token(context)),
+        "language.definition" => (object?)await definitions.ResolveAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
         "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),

@@ -121,6 +121,12 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
+  // VS Code's Ctrl+click (⌘-click on macOS); Alt for those who moved Monaco's multi-cursor click to Ctrl (textEditor.multiCursorModifier).
+  'editor.goToDefinition': {
+    title: 'Go To Definition', description: 'Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does.',
+    kind: 'pointerCommand', scope: 'queryEditor', action: 'click', target: 'an object name', modifiers: ['mod'],
+    choices: [['mod'], ['alt']], keyboard: ['edit.goToDefinition']
+  },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'an object', modifiers: [], keyboard: ['explorer.copyName'],

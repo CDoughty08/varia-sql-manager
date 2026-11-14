@@ -1760,6 +1760,16 @@ async function workbench(id, method, params, credit) {
       if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
       return respond(id, { refreshed: true })
     case 'language.close': return respond(id, { closed: true })
+    // Go to Definition: the word at the caret; only Orders resolves (to dbo.Orders in the query's database), anything else is null.
+    case 'language.definition': {
+      const line = params.text.split(/\r\n|\r|\n/)[params.position.line] ?? ''
+      const words = [...line.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)]
+      const word = words.find(match => match.index <= params.position.character && params.position.character <= match.index + match[0].length)
+      if (!params.context.connectionId || word?.[0] !== 'Orders') return respond(id, null)
+      const start = line.lastIndexOf(' ', word.index) + 1
+      return respond(id, { database: params.context.database ?? 'master', schema: 'dbo', name: 'Orders', kind: 'table',
+        range: { start: { line: params.position.line, character: start }, end: { line: params.position.line, character: word.index + word[0].length } } })
+    }
     case 'plans.estimate': return respond(id, { plans: [{ xml: fixturePlanXml, batchNumber: 1, iteration: 1 }], database: params.database })
     case 'plans.parse': {
       const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')

@@ -114,7 +114,8 @@ describe('validateShortcut', () => {
     // macOS menus take only ⌘ keys from the page, and role keys work only through the menu.
     expectRefused('role', { command: 'view.zoomIn', key: 'f12' }, 'darwin')
     expect(check({ command: 'view.zoomIn', key: 'mod+f12' }, 'darwin').verdict).toBe('ok')
-    expect(check({ command: 'view.zoomIn', key: 'f12' }, 'win32').verdict).toBe('ok')
+    // Elsewhere F12 is no role key (it is Go To Definition's in editors, a conflict rather than a refusal).
+    expect(check({ command: 'view.zoomIn', key: 'f12' }, 'win32').verdict).toBe('conflict')
     // findConflicts enumerates at most 12 state keys; a clause reading more cannot be checked.
     const busy = resolveKeybinding('file.open', { key: 'f9', when: 'queryRunning && hasConnection && hasResults && hasActiveDocument && documentBusy && multipleDocuments && editorWordWrap && editorWhitespace && editorLineNumbers && hasBookmarks && anyDocumentDirty && editorOvertype && hasRecentFiles' }, 'win32')!
     expectRefused('complex', { command: 'file.new', key: 'f9' }, 'win32', [busy])

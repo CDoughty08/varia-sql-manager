@@ -86,6 +86,12 @@ if (args is ["--sql-language-checks"])
     Console.WriteLine("Passed " + passed + " SQL language checks.");
     return;
 }
+if (args is ["--sql-definition-checks"])
+{
+    await SqlDefinitionChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL definition checks.");
+    return;
+}
 if (args is ["--sql-language-live"])
 {
     await SqlLanguageLiveChecks.RunAsync(Check);
@@ -364,6 +370,7 @@ if (liveGroup is null)
     (string Name, Func<Task> Run)[] offlineSuites = [
         ("LspTransport", () => LspTransportChecks.RunAsync(Check)),
         ("SqlLanguage", () => SqlLanguageChecks.RunAsync(Check)),
+        ("SqlDefinition", () => SqlDefinitionChecks.RunAsync(Check)),
         ("SqlLanguageDiagnostics", () => SqlLanguageDiagnosticChecks.RunAsync(Check)),
         ("SqlCompletion", () => SqlCompletionChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
