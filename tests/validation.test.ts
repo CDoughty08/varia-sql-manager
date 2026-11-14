@@ -276,10 +276,13 @@ describe('IPC validation', () => {
     expect(methodPolicies['query.session.state']).toMatchObject({ kind: 'unary', lane: 'control' })
     expect(deadlineFor('query.session.state', { sessionId })).toEqual({ deadlineMs: 5000, backstopMs: 10_000 })
   })
-  it('takes the shown results as at most limits.visibility.maxResults distinct ids, on the control lane', () => {
-    const most = Array.from({ length: limits.visibility.maxResults }, (_, at) => at + 1)
-    for (const visible of [[], [7], [0xffffffff], most]) expect(validateRequest('results.visibility', { visible })).toEqual({ visible })
-    for (const params of [{}, { visible: [0] }, { visible: [7, 7] }, { visible: [1.5] }, { visible: [-1] }, { visible: [2 ** 32] }, { visible: ['7'] }, { visible: [...most, most.length + 1] }, { visible: [7], generation: 1 }])
+  it('takes the shown results as at most limits.visibility.maxResults distinct ids with an ordered source, on the control lane', () => {
+    const most = Array.from({ length: limits.visibility.maxResults }, (_, at) => at + 1), source = crypto.randomUUID()
+    for (const visible of [[], [7], [0xffffffff], most]) expect(validateRequest('results.visibility', { source, seq: 1, visible })).toEqual({ source, seq: 1, visible })
+    expect(validateRequest('results.visibility', { source, seq: 2 ** 31 - 1, visible: [] })).toEqual({ source, seq: 2 ** 31 - 1, visible: [] })
+    for (const params of [{}, { source, seq: 1 }, { seq: 1, visible: [7] }, { source: 'tab-1', seq: 1, visible: [7] }, { source, visible: [7] }, { source, seq: 0, visible: [7] }, { source, seq: 2 ** 31, visible: [7] },
+      { source, seq: 1.5, visible: [7] }, { source, seq: 1, visible: [0] }, { source, seq: 1, visible: [7, 7] }, { source, seq: 1, visible: [1.5] }, { source, seq: 1, visible: [-1] }, { source, seq: 1, visible: [2 ** 32] },
+      { source, seq: 1, visible: ['7'] }, { source, seq: 1, visible: [...most, most.length + 1] }, { source, seq: 1, visible: [7], generation: 1 }])
       expect(() => validateRequest('results.visibility', params), JSON.stringify(params).slice(0, 80)).toThrow()
     expect(methodPolicies['results.visibility']).toEqual({ kind: 'unary', lane: 'control', deadlineMs: 10_000 })
   })

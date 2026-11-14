@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, BackendState } from '../src/shared/contracts'
+import type { ApiResult, BackendState, ResultsVisibilityParams } from '../src/shared/contracts'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { WindowRegistry } from '../src/renderer/src/core/windows'
 import { ResultVisibilityService } from '../src/renderer/src/results/ResultVisibilityService'
@@ -46,33 +47,46 @@ function fakeWindow() {
   }
 }
 type FakeWindow = ReturnType<typeof fakeWindow>
-interface FakeElement { isConnected: boolean; clientWidth: number; clientHeight: number; ownerDocument: { defaultView: Window } }
-const grid = (owner: FakeWindow, width = 400, height = 200): FakeElement => ({ isConnected: true, clientWidth: width, clientHeight: height, ownerDocument: { defaultView: owner.window } })
+/** A grid element: `visible` stands for its computed visibility (checkVisibility with visibilityProperty). */
+interface FakeElement { isConnected: boolean; clientWidth: number; clientHeight: number; visible: boolean; ownerDocument: { defaultView: Window }; checkVisibility(options?: { visibilityProperty?: boolean }): boolean }
+const grid = (owner: FakeWindow, width = 400, height = 200): FakeElement => ({
+  isConnected: true, clientWidth: width, clientHeight: height, visible: true, ownerDocument: { defaultView: owner.window },
+  checkVisibility(options) { return options?.visibilityProperty ? this.visible : true }
+})
 const hide = (element: FakeElement) => { element.clientWidth = 0; element.clientHeight = 0 }
 const show = (element: FakeElement) => { element.clientWidth = 400; element.clientHeight = 200 }
 const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve() }
+const ready = (generation: number): BackendState => ({ status: 'ready', generation, pid: 1, runtime: 'test', platform: 'test' })
 
-function harness(o: { answer?: (visible: number[]) => Promise<ApiResult<unknown>> } = {}) {
+function harness(o: { answer?: (params: ResultsVisibilityParams) => Promise<ApiResult<unknown>>; initial?: BackendState } = {}) {
   const main = fakeWindow()
   const registry = new WindowRegistry(main.window)
   let generation = 1, mainHidden = false
-  const generationListeners = new Set<(generation: number) => void>(), stateListeners = new Set<(state: BackendState) => void>(), pageListeners = new Set<() => void>()
-  const send = vi.fn(o.answer ?? (async (visible: number[]) => ({ ok: true as const, value: { visible: visible.length } })))
+  const generationListeners = new Set<(generation: number) => void>(), stateListeners = new Set<(state: BackendState) => void>(), pageListeners = new Set<() => void>(), layoutListeners = new Set<() => void>()
+  const send = vi.fn(o.answer ?? (async (params: ResultsVisibilityParams) => ({ ok: true as const, value: { visible: params.visible.length, applied: true } })))
+  const frames: (() => void)[] = []
   const service = new ResultVisibilityService({
-    send, generation: () => generation, windows: registry, mainWindow: main.window,
+    send, generation: () => generation, windows: registry, mainWindow: main.window, source: '00000000-0000-4000-8000-000000000001', frame: callback => { frames.push(callback) },
     onGeneration: listener => { generationListeners.add(listener); return { dispose: () => { generationListeners.delete(listener) } } },
     onBackendState: listener => { stateListeners.add(listener); return () => { stateListeners.delete(listener) } },
+    onLayout: listener => { layoutListeners.add(listener); return () => { layoutListeners.delete(listener) } },
+    ...o.initial ? { backendState: async () => ({ ok: true as const, value: o.initial! }) } : {},
     mainPage: { hidden: () => mainHidden, subscribe: listener => { pageListeners.add(listener); return () => { pageListeners.delete(listener) } } }
   })
   const track = (resultId: number, element: FakeElement, resultGeneration = generation) => service.track({ generation: resultGeneration, resultId }, element as unknown as Element)
+  const state = (value: BackendState) => { for (const listener of [...stateListeners]) listener(value) }
   return {
-    main, registry, service, send, track,
-    sent: () => send.mock.calls.map(call => call[0]),
+    main, registry, service, send, track, state,
+    sent: () => send.mock.calls.map(call => call[0].visible),
     setMainHidden(value: boolean) { mainHidden = value; for (const listener of [...pageListeners]) listener() },
-    /** A new backend: the port's generation first, then main's ready state (either may come first). */
-    restart(next: number) { generation = next; for (const listener of [...generationListeners]) listener(next); for (const listener of [...stateListeners]) listener({ status: 'ready', generation: next, pid: 1, runtime: 'test', platform: 'test' }) },
-    ready(next: number) { for (const listener of [...stateListeners]) listener({ status: 'ready', generation: next, pid: 1, runtime: 'test', platform: 'test' }) },
-    listeners: () => generationListeners.size + stateListeners.size + pageListeners.size
+    /** The results port reports a new generation (it may come before or after main's ready state). */
+    port(next: number) { generation = next; for (const listener of [...generationListeners]) listener(next) },
+    /** PaneService published: a dock tab or a maximized group changed what shows. */
+    layout() { for (const listener of [...layoutListeners]) listener() },
+    /** The next frame any window draws. */
+    drawFrame() { for (const callback of frames.splice(0)) callback() },
+    frames: () => frames.length,
+    listeners: () => generationListeners.size + stateListeners.size + pageListeners.size + layoutListeners.size
   }
 }
 
@@ -93,9 +107,11 @@ describe('ResultVisibilityService', () => {
     h.track(2, second)
     await settle()
     expect(h.sent()).toEqual([[1], [2]])
+    // Each set carries this load's source and a rising number, for the backend's ordering.
+    expect(h.send.mock.calls.map(call => [call[0].source, call[0].seq])).toEqual([['00000000-0000-4000-8000-000000000001', 1], ['00000000-0000-4000-8000-000000000001', 2]])
   })
 
-  it('counts a grid without a size as hidden: a hidden or collapsed Results panel, a background dock tab; one frame is one message', async () => {
+  it('counts a grid without a size as hidden: a hidden or collapsed Results panel; one frame is one message', async () => {
     const h = harness()
     const first = grid(h.main), second = grid(h.main), unsized = grid(h.main, 0, 0)
     h.track(3, first); h.track(1, second); h.track(9, unsized)
@@ -119,6 +135,54 @@ describe('ResultVisibilityService', () => {
     h.track(1, grid(h.main))
     await settle()
     expect(h.sent()).toHaveLength(4)
+  })
+
+  it('counts a grid in a dock tab behind another, or beside a maximized group, as hidden though it keeps its size', async () => {
+    const h = harness()
+    const element = grid(h.main)
+    h.track(5, element)
+    await settle()
+    expect(h.sent()).toEqual([[5]])
+    // The Messages tab is selected in the Results group: dockview hides the Results panel with visibility: hidden at once,
+    // which no ResizeObserver reports; PaneService publishes.
+    element.visible = false
+    h.layout()
+    await settle()
+    expect(h.sent()).toEqual([[5], []])
+    h.drawFrame()
+    await settle()
+    expect(h.sent()).toHaveLength(2)
+    // Results again: PaneService publishes while the panel is still hidden, and dockview clears visibility: hidden in its
+    // next frame; the check after that frame sees it.
+    h.layout()
+    await settle()
+    expect(h.sent()).toHaveLength(2)
+    element.visible = true
+    h.drawFrame()
+    await settle()
+    expect(h.sent()).toEqual([[5], [], [5]])
+    // A pane change that does not touch this grid sends nothing.
+    h.layout()
+    await settle()
+    h.drawFrame()
+    await settle()
+    expect(h.sent()).toHaveLength(3)
+    // Several pane changes before the frame draws share one frame.
+    h.layout(); h.layout()
+    await settle()
+    h.layout()
+    await settle()
+    expect(h.frames()).toBe(1)
+    h.drawFrame()
+    await settle()
+    // Disposed with a frame still asked for: it does nothing, though the set has changed since.
+    h.layout()
+    await settle()
+    element.visible = false
+    h.service.dispose()
+    h.drawFrame()
+    await settle()
+    expect(h.sent()).toHaveLength(3)
   })
 
   it('follows grids into popout windows: their own document\'s visibility, closing, and docking back', async () => {
@@ -161,52 +225,102 @@ describe('ResultVisibilityService', () => {
     h.setMainHidden(false)
     await settle()
     expect(h.sent().at(-1)).toEqual([4])
-    // A closed popout shows nothing, even before its grid is unmounted.
+    // Out again, then the popout closes: its unloading document reports hidden, and the grid counts as hidden even before
+    // it is docked back or unmounted.
     element.ownerDocument = { defaultView: popout.window }
     h.registry.adopted()
+    await settle()
+    expect(h.sent().at(-1)).toEqual([4])
+    // The closed window alone (no visibilitychange from it): any later check counts its grid as hidden.
     popout.close()
-    h.main.resize()
     h.setMainHidden(false)
     await settle()
     expect(h.sent().at(-1)).toEqual([])
   })
 
-  it('sends the whole set again after a backend restart, without the lost generation\'s results, and after a refused send', async () => {
-    let refuse = false
-    const h = harness({ answer: async visible => refuse ? { ok: false, error: 'The SQL backend is restarting.' } : { ok: true, value: { visible: visible.length } } })
+  it('sends the whole set again after a restart, never a lost generation\'s results, whichever of main and the port reports first', async () => {
+    const h = harness()
     const old = grid(h.main)
     h.track(1, old)
-    h.ready(1)
+    h.state(ready(1))
     await settle()
     expect(h.sent()).toEqual([[1]])
-    // The backend restarts: the old grid still shows its lost result, which the new backend never had.
-    h.restart(2)
+    // The backend restarts. While it is not ready nothing is sent (main would hand it to the next backend).
+    h.state({ status: 'restarting', generation: 1, retryInMs: 0 })
+    h.track(2, grid(h.main))
+    await settle()
+    expect(h.sent()).toEqual([[1]])
+    // Main reports the next backend ready before the results port has its generation: still held, since the set would
+    // name generation 1's ids to generation 2, whose ids start again.
+    h.state(ready(2))
+    await settle()
+    expect(h.sent()).toEqual([[1]])
+    h.port(2)
     await settle()
     expect(h.sent()).toEqual([[1], []])
     h.track(7, grid(h.main))
     await settle()
     expect(h.sent()).toEqual([[1], [], [7]])
-    // The same backend reporting ready again sends nothing new.
-    h.ready(2)
+    // The port first, then main: one set, once both agree.
+    h.state({ status: 'restarting', generation: 2, retryInMs: 0 })
+    h.port(3)
+    h.track(8, grid(h.main), 3)
     await settle()
     expect(h.sent()).toHaveLength(3)
-    // A send refused while the next backend starts goes again once it is ready, unchanged.
+    h.state(ready(3))
+    await settle()
+    expect(h.sent()).toEqual([[1], [], [7], [8]])
+  })
+
+  it('reads main\'s backend state at start, so a reload keeps the generation guard before any state is pushed', async () => {
+    // Main already reports generation 2 ready; the results port still has generation 1's results.
+    const h = harness({ initial: ready(2) })
+    h.track(1, grid(h.main))
+    await settle()
+    expect(h.sent()).toEqual([])
+    h.port(2)
+    h.track(4, grid(h.main))
+    await settle()
+    expect(h.sent()).toEqual([[4]])
+    // A state pushed before the answer arrives wins over it.
+    const late = harness({ initial: { status: 'restarting', generation: 1, retryInMs: 0 } })
+    late.state(ready(1))
+    late.track(6, grid(late.main))
+    await settle()
+    expect(late.sent()).toEqual([[6]])
+  })
+
+  it('sends again when the backend recovers in the same generation, and after a refused send', async () => {
+    let refuse = false
+    const h = harness({ answer: async params => refuse ? { ok: false, error: 'The SQL backend did not answer in time.' } : { ok: true, value: { visible: params.visible.length, applied: true } } })
+    h.state(ready(1))
+    const element = grid(h.main)
+    h.track(1, element)
+    await settle()
+    expect(h.sent()).toEqual([[1]])
+    // The backend stalls; the user hides the grid; the set times out.
+    h.state({ status: 'unresponsive', generation: 1, silentMs: 15_000 })
+    h.state(ready(1))
     refuse = true
-    h.restart(3)
-    const fresh = grid(h.main)
-    h.track(8, fresh, 3)
+    hide(element)
+    h.main.resize(element)
     await settle()
-    expect(h.sent().at(-1)).toEqual([8])
+    expect(h.sent()).toEqual([[1], []])
+    // Nothing is retried on its own (no timers)...
+    await settle()
+    expect(h.sent()).toHaveLength(2)
+    // ...until the backend reports ready again, in the same generation.
     refuse = false
-    h.ready(4)
+    h.state({ status: 'unresponsive', generation: 1, silentMs: 15_000 })
     await settle()
-    // Generation 4's port has not reported yet, so the set is still generation 3's; the port's report sends it again.
-    expect(h.sent().at(-1)).toEqual([8])
-    const before = h.sent().length
-    h.restart(4)
+    expect(h.sent()).toHaveLength(2)
+    h.state(ready(1))
     await settle()
-    expect(h.sent()).toHaveLength(before + 1)
-    expect(h.sent().at(-1)).toEqual([])
+    expect(h.sent()).toEqual([[1], [], []])
+    // A ready state that changes nothing sends nothing.
+    h.state(ready(1))
+    await settle()
+    expect(h.sent()).toHaveLength(3)
   })
 
   it('keeps one request in flight and then sends only the latest set', async () => {
@@ -221,10 +335,10 @@ describe('ResultVisibilityService', () => {
     h.track(3, elements[2])
     await settle()
     expect(h.sent()).toEqual([[1]])
-    answers.shift()!({ ok: true, value: { visible: 1 } })
+    answers.shift()!({ ok: true, value: { visible: 1, applied: true } })
     await settle()
     expect(h.sent()).toEqual([[1], [2, 3]])
-    answers.shift()!({ ok: true, value: { visible: 2 } })
+    answers.shift()!({ ok: true, value: { visible: 2, applied: true } })
     await settle()
     expect(h.sent()).toHaveLength(2)
   })
@@ -242,7 +356,7 @@ describe('ResultVisibilityService', () => {
         onGeneration: () => ({ dispose: () => {} }), onBackendState: () => () => {}, mainPage: { hidden: () => false, subscribe: () => () => {} } })
       service.track({ generation: 1, resultId: 6 }, grid(main) as unknown as Element)
       await settle()
-      expect(send.mock.calls).toEqual([[[6]]])
+      expect(send.mock.calls.map(call => (call as unknown as [ResultsVisibilityParams])[0].visible)).toEqual([[6]])
       service.dispose()
     } finally { globalThis.queueMicrotask = original }
   })
@@ -263,5 +377,39 @@ describe('ResultVisibilityService', () => {
     await settle()
     expect([h.main.observers(), h.listeners()]).toEqual([0, 0])
     expect(h.sent().at(-1)).toEqual([1])
+  })
+
+  it('checks a pane change after the main window\'s own frame, where the dock shows the panel, not whichever window draws first', async () => {
+    const main = fakeWindow(), popout = fakeWindow()
+    const queues = new Map<Window, (() => void)[]>([[main.window, []], [popout.window, []]])
+    for (const [target, queue] of queues) (target as unknown as { requestAnimationFrame(callback: () => void): number }).requestAnimationFrame = callback => queue.push(callback)
+    const registry = new WindowRegistry(main.window)
+    registry.add(popout.window)
+    const layoutListeners = new Set<() => void>(), send = vi.fn(async () => ({ ok: true as const, value: {} }))
+    const service = new ResultVisibilityService({ send, generation: () => 1, windows: registry, mainWindow: main.window,
+      onGeneration: () => ({ dispose: () => {} }), onBackendState: () => () => {}, onLayout: listener => { layoutListeners.add(listener); return () => { layoutListeners.delete(listener) } },
+      mainPage: { hidden: () => false, subscribe: () => () => {} } })
+    const element = grid(main)
+    element.visible = false
+    service.track({ generation: 1, resultId: 3 }, element as unknown as Element)
+    await settle()
+    const sent = () => send.mock.calls.map(call => (call as unknown as [ResultsVisibilityParams])[0].visible)
+    expect(sent()).toEqual([[]])
+    for (const listener of layoutListeners) listener()
+    await settle()
+    // The popout draws first: nothing was asked of it.
+    expect(queues.get(popout.window)).toHaveLength(0)
+    // The main window's frame: dockview's callback (asked for first) un-hides the panel, then the check runs.
+    const queue = queues.get(main.window)!
+    queue.unshift(() => { element.visible = true })
+    for (const callback of queue.splice(0)) callback()
+    await settle()
+    expect(sent()).toEqual([[], [3]])
+    service.dispose()
+  })
+
+  it('agrees with the backend on the most ids one set names', () => {
+    const source = readFileSync('backend/Varia.Backend/Results/ResultVisibility.cs', 'utf8')
+    expect(source).toContain(`public const int MaxResults = ${limits.visibility.maxResults};`)
   })
 })

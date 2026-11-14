@@ -292,8 +292,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The main window's visibility, for live views and result visibility alike.
   const mainPage = eitherHidden(documentPage(document), mainWindowPage(api))
   const resultVisibility = new ResultVisibilityService({
-    send: visible => api.setResultVisibility({ visible }), generation: () => resultClient.backendGeneration, onGeneration: listener => resultClient.onGeneration(listener),
-    onBackendState: listener => api.onBackendState(listener), mainPage, mainWindow: window
+    send: params => api.setResultVisibility(params), generation: () => resultClient.backendGeneration, onGeneration: listener => resultClient.onGeneration(listener),
+    onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
   })
   const retainedPlans = new RetainedPlansService()
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),

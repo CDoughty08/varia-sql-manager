@@ -2182,9 +2182,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// memory policy over hidden results (<see cref="ResultVisibility"/>). Ids of results not stored are ignored.</summary>
     private ResultsVisibilityResult SetVisibility(ResultsVisibilityArgs args)
     {
-        if (args.Visible is not { Length: <= ResultVisibility.MaxResults } ids || ids.Contains(0u) || ids.Distinct().Count() != ids.Length)
-            throw new RequestException("INVALID_PARAMS", $"At most {ResultVisibility.MaxResults} distinct result IDs are allowed.");
-        return new ResultsVisibilityResult(visibility.Set(ids));
+        if (args.Visible is not { Length: <= ResultVisibility.MaxResults } ids || ids.Contains(0u) || ids.Distinct().Count() != ids.Length
+            || args.Seq is not (>= 1 and <= int.MaxValue) || args.Source is not { Length: 36 } text || !Guid.TryParseExact(text, "D", out var source))
+            throw new RequestException("INVALID_PARAMS", $"A source ID, a sequence number and at most {ResultVisibility.MaxResults} distinct result IDs are required.");
+        var applied = visibility.Set(source, args.Seq.Value, ids, out var kept);
+        return new ResultsVisibilityResult(kept, applied);
     }
 
     /// <summary>Which results are shown, for a memory policy over hidden ones and for the checks.</summary>

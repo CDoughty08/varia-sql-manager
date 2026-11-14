@@ -46,7 +46,7 @@ export const requestSchemas = {
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.
-  'results.visibility': z.object({ visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),
+  'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
   'explorer.index': objectIndexParamsSchema,
   'explorer.search': objectSearchParamsSchema,

@@ -234,7 +234,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
-| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again to each new generation; one request in flight at a time | unary | control | 10 s. Takes `{ visible }`, the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last; answers `{ visible }`, how many of them are stored. Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
+| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again each time the backend becomes ready or the results port's generation changes; once main has reported a state (read at start, then pushed), only while it reports the backend ready in the port's generation; one request in flight at a time | unary | control | 10 s. Takes `{ source, seq, visible }`: a UUID per renderer load, a number rising from 1 (at most 2^31 - 1), and the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last. Answers `{ visible, applied }`: how many ids the backend's visible set holds, and false for a set from the same source not numbered above the last one applied (control requests run concurrently, and one past its deadline still runs). Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
@@ -1225,15 +1225,23 @@ Results stay in backend memory, never on disk (`ResultStore`).
   exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
   SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
   `RESULT_RELEASED` after the current page and stops storing at once.
-- **Visibility.** `results.visibility` tells the backend which results' grids are shown in any window, popouts
-  included. A grid is shown while its element has a size (a background tab, a hidden or collapsed Results panel and a
-  detached panel have none) and its window is visible (main's word for the main window while popouts keep its document
-  visible; a popout's own document). The renderer sends the whole set when it changes (one message per task's changes,
-  never on a timer), and again after a restart, so a lost or refused message only delays what reads it. `ResultVisibility`
-  (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it became hidden (or was
-  first asked about), within 16,384 entries; results.close forgets released results at once and each set drops the rest.
-  It changes nothing in the store: `IsHidden(resultId, out since)` is the query for a later policy that compresses
-  hidden results (stage 1 of the page compression plan).
+- **Visibility.** `results.visibility` tells the backend which query results' grids are shown in any window, popouts
+  included (result sets, pivots, comparisons and Peek's rows; not live views' tables, which are replaced every tick, so
+  a stored live table always counts as hidden and a policy must exclude live tables). A grid is shown while it is
+  rendered with a size (a query tab not shown has unmounted it; a hidden or collapsed Results panel and a detached panel
+  have no size; a dock tab behind another, or a panel beside a maximized group, is `visibility: hidden`, which the
+  renderer reads when PaneService publishes and again after the main window's next frame, where the dock un-hides a
+  panel) and its window is visible (main's word for the main window while popouts keep its document visible; a popout's
+  own document). The renderer sends the whole set when it changes (one message per task's changes, never on a timer),
+  and again each time the backend becomes ready, so a lost, refused or stale message only delays what reads it, until
+  the next change or the next return to ready (nothing retries on a timer; a set flushed as main restarts the backend
+  can still reach the next one, since the request carries no generation, until the set sent at its ready replaces it).
+  `ResultVisibility` (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it
+  became hidden (or was first asked about). Nothing is evicted by age: results.close forgets released results at once,
+  and other released results' entries are swept once the table has doubled since the last sweep, so it stays within
+  twice its size after the last sweep. It changes nothing in the store: `IsHidden(resultId, out since)` is the query for
+  a later policy that compresses hidden results (stage 1 of the page compression plan), which must not call it while
+  holding the store's locks.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
@@ -2665,6 +2673,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Shown results a set names | `results.visibility`: 0 – 4,096 distinct result ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |

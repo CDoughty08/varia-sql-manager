@@ -288,7 +288,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       const state = sessionStates.get(sessionId)
       return state === undefined ? { ok: false, error: 'This query has no open SQL session.', code: 'SESSION_CLOSED' } : { ok: true, value: state === 'unchecked' ? { transactionCount: 0, checked: false } : { transactionCount: state, checked: true } }
     }),
-    setResultVisibility: vi.fn<VariaApi['setResultVisibility']>(async params => ({ ok: true, value: { visible: params.visible.length } })),
+    setResultVisibility: vi.fn<VariaApi['setResultVisibility']>(async params => ({ ok: true, value: { visible: params.visible.length, applied: true } })),
     databases: vi.fn<VariaApi['databases']>(async () => ({ ok: true, value: [] })),
     previewTheme: vi.fn<VariaApi['previewTheme']>(async () => ({ ok: true, value: null })),
     setThemePreference: vi.fn<VariaApi['setThemePreference']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
@@ -352,7 +352,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
   // The fixture's grids are in generation 1; the main page never hides.
-  const resultVisibility = new ResultVisibilityService({ send: visible => api.setResultVisibility({ visible }), generation: () => 1, onGeneration: listener => resultClient.onGeneration(listener),
+  const resultVisibility = new ResultVisibilityService({ send: params => api.setResultVisibility(params), generation: () => 1, onGeneration: listener => resultClient.onGeneration(listener),
     onBackendState: listener => api.onBackendState(listener), mainPage: { hidden: () => false, subscribe: () => () => {} } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const highlights = new HighlightsService(results, { timers: options.timers ?? browserTimers })
