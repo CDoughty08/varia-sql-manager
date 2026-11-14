@@ -72,7 +72,8 @@ being true.
   sent by main alone when Tools › Options' limit changes, as each generation becomes ready and after each settings read that
   succeeds, `SettingsStore.onDidLoad`). They are replaced whole and
   each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
-  store and memory budget). Every operation on a whole result reserves its working memory before it builds; small steps go
+  store and memory budget). Every operation on a whole result reserves its working memory before it builds (search reserves only what
+  unpacking takes, its comment says why); small steps go
   through `WorkSteps`, which asks the memory load once per 64 MiB held. `tests/working-memory-lint.test.ts` pins each
   operation's reservations in `SqlService`.
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,

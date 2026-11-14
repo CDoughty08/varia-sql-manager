@@ -6,11 +6,13 @@ import { expect, it } from 'vitest'
 // pivot or diff of a large result is refused (TOO_LARGE) rather than taking gigabytes the budget never counted. The
 // operations still work without their reservation, and only a machine short of memory would show it, so no behaviour
 // check sees one removed: this pins them in the source. Changing an operation's reservations means changing this table.
-// Comments are dropped first: a reservation commented out is a reservation removed.
-const source = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.cs'), 'utf8').replace(/\/\/.*$/gm, '')
+// Comments and code compiled out are dropped first: a reservation commented out is a reservation removed.
+const strip = (code: string) => code.replace(/#if false\b[\s\S]*?#endif/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+const source = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.cs'), 'utf8'))
 
 const reservations: Record<string, RegExp> = {
-  work: /\bstore\.TryReserveWork\(/g,
+  // Refused, it ends the operation: every one is tested.
+  work: /!store\.TryReserveWork\(/g,
   spare: /\bstore\.TryReserveSpare\(/g,
   steps: /\bnew WorkSteps\(store, /g,
   // A WorkSteps built and not handed on reserves nothing: its TryReserve is what the operation is given.
@@ -35,6 +37,15 @@ const expected: Record<string, Partial<Record<keyof typeof reservations, number>
   PivotAsync: { work: 1, spare: 1, steps: 1, handed: 1, unpack: 1 }
 }
 
+/** What each method hands the code that builds: a reservation made and not passed on reserves nothing. */
+const handoffs: Record<string, RegExp[]> = {
+  ViewAsync: [/\bViewSorter\.Build\([^;]*\bkeyMemory\)/],
+  ProfileAsync: [/\bnew ColumnProfiler\.Charges\(steps\.TryReserve\)/, /\bColumnProfiler\.Profile\([^;]*\bcharges\b/],
+  DistinctAsync: [/\bViewSorter\.DistinctValues\([^;]*\bkeyMemory\)/],
+  DiffAsync: [/\bResultDiffer\.Compare\([^;]*\bcells\.TryReserve\b/],
+  PivotAsync: [/\bResultPivoter\.Build\([^;]*\bfigures\.TryReserve, keyMemory\)/]
+}
+
 /** The body of the method `name` in SqlService.cs, from its first `{` to the matching `}`. */
 function body(name: string): string {
   const header = new RegExp(`^    (?:private|internal|public)[^\\n=;]*\\b${name}\\(`, 'm').exec(source)
@@ -55,6 +66,12 @@ it('keeps every working-memory reservation of the operations on results', () => 
   for (const [name, kinds] of Object.entries(expected)) expect({ name, ...counts(body(name)) }).toEqual({ name, ...kinds })
 })
 
+it('hands every reservation on to the code that builds', () => {
+  for (const [name, patterns] of Object.entries(handoffs)) for (const pattern of patterns) expect({ name, pattern: String(pattern), found: pattern.test(body(name)) }).toEqual({ name, pattern: String(pattern), found: true })
+  // The lint sees a reservation dropped on the way: a profile given no charges budgets nothing.
+  expect(handoffs.ProfileAsync[1].test(body('ProfileAsync').replace('work, charges, threads', 'work, null, threads'))).toBe(false)
+})
+
 it('lists every method that reserves working memory, so a new one is added to the table', () => {
   // Every reservation in the file is in a listed method.
   const listed = Object.keys(expected).map(body).join('\n')
@@ -62,4 +79,7 @@ it('lists every method that reserves working memory, so a new one is added to th
   // And the lint sees what it pins: removing one reservation changes the counts.
   expect(counts(body('DiffAsync').replace(/\bstore\.TryReserveWork\(/, 'store.Return('))).not.toEqual(expected.DiffAsync)
   expect(counts(body('DiffAsync').replace(/cells\.TryReserve\b/, '_ => true'))).not.toEqual(expected.DiffAsync)
+  // Commented or compiled out, it is gone too.
+  expect(counts(strip(body('DiffAsync').replace('!store.TryReserveWork(left.Budget, working)', 'false /* !store.TryReserveWork(left.Budget, working) */')))).not.toEqual(expected.DiffAsync)
+  expect(counts(strip(body('PivotAsync').replace(/^.*figures\.TryReserve, keyMemory.*$/m, line => `#if false\n${line}\n#endif`)))).not.toEqual(expected.PivotAsync)
 })

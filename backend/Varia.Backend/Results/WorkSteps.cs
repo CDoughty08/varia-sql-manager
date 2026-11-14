@@ -23,7 +23,8 @@ internal sealed class WorkSteps(ResultStore store, QueryBudget query)
     {
         if (bytes <= 0) return true;
         var after = Interlocked.Add(ref held, bytes);
-        var check = bytes >= ResultStore.WorkCheckBytes || after / ResultStore.WorkCheckBytes != (after - bytes) / ResultStore.WorkCheckBytes;
+        var mark = store.WorkStepBytes;
+        var check = bytes >= mark || after / mark != (after - bytes) / mark;
         if (store.TryReserve(query, bytes, check, out var reason)) return true;
         // Taken back, so the next step passes the same mark and asks again.
         Interlocked.Add(ref held, -bytes);

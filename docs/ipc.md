@@ -1209,7 +1209,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   values, a diff's differing cells, a pivot's figures and Distinct Count bounds: `WorkSteps`) at each further 64 MiB
   held (the load is read then, not at every step), is refused under high system memory load as rows are
   (`TOO_LARGE`, saying the computer is low on memory, as does a pivot or diff refused while the load is
-  high). One query may use half of it. Nothing more is stored while the operating system reports high
+  high; Distinct Count bounds refused are not an error, the pivot sorts by cell and value instead, and a profile refused
+  on several threads is read again on one, which holds less). One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
   again by a collection of the youngest generation when it is more than a second old). A release's forced collection
   compacts, which alone returns the memory to the operating system, only when what remains is no more than was

@@ -1796,19 +1796,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 if (view is not null && !store.HasView(view)) throw ViewClosed();
                 return result;
             }
-            catch (ColumnProfiler.ProfileTooLargeException) when (steps.LowMemory)
-            {
-                // One thread's values would be refused for the same reason.
-                throw new RequestException("TOO_LARGE", LowMemory);
-            }
             catch (ColumnProfiler.ProfileTooLargeException) when (workers > 1)
             {
-                // Every thread keeps long values of its own: one thread's may still fit.
+                // Every thread keeps long values of its own: one thread's may still fit, and under high memory load they
+                // may stay under the 64 MiB at which the threads' values together asked it.
                 workers = 1;
             }
             catch (ColumnProfiler.ProfileTooLargeException)
             {
-                throw TooLarge(tooLarge);
+                throw steps.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : TooLarge(tooLarge);
             }
             finally { store.Return(set.Budget, working + charges.Extra); }
         }
@@ -2170,6 +2166,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, figures.TryReserve, keyMemory), token, set); }
             catch (PivotTooLargeException)
             {
+                // Thrown only for the figures, the first step: a refused Distinct Count bounds step (also LowMemory) comes
+                // later and is not an error, the build sorts by cell and value instead.
                 throw figures.LowMemory ? NotStored(set.Budget, new RequestException("TOO_LARGE", LowMemory), (set, args.ResultId)) : NotStored(set.Budget, tooLarge, (set, args.ResultId));
             }
             if (set.IsReleased) throw Unavailable(args.ResultId);

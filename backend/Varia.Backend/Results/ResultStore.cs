@@ -366,6 +366,9 @@ internal sealed partial class ResultStore
     /// for every this much taken (<see cref="WorkSteps"/>), as a sort key's pages do.</summary>
     public const long WorkCheckBytes = 64L << 20;
 
+    /// <summary>What <see cref="WorkSteps"/> take between load readings: <see cref="WorkCheckBytes"/>, less only in checks.</summary>
+    internal long WorkStepBytes { get; init; } = WorkCheckBytes;
+
     /// <summary>Takes the working memory of an operation on a result (a sort's keys, a profile's figures).</summary>
     public bool TryReserveWork(QueryBudget query, long bytes) => TryReserve(query, bytes, bytes >= WorkCheckBytes, out _);
 
