@@ -82,8 +82,8 @@ function fixture() {
   const host = container
   /** Draws the stack over the results as published now, and lets it mount its grids (two a frame). Without `closable` the
    *  run is drawn bare, as Peek's is: no close buttons. */
-  const draw = (closable = true) => {
-    act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement('div', { className: 'output-panel' }, createElement('button', { role: 'tab', 'data-output-tab': 'results' }), createElement(ResultsStack, { tabId: 't1', tab: closable ? results.getSnapshot().t1 : { ...results.getSnapshot().t1, bare: true } })) })) })
+  const draw = (closable = true, revealFocused = false) => {
+    act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement('div', { className: 'output-panel' }, createElement('button', { role: 'tab', 'data-output-tab': 'results' }), createElement(ResultsStack, { tabId: 't1', tab: closable ? results.getSnapshot().t1 : { ...results.getSnapshot().t1, bare: true }, revealFocused })) })) })
     for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
   }
   const all = <T extends Element = HTMLElement>(selector: string) => [...host.querySelectorAll<T>(selector)]
@@ -285,6 +285,54 @@ describe('the stacked results', () => {
     expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
     expect(client.released()).toEqual([3, 803, 1, 901, 2])
     expect([three, pivot].every(entry => !results.getSnapshot().t1.sets.some(set => set.key === entry))).toBe(true)
+  })
+
+  it('put the caption focus after a close where the service puts the grid focus: the view its neighbour last showed', () => {
+    const { results, keys, draw } = fixture()
+    const [one, two, three] = keys
+    const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
+    results.removeEntry('t1', three)
+    const pivot = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    // Result 1 last showed its Table; Result 2, the last result, has the focus. The caption before Result 2's is the Pivot's,
+    // but the service gives the grid focus to Result 1's Table, and the caption focus goes with it.
+    results.focusEntry('t1', one)
+    results.focusEntry('t1', two)
+    draw()
+    const close = (name: string) => { const button = container!.querySelector<HTMLButtonElement>(`[aria-label="Close ${name}"]`)!; button.focus(); act(() => { button.click() }); draw() }
+    close('Result 2')
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(one)
+    expect(pivot).toBeDefined()
+  })
+
+  it('open and scroll to the focused view when drawn in place of the Tabs layout, and only then', () => {
+    // A pane that scrolls: scrollTop is kept per element, as no layout engine keeps it here.
+    const scrolled = new WeakMap<Element, number>()
+    const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', { configurable: true, get(this: HTMLElement) { return scrolled.get(this) ?? 0 }, set(this: HTMLElement, value: number) { scrolled.set(this, value) } })
+    try {
+      paneHeight = 150
+      for (const revealFocused of [false, true]) {
+        const { results, keys, draw } = fixture()
+        const pivot = keys[3]
+        const view = results.viewState('t1')
+        results.focusEntry('t1', pivot)
+        view.collapsed = new Set([pivot])
+        view.stackScrollTop = 0
+        draw(true, revealFocused)
+        // Drawn by a switch from Tabs, the Pivot of Result 3 (last, collapsed) opens and the stack scrolls down to it;
+        // drawn any other way, the stack keeps what was collapsed and where it was.
+        expect(view.collapsed.has(pivot)).toBe(!revealFocused)
+        if (revealFocused) expect(view.stackScrollTop).toBeGreaterThan(0)
+        else expect(view.stackScrollTop).toBe(0)
+        act(() => { root?.unmount() })
+        root = undefined
+        container?.remove()
+      }
+    } finally {
+      if (scrollTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTop)
+      else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop
+    }
   })
 
   it('draw a bare run as its grid alone, with a caption only to hold its filters, and size a transposed item by the rows it draws', () => {
