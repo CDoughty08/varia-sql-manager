@@ -1653,7 +1653,8 @@ try {
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
   await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
-  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  // The builder has two live regions (its error, and its waiting notes): the refusal is in one of them.
+  await expect(pivoting.getByRole('status').filter({ hasText: 'The column group has 300 distinct values, and a pivot can have at most 256 column groups.' })).toBeVisible()
   await expect(anyResultGrid(page)).toHaveCount(1)
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await run('-- varia-fake: sets=W1*100')
