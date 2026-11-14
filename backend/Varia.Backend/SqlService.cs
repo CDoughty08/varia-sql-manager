@@ -92,6 +92,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
     private readonly ResultVisibility visibility;
+    /// <summary>Packs hidden results (stage 1), or null when the service was not asked to (the checks' default).</summary>
+    private readonly ResultPacker? packer;
     private readonly ResultJobs jobs;
     private readonly bool hooks;
     private readonly Func<object, bool>? publish;
@@ -165,13 +167,22 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <param name="publish">Sends a global EVENT and says whether it was queued. Memory usage is sampled once a second
     /// and after operations that release it.</param>
     /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
+    /// <param name="packHidden">Packs results hidden for a few seconds (<see cref="ResultPacker"/>), turning the store's packing on
+    /// request if it is off. The backend process asks (<see cref="FromEnvironment"/>); the checks ask only where they test the
+    /// policy, so no other check's budget figures depend on how long it takes.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null, bool packHidden = false)
     {
         // Before any session opens: the checks host the service in their own process, so the floor is the service's, not Program's.
         ThreadPoolFloor.Ensure();
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
         visibility = new ResultVisibility(id => this.store.Find(id) is not null);
+        if (packHidden)
+        {
+            if (this.store.Packing == PagePacking.Off) this.store.Packing = PagePacking.OnRequest;
+            packer = new ResultPacker(this.store, visibility);
+            packer.Start();
+        }
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
@@ -202,7 +213,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
         // The user's limit, in MiB, as main read it from the settings when it started this process.
         var limit = ResultStore.LimitFromEnvironment(Environment.GetEnvironmentVariable("VARIA_RESULT_MEMORY_MIB"));
-        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish);
+        // The product packs hidden results (ResultPacker), which turns the store's packing on request.
+        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish, packHidden: true);
     }
 
     public IReadOnlyList<string> Methods { get; }
@@ -2278,11 +2290,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             || args.Seq is not (>= 1 and <= int.MaxValue) || args.Source is not { Length: 36 } text || !Guid.TryParseExact(text, "D", out var source))
             throw new RequestException("INVALID_PARAMS", $"A source ID, a sequence number and at most {ResultVisibility.MaxResults} distinct result IDs are required.");
         var applied = visibility.Set(source, args.Seq.Value, ids, out var kept);
+        // A result shown again stops packing at its next page; one hidden starts its delay.
+        if (applied) packer?.Poke();
         return new ResultsVisibilityResult(kept, applied);
     }
 
     /// <summary>Which results are shown, for a memory policy over hidden ones and for the checks.</summary>
     internal ResultVisibility Visibility => visibility;
+
+    /// <summary>The hidden-result packing policy, or null when the service was not asked to pack hidden results (the checks read it).</summary>
+    internal ResultPacker? Packer => packer;
 
     /// <summary>The most a user's limit is, in GiB, as Tools › Options allows (queryResults.grid.memoryLimitGiB).</summary>
     internal const int MaxMemoryLimitGiB = 1024;
@@ -2690,6 +2707,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
     public void Dispose()
     {
+        // First, so packing stops before the results it packs are released.
+        packer?.Dispose();
         memoryTimer?.Dispose();
         language.Dispose();
         explorer.Dispose();

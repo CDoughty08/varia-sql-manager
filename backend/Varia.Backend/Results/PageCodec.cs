@@ -2,14 +2,16 @@ using System.IO.Compression;
 
 namespace Varia.Backend.Results;
 
-/// <summary>How the store keeps complete results' pages (<see cref="ResultStore.Packing"/>): an internal switch, off in the
-/// product until a policy decides which results to pack (docs/page-compression-findings.md).</summary>
+/// <summary>How the store keeps complete results' pages (<see cref="ResultStore.Packing"/>): an internal switch, not a
+/// setting. The product's store is <see cref="OnRequest"/>, and the hidden-result policy (<see cref="ResultPacker"/>)
+/// decides what to pack; the checks' stores are <see cref="Off"/> unless a check chooses otherwise
+/// (docs/page-compression-findings.md).</summary>
 internal enum PagePacking
 {
     /// <summary>Pages stay as sealed; <see cref="ResultSetBuffer.Pack"/> does nothing.</summary>
     Off,
     /// <summary><see cref="ResultSetBuffer.Pack"/> packs a complete, unpinned, unleased result's pages that save at least
-    /// a tenth of their bytes.</summary>
+    /// a tenth of their bytes. The product's mode, which the service running the hidden-result policy sets.</summary>
     OnRequest,
     /// <summary>The checks' mode: every complete result is packed at once, and again whenever its last pin or lease ends,
     /// every page whatever it saves, so every reader meets packed pages.</summary>

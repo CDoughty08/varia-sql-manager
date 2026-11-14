@@ -134,9 +134,15 @@ being true.
   page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
   The store may keep a page packed (`PackedPage`: Zstandard level 2, a one-page window, `PageCodec`), so nothing else
   touches `StoredPage.Stored` (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned,
-  unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, off in the
-  product until a policy decides which results to pack (docs/page-compression-findings.md); the checks' second pass
-  packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
+  unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, not a
+  setting: the backend process's service turns it on request and runs the stage 1 policy (`ResultPacker`,
+  docs/page-compression-findings.md), which packs a complete result of 1 MiB or more hidden in every window for 5 s
+  (`ResultVisibility`), never a live table or one still storing rows. It runs on its own lowest-priority thread, not
+  the workers' gate (which has no lower priority), waking only on a deadline, a completed result of 1 MiB or more, a
+  visibility change, or the end of a pin or lease that stopped it or of an operation that unpacked it (`ResultStore.Settled`;
+  an operation's unpack counts as a use, so the delay starts again), and stops between pages when the result is
+  shown, held, released or the service disposed. The checks' stores leave packing off unless a check turns it on
+  (`SqlService`'s `packHidden`), and their second pass packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
   live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
   `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
   collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
@@ -149,9 +155,10 @@ being true.
   then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
   A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
   held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page through
-  the cache. `ResultStore.PackingSnapshot` holds the
-  counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
-  `results.memory`.
+  the cache. An operation's unpack clears the set's packed mark, so the policy packs it again once it ends.
+  `ResultStore.PackingSnapshot` holds the counters (packed, logical and cached bytes; pages packed, kept raw and
+  unpacked; cache hits and lookups; time; the last whole unpack), which `results.memory`'s detail reports with each
+  result's own figures (`ResultSetBuffer.Memory`), so the Memory panel's packed and saved figures are the budget's.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
