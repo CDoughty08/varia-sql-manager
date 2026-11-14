@@ -211,10 +211,10 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   }
   pick(tabId: string, target: EntryKey): void {
     const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, target)
-    if (tab && entry) this.update(tabId, { target, targetOrdinal: slotOf(tab, entry.key)?.group, error: undefined, cancelled: false })
+    if (tab && entry) this.choose(tabId, { target, targetOrdinal: slotOf(tab, entry.key)?.group, error: undefined, cancelled: false })
   }
-  swap(tabId: string): void { const picker = this.getSnapshot().pickers[tabId]; if (picker) this.update(tabId, { swapped: !picker.swapped, error: undefined, cancelled: false }) }
-  setExact(tabId: string, exact: boolean): void { this.update(tabId, { exact, error: undefined, cancelled: false }) }
+  swap(tabId: string): void { const picker = this.getSnapshot().pickers[tabId]; if (picker) this.choose(tabId, { swapped: !picker.swapped, error: undefined, cancelled: false }) }
+  setExact(tabId: string, exact: boolean): void { this.choose(tabId, { exact, error: undefined, cancelled: false }) }
 
   /** The picker's two sides, old (−) then new (+), and how their columns pair; undefined while it has no target. */
   sidesOf(tabId: string): { readonly old: ResultSetEntry; readonly neu: ResultSetEntry; readonly pairing: ColumnPairing } | undefined {
@@ -252,7 +252,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (!picker || !sides) return undefined
     const shown = this.existing(tabId, sides.old.key, sides.neu.key, picker.exact)
     if (shown) { this.remember(tabId, picker); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
-    this.update(tabId, { error: undefined, cancelled: false })
+    this.choose(tabId, { error: undefined, cancelled: false })
     const outcome = await this.comparePair(tabId, sides.old.key, sides.neu.key, { exact: picker.exact, quiet: true })
     const same = this.shows(tabId, picker.queryId, sides.old.key, sides.neu.key, picker.exact)
     if (outcome && 'error' in outcome) {
@@ -364,8 +364,14 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (next.targetOrdinal === undefined) delete (next as { targetOrdinal?: number }).targetOrdinal
     if (next.error === undefined) delete (next as { error?: string }).error
     if (!next.cancelled) delete (next as { cancelled?: boolean }).cancelled
-    this.remember(tabId, next)
     this.setPicker(tabId, next)
+  }
+  /** A choice made in the popover (a pick, a swap, Exact text, Compare): applied and remembered. What it is told of a
+   *  comparison (a failure, a cancel, a new attempt from elsewhere) goes through `update` and is not a choice. */
+  private choose(tabId: string, change: Partial<ComparePicker>): void {
+    this.update(tabId, change)
+    const picker = this.getSnapshot().pickers[tabId]
+    if (picker) this.remember(tabId, picker)
   }
 
   dispose(): void {

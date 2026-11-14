@@ -399,6 +399,32 @@ describe('the Compare popover', () => {
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
   })
 
+  it('remembers no choice for what it is told of a Compare with Previous Result or a cancel on the pair it shows', async () => {
+    const { compare, run, handle } = fixture()
+    const other = [{ name: 'Other', dataType: 'int', wire: 'text', nullable: false } as ResultColumn]
+    let keys = run(3)
+    compare.open('t1', keys[2])
+    compare.pick('t1', keys[0])
+    compare.close('t1')
+    // Result 1 shares no column with Result 3 in the next run, so the popover offers its default, Result 2.
+    keys = run(3, { queryId: 'q2', columns: { 0: other } })
+    compare.open('t1', keys[2])
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ target: keys[1] })
+    // Compare with Previous Result of Result 3 (Result 2 → Result 3, the pair shown) fails, then again and is cancelled.
+    vi.mocked(handle(keys[1]).diff).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'Too large to compare.'))
+    await compare.compare('t1', keys[2])
+    expect(compare.getSnapshot().pickers.t1.error).toBe('Too large to compare.')
+    vi.mocked(handle(keys[1]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
+    const cancelled = compare.compare('t1', keys[2])
+    compare.cancel('t1', keys[1], keys[2], false)
+    await cancelled
+    compare.close('t1')
+    // Neither was a choice: back in the first layout, Result 3 offers Result 1 again.
+    keys = run(3, { queryId: 'q3' })
+    compare.open('t1', keys[2])
+    expect(compare.getSnapshot().pickers.t1).toMatchObject({ target: keys[0] })
+  })
+
   it('focuses the comparison in a popover reopened on its pair while it ran, though the reopen moved the focus', async () => {
     const { compare, results, run, handle, tab } = fixture()
     const keys = run(2)
