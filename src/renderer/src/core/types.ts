@@ -10,6 +10,8 @@ export interface Disposable { dispose(): void }
 export interface CommandContext {
   readonly guideId?: string
   readonly settingsPage?: string
+  /** The setting Options focuses when it opens, on its own page (`settingsPage` is then not needed). */
+  readonly setting?: string
   /** The exact advertised release; omitted when Help opens notes for the running application. */
   readonly releaseVersion?: string
   /** The tab a tab-strip button acts on. */

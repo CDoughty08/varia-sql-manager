@@ -50,8 +50,8 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
  * and the focused row's description below. Changes on every page stay in one draft until OK saves the ones that differ
  * from what main stored; Cancel and Escape discard them, and focus returns to where it was.
  */
-export default function OptionsDialog({ page: requested }: { page?: string }) {
-  const { settings, platform, keybindings } = useWorkbench()
+export default function OptionsDialog({ page: requested, setting }: { page?: string; setting?: string }) {
+  const { settings, platform, keybindings, documents } = useWorkbench()
   const { values } = useServiceSnapshot(settings)
   const [draft, setDraft] = useState<OptionsDraft>(() => draftFrom(values))
   // The Shortcuts page's edits: a second draft, saved after the settings by OK.
@@ -78,7 +78,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   const [saving, setSaving] = useState(false)
   // Read while rendering, before the search box takes focus.
   const [returnFocus] = useState(focusToReturn)
-  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string>(undefined)
+  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string | undefined>(setting)
   const found = useMemo(() => searchPages(query, platform), [query, platform])
   const rows = treeRows(expanded, found?.shown)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
@@ -95,7 +95,9 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     document.getElementById(controlId(key))?.focus()
   })
 
-  const restoreFocus = () => returnFocusTo(returnFocus)
+  // What opened the dialog may be gone once its changes apply (the status bar's Results discarded item, for one): the
+  // keyboard goes to the active document rather than to nothing.
+  const restoreFocus = () => { if (returnFocus?.isConnected) returnFocusTo(returnFocus); else documents.focusActive() }
   // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
     if (saving) return

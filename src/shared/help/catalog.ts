@@ -37,7 +37,7 @@ export const guideCatalog = {
     keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection'],
     sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
     related: ['run-query'], commands: [{ id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
-    settings: ['queryResults.grid.includeColumnHeaders'], gestures: ['grid.addToSelection'],
+    settings: ['queryResults.grid.includeColumnHeaders', 'queryResults.grid.discardResults'], gestures: ['grid.addToSelection'],
     sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/shared/settings/query-results.ts']
   }
 } as const satisfies Record<string, GuideMetadata>
