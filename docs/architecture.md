@@ -79,6 +79,14 @@ being true.
   checks close the physical connection and invalidate language context. Entra token acquisition requires an explicit
   request scope: initial Connect/database discovery may establish an account, while later native opens carry the
   pinned principal. Unscoped driver background replenishment cannot acquire a token or seed a target's pool.
+  An unapproved library reopen permanently fences that exact connection's commands before scheduling physical cleanup:
+  closing synchronously inside SqlClient's Open state callback can wait on the same unfinished Open. The existing
+  SqlClient diagnostic listener enforces the command fence, with synchronous single-instance initialization; real-driver
+  regressions must continue to prove refusal before command send when upgrading the driver.
+  Initial Windows/Kerberos and Entra authentication use a fresh physical session; later guarded opens retain the
+  requested pooling preference. Known password rotation retires affected old pools before publishing its binding.
+  A missing logical registration/profile fails closed at factory ownership and Open admission, including during
+  Disconnect. Optional metadata fallback must preserve fatal connection errors and their authentication details.
   SQL Tools Service remains a separate process
   with its existing SQL/Windows credential contract and unsupported Entra modes; it does not provide the native
   connection owner's cross-open identity proof. No token, raw password or secret-derived comparison key enters a
@@ -263,6 +271,9 @@ being true.
   back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
   `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
+  Explorer's pinned server shortcuts use the same canonical target as its ordinary rows. Closing a shortcut popover
+  leaves its visible invoker as the keyboard menu anchor and focus destination. Deferred Connect focus yields to newer
+  input recorded by `WindowRegistry`, including input in a popout.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,

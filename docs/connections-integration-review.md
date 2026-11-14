@@ -61,9 +61,62 @@ identity-bound native connections; the relevant driver behavior is documented in
 SQL Tools Service retains its existing separate-process SQL/Windows credential contract and unsupported Entra modes.
 It does not supply the native owner's cross-open identity proof.
 
-## Validation and limits
+The follow-up driver audit also traced [Close's wait for a pending Open](https://github.com/dotnet/SqlClient/blob/29ce2d856cb5a9450f79ea62c0afc744fd337fde/src/Microsoft.Data.SqlClient/src/Microsoft/Data/SqlClient/SqlConnection.cs#L1378)
+and the [before-command diagnostic callback](https://github.com/dotnet/SqlClient/blob/29ce2d856cb5a9450f79ea62c0afc744fd337fde/src/Microsoft.Data.SqlClient/src/Microsoft/Data/SqlClient/Diagnostics/SqlDiagnosticListener.cs#L86).
+Varia refuses a library reopen synchronously, permanently fences commands on that instance, and disposes it after the
+callback unwinds. The diagnostic subscription is initialized synchronously once. Real-driver checks hold physical
+cleanup open and verify scalar, reader, nonquery and SMO calls still fail before SQL can be sent.
 
-`npm run check` passed on the final implementation in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,
+## Follow-up review: sticky menus and CI
+
+The PR's first CI run passed checks on Linux, Windows and macOS, all Windows smoke shards and Linux benchmarks. Live
+SQL groups and three Linux smoke scenarios exposed additional gaps. Fresh reviewers separately audited the entire
+main/renderer lifecycle, Explorer/menu behavior and backend identity/binding paths, then checked the corrections again.
+
+| Area | Finding and correction |
+| --- | --- |
+| Sticky Explorer menus | Top/bottom server shortcuts and both overflow lists lacked canonical menu registration. They now resolve the same full menu and current lifecycle state as the ordinary server row, independently of the selected row. Pointer and keyboard regressions cover command target, enablement, scroll and focus. |
+| Overflow keyboard placement | Dismissing the shortcut popover left a hidden entry as the menu anchor. A zero-size anchor falls back to its visible invoker. Unit geometry and real above/below overflow checks cover placement; pointer coordinates remain authoritative. |
+| Deferred Connect focus | The scheduled Explorer transfer could override newer editor input. Only this transfer now checks the existing window registry's input revision, including input in popouts. Held-frame regressions preserve normal dialog cleanup while yielding to newer interaction. |
+| Rejected native opens | Closing inside Open's state callback could wait on that same unfinished Open. Deferred disposal and an exact-instance command fence preserve refusal without self-wait; the subscription's Lazy initialization also closes a concurrent first-use readiness gap. |
+| Factory/disconnect race | A factory could snapshot settings, lose its profile to Disconnect and create an owner without account proof. Missing registration/profile now fails closed at ownership and guarded Open admission; explicitly registered identity-free offline seams remain distinct. |
+| Unknown administrative outcomes | Returned CONNECTION_LOST or CANCELLED values incorrectly claimed complete binding evidence. They now retain confirmed receipts but mark unreported changes incomplete. A real Stop-after-rename regression verifies that an already-applied statement cannot preserve obsolete equality. |
+| Retired password pools | Idle sessions using a previous password could make a fresh Connect appear to authenticate that password after a known rotation. Affected tracked pools are retired before publishing the new binding. SQL opens preserve the exact retained pool-key text so cleanup reaches the pool actually used. A real SQL-login regression covers rejection of the old secret, acceptance of the new one and a retained query session. |
+| Windows/Kerberos initial authentication | A pooled initial open could discover the account of an old physical session after ticket switching. Initial Windows opens authenticate without pooling; later guarded native opens retain the requested pooling preference. Offline checks cover both sides of that boundary. |
+| Fatal profile errors | Optional metadata fallback could replace a fatal authentication error with a generic closed-connection error. Closed/broken-session SQL errors retain their original classification and details; recoverable metadata permission failures still use the fallback. |
+| Resolved default database | A password-only binding update could overwrite a server-resolved default database with the empty submitted option. Receipt metadata now changes its database only for an acknowledged database mutation; reuse preserves the resolved name without changing identity options. |
+| Late Connect publication | A closed session could throw while reading provider properties after its logical handle was registered, leaving a handle that main never received. All physical-session facts are captured before registration; a failed initialization publishes no handle. |
+| Dropped Connect replies | Native protocol cancellation or response serialization failure could hide a successful registration from main. Connect now supplies idempotent exact-ID Dropped/Unsent cleanup. Actual protocol tests gate a successful dispatch before cancellation and exercise an oversized reply while retaining a separate accepted target. |
+| Activity Monitor pool protection | Long application names were truncated differently by the factory and its own-pool name matcher. Both use one prefix/suffix rule, so Kill cannot miss the application's own pool because its name is long. Offline parity and actual session-action tests cover the boundary. |
+| CI fixtures | Exact scripting command budgets include the account preflight. Intentional owned opens in native live fixtures use the central opener. Electron recovery checks use the current credential-update action and wait for exact attachment/focus. Activity Monitor retries only opening a non-mutating confirmation after a live sample changes, never the Kill action. |
+
+A proposed extra database-binding refresh API was investigated and retracted. Database-only mutation settlement
+publishes synchronously; password and database receipt producers are disjoint, and reload projects current main pins.
+The proposed delayed-publication interleaving was unreachable. No additional IPC was retained.
+
+The similar behavior found outside this request is the hidden query/pinned-tab overflow in
+`src/renderer/src/editor-groups/TabShelves.tsx`: those entries navigate to tabs but lack the visible tabs' context menu.
+It remains a separate follow-up. Explorer pins represent server roots; there is no separate sticky database renderer.
+
+The Connect guide's commands and basic sequence remain correct, so this menu-parity correction requires no guide or
+fictional sample change. README, Unreleased, connection guidance and architecture document the behavior.
+
+The follow-up review loop finished with no remaining actionable findings in the reviewed main/renderer, UI/menu and
+backend scopes. The full pre-base-update check passed with 2,714 offline .NET checks and 5,075 Vitest tests; 24
+configuration-dependent Vitest cases were skipped. The 178 focused native checks and actual SQL Server regressions
+cover the added security boundaries. Live group 2 passed 475 checks; the other live groups' failures were resolved and
+their affected suites rerun serially, including scripting, login/password pools, exact SID replacement, cancellation,
+restore, own-pool protection and SSIS Stop. Current Electron and cross-platform CI results are recorded in the PR.
+
+One opt-in local SQL Server 2025 Windows Extended Events assertion remains a baseline limitation: its password-redaction
+test fails identically on an isolated build of unchanged main `733b2917`. The login/SSIS SQL and that assertion are
+unchanged. It was neither skipped nor weakened. The test records no secret values in these logs, and its scratch XE
+sessions were removed. Version, OS and configuration causes have not been isolated. No real Kerberos account switch
+or Entra tenant was available locally.
+
+## Initial local validation and limits
+
+`npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,
 TypeScript and the production build. The 24 configuration-dependent Vitest tests were skipped.
 
 All 31 Electron suite commands passed across the complete collection and the final connections rerun. The collection
@@ -75,7 +128,7 @@ The details confirmation, disconnect confirmation, retained-results and mixed-st
 1440 by 960. Dialog content and actions were readable, offline roots remained collapsed, and remembered query status
 and recovery controls remained visible. Follow-up reviews verified the confirmed corrections, including typed recovery
 after generation loss; no concrete P1/P2 remained in the reviewed paths.
-The local environment is Windows with no live SQL Server, Kerberos test endpoint or Entra tenant configured. Offline
+That Windows run had no live SQL Server, Kerberos test endpoint or Entra tenant configured. Offline
 provider seams, actual event handlers and fake-backend Electron tests exercise the contracts; they do not substitute
 for live authentication, driver/network fault or cross-platform OS-keyring validation.
 

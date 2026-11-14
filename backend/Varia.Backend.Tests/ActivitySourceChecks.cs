@@ -368,9 +368,9 @@ internal static class ActivitySourceChecks
         check(C(1, 4242, "Varia SQL Manager - Object Explorer", "OTHER-PC") == (null, false) && C(2, 4242, "Varia SQL Manager", "OTHER-PC") == (null, false)
             && C(8, 4242, "Varia SQL Manager - Object Explorer") == (null, false) && C(8, 4242, "Varia SQL Manager - Scripting", null) == (null, false),
             "a session from another machine under this backend's process id and program name is not Varia's, nor is a pool session under an id none of Varia's connections were given");
-        // SQL Server keeps 128 characters of a program name, as SqlService cuts the pool's.
+        // Pool names keep their full role suffix by shortening the configured prefix.
         var longName = new string('V', 120);
-        check(Own([longName], 9).Classify(9, 4242, Host, (longName + " - Object Explorer")[..128], 99) == ("Varia Object Explorer", true),
+        check(Own([longName], 9).Classify(9, 4242, Host, longName[..(128 - " - Object Explorer".Length)] + " - Object Explorer", 99) == ("Varia Object Explorer", true),
             "a 120-character Application Name's pool session, its program name cut to 128 characters, is still Varia's Object Explorer");
         // SqlClient's idle connection resiliency reconnected a held Scripting connection under a new session, 88: the ledger
         // still names its old id, 74, which SQL Server has since given to another client, and not 88.

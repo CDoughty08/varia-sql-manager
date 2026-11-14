@@ -79,6 +79,8 @@ Object Explorer retains disconnected servers as collapsed roots. Use **Reconnect
 Explorer** for an offline root, or **Disconnect and Remove from Explorer** for a connected one. Removing a root does
 not delete saved profiles or query text. Equivalent connections select the existing root; differing
 name, color, environment or startup reconnect details receive an explicit Current/Selected confirmation.
+Server shortcuts pinned above or below the tree, including their overflow entries, offer the same full context menu
+as the server row in the tree.
 Disconnect with attached queries offers Keep Tabs, Close Query Tabs and Cancel, with save and transaction choices
 resolved before tabs close. See [connection roots in Object Explorer](docs/connections-explorer.md).
 

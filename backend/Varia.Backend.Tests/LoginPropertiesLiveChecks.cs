@@ -173,6 +173,12 @@ internal static class LoginPropertiesLiveChecks
         var self = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = login, Password = third, Database = "master" });
         try
         {
+            var tab = Guid.NewGuid().ToString();
+            var held = await Call<QueryResult>("query.execute", new QueryArgs(self.Id, tab, "master", "CREATE TABLE #credential_pool_state (value int); INSERT #credential_pool_state VALUES (731);", Guid.NewGuid().ToString(), 10, 30));
+            check(held.Status == "completed", "the password-pool regression holds an accepted query session with temporary state");
+            // The initial Connect left its plain pool warm; warm a role pool too, so both old credential keys must retire.
+            await using (var warm = ((Varia.Backend.Explorer.IExplorerHost)service).Connection(self.Id, "master"))
+                await ((Varia.Backend.Explorer.IExplorerHost)service).OpenAsync(warm, CancellationToken.None);
             var selfDescribed = await Describe(login, self.Id);
             // Its own Disable first: once its password changes, this connection's new sessions (object actions open their own) need the new one.
             var denied = await actions.ExecuteAsync(Properties(login, new(Enabled: false), IdentityOf(selfDescribed), null, self.Id), CancellationToken.None);
@@ -184,6 +190,24 @@ internal static class LoginPropertiesLiveChecks
                 && withOld.Error is null && await SignIn(login, fourth) == 0
                 && denied is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && denied.Error.Message == actions.Catalog.Logins.Message("ownStatus") && await State(login) == database + "|Deutsch|0|G|dbcreator",
                 "the login itself changes its own password only with the old one, and may not disable itself: " + withoutOld.Error?.Code + " " + withOld.Error?.Message + " " + denied.Error?.Code);
+            ConnectionInfo? staleConnect = null, freshConnect = null;
+            RequestException? oldPassword = null;
+            try
+            {
+                try { staleConnect = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = login, Password = third, Database = "master" }); }
+                catch (RequestException error) { oldPassword = error; }
+                freshConnect = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = login, Password = fourth, Database = "master" });
+                var retained = await Call<QueryResult>("query.execute", new QueryArgs(self.Id, tab, "master", "SELECT value FROM #credential_pool_state;", Guid.NewGuid().ToString(), 10, 30));
+                check(staleConnect is null && oldPassword is { Code: "SQL_ERROR", Details.Number: 18456 } && freshConnect.PrincipalId == self.PrincipalId
+                    && retained.Status == "completed" && retained.ResultSets.Count == 1 && LiveResultChecks.RowsOf(service.Results, retained.ResultSets[0])[0][0] == "731",
+                    "a password rotation retires warm old-credential pools: a fresh old-password Connect fails, the new password authenticates, and accepted query state stays usable");
+            }
+            finally
+            {
+                await Call<object>("query.session.close", new SessionArgs(tab));
+                if (staleConnect is not null) await Call<object>("connections.disconnect", new ConnectionArgs(staleConnect.Id));
+                if (freshConnect is not null) await Call<object>("connections.disconnect", new ConnectionArgs(freshConnect.Id));
+            }
             // The connection keeps working: its new sessions (each object action opens one) sign in with the new password (finding 7).
             var afterOwn = await actions.ExecuteAsync(Properties(login, new(DefaultLanguage: "us_english"), IdentityOf(selfDescribed), null, self.Id), CancellationToken.None);
             var afterOwnState = await State(login);
@@ -286,13 +310,16 @@ internal static class LoginPropertiesLiveChecks
         check(owned is null && dboChange is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 },
             "the preflight refuses to change dbo, the user of the login that owns the database: " + owned + " " + dboChange.Error?.Code);
         // The login dropped and created again between the preflight and its step: that step is refused and the new login gains no role.
+        SqlRun? replacement = null;
         actions.Options.BeforeStep = async (title, _) =>
         {
-            if (title == "Add to a server role") await Sql("DROP LOGIN " + Bracket(login) + ";\nCREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Literal(Remember(NewPassword())) + ", CHECK_POLICY = OFF;");
+            if (title == "Add to a server role") replacement = await Sql("DROP LOGIN " + Bracket(login) + ";\nCREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Literal(Remember(NewPassword())) + ", CHECK_POLICY = OFF;");
         };
         ActionExecuteResult loginSwapped;
         try { loginSwapped = await actions.ExecuteAsync(Properties(login, new(RolesAdd: ["dbcreator"]), identity), CancellationToken.None); }
         finally { actions.Options.BeforeStep = null; }
+        var replacementError = secrets.Aggregate(replacement?.Error ?? "", (text, secret) => LoginSql.Scrub(text, new(secret)));
+        check(replacement?.Status == "completed", "the login-replacement fixture completed DROP and CREATE before testing the prior SID binding: " + replacement?.Status + " " + replacementError);
         check(loginSwapped is { Error.Code: "NOT_FOUND" } && Steps(loginSwapped) == "failed:Add to a server role/dbcreator" && await State(login) == "master|us_english|0|G|",
             "a login replaced under the same name after the preflight is refused at its step, and the newcomer gains no server role: " + Steps(loginSwapped) + " | " + loginSwapped.Error?.Message);
 

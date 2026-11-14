@@ -17,6 +17,9 @@ internal sealed partial class SqlService
         try
         {
             var result = await action();
+            // A transport loss or attention may race a statement that the server already applied. Returned error values
+            // carry the same uncertainty as an exception; confirmed earlier receipts still belong to this request.
+            if (result.Error?.Code is "CONNECTION_LOST" or "CANCELLED") capture.Incomplete();
             var (changes, complete) = capture.Seal();
             return result with { BindingChanges = changes, BindingChangesComplete = complete };
         }

@@ -303,7 +303,7 @@ export class ConnectionOpenService {
         const authentication = connectionAuthenticationSchema.parse({ principal, credential: credential ?? null })
         this.deps.authentication.rebind(before.targetId, after.options, after.options, authentication)
         if (this.mutation !== mutation || this.deps.generation() !== mutation.generation || this.handles.get(key) !== owner) continue
-        owner.info = Object.freeze({ ...owner.info, database: after.options.database, authentication, bindingRevision: change.bindingRevision })
+        owner.info = Object.freeze({ ...owner.info, database: change.newDatabase ?? owner.info.database, authentication, bindingRevision: change.bindingRevision })
         owner.initialization = Promise.resolve(owner.info)
         changes.push({ targetId: before.targetId, handle, revision: ++owner.bindingEventRevision, options: after.options, authentication })
       }

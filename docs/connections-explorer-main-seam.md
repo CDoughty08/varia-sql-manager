@@ -81,6 +81,9 @@ Successful IPC delivery is a receipt. It does not make that caller the owner of 
 - An accepted caller protects the shared handle from another caller's cancellation. Acknowledgement is idempotent.
   A rejected acknowledgement with `retained: false` proves the transport was removed; the renderer may mark only that
   exact handle lost. `retained: true` or an IPC failure does not authorize invalidating another caller's connection.
+- Native Connect also owns its unpublished registration: protocol cancellation, deadlines or an unencodable reply
+  release that exact ID through Dropped/Unsent cleanup. Main cannot clean a handle whose reply it never received.
+  Provider properties are captured before registration, and cancellation is checked before publication.
 - `credentialUpdated: true` is main's narrow proof that a same-account, same-credential caller changed the remembered
   reference. The renderer may reconcile only the exact current handle's credential reference after ordinary target
   adoption checks. It does not change the established principal or destination.

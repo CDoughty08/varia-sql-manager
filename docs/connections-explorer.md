@@ -13,6 +13,10 @@ from Explorer. The toolbar, server menu and command palette share these commands
 not delete profiles, saved credentials or query text. A target referenced by a query can remain hidden until explicitly
 reconnected.
 
+When a server scrolls out of view, its pinned shortcut above or below the tree keeps the same full context menu.
+The entries in **More servers** do too. Commands act on the server you right-click, independently of the selected row
+or active query. These shortcuts represent server roots; individual databases are not pinned.
+
 Equivalent connections reuse one root only after main verifies their identity. Account, credentials, submitted
 destination, initial database, TLS, advanced settings and execution policy participate in that decision. A saved
 profile or a similar server name is insufficient. Name, color, environment and startup reconnect preference are
@@ -53,3 +57,6 @@ Changing a login password through Varia also updates the encrypted copy for affe
 it. Unremembered passwords stay unremembered. If storage cannot be updated, Varia reports a warning and requires
 credentials again instead of claiming that the old saved password is current. Database-management changes likewise
 update the remembered initial database without moving unrelated query databases or replacing existing SQL sessions.
+Changing a password also retires pooled sessions that could otherwise make the old password appear valid. Existing
+query sessions remain available. An uncertain or cancelled administrative outcome requires fresh authentication
+instead of reusing unverified settings.

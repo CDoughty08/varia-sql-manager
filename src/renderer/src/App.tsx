@@ -237,7 +237,7 @@ export default function App() {
       return
     }
     // A provisional root can appear while Connect still holds focus. Transfer it only after the picker has unmounted.
-    focusWhenDrawn(nextFrame, () => workspaceRef.current?.reveal('explorer', { focus: true }))
+    focusWhenDrawn(nextFrame, () => workspaceRef.current?.reveal('explorer', { focus: true }), { preserveUserInput: true })
     // Ordinary reuse only selects the existing root. New Query remains an explicit independent command.
     if (opened.reused) return
     const tab = documents.active

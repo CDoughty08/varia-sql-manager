@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **Object Explorer:** pinned server shortcuts above and below the tree, including entries in More servers, offer the same full context menu as the server row in view.
+- **Connection recovery:** Connect's deferred Explorer focus yields to newer keyboard or pointer input. Rejected native opens fail without blocking cleanup, and cancelled or lost database/password changes cannot leave unverified settings eligible for connection reuse.
 - **Connection safety:** Database Properties, Table Designer, SSIS, Activity Monitor and other dependent documents no longer follow a replacement connection by server name alone. Drafts stay open, and operations require their original connection target. Legacy documents without that identity must be reopened explicitly after a connection is replaced.
 - **Disconnect prompts:** cancelling a running query names the server disconnect action and explains that cancellation cannot undo committed work and may have an unknown outcome. Server transaction prompts default to Cancel.
 

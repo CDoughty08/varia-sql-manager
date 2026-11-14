@@ -11,9 +11,6 @@ internal static class LiveErrors
     private static readonly int[] Permission = [297, 300, 229, 262];
     private static readonly int[] Unsupported = [207, 208];
     private static readonly int[] Unavailable = [4060, 911, 942, 952, 922, 924, 926, 927, 945, 976, 978];
-    /// <summary>Login failed, locked out, password expired or must change, untrusted domain: retrying alone would only count
-    /// more failures against the login (and lock it out), so the probe stops until the user acts.</summary>
-    private static readonly int[] LoginFailed = [18456, 18486, 18487, 18488, 18452];
     private static readonly int[] Lost = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060];
 
     public const string BlockedMessage = "Another session held a lock this view needed for more than a second. It tries again.";
@@ -55,7 +52,7 @@ internal static class LiveErrors
         _ when Permission.Contains(number) => "PERMISSION_DENIED",
         _ when Unsupported.Contains(number) => "NOT_SUPPORTED",
         _ when Unavailable.Contains(number) => "DATABASE_UNAVAILABLE",
-        _ when LoginFailed.Contains(number) => "LOGIN_FAILED",
+        _ when ConnectionFailures.LoginFailed(number) => "LOGIN_FAILED",
         -2 => "TIMEOUT",
         _ when severity >= 20 || Lost.Contains(number) => "CONNECTION_LOST",
         _ => "SQL_ERROR"

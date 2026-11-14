@@ -465,6 +465,19 @@ describe('context menus', () => {
     menus.close('escape')
     expect(menus.menuFor.getSnapshot()).toBeUndefined()
   })
+  it('anchors a keyboard menu to the visible invoker when resolving its overflow entry hides the original element', () => {
+    const { menus, one, doc, targets, first } = setup()
+    const invoker = new FakeElement(doc, 'button')
+    invoker.rect = { left: 200, top: 320, right: 420, bottom: 342 }
+    targets.register(one.tab.dom, () => {
+      one.tab.rect = { left: 0, top: 0, right: 0, bottom: 0 }
+      return { kind: 'documentTab', tabId: first.id }
+    }, () => invoker.dom)
+    expect(menus.openForElement(one.button.dom, { keyboard: true })).toBe(true)
+    expect(level(menus)).toMatchObject({ anchor: { kind: 'below', rect: { left: 208, top: 320, right: 420, bottom: 342 } } })
+    menus.close('escape')
+    expect(doc.activeElement).toBe(invoker)
+  })
   it('opens a tree\'s menu from the keyboard for its active row, below that row, with focus left on the tree', async () => {
     const { menus, doc, fixture, targets } = setup()
     const fake = fakeWindow()

@@ -1,4 +1,4 @@
-import { activeDocumentName, backendReady, documentTabs, outputStatus, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './ui.mjs'
+import { activeDocumentName, backendReady, documentTabs, explorerTree, outputStatus, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './ui.mjs'
 
 /** Crash the real sidecar while one tab profiles, inspect only that run's collector from another query tab,
  * reconnect through the palette, and let the next toolbar capture recover it. No backend request starts a run. */
@@ -40,9 +40,12 @@ export async function checkCaptureRecovery({ application, page, expect, run, agg
     await page.keyboard.press('Enter')
     const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog).toBeVisible()
-    if (process.env.VARIA_TEST_SQL_USER?.trim()) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    const typedCredentials = !!process.env.VARIA_TEST_SQL_USER?.trim()
+    if (typedCredentials) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    await dialog.getByRole('button', { name: typedCredentials ? 'Update Credentials and Reconnect' : 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole('combobox', { name: 'Query server', exact: true }).locator('option:checked')).not.toBeDisabled()
+    await expect(explorerTree(page)).toBeFocused()
     await page.keyboard.press(`${mod}+n`)
     const count = `SELECT COUNT(*) AS isolated_remaining FROM sys.server_event_sessions WHERE name=N'${name}';`
     await run(count)

@@ -165,7 +165,10 @@ internal sealed class ActivityCatalog
     /// <summary>The program names of this backend's pool sessions for a connection whose Application Name is <paramref name="applicationName"/>:
     /// each pool suffix appended and cut to 128 characters, as SqlService names its pools. Query tabs (no suffix) are not pools.</summary>
     public IReadOnlyList<string> PoolProgramNames(string applicationName) =>
-        [.. VariaSuffixes.Where(entry => entry.Kind == "pool").Select(entry => applicationName + entry.Suffix).Select(name => name.Length > 128 ? name[..128] : name)];
+        [.. VariaSuffixes.Where(entry => entry.Kind == "pool").Select(entry => ProgramName(applicationName, entry.Suffix))];
+
+    internal static string ProgramName(string applicationName, string suffix) =>
+        applicationName[..Math.Min(applicationName.Length, 128 - suffix.Length)] + suffix;
 
     public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown Activity Monitor limit " + key);
 

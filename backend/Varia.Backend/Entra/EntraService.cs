@@ -44,7 +44,8 @@ internal sealed class EntraService
 
     /// <summary>Opens a connection the user is choosing (connect and Load databases). When MFA has no cached token, signs in
     /// through the browser under the request's token (Stop cancels it), then opens once more with a new connection, which
-    /// now finds the token. Every Entra user open is unpooled (SqlClient otherwise reuses a pool's token without asking the
+    /// now finds the token. Windows/Kerberos user opens are unpooled so switching tickets cannot borrow the prior account's
+    /// physical session. Every Entra user open is unpooled (SqlClient otherwise reuses a pool's token without asking the
     /// provider), so the provider proves which account it used. For anonymous MFA, the string returned names that account: later
     /// opens then find that account's token even when several are signed in. Other Entra failures answer AUTH_ENTRA with the
     /// dialog's details; anything else is left to the caller.</summary>
@@ -58,7 +59,14 @@ internal sealed class EntraService
         using var scope = new EntraConnectScope(token, allowUnpinned: true);
         async Task<(T, string, string?)> Attempt(string text)
         {
-            if (!UsesEntra(text)) return (await open(text, token).ConfigureAwait(false), text, null);
+            if (!UsesEntra(text))
+            {
+                var builder = new SqlConnectionStringBuilder(text);
+                if (builder.IntegratedSecurity) builder.Pooling = false;
+                // SQL pools use the literal submitted string as their key. Preserve exactly the string Register keeps
+                // for cleanup; only the unpooled Windows authentication probe needs a different physical-open string.
+                return (await open(builder.IntegratedSecurity ? builder.ConnectionString : text, token).ConfigureAwait(false), text, null);
+            }
             var opened = await open(new SqlConnectionStringBuilder(text) { Pooling = false }.ConnectionString, token).ConfigureAwait(false);
             var served = Attempts.Take(idOf(opened)) as Served;
             var kept = AnonymousMfa(text) && served?.Account is { } account ? new SqlConnectionStringBuilder(text) { UserID = account }.ConnectionString : text;

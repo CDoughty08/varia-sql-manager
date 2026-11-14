@@ -42,11 +42,16 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
                     reader.IsDBNull(7) ? ExplorerCatalog.MinBand : reader.GetInt32(7), !reader.IsDBNull(8) && reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetString(9),
                     reader.IsDBNull(10) || reader.GetBoolean(10), reader.IsDBNull(11) ? null : ConnectionPrincipal.FromSid(reader.GetFieldValue<byte[]>(11)));
         }
-        catch (SqlException) { }
+        catch (SqlException error) when (CanFallback(error, connection.State)) { }
         catch (InvalidCastException) { }
         token.ThrowIfCancellationRequested();
         return Fallback(connection.ServerVersion);
     }
+
+    /// <summary>Managed SNI can report a fatal error before State changes. Authentication errors likewise cannot be
+    /// downgraded into optional metadata failures just because the provider still briefly reports an open session.</summary>
+    internal static bool CanFallback(SqlException error, System.Data.ConnectionState state) =>
+        !SqlService.IsSessionLost(error, state) && !error.Errors.Cast<SqlError>().Any(item => ConnectionFailures.LoginFailed(item.Number));
 
     /// <summary>The major version from the provider's "16.00.4135" form; a sign-in it could not check counts as contained.</summary>
     public static ServerProfile Fallback(string? serverVersion) =>

@@ -9,6 +9,7 @@ import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
 import { useConnectionAccent, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
+import { useMenuTarget } from '../menus/useMenuTarget'
 import type { GestureEvent } from '../core/gestures'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
 import type { RowStatus } from './ExplorerStatusService'
@@ -243,10 +244,20 @@ export function RowEnd({ count, connection, active, children, actions }: { count
 export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, top, jump }: {
   node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; top?: number; jump(): void
 }) {
+  const { explorer } = useWorkbench()
+  const menuTarget = useMenuTarget<HTMLButtonElement>(button => {
+    const target = explorer.menuNode(node.id)
+    // A popover is above the custom menu layer. Dismiss the shortcut list before opening the node's full menu.
+    button.closest<HTMLElement>('[popover]')?.hidePopover()
+    return target ? { kind: 'explorer', node: target } : null
+  }, button => {
+    const popup = button.closest<HTMLElement>('[popover]')
+    return popup ? button.ownerDocument.querySelector<HTMLButtonElement>(`[popovertarget="${CSS.escape(popup.id)}"]`) ?? undefined : button
+  })
   const sublabel = shownSublabel(node), tag = environmentTag(environment)
   const facts = [status?.words && displayText(status.words), tag?.description]
   const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
-  return <button type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
+  return <button ref={menuTarget} type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
     style={{ top }} data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
     aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onClick={jump}>
     <Accent color={color} />

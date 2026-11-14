@@ -8,6 +8,7 @@ import type { Disposable } from './types'
 export class WindowRegistry {
   private readonly windows = new Set<Window>()
   private last: Window | undefined
+  private inputVersion = 0
   private readonly adoptions = new Set<() => void>()
   constructor(readonly main: Window | undefined) {
     if (main) this.add(main)
@@ -17,7 +18,7 @@ export class WindowRegistry {
     this.windows.add(target)
     // The user's input, not focus: code focusing an element (a dialog opening in the main window) is not the user moving
     // there, and the windows' own focus is read from document.hasFocus().
-    const used = () => { this.last = target }
+    const used = () => { this.last = target; this.inputVersion++ }
     const events = ['pointerdown', 'keydown'] as const
     for (const event of events) target.addEventListener(event, used, true)
     return { dispose: () => {
@@ -26,6 +27,8 @@ export class WindowRegistry {
       if (this.last === target) this.last = undefined
     } }
   }
+  /** Changes only for user input, so deferred focus can yield to a newer interaction in any workbench window. */
+  get inputRevision(): number { return this.inputVersion }
   /**
    * The window the user is working in: of the windows with focus, the one used last (a test driver can give every window
    * focus at once), else any focused popout; with none focused (a native dialog, another application), the window used

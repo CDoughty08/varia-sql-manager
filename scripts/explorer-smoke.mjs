@@ -1884,6 +1884,38 @@ try {
   await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   checkGeometry(await scrollGeometry())
+  // Sticky shortcuts keep the full canonical server menu, including when their real rows are offscreen. Commands
+  // must use the shortcut's server instead of the selected tree row, and opening/closing a menu must not jump there.
+  const canonicalServer = await revealExplorerRow(page, 'pin-c')
+  await canonicalServer.click({ button: 'right' })
+  const fullServerMenu = await menuItemNames(menu('Object Explorer'))
+  const disabledServerItems = await menuItemNames(menu('Object Explorer'), { disabled: true })
+  await page.keyboard.press('Escape')
+  await scrollToMiddle()
+  const checkPinnedMenu = async (button, server, keyboard, restore, overflow) => {
+    const before = await tree().evaluate(element => element.scrollTop)
+    if (keyboard) { await button.focus(); await page.keyboard.press('Shift+F10') }
+    else await button.click({ button: 'right' })
+    await expect(menu('Object Explorer')).toBeVisible()
+    expect(await menuItemNames(menu('Object Explorer'))).toEqual(fullServerMenu)
+    expect(await menuItemNames(menu('Object Explorer'), { disabled: true })).toEqual(disabledServerItems)
+    if (overflow) await expect(overflow).toBeHidden()
+    if (keyboard && overflow) {
+      const invoker = await restore.boundingBox(), opened = await menu('Object Explorer').boundingBox()
+      // The menu can flip or scroll to fit, but remains adjacent to its visible invoker rather than the hidden entry.
+      const distance = Math.min(Math.abs(opened.y - invoker.y - invoker.height), Math.abs(opened.y + opened.height - invoker.y))
+      expect(distance).toBeLessThanOrEqual(2)
+    }
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
+    await expect.poll(clipboard).toBe(server)
+    await expect(restore).toBeFocused()
+    expect(await tree().evaluate(element => element.scrollTop)).toBe(before)
+  }
+  for (const band of [upper, lower]) {
+    const button = band.getByRole('button', { name: /^Jump to/ }).first()
+    const server = (await button.getAttribute('aria-label')).match(/^Jump to (pin-[a-f])\b/)[1]
+    for (const keyboard of [false, true]) await checkPinnedMenu(button, server, keyboard, button)
+  }
   // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
   // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
   await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
@@ -1913,6 +1945,14 @@ try {
     await moreAbove.focus()
     await page.keyboard.press('Enter')
     await expect(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ })).toBeFocused()
+  }
+  for (const keyboard of [false, true]) {
+    await openAbove()
+    await checkPinnedMenu(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ }), 'pin-a', keyboard, moreAbove, aboveMenu)
+    const moreBelow = lower.getByRole('button', { name: /1 more below/ })
+    await moreBelow.click()
+    const belowMenu = menu('More servers below')
+    await checkPinnedMenu(belowMenu.getByRole('menuitem', { name: /^Jump to pin-f/ }), 'pin-f', keyboard, moreBelow, belowMenu)
   }
   await openAbove()
   await page.keyboard.press('Shift+Tab')

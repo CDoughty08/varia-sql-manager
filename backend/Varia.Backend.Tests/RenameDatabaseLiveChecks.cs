@@ -101,7 +101,7 @@ internal static class RenameDatabaseLiveChecks
             ActionDescribeResult quiet;
             await using (var monitor = ((IActivityHost)service).MonitorConnection(inside.Id))
             {
-                await monitor.OpenAsync();
+                await ((IActivityHost)service).OpenAsync(monitor, CancellationToken.None);
                 quiet = await Describe(db);
             }
             check(listed.Error is null && explorerSessions is not (null or "0") && quiet is { Error: null, RenameDatabase: { UserAccess: 0, Sessions: 0, WithTransaction: 0, LoginsDefaulting: 0, CanClose: true } facts }
@@ -211,6 +211,25 @@ internal static class RenameDatabaseLiveChecks
         var script = await Call<ActionScriptResult>("actions.script", Rename(db, renamed, close: true));
         check(script is { Error: null, Database: "master" } && script.Text == ActionService.ScriptText(ActionService.RenameDatabasePlan(db, renamed, true, 0)) && await State(db) == "ONLINE MULTI_USER",
             "Script Action shows SINGLE_USER, MODIFY NAME and MULTI_USER and runs nothing");
+
+        // A Stop can arrive after the server applied MODIFY NAME but before the reader's completion is acknowledged.
+        // The cancelled step has no local binding receipt, so the result must keep comparison evidence unproven.
+        ActionExecuteResult? silentStop = null;
+        using (var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0))
+        {
+            ActionService.ReaderEnded = command =>
+            {
+                if (command.CommandText == ActionSql.Executable(ActionTemplate.RenameDatabase, dryRun: false)
+                    && command.Parameters["@p1"].Value as string == db && command.Parameters["@p2"].Value as string == renamed)
+                    context.Cancel(CancelReason.User);
+            };
+            try { silentStop = await Execute(Rename(db, renamed, close: false), context); }
+            finally { ActionService.ReaderEnded = null; }
+        }
+        check(silentStop is { Error.Code: "CANCELLED", BindingChangesComplete: false, BindingChanges.Count: 0 }
+            && Steps(silentStop) == "cancelled:Rename" && await State(renamed) == "ONLINE MULTI_USER" && await State(db) is null,
+            "Stop after the server's rename applied returns an incomplete binding acknowledgement, never proof that the old database stayed unchanged");
+        await Sql("ALTER DATABASE " + Bracket(renamed) + " MODIFY NAME = " + Bracket(db) + ";");
 
         // A SINGLE_USER database: with no other session, MODIFY NAME alone renames it and keeps its access, and the describe offers no
         // Close (SET SINGLE_USER again would wait for a session that holds it rather than close it, probed on 2025).

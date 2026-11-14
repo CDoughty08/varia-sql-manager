@@ -61,6 +61,20 @@ internal static class ConnectionBindingChecks
         check(noChanges.BindingChanges is { Count: 0 } && noChanges.BindingChangesComplete == true,
             "every settled action can explicitly acknowledge that it made no local binding changes");
 
+        foreach (var code in new[] { "CONNECTION_LOST", "CANCELLED" })
+        {
+            var unknown = await sql.CaptureBindingChangesAsync(() => Task.FromResult(new ActionExecuteResult([], [], 0, new(code, "The last statement's outcome is unknown.", false))));
+            check(unknown.BindingChanges is { Count: 0 } && unknown.BindingChangesComplete == false,
+                "a returned " + code + " cannot acknowledge an unchanged binding when the server may have applied the last statement");
+            var confirmed = await sql.CaptureBindingChangesAsync(() =>
+            {
+                sql.PasswordChanged(acting, "reader", After);
+                return Task.FromResult(new ActionExecuteResult([], [], 0, new(code, "A later statement's outcome is unknown.", false)));
+            });
+            check(confirmed.BindingChanges is { Count: 2 } && confirmed.BindingChanges.All(change => change.PasswordChanged == true) && confirmed.BindingChangesComplete == false,
+                "a returned " + code + " preserves confirmed earlier binding receipts without claiming the capture is complete");
+        }
+
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var passwordAction = sql.CaptureBindingChangesAsync(async () =>

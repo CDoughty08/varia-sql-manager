@@ -154,6 +154,22 @@ describe('main connection ownership', () => {
     expect(open).toHaveBeenCalledTimes(2)
   })
 
+  it('preserves the resolved default database through password rotation and later reuse', async () => {
+    const { service, request, open, authentication } = await fixture()
+    const defaultDatabase = { ...options, database: '' }, first = request()
+    const connected = await service.connect(defaultDatabase, first)
+    if (!connected.ok) throw connected.error
+    const before = connected.value as ConnectionInfo
+    expect(before.database).toBe('Sales')
+    await service.accept(first.requestId)
+    await service.finishBindingMutation(service.beginBindingMutation(passwordMutation(before.id))!, mutationResult(before.id, 1, { passwordChanged: true }))
+    expect(authentication.resolve(first.targetId)?.options.database).toBe('')
+    const current = request()
+    expect(await service.connect({ ...defaultDatabase, password: 'new-secret' }, current)).toMatchObject({ ok: true, value: { id: before.id, database: 'Sales' } })
+    await service.accept(current.requestId)
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
   it('rekeys an initial database rename without retaining the original password and publishes the updated pin', async () => {
     const { service, request, open, authentication, bindingEvents } = await fixture()
     const first = request(), connected = await service.connect(options, first)
@@ -227,13 +243,14 @@ describe('main connection ownership', () => {
     expect(() => checkpoint.assertCurrent(7)).toThrow('connection target changed')
   })
 
-  it('keeps unreported handles unkeyed after an incomplete binding acknowledgement', async () => {
+  it.each([undefined, 'CONNECTION_LOST', 'CANCELLED'] as const)('keeps unreported handles unkeyed after an incomplete binding acknowledgement (%s)', async code => {
     const { service, request, open, close } = await fixture()
     const first = request(), connected = await service.connect(options, first)
     if (!connected.ok) throw connected.error
     await service.accept(first.requestId)
     const ticket = service.beginBindingMutation(passwordMutation((connected.value as ConnectionInfo).id))!
-    await service.finishBindingMutation(ticket, { steps: [], messages: [], elapsedMs: 1, bindingChanges: [], bindingChangesComplete: false })
+    await service.finishBindingMutation(ticket, { steps: [], messages: [], elapsedMs: 1, bindingChanges: [], bindingChangesComplete: false,
+      ...code ? { error: { code, message: 'The change may have completed.', retryable: false } } : {} })
     open.mockRejectedValueOnce(new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 8 }))
     expect(await service.connect(options, request())).toMatchObject({ ok: false })
     expect(open).toHaveBeenCalledTimes(2)

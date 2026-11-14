@@ -17,6 +17,9 @@ internal static class ConnectionFailures
 {
     /// <summary>The longest server name the details carry; connection options cap the server name at 256 characters too.</summary>
     internal const int MaxServerLength = 256;
+    /// <summary>Login failed, locked out, password expired or must change, or an untrusted domain. Retrying metadata
+    /// cannot turn these authentication failures into a usable connection.</summary>
+    internal static bool LoginFailed(int number) => number is 18456 or 18486 or 18487 or 18488 or 18452;
     // SqlClient's managed SNI reports every failure to build the Negotiate token under this procedure, as SqlError 0 class 11
     // whose text ("Cannot generate SSPI context.") says nothing about the cause, so the cause comes from KerberosProbe.
     private const string SspiProcedure = "GenClientContext";

@@ -545,7 +545,18 @@ try {
   expect(await calls('activity.kill')).toEqual([])
   // Without ALTER ANY CONNECTION (canKill 0 in the next sample) the confirm refuses, with the reason.
   await writeFile(join(control, 'activity-no-kill'), '')
-  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  // A new live sample can retire the row while its identity is read. The action safely refuses that stale read;
+  // select the same named session again until its non-mutating confirmation opens, never retrying Kill itself.
+  let unexpectedDialog = false
+  await expect(async () => {
+    if (unexpectedDialog) return
+    if (!await kill.isVisible()) {
+      if (await page.getByRole('dialog').count()) { unexpectedDialog = true; return }
+      await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+    }
+    await expect(kill).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
+  expect(unexpectedDialog, 'no unrelated dialog while selecting the session').toBe(false)
   await expect(kill.getByRole('alert')).toHaveText(/needs ALTER ANY CONNECTION/, { timeout: 15_000 })
   await expect(kill.getByRole('button', { name: 'Kill Process', exact: true })).toBeDisabled()
   await kill.getByRole('button', { name: 'Cancel', exact: true }).click()

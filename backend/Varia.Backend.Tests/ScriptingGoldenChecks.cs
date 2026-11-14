@@ -413,7 +413,7 @@ internal static partial class ScriptingLiveChecks
         check(p50 <= 3000, "a warm table CREATE takes at most 3 s at the median (" + p50 + " ms)");
         var templates = timings.Where(item => item.Case.Verb is "select" or "insert" or "update" or "delete" or "execute" && item.Case.ExpectError is null).ToList();
         var slowest = templates.Count == 0 ? 0 : templates.Max(item => item.Ms);
-        check(templates.Count > 20 && slowest <= 500 && templates.All(item => item.Commands == 2), "templates take one round trip after the prologue and at most 500 ms (" + slowest + " ms)");
+        check(templates.Count > 20 && slowest <= 500 && templates.All(item => item.Commands == 3), "templates verify the account, run the prologue and take one preflight round trip, at most 500 ms (" + slowest + " ms)");
 
         var peak = 0;
         using var sampling = new CancellationTokenSource();

@@ -420,7 +420,7 @@ internal static class ActionLiveChecks
         check(columns.Columns.Single().Name == "id" && (await Exec(sessions)).Scalar == "0", "tables.columns reads a table's columns without leaving a connection in its database");
         await using (var pooled = ((IExplorerHost)service).Connection(client.ConnectionId, db))
         {
-            await pooled.OpenAsync();
+            await ((IExplorerHost)service).OpenAsync(pooled, CancellationToken.None);
         }
         var idle = (await Exec(sessions)).Scalar;
         service.ClearPoolsFor(client.ConnectionId, db);
