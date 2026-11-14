@@ -294,6 +294,7 @@ explorer.context, for a table
       &New Query Editor Window  ----
       &File…  ----
       C&lipboard  ----
+  View &Dependencies  ----
   ---
   Copy N&ame  -+++
   ---

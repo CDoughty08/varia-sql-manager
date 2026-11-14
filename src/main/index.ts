@@ -768,7 +768,11 @@ app.whenReady().then(async () => {
     request: (params, generation) => backend.request('results.setMemoryLimit', params, { generation }),
     onState: listener => backend.onState(listener), read: () => settings.current()['queryResults.grid.memoryLimitGiB']
   })
-  // A first read slower than the first launch's wait leaves that backend on the defaults, and a load fires no change.
+  // A first read slower than the first launch's wait, or one that failed and was read again later (Tools › Options reads
+  // it), leaves that backend on the defaults, and a read fires no change.
+  // Registered before the first read can finish (no await since settings.load() above); the first read is also followed
+  // directly, which sends nothing more when the value is already applied.
+  settings.onDidLoad(() => memoryLimit.settingsChanged())
   loaded.then(() => memoryLimit.settingsChanged(), () => {})
   // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
@@ -971,7 +975,7 @@ app.whenReady().then(async () => {
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'explorer.index' | 'explorer.search' | 'explorer.peek' | 'explorer.peekDependencies' | 'explorer.peekDefinition' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'explorer.index' | 'explorer.search' | 'explorer.peek' | 'explorer.peekDependencies' | 'explorer.peekDefinition' | 'explorer.dependencies' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
       // A long action's STATS progress goes back only to the window that sent it (varia:actions-progress).
       const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, event.sender) : undefined
       // An object index build's progress goes back only to the window that started it (varia:explorer-index-progress).

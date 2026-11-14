@@ -325,10 +325,18 @@ internal sealed record PeekList(List<object?[]> Rows, bool? Truncated = null, in
 /// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
 /// Both lists are empty with an Error.</summary>
 internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<PeekDependency> UsedBy, long ElapsedMs, bool? UsesTruncated = null, bool? UsedByTruncated = null, ExplorerError? Error = null);
-/// <summary>One object on Peek's Dependencies tab: Database and Server name another database or a linked server; Kind is its
-/// Object Explorer kind when it is in this database and listed by name, with the Subtype the tree gives it; ForeignKey is true
-/// when a foreign key makes the link.</summary>
-internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null);
+/// <summary>One object on Peek's Dependencies tab and in View Dependencies' tree: Database and Server name another database or a
+/// linked server; Kind is its Object Explorer kind when it is in this database and listed by name (a DML trigger with its table's
+/// or view's Parent), with the Subtype the tree gives it; ForeignKey is true when a foreign key makes the link. Type is the
+/// object's sys.objects type (trimmed; absent when SQL Server did not resolve the reference here), and SchemaBound is true for a
+/// schema-bound reference (sys.sql_expression_dependencies, or a column or parameter of a type).</summary>
+internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null,
+    string? Type = null, bool? SchemaBound = null, ParentRefDto? Parent = null, string? ParentSubtype = null);
+/// <summary>explorer.dependencies (src/shared/explorer/dependencies.ts): one level of View Dependencies' tree for an object of a kind
+/// whose Peek has the Dependencies tab, Direction "uses" (what it depends on) or "usedBy" (what depends on it). Cancellation as explorer.peek's.</summary>
+internal sealed record DependenciesArgs(string ConnectionId, string RequestId, ObjectRefDto Target, string Direction);
+/// <summary>At most the catalogue's level of objects in name order, Truncated when there were more; empty with an Error.</summary>
+internal sealed record DependenciesResult(List<PeekDependency> Items, long ElapsedMs, bool? Truncated = null, ExplorerError? Error = null);
 
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the

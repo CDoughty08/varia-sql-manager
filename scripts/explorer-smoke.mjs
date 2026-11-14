@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -794,6 +794,41 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
+  // 8c. View Dependencies: the menu opens Object Dependencies on the table. Its tree reads the root's level at once and a node's
+  // only when it expands, marks the table met again below its view as a cycle, and the other choice starts again from the root.
+  await peekRow.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'View Dependencies', exact: true }).click()
+  const dependencies = dependenciesDialog(page, 'dbo.Orders')
+  await expect(dependencies).toBeVisible()
+  await expect(dependenciesTree(dependencies)).toBeFocused()
+  await expect(dependencies.getByRole('radio', { name: 'Objects that depend on dbo.Orders', exact: true })).toBeChecked()
+  await expect(dependencyNode(dependencies, 'dbo.vOrders')).toBeVisible()
+  await expect(dependencyNode(dependencies, 'dbo.OrderLines')).toBeVisible()
+  expect(await stubCalls('explorer.dependencies')).toEqual([expect.objectContaining({ direction: 'usedBy', target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } })])
+  await page.keyboard.press('End')
+  await expect(dependencyNode(dependencies, 'dbo.vOrders')).toHaveAttribute('aria-selected', 'true')
+  const selectedObject = dependencies.getByRole('region', { name: 'Selected object', exact: true })
+  await expect(selectedObject).toContainText('View')
+  await expect(selectedObject).toContainText('Schema-bound')
+  await page.keyboard.press('ArrowRight')
+  await expect(dependencyNode(dependencies, 'dbo.vOrders')).toHaveAttribute('aria-expanded', 'true')
+  await expect(dependencyNode(dependencies, 'dbo.Orders, Cycle: already above on this branch')).toBeVisible()
+  expect((await stubCalls('explorer.dependencies')).map(call => call.target.name)).toEqual(['Orders', 'vOrders'])
+  await dependencies.getByRole('radio', { name: 'Objects on which dbo.Orders depends', exact: true }).check()
+  await expect(dependencyNode(dependencies, 'Crm.dbo.Customers, In another database: not followed')).toBeVisible()
+  expect((await stubCalls('explorer.dependencies')).at(-1)).toMatchObject({ direction: 'uses' })
+  await page.keyboard.press('Escape')
+  await expect(dependencies).toBeHidden()
+  await expect(tree()).toBeFocused()
+  // Enter on a node selects it in Object Explorer and closes the dialog: here the table itself.
+  await peekRow.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'View Dependencies', exact: true }).click()
+  await expect(dependenciesTree(dependencies)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(dependencies).toBeHidden()
+  await expect(tree()).toBeFocused()
+  expect((await active())?.label).toBe('dbo.Orders')
+  console.log('Object Explorer checks: View Dependencies opens Object Dependencies from the menu, reads a level as a node expands, marks a cycle and another database, switches its choice, and Enter selects the node in Object Explorer.')
   console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.

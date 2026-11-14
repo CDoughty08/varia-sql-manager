@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { BackendState } from '../src/shared/contracts'
 import { ResultMemoryLimit, resultMemoryLimitParams } from '../src/main/backend/result-memory'
 import { resultsMemoryLimitSchema } from '../src/main/validation'
 import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { settingDef } from '../src/shared/settings/catalog'
+import { SettingsStore } from '../src/main/settings-store'
 
 const ready = (generation: number): BackendState => ({ status: 'ready', generation, pid: 1, runtime: 'test', platform: 'test' })
 
@@ -144,9 +146,41 @@ describe('result memory limit (results.setMemoryLimit)', () => {
     expect(h.requests()).toEqual([])
   })
 
-  it('is applied by main when the first settings read finishes, which fires no change of its own', () => {
+  it('is applied by main after every settings read that succeeds, which fires no change of its own', () => {
     const source = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8')
-    expect(source).toMatch(/loaded\.then\(\(\) => memoryLimit\.settingsChanged\(\)/)
+    expect(source).toMatch(/settings\.onDidLoad\(\(\) => memoryLimit\.settingsChanged\(\)\)/)
     expect(source).toMatch(/settings\.onDidChange\([^]*?memoryLimit\.settingsChanged\(\)/)
+  })
+
+  it('corrects a backend that started on the automatic budget when the first settings read failed and a later one succeeds', async () => {
+    await mkdir('artifacts', { recursive: true })
+    const directory = await mkdtemp(join(resolve('artifacts'), 'memory-limit-test-'))
+    try {
+      const path = join(directory, 'settings.json')
+      // A folder at the path: every read fails, as it does for a file without read permission.
+      await mkdir(path)
+      const settings = new SettingsStore(path, join(directory, 'scripting-options.json'))
+      const sent: number[] = []
+      const listeners = new Set<(state: BackendState) => void>()
+      const limit = new ResultMemoryLimit({
+        request: async params => { sent.push(params.limitGiB) },
+        onState: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+        read: () => settings.current()['queryResults.grid.memoryLimitGiB']
+      })
+      settings.onDidLoad(() => limit.settingsChanged())
+      await expect(settings.load()).rejects.toThrow()
+      for (const listener of listeners) listener(ready(1))
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+      expect(sent).toEqual([0])
+      // The file becomes readable, and Tools › Options reads it again.
+      await rm(path, { recursive: true })
+      await writeFile(path, JSON.stringify({ version: 1, values: { 'queryResults.grid.memoryLimitGiB': 8 } }))
+      expect((await settings.load({ showsWarning: true })).values['queryResults.grid.memoryLimitGiB']).toBe(8)
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+      expect(sent).toEqual([0, 8])
+      limit.dispose()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

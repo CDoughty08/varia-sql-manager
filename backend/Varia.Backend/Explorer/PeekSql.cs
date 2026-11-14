@@ -310,30 +310,36 @@ internal static class PeekSql
     /// so dropping it lets a reference that names this database in another case be followed, and merges one made both ways. A
     /// four-part name through the local server's own name resolves too, so it loses that server, which is harmless: SQL Server
     /// runs it locally. The test is referenced_id, not the object's row, which sys.all_objects hides from a login that may not
-    /// see the object: such a reference keeps the code's schema and name but still loses its server and database.</summary>
+    /// see the object: such a reference keeps the code's schema and name but still loses its server and database. A DML trigger
+    /// also uses its table or view, as SSMS lists it (its ON clause is not a reference the server records).</summary>
     private const string UsesRows = "SELECT CASE WHEN d.referenced_id IS NULL THEN d.referenced_server_name END AS server_name, "
         + "CASE WHEN d.referenced_id IS NULL THEN d.referenced_database_name END AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
-        + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via "
+        + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via, d.is_schema_bound_reference AS bound "
         + "FROM sys.sql_expression_dependencies AS d LEFT JOIN sys.all_objects AS ro ON ro.object_id = d.referenced_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id "
         + "WHERE d.referencing_id = @object_id AND d.referencing_class = 1 AND d.referenced_class = 1 AND d.referenced_entity_name IS NOT NULL "
         + "AND (d.referenced_id IS NULL OR d.referenced_id <> @object_id) "
-        + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.object_id, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
-        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id";
+        + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.object_id, CONVERT(bit, 1), CONVERT(bit, 0) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
+        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id "
+        + "UNION SELECT NULL, NULL, ts.name, tp.name, tp.object_id, CONVERT(bit, 0), CONVERT(bit, 0) FROM sys.triggers AS tr JOIN sys.all_objects AS tp ON tp.object_id = tr.parent_id "
+        + "JOIN sys.schemas AS ts ON ts.schema_id = tp.schema_id WHERE tr.parent_class = 1 AND tr.object_id = @object_id";
 
-    /// <summary>The objects whose code references the object (resolved references only), and the tables whose foreign keys point
-    /// at it, in <see cref="UsesRows"/>' columns.</summary>
+    /// <summary>The objects whose code references the object (resolved references only), the tables whose foreign keys point
+    /// at it, and its own DML triggers (as SSMS lists them: a trigger's ON clause is not a reference the server records), in
+    /// <see cref="UsesRows"/>' columns.</summary>
     private const string UsedByRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, s.name AS schema_name, o.name AS entity_name, o.object_id AS id, "
-        + "CONVERT(bit, 0) AS via FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
+        + "CONVERT(bit, 0) AS via, d.is_schema_bound_reference AS bound FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE d.referenced_id = @object_id AND d.referencing_class = 1 AND d.referencing_id <> @object_id "
-        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS o ON o.object_id = fk.parent_object_id "
-        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id";
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 1), CONVERT(bit, 0) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS o ON o.object_id = fk.parent_object_id "
+        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id "
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0), CONVERT(bit, 0) FROM sys.triggers AS tr JOIN sys.all_objects AS o ON o.object_id = tr.object_id "
+        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE tr.parent_class = 1 AND tr.parent_id = @object_id";
 
     /// <summary>A synonym's base object, in <see cref="UsesRows"/>' columns: when it names no server, and no database or this one,
     /// the object of that name in its schema (dbo when it names none, as SQL Server falls back to) takes its current names and no
     /// server or database, so it can be followed; otherwise the parts as the synonym names them.</summary>
     private const string SynonymUsesRows = "SELECT CASE WHEN ro.object_id IS NULL THEN PARSENAME(sy.base_object_name, 4) END AS server_name, "
         + "CASE WHEN ro.object_id IS NULL THEN PARSENAME(sy.base_object_name, 3) END AS database_name, COALESCE(rs.name, PARSENAME(sy.base_object_name, 2)) AS schema_name, "
-        + "COALESCE(ro.name, PARSENAME(sy.base_object_name, 1)) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via FROM sys.synonyms AS sy "
+        + "COALESCE(ro.name, PARSENAME(sy.base_object_name, 1)) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via, CONVERT(bit, 0) AS bound FROM sys.synonyms AS sy "
         + "OUTER APPLY (SELECT TOP (1) bo.object_id, bo.name, bo.schema_id FROM sys.all_objects AS bo JOIN sys.schemas AS bs ON bs.schema_id = bo.schema_id "
         + "WHERE PARSENAME(sy.base_object_name, 4) IS NULL AND (PARSENAME(sy.base_object_name, 3) IS NULL OR PARSENAME(sy.base_object_name, 3) = DB_NAME()) "
         + "AND bo.name = PARSENAME(sy.base_object_name, 1) AND (bs.name = PARSENAME(sy.base_object_name, 2) OR PARSENAME(sy.base_object_name, 2) IS NULL AND bs.schema_id = 1) "
@@ -342,29 +348,40 @@ internal static class PeekSql
     /// <summary>What uses a type (the lookup's user_type_id): code that names it (class 6, a type), the objects with columns or
     /// parameters of it, and the table types with columns of it (by the table type's names, not its table object's).</summary>
     private const string TypeUsedByRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, s.name AS schema_name, o.name AS entity_name, o.object_id AS id, "
-        + "CONVERT(bit, 0) AS via FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
+        + "CONVERT(bit, 0) AS via, d.is_schema_bound_reference AS bound FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE d.referenced_class = 6 AND d.referenced_id = @object_id AND d.referencing_class = 1 "
-        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0) FROM sys.all_columns AS c JOIN sys.all_objects AS o ON o.object_id = c.object_id "
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0), CONVERT(bit, 1) FROM sys.all_columns AS c JOIN sys.all_objects AS o ON o.object_id = c.object_id "
         + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE c.user_type_id = @object_id AND o.type <> 'TT' "
-        + "UNION SELECT NULL, NULL, s.name, tt.name, tt.type_table_object_id, CONVERT(bit, 0) FROM sys.all_columns AS c JOIN sys.table_types AS tt ON tt.type_table_object_id = c.object_id "
+        + "UNION SELECT NULL, NULL, s.name, tt.name, tt.type_table_object_id, CONVERT(bit, 0), CONVERT(bit, 1) FROM sys.all_columns AS c JOIN sys.table_types AS tt ON tt.type_table_object_id = c.object_id "
         + "JOIN sys.schemas AS s ON s.schema_id = tt.schema_id WHERE c.user_type_id = @object_id "
-        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0) FROM sys.all_parameters AS pa JOIN sys.all_objects AS o ON o.object_id = pa.object_id "
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0), CONVERT(bit, 1) FROM sys.all_parameters AS pa JOIN sys.all_objects AS o ON o.object_id = pa.object_id "
         + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE pa.user_type_id = @object_id";
 
     /// <summary>No rows, in <see cref="UsesRows"/>' columns: a type uses nothing Peek lists.</summary>
     private const string NoRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, CONVERT(sysname, NULL) AS schema_name, "
-        + "CONVERT(sysname, NULL) AS entity_name, CONVERT(int, NULL) AS id, CONVERT(bit, 0) AS via WHERE @object_id IS NULL";
+        + "CONVERT(sysname, NULL) AS entity_name, CONVERT(int, NULL) AS id, CONVERT(bit, 0) AS via, CONVERT(bit, 0) AS bound WHERE @object_id IS NULL";
 
     /// <summary>One listing, at most @take rows in name order: server, database, schema, name, the type, whether a foreign key
     /// makes the link, then what the tree's listings read for a subtype (ExplorerQueries' Tables and views, the tools-support
-    /// property as their system flag), each from its band.</summary>
+    /// property as their system flag), each from its band; then whether the link is schema-bound and, for a trigger, its table's
+    /// or view's schema, name and type, which name it in Object Explorer. The rows are grouped first, so an object whose
+    /// references differ only in being schema-bound stays one row (schema-bound when any of them is).</summary>
     private static string Listing(string rows, SqlRender render) => "SELECT TOP (@take) x.server_name, x.database_name, x.schema_name, x.entity_name, o.type, x.via, "
         + render.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + ", "
         + render.Col(14, "t.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "t.is_edge", "CONVERT(bit, 0)") + ", t.is_filetable, " + render.Col(13, "t.is_external", "CONVERT(bit, 0)") + ", "
         + render.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN o.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END), "
-        + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " FROM (" + rows + ") AS x "
+        + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + ", x.bound, ps.name, po.name, po.type, "
+        // A trigger's table's subtype, as for the row's own (Tables › Graph Tables, FileTables …), so the tree can walk to it.
+        + render.Col(13, "pt.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "pt.ledger_type", "CONVERT(tinyint, 0)") + ", "
+        + render.Col(14, "pt.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "pt.is_edge", "CONVERT(bit, 0)") + ", pt.is_filetable, " + render.Col(13, "pt.is_external", "CONVERT(bit, 0)") + ", "
+        + render.Col(16, "pt.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN po.is_ms_shipped = 1 OR pep.major_id IS NOT NULL THEN 1 ELSE 0 END) "
+        + "FROM (SELECT r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via, CONVERT(bit, MAX(CONVERT(tinyint, r.bound))) AS bound FROM (" + rows + ") AS r "
+        + "GROUP BY r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via) AS x "
         + "LEFT JOIN sys.all_objects AS o ON o.object_id = x.id LEFT JOIN sys.tables AS t ON t.object_id = x.id LEFT JOIN sys.all_views AS v ON v.object_id = x.id "
         + "LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = x.id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support' "
+        + "LEFT JOIN sys.all_objects AS po ON po.object_id = o.parent_object_id AND o.type IN ('TR', 'TA') LEFT JOIN sys.schemas AS ps ON ps.schema_id = po.schema_id "
+        + "LEFT JOIN sys.tables AS pt ON pt.object_id = po.object_id "
+        + "LEFT JOIN sys.extended_properties AS pep ON pep.class = 1 AND pep.major_id = po.object_id AND pep.minor_id = 0 AND pep.name = N'microsoft_database_tools_support' "
         + "ORDER BY x.server_name, x.database_name, x.schema_name, x.entity_name, x.via;\n";
 
     /// <summary>What the object uses, for the band.</summary>
@@ -547,12 +564,20 @@ internal static class PeekSql
     /// <summary>explorer.peekDependencies' batch for a kind and band: the object found as its peek finds it, then what it uses
     /// and what uses it, at most @take rows each in name order. A synonym uses its base object; a type uses nothing, and is used
     /// by code that names it and by the objects with columns or parameters of it.</summary>
-    public static string Dependencies(string kind, SqlRender render, string? parentKind = null) => Lookup(kind, parentKind) + kind switch
+    public static string Dependencies(string kind, SqlRender render, string? parentKind = null) => Lookup(kind, parentKind) + UsesOf(kind, render) + UsedByOf(kind, render);
+
+    /// <summary>explorer.dependencies' batch (View Dependencies, one level of its tree): the object found as its peek finds it, then
+    /// one of Peek's two listings, the same text the Dependencies tab reads.</summary>
+    public static string Level(string kind, SqlRender render, string? parentKind, bool usedBy) => Lookup(kind, parentKind) + (usedBy ? UsedByOf(kind, render) : UsesOf(kind, render));
+
+    private static string UsesOf(string kind, SqlRender render) => kind switch
     {
-        "synonym" => Listing(SynonymUsesRows, render) + UsedBy(render),
-        "type" or "tableType" => Listing(NoRows, render) + Listing(TypeUsedByRows, render),
-        _ => Uses(render) + UsedBy(render)
+        "synonym" => Listing(SynonymUsesRows, render),
+        "type" or "tableType" => Listing(NoRows, render),
+        _ => Uses(render)
     };
+
+    private static string UsedByOf(string kind, SqlRender render) => kind is "type" or "tableType" ? Listing(TypeUsedByRows, render) : UsedBy(render);
 
     /// <summary>The two dependency listings (the reader is on the first): at most <paramref name="max"/> each, marked truncated
     /// when the batch's TOP (@take), one more, found another.</summary>
@@ -563,20 +588,41 @@ internal static class PeekSql
         return new(uses, usedBy, 0, usesCut ? true : null, usedByCut ? true : null);
     }
 
+    /// <summary>explorer.dependencies' one listing (the reader is on it): at most <paramref name="max"/>, marked truncated when there
+    /// was another.</summary>
+    public static async Task<DependenciesResult> ReadLevelAsync(SqlDataReader reader, int max, CancellationToken token)
+    {
+        var (items, cut) = await ListingAsync(reader, max, token);
+        return new(items, 0, cut ? true : null);
+    }
+
     private static async Task<(List<PeekDependency> Items, bool Cut)> ListingAsync(SqlDataReader reader, int max, CancellationToken token)
     {
         var items = new List<PeekDependency>();
         while (await reader.ReadAsync(token))
         {
             if (items.Count == max) return (items, true);
-            var type = Text(reader, 4);
-            var kind = KindOf(type);
+            var type = Text(reader, 4)?.TrimEnd();
+            // A DML trigger is named below its table or view, which the row gives; one without them stays a leaf.
+            var trigger = type is "TR" or "TA";
+            var parent = trigger && Text(reader, 17) is { } parentSchema && Text(reader, 18) is { } parentName && ParentKindOf(Text(reader, 19)) is { } parentKind
+                ? new ParentRefDto(parentKind, parentSchema, parentName) : null;
+            var kind = trigger ? parent is null ? null : "trigger" : KindOf(type);
+            var parentSubtype = parent?.Kind == "table" ? ExplorerLabels.TableSubtype(Number(reader, 20), Number(reader, 21), Flag(reader, 22), Flag(reader, 23), Flag(reader, 24), Flag(reader, 25), Flag(reader, 26), Flag(reader, 27)) : null;
             items.Add(new(reader.GetString(3), Text(reader, 2), Text(reader, 1), Text(reader, 0), kind, reader.GetBoolean(5) ? true : null,
                 SubtypeOf(kind, type, Number(reader, 6), Number(reader, 7), Flag(reader, 8), Flag(reader, 9), Flag(reader, 10), Flag(reader, 11), Flag(reader, 12), Flag(reader, 13),
-                    Number(reader, 14), Flag(reader, 15))));
+                    Number(reader, 14), Flag(reader, 15)), type, Flag(reader, 16) ? true : null, parent, parentSubtype));
         }
         return (items, false);
     }
+
+    /// <summary>The Object Explorer kind of a trigger's parent object type.</summary>
+    internal static string? ParentKindOf(string? type) => type?.TrimEnd() switch
+    {
+        "U" or "ET" => "table",
+        "V" => "view",
+        _ => null
+    };
 
     private static int Number(SqlDataReader reader, int index) => reader.IsDBNull(index) ? 0 : Convert.ToInt32(reader.GetValue(index), CultureInfo.InvariantCulture);
     private static bool Flag(SqlDataReader reader, int index) => !reader.IsDBNull(index) && reader.GetBoolean(index);

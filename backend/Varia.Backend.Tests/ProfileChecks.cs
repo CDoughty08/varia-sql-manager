@@ -38,6 +38,7 @@ internal static class ProfileChecks
         Threads(check);
         Retried(check);
         Charged(check);
+        LowMemorySteps(check);
         Requests(check);
         Hashes(check);
     }
@@ -310,13 +311,9 @@ internal static class ProfileChecks
         var spare = snug.TryReserveSpare(copy.Budget, figures);
         if (spare) snug.Return(copy.Budget, figures);
         string answered;
-        var workers = ViewSorter.Workers;
-        try
-        {
-            ViewSorter.Workers = 4;
+        // For this flow alone: other suites set the threads for all beside it.
+        using (ViewSorter.WorkersHere(4))
             answered = JsonSerializer.Serialize(service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = copy.ResultId, columns = new[] { 0 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(), HostChecks.Json);
-        }
-        finally { ViewSorter.Workers = workers; }
         check(pages.Length >= 8 && four.Shown == one.Shown && four.Charged > one.Charged + 100_000 && refused == "too large" && Profiled(1, between).Shown == one.Shown
             && spare && answered == one.Shown && Held.Bytes(snug) == before && gate.Busy == 0,
             "four threads keep more of long values than one (" + four.Charged + " bytes against " + one.Charged + "); a profile refused them on several threads is read again on one, "
@@ -394,4 +391,54 @@ internal static class ProfileChecks
 
     private static string Describe(ColumnProfile profile) =>
         $"values {profile.Values}, nulls {profile.Nulls}, distinct {profile.Distinct}, min {profile.Min}, max {profile.Max}";
+
+    /// <summary>A profile's long values are charged in steps that ask the system's memory load once for every mark held by all
+    /// its threads together (WorkSteps). A refusal on several threads reads the rows again on one, which holds less and may
+    /// pass no mark; on one thread it says the computer is low on memory.</summary>
+    private static void LowMemorySteps(Action<bool, string> check)
+    {
+        ResultColumn[] columns = [new("doc", "nvarchar(max)", "text", Collation: CaseInsensitive)];
+        var highReadings = 0;
+        var readings = 0;
+        var store = new ResultStore(1L << 30, 1L << 29, () =>
+        {
+            readings++;
+            return (Interlocked.Decrement(ref highReadings) >= 0 ? 100 : 0, 50);
+        }) { Packing = PagePacking.Off, WorkStepBytes = 4096 };
+        var set = store.Open(store.BeginQuery("long"), 0, 1, 1, "rows", columns, [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+        for (var i = 0; i < 48; i++)
+        {
+            set.CountRow();
+            set.BeginRow()!.AppendText(new string((char)('a' + i % 26), 60_000) + i.ToString(CultureInfo.InvariantCulture));
+            set.TryCommitRow();
+        }
+        set.Complete();
+        using var service = new SqlService(store);
+        string Profiled()
+        {
+            try { return JsonSerializer.Serialize(service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, columns = new[] { 0 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(), HostChecks.Json); }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var expected = JsonSerializer.Serialize(ColumnProfiler.Profile(set, set.SealedSnapshot(), null, [0], true, CancellationToken.None), HostChecks.Json);
+        var before = Held.Bytes(store);
+        string retried, refused;
+        int retriedReadings;
+        // The threads for this flow alone: other suites set them for all beside it.
+        using (ViewSorter.WorkersHere(4))
+        {
+            // High for the first reading only: the four threads' values are refused at the first mark, one thread's pass.
+            (highReadings, readings) = (1, 0);
+            retried = Profiled();
+            retriedReadings = readings;
+        }
+        using (ViewSorter.WorkersHere(1))
+        {
+            // High for the refused step's reading only: the answer says why it was refused, though the load has gone since.
+            (highReadings, readings) = (1, 0);
+            refused = Profiled();
+        }
+        highReadings = 0;
+        check(set.SealedSnapshot().Length >= 8 && retried == expected && retriedReadings >= 2 && refused == "TOO_LARGE: " + SqlService.LowMemory && Held.Bytes(store) == before,
+            $"a profile refused under high memory load on several threads is read again on one; on one it says the computer is low on memory; both return what they took: {retriedReadings} readings, {(retried == expected ? "same answer" : retried)} / {refused} {Held.Bytes(store) - before}");
+    }
 }

@@ -13,6 +13,7 @@ import { isIconId } from '../src/shared/icons'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
 import { workbenchFixture } from './fixtures/workbench'
 import { folderIds, kindSpecs, nodeKinds, nodeStatuses, serverEngines } from '../src/shared/explorer/catalog'
+import { isDependencyKind } from '../src/shared/explorer/dependencies'
 import { noExplorerContext } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptAsTitleKeys, scriptCommandIds, scriptVerbContextKey, scriptVerbs } from '../src/shared/scripting/catalog'
 
@@ -27,7 +28,7 @@ const explorerSelections: Partial<ContextKeys>[] = [
   ...nodeKinds.flatMap(kind => [undefined, ...kindSpecs[kind].subtypes ?? []].flatMap(subtype => [undefined, ...actionStatuses(kind)].flatMap(status => serverEngines.map((engine): Partial<ContextKeys> => ({
     // An object node's menu has no folder (src/renderer/src/menus/targets.ts), so a folder's items never show on it.
     ...noExplorerContext, explorerNode: kind, explorerFolder: '', explorerHasSelection: true, explorerSelectionKind: kind, explorerNodeStatus: status ?? '', explorerSelectionStatus: status ?? '',
-    explorerServerEngine: engine, explorerSelectionServerEngine: engine, ...actionContextValues(actionMenuState({ kind, subtype, status, engine })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
+    explorerServerEngine: engine, explorerSelectionServerEngine: engine, explorerNodeDependencies: isDependencyKind(kind), explorerSelectionDependencies: isDependencyKind(kind), ...actionContextValues(actionMenuState({ kind, subtype, status, engine })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
   }))))),
   ...serverEngines.map((engine): Partial<ContextKeys> => ({ ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder', explorerServerEngine: engine, explorerSelectionServerEngine: engine })),
   { ...noExplorerContext, explorerNode: 'background' }
@@ -61,7 +62,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(311)
+    expect(commandIds).toHaveLength(312)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -239,7 +240,7 @@ describe('context keys', () => {
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
     expect(keysOfScope('target')).toEqual([
-      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
+      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
       'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema'
     ])
     expect(isContextKey('__proto__')).toBe(false)
