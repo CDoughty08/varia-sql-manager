@@ -3,7 +3,7 @@
 // sorted or filtered warning while it holds), takes the focus when it opens, compares on Enter, closes on Escape, Close, a
 // press outside and once its comparison is shown, and while its comparison runs keeps the Compare button focusable
 // (aria-disabled) and says a failure or a cancel in the status region that is always in the accessibility tree.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
@@ -24,6 +24,10 @@ import { manualTimers } from './fixtures/workbench'
 type DiffAnswer = Awaited<ReturnType<FakeHandle['diff']>>
 const column = (name: string): ResultColumn => ({ name, dataType: 'int', wire: 'text', nullable: false })
 const made = (index: number): DiffAnswer => ({ descriptor: descriptor(900 + index, { index, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+
+// Fixtures still drawn when a test ends (a failed expectation skips its unmount): unmounted so they do not leak into the next.
+const drawnFixtures = new Set<() => void>()
+afterEach(() => { for (const unmount of drawnFixtures) unmount(); drawnFixtures.clear() })
 
 function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; open?: number } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
@@ -52,7 +56,9 @@ function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; 
   const button = (name: string) => [...popover()?.querySelectorAll('button') ?? []].find(item => item.textContent === name)
   const status = () => popover()?.querySelector('[role="status"]')
   const key = (target: Element, name: string) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })) })
-  return { compare, results, keys, handle, container, draw, popover, button, status, key, unmount: () => act(() => { root.unmount(); container.remove() }) }
+  const unmount = () => { if (!drawnFixtures.delete(unmount)) return; act(() => { root.unmount(); container.remove() }) }
+  drawnFixtures.add(unmount)
+  return { compare, results, keys, handle, container, draw, popover, button, status, key, unmount }
 }
 
 describe('Compare popover', () => {
@@ -89,7 +95,8 @@ describe('Compare popover', () => {
 
   it('names each result when a column is not compared, and counts one row as one', () => {
     const wide = (name: string, dataType: string, wire: ResultColumn['wire']): ResultColumn => ({ name, dataType, wire, nullable: false })
-    const view = fixture({ columns: { 0: [column('Id'), column('Id'), wide('Data', 'nvarchar', 'text')], 1: [column('Id'), wide('Data', 'varbinary', 'binary')] } })
+    // The second Id is left out because its name repeats, though the other result's Id is a bigint: no type is blamed.
+    const view = fixture({ columns: { 0: [column('Id'), column('Id'), wide('Data', 'nvarchar', 'text')], 1: [wide('Id', 'bigint', 'text'), wide('Data', 'varbinary', 'binary')] } })
     const items = [...view.popover()!.querySelectorAll('section li')].map(item => item.textContent)
     expect(items).toEqual(expect.arrayContaining([
       expect.stringContaining('a second column of this name in Result 1'),
@@ -97,10 +104,29 @@ describe('Compare popover', () => {
       expect.stringContaining('varbinary in Result 2, nvarchar in Result 1')
     ]))
     expect(view.popover()!.textContent).not.toContain(' here')
+    expect(view.popover()!.textContent).not.toContain('int in Result 1, bigint')
     view.handle(view.keys[0]).snapshot = { ...view.handle(view.keys[0]).snapshot, rowsStored: 1 }
     view.draw()
     expect(view.popover()!.querySelector('[aria-label="Old side"]')?.textContent).toContain('1 row')
     expect(view.popover()!.querySelector('[aria-label="Old side"]')?.textContent).not.toContain('1 rows')
+    view.unmount()
+  })
+
+  it('keeps the focus inside when Exact text lands on a pair already comparing', async () => {
+    const view = fixture()
+    // Compare with Previous Result (Exact Text) is running on the same pair.
+    let finish!: (answer: DiffAnswer) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(yes => { finish = yes }))
+    const running = view.compare.compare('t1', view.keys[1], { exact: true })
+    view.draw()
+    const exact = view.popover()!.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    expect(exact.disabled).toBe(false)
+    exact.focus()
+    act(() => { exact.click() })
+    view.draw()
+    expect(exact.disabled).toBe(true)
+    expect(document.activeElement).toBe(view.popover()!.querySelector('button[type="submit"]'))
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }); await running })
     view.unmount()
   })
 

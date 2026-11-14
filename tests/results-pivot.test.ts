@@ -112,7 +112,7 @@ describe('a rebuilt Pivot', () => {
 })
 
 describe('PivotService', () => {
-  it("closes the builder once its tab's results are gone, as the Compare picker does, and keeps its drafts for the next Pivot…", async () => {
+  it("closes the builder once its tab's results are gone, as the Compare popover does, and keeps its drafts for the next Pivot…", async () => {
     const { results, pivot, run } = fixture()
     const [first] = run(2)
     const open = () => { pivot.open('t1', keyAt(results, 't1', 1)); pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] }) }
@@ -860,7 +860,7 @@ describe('PivotService', () => {
     sortOf.mockRestore()
     await pivot.run('t1')
     expect(pivot.getSnapshot().info.size).toBe(1)
-    // Close Results closes the builder (as it does the Compare picker), and the closed pivot's strip goes.
+    // Close Results closes the builder (as it does the Compare popover), and the closed pivot's strip goes.
     results.closeResults('t1')
     expect(pivot.getSnapshot().info.size).toBe(0)
     expect(pivot.getSnapshot().tabs.t1?.open ?? false).toBe(false)

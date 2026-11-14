@@ -63,12 +63,12 @@ function naturalHeight(form: HTMLElement): number {
   return body ? form.offsetHeight - body.clientHeight + body.scrollHeight : form.scrollHeight
 }
 
-/** Why a column is not compared, naming each result: only one has it, its types differ, or its name repeats in its own
- *  result (the other's column of that name already paired). */
+/** Why a column is not compared, naming each result: only one has it, its name repeats in its own result (the other's
+ *  column of that name already paired, whatever the types), or the other's holds another kind of value (text and binary). */
 function unpairedWhy(column: UnpairedColumn, own: ResultSetEntry, other: ResultSetEntry): string {
   if (column.otherType === undefined) return `only in ${entryName(own)}`
-  if (column.otherType !== column.dataType) return `${column.dataType} in ${entryName(own)}, ${column.otherType} in ${entryName(other)}`
-  return `a second column of this name in ${entryName(own)}`
+  if (column.repeat) return `a second column of this name in ${entryName(own)}`
+  return `${column.dataType} in ${entryName(own)}, ${column.otherType} in ${entryName(other)}`
 }
 
 /** Popovers drawn per tab: one that goes while its picker is open (its pane hidden, another tab shown) closes the picker,
@@ -131,6 +131,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   // The focus goes in once it is placed, and again when it opens on another Table: to the picked target when there is a
   // list, else to Compare.
   const placed = !!place
+  // A pick or Exact text that lands on a pair already comparing (Compare with Previous Result, or a run left going) disables
+  // the control that has the focus: it moves to Compare, which stays focusable, so the keys stay inside.
+  useLayoutEffect(() => {
+    const active = card.current?.ownerDocument.activeElement
+    if (running && active && card.current?.contains(active) && active.matches(':disabled')) button.current?.focus({ preventScroll: true })
+  }, [running])
   useLayoutEffect(() => {
     if (!placed) return
     const form = card.current

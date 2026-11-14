@@ -1601,7 +1601,7 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 
 ## Result diffs
 
-Compare with Previous Result and the Compare picker compare two results of one query in the backend
+Compare with Previous Result and the Compare popover compare two results of one query in the backend
 (`Results/ResultDiff.cs`); the renderer receives a new result to read like any other, never rows to compare. The renderer
 runs at most four comparisons at once per window (`DerivedJobs`, whose places Pivot builds share) and asks again after a `TOO_MANY_REQUESTS` or `BUSY`
 refusal (after 1, 4 and 16 s), as highlights do; the backend is unchanged by that.

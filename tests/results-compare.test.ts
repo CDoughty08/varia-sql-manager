@@ -47,7 +47,7 @@ function fixture(o: { parallel?: number } = {}) {
   return { client, results, compare, pivot, jobs, run, tab, handle }
 }
 
-describe('the Compare picker', () => {
+describe('the Compare popover', () => {
   it('offers the run\'s other Tables that share a column and have every row: never a Pivot, a comparison, a plan set or itself', async () => {
     const { results, compare, pivot, run, tab } = fixture()
     const keys = run(6, { plan: 3, columns: { 5: [column('Other')] } })
