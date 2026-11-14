@@ -135,7 +135,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     // What closes: a result's whole group (its Pivot's view tab too), or one view. The view row and the panel belong to the
     // selected view, so the focus there is in what closes when the selected view does.
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
-    const inSelected = !!selected && gone.has(selected.key) && !!active?.closest('.rt-views, [role="tabpanel"]')
+    const inSelected = !!selected && gone.has(selected.key) && !!active?.closest('.rt-views, .rt-panel')
     const own = !active || active === root?.ownerDocument.body || active === event.currentTarget
       || (!!root && root.contains(active) && (gone.has(active.closest('[data-tab-entry]')?.getAttribute('data-tab-entry') ?? '') || inSelected))
     const last = gone.size === results.getSnapshot()[tabId]?.sets.length
