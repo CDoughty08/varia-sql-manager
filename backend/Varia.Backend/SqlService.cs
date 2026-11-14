@@ -1,8 +1,10 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
@@ -1717,12 +1719,37 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ViewCells(order, [.. named.Ranges.Select(range => (range[0], range[1]))]);
     }
 
+    /// <summary>What a groups filter keeps, in 32 hex digits: a hash of its column, whether it keeps or drops, NULL and its
+    /// frozen rows, each the lowest of the snapshot's rows holding its value, in value order. Two value lists over the same
+    /// rows that tick the same values have the same digest whatever their snapshots, so a Pivot's recorded filters compare by
+    /// it rather than by snapshot id; the rows themselves, one a distinct value, are too many to send. Hashed in chunks, so it
+    /// holds nothing a row.</summary>
+    internal static string GroupsDigest(ViewFilter filter)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> chunk = stackalloc byte[1024];
+        BinaryPrimitives.WriteInt32LittleEndian(chunk, filter.Column);
+        chunk[4] = filter.Op == FilterOp.In ? (byte)1 : (byte)0;
+        chunk[5] = filter.Nulls ? (byte)1 : (byte)0;
+        hash.AppendData(chunk[..6]);
+        var rows = filter.Rows!;
+        for (var at = 0; at < rows.Length; at += chunk.Length / 4)
+        {
+            var count = Math.Min(chunk.Length / 4, rows.Length - at);
+            for (var i = 0; i < count; i++) BinaryPrimitives.WriteInt32LittleEndian(chunk[(4 * i)..], rows[at + i]);
+            hash.AppendData(chunk[..(4 * count)]);
+        }
+        Span<byte> digest = stackalloc byte[32];
+        hash.GetHashAndReset(digest);
+        return Convert.ToHexStringLower(digest[..16]);
+    }
+
     private static ViewFilterResult FilterResult(ViewFilter filter) => filter.Op switch
     {
         FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
         FilterOp.KeepRows => new ViewFilterResult("keepRows", Rows: filter.Rows),
         _ when filter.Snapshot is { } snapshot => new ViewFilterResult("groups", filter.Column, Nulls: filter.Nulls, SnapshotId: snapshot, Keep: filter.Op == FilterOp.In,
-            Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null),
+            Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null, Digest: GroupsDigest(filter)),
         _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)
     };
 

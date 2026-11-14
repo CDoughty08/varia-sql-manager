@@ -915,7 +915,7 @@ describe('an out-of-date Pivot and Update', () => {
   }
   const pivoted = (resultId: number, rows = 1) => ({ descriptor: descriptor(resultId, { index: 0, kind: 'pivot' }), rows, rowGroups: 1, columnGroups: 0, approximate: false })
 
-  it('compares resolved filters by what they keep: a groups filter by its snapshot, value rows in any order, a range in order, the list in order', () => {
+  it('compares resolved filters by what they keep: a groups filter by its digest, value rows in any order, a range in order, the list in order', () => {
     const inRows: ResolvedViewFilter = { op: 'in', column: 0, rows: [4, 2], nulls: false }
     expect(sameFilters([], [])).toBe(true)
     expect(sameFilters([inRows], [{ ...inRows, rows: [2, 4] }])).toBe(true)
@@ -923,9 +923,12 @@ describe('an out-of-date Pivot and Update', () => {
     expect(sameFilters([inRows], [{ ...inRows, op: 'notIn' }])).toBe(false)
     expect(sameFilters([inRows], [{ ...inRows, column: 1 }])).toBe(false)
     expect(sameFilters([{ op: 'between', column: 0, rows: [1, 9], nulls: false }], [{ op: 'between', column: 0, rows: [9, 1], nulls: false }])).toBe(false)
-    // A groups filter's other fields are read from its snapshot: the same snapshot is the same filter.
-    expect(sameFilters([{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false }], [{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false, row: 3 }])).toBe(true)
-    expect(sameFilters([{ op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false }], [{ op: 'groups', column: 1, snapshotId: 8, keep: true, values: 2, nulls: false }])).toBe(false)
+    // A groups filter is its digest (the backend's hash of its column, keep or drop, NULL and its values' rows): another
+    // snapshot ticking the same values is the same filter, and the same snapshot is too.
+    const groups: ResolvedViewFilter = { op: 'groups', column: 1, snapshotId: 7, keep: true, values: 2, nulls: false, digest: 'a'.repeat(32) }
+    expect(sameFilters([groups], [{ ...groups, row: 3 }])).toBe(true)
+    expect(sameFilters([groups], [{ ...groups, snapshotId: 8 }])).toBe(true)
+    expect(sameFilters([groups], [{ ...groups, digest: 'b'.repeat(32) }])).toBe(false)
     expect(sameFilters([{ op: 'keepRows', rows: [3, 1] }], [{ op: 'keepRows', rows: [1, 3] }])).toBe(true)
     expect(sameFilters([{ op: 'duplicates', columns: [0, 1] }, inRows], [inRows, { op: 'duplicates', columns: [0, 1] }])).toBe(false)
     // Filters keep the rows all of them keep, so their order counts only around a duplicates filter (re-applying one moves
@@ -975,6 +978,35 @@ describe('an out-of-date Pivot and Update', () => {
     expect(pivotStrip(info, 'Marked.', true)).toBe(`${outOfDateText('Result 1')} ${pivotText(info)} Marked.`)
     // A group without a Pivot, or a Pivot added without provenance, is never marked.
     expect(pivotOutOfDate(results.getSnapshot().t1, { table: results.getSnapshot().t1.groups[0].table })).toBe(false)
+  })
+
+  it('does not mark a Pivot for a filter made again of the same values, and does for other values', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    const checklist = (snapshotId: number, digest: string): ResolvedViewFilter => ({ op: 'groups', column: 1, snapshotId, keep: true, values: 2, nulls: false, digest })
+    const selection: ResolvedViewFilter = { op: 'in', column: 0, rows: [0, 3], nulls: false }
+    const filtered = view(first, 1, [checklist(4, '1'.repeat(32)), selection])
+    filtered.pivot.mockResolvedValueOnce(pivoted(901))
+    await show(results, first, one, filtered)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const stale = () => { const tab = results.getSnapshot().t1; return pivotOutOfDate(tab, tab.groups[0]) }
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot!.filters).toEqual([checklist(4, '1'.repeat(32)), selection])
+    expect(stale()).toBe(false)
+    // The same values ticked again in the header's checklist: a new snapshot, the same digest. The selection filter made
+    // again from other cells of the same values: the backend resolves each value to its lowest row, the same rows; applying
+    // it again moved it last, which changes nothing.
+    await show(results, first, one, view(first, 2, [{ ...selection, rows: [3, 0] }, checklist(9, '1'.repeat(32))]))
+    expect(stale()).toBe(false)
+    // Other values ticked are another digest; another value selected is another row.
+    await show(results, first, one, view(first, 3, [checklist(10, '2'.repeat(32)), selection]))
+    expect(stale()).toBe(true)
+    await show(results, first, one, view(first, 4, [checklist(11, '1'.repeat(32)), { ...selection, rows: [0, 5] }]))
+    expect(stale()).toBe(true)
+    await show(results, first, one, view(first, 5, [checklist(12, '1'.repeat(32)), selection]))
+    expect(stale()).toBe(false)
   })
 
   it("updates from the Pivot's own recipe over the Table as filtered now, keeping the old Pivot until the new one publishes, and leaves the draft alone", async () => {

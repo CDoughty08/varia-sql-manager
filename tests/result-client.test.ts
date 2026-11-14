@@ -578,7 +578,7 @@ describe('ResultClient', () => {
     await expect(fromView.tick({ checked: true, groups: [1], search: 'x' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(fromView.tick({ checked: true, groups: Array.from({ length: 513 }, (_, at) => at) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     // A groups filter goes to the backend as it was asked, without what a view said of it.
-    const filtering = handle.sort([], { filters: [{ op: 'groups', column: 0, snapshotId: 10, keep: true, values: 1, nulls: false, row: 4 } as never] })
+    const filtering = handle.sort([], { filters: [{ op: 'groups', column: 0, snapshotId: 10, keep: true, values: 1, nulls: false, row: 4, digest: 'd'.repeat(32) } as never] })
     await settle()
     expect(worker().fromWorker.findLast(item => item.t === 'view')).toMatchObject({ filters: [{ op: 'groups', column: 0, snapshotId: 10 }] })
     expect(worker().fromWorker.findLast(item => item.t === 'view')!.filters?.[0]).not.toHaveProperty('keep')

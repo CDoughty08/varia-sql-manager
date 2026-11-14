@@ -248,6 +248,19 @@ internal static class DistinctChecks
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "groups", column = 0, snapshotId = opened.SnapshotId } } });
         check(view.Rows == 3 && view.Filters is [{ Op: "groups", Column: 0, SnapshotId: var id, Keep: true, Values: 1, Row: 1, Nulls: false, Rows: null }] && id == opened.SnapshotId,
             "a groups filter keeps the ticked value's rows and comes back as asked, saying what it keeps");
+        // Ticking the same values again in a new snapshot gives a new id but the same digest; other ticks another.
+        string? Digest(bool clearSecond, bool clearNulls)
+        {
+            var snapshot = Call<ResultsDistinctResult>("results.distinct", new { resultId = set.ResultId, column = 0 });
+            Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = set.ResultId, snapshotId = snapshot.SnapshotId, @checked = false, groups = new[] { clearSecond ? 1 : 0 }, nulls = !clearNulls });
+            var built = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "groups", column = 0, snapshotId = snapshot.SnapshotId } } });
+            Call<ResultsViewCloseResult>("results.viewClose", new { resultId = set.ResultId, viewIds = new[] { built.ViewId } });
+            Call<ResultsDistinctCloseResult>("results.distinctClose", new { resultId = set.ResultId, snapshotIds = new[] { snapshot.SnapshotId } });
+            return built.Filters![0].Digest;
+        }
+        var digest = view.Filters![0].Digest;
+        check(digest is { Length: 32 } && Digest(true, true) == digest && Digest(false, true) != digest && Digest(true, false) != digest,
+            "a groups filter's digest names the values it keeps: the same ticks in another snapshot match it, other values or NULL do not");
         var again = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 1, descending = false, mode = "value" } }, filters = new object[] { new { op = "groups", column = 0, snapshotId = opened.SnapshotId } } });
         check(again.Rows == 3 && Code("results.distinctTick", new { resultId = set.ResultId, snapshotId = opened.SnapshotId, @checked = true, all = true }) == "INVALID_PARAMS",
             "a view built again keeps the same rows, and the snapshot takes no more ticks");

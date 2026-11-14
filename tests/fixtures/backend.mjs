@@ -82,6 +82,7 @@ import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { sameName } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
+import { createHash } from 'node:crypto'
 import { fixturePlan } from './plans/model.mjs'
 
 const fixturePlanXml = readFileSync(new URL('./plans/multiple.sqlplan', import.meta.url), 'utf8')
@@ -584,7 +585,9 @@ function buildView(result, sort, filters = []) {
       const frozen = freezeSnapshot(snapshot)
       const named = new Set(frozen.groups.map(group => snapshot.groups[group].key))
       order = order.filter(row => { const value = valueOf(row, filter.column); return (value === null ? frozen.nulls : named.has(value)) === frozen.keep })
-      resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {} })
+      // What it keeps, as the real backend's digest names it: the same ticks over the same rows give the same digest.
+      const digest = createHash('sha256').update(JSON.stringify([filter.column, frozen.keep, frozen.nulls, frozen.groups.map(group => snapshot.groups[group].row)])).digest('hex').slice(0, 32)
+      resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {}, digest })
       continue
     }
     if (filter.op === 'keepRows') {
@@ -615,6 +618,11 @@ function buildView(result, sort, filters = []) {
     const reps = []
     for (const row of picked.filter(row => valueOf(row, filter.column) !== null).sort((a, b) => compareValues(valueOf(a, filter.column), valueOf(b, filter.column)) || a - b)) {
       if (!reps.length || valueOf(reps.at(-1), filter.column) !== valueOf(row, filter.column)) reps.push(row)
+    }
+    // Each value resolves to its lowest row, as the real backend's do, whichever cells named it.
+    for (let at = 0; at < reps.length; at++) {
+      const value = valueOf(reps[at], filter.column)
+      for (let row = 0; row < reps[at]; row++) if (valueOf(row, filter.column) === value) { reps[at] = row; break }
     }
     if (filter.op === 'between') {
       if (!reps.length) throw Object.assign(new Error('Select at least one value that is not NULL to filter between.'), { code: 'INVALID_PARAMS' })

@@ -40,7 +40,7 @@ const group = filterRow
 const resolvedFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean() }).strict(),
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
-  z.object({ op: z.literal('groups'), column, snapshotId: u32, keep: z.boolean(), values: group, nulls: z.boolean(), row: filterRow.optional() }).strict()
+  z.object({ op: z.literal('groups'), column, snapshotId: u32, keep: z.boolean(), values: group, nulls: z.boolean(), row: filterRow.optional(), digest: z.string().regex(/^[0-9a-f]{32}$/) }).strict()
     .refine(filter => filter.row === undefined || filter.values === 1, 'A row names the one value.'),
   z.object({ op: z.literal('keepRows'), rows: keptRows }).strict()
 ])

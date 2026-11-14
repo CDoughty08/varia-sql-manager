@@ -269,10 +269,12 @@ export type ViewFilter =
   | { op: 'groups'; column: number; snapshotId: number }
   | { op: 'keepRows'; rows: number[] }
   | { op: 'keepRows'; cells: ViewCells }
-/** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), and the
- *  one value's representative `row` when it names exactly one besides NULL. */
-export interface ResolvedGroupsFilter { op: 'groups'; column: number; snapshotId: number; keep: boolean; values: number; nulls: boolean; row?: number }
-/** A filter as a view applied it: cells resolved to base rows, which build the same filter again. */
+/** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), the
+ *  one value's representative `row` when it names exactly one besides NULL, and `digest`, 32 hex digits naming what it
+ *  keeps: two value lists over the same rows that tick the same values have the same digest whatever their snapshots. */
+export interface ResolvedGroupsFilter { op: 'groups'; column: number; snapshotId: number; keep: boolean; values: number; nulls: boolean; row?: number; digest: string }
+/** A filter as a view applied it: cells resolved to base rows, which build the same filter again. A value filter's rows are
+ *  each its value's lowest base row, so filters of the same values resolve to the same rows. */
 export type ResolvedViewFilter =
   | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls: boolean }
   | { op: 'duplicates'; columns: number[] }

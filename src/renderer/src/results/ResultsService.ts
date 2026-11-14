@@ -104,11 +104,12 @@ export function groupOf(tab: Pick<TabResults, 'groups'> | undefined, key: EntryK
   if (!tab || key === undefined) return undefined
   return tab.groups.find(group => group.table.key === key || group.pivot?.key === key)
 }
-/** What a resolved filter keeps, in a form two of them compare by: a `groups` filter by the snapshot it names (its other
- *  fields are read from it), the rows a value filter names in any order (a representative row each), a range's two in order. */
+/** What a resolved filter keeps, in a form two of them compare by values, never by the snapshot or cells that made it: a
+ *  `groups` filter by its digest (the backend's hash of its column, keep or drop, NULL and its values' rows), a value
+ *  filter by its rows in any order and a range by its two in order (the backend resolves each value to its lowest row). */
 const filterIdentity = (filter: ResolvedViewFilter): string => {
   switch (filter.op) {
-    case 'groups': return `groups:${filter.column}:${filter.snapshotId}`
+    case 'groups': return `groups:${filter.digest}`
     case 'duplicates': return `duplicates:${filter.columns.join(',')}`
     case 'keepRows': return `keepRows:${[...filter.rows].sort((a, b) => a - b).join(',')}`
     case 'between': return `between:${filter.column}:${filter.nulls}:${filter.rows.join(',')}`
@@ -128,8 +129,9 @@ const filtersIdentity = (filters: readonly ResolvedViewFilter[]): string => {
   }
   return [...parts, ...run.sort()].join('|')
 }
-/** Whether two lists of resolved filters keep the same rows: the same filters, in any order between duplicates filters
- *  (re-applying a filter moves it last). A filter's words are not part of it. */
+/** Whether two lists of resolved filters keep the same rows: the same filters by the values they keep, in any order between
+ *  duplicates filters (re-applying a filter moves it last). Ticking the same values again, or filtering by other cells of
+ *  the same values, changes nothing. A filter's words are not part of it. */
 export function sameFilters(a: readonly ResolvedViewFilter[], b: readonly ResolvedViewFilter[]): boolean {
   return a.length === b.length && filtersIdentity(a) === filtersIdentity(b)
 }

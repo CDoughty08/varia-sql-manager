@@ -394,12 +394,15 @@ internal static partial class ViewSorter
                 if (filter.Rows is not null && (filter.Nulls || nulls || filter.Rows.Length != 2))
                     throw new RequestException("INVALID_PARAMS", "Between takes two rows with distinct values, not NULL.");
                 if (reps.Length == 0) throw new RequestException("INVALID_PARAMS", "Select at least one value that is not NULL to filter between.");
-                reps = [reps[0], reps[^1]];
+                // Its two ends, each its value's lowest row (one value's twice).
+                var ends = Lowest(key, reps.Length == 1 ? reps : [reps[0], reps[^1]], token);
+                reps = [ends[0], ends[^1]];
                 nulls = false;
             }
             else if (reps.Length > MaxFilterValues)
                 throw new RequestException("TOO_LARGE", "Select at most 4,096 different values to filter by.");
             else if (reps.Length == 0 && !nulls) throw new RequestException("INVALID_PARAMS", "A filter needs at least one value.");
+            else reps = Lowest(key, reps, token);
             order = Keep(order, key, filter.Op, reps, nulls, token);
             resolved[f] = filter with { Rows = reps, Nulls = nulls, Cells = null };
         }
@@ -564,6 +567,33 @@ internal static partial class ViewSorter
         return rows;
     }
 
+    /// <summary>
+    /// Each value's lowest base row, for rows one a value in ascending value order: what a value filter resolves to, so two
+    /// filters of the same values resolve to the same rows whichever cells or rows named them (a Pivot compares its
+    /// recorded filters with its Table's by them). Rows below a sealed row are sealed, so a value's lowest row never changes
+    /// as more arrive. The scan stops once every value has met its lowest row, at the latest at the highest row given.
+    /// </summary>
+    internal static int[] Lowest(Key key, int[] reps, CancellationToken token)
+    {
+        if (reps.Length == 0) return reps;
+        var lowest = (int[])reps.Clone();
+        var found = new bool[reps.Length];
+        var missing = reps.Length;
+        var last = 0;
+        foreach (var row in reps) last = Math.Max(last, row);
+        for (var row = 0; row <= last && missing > 0; row++)
+        {
+            if ((row & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (key.IsNull(row)) continue;
+            var at = IndexOf(key, reps, row);
+            if (at < 0 || found[at]) continue;
+            found[at] = true;
+            lowest[at] = row;
+            missing--;
+        }
+        return lowest;
+    }
+
     private static int[] Keep(int[] order, Key key, FilterOp op, int[] reps, bool nulls, CancellationToken token)
     {
         var kept = new int[order.Length];
@@ -582,18 +612,21 @@ internal static partial class ViewSorter
         return kept;
     }
 
-    private static bool Contains(Key key, int[] reps, int row)
+    private static bool Contains(Key key, int[] reps, int row) => IndexOf(key, reps, row) >= 0;
+
+    /// <summary>The place of the value <paramref name="row"/> holds among rows one a value in ascending value order, or -1.</summary>
+    private static int IndexOf(Key key, int[] reps, int row)
     {
         int low = 0, high = reps.Length - 1;
         while (low <= high)
         {
             var mid = (low + high) >>> 1;
             var compared = key.Compare(reps[mid], row);
-            if (compared == 0) return true;
+            if (compared == 0) return mid;
             if (compared < 0) low = mid + 1;
             else high = mid - 1;
         }
-        return false;
+        return -1;
     }
 
     /// <summary>The rows whose values in the columns equal another row's (NULL equal to NULL, as GROUP BY has it), each
