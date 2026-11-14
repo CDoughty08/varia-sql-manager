@@ -397,6 +397,38 @@ internal sealed class ResultSetBuffer
         return page.Stored as byte[] ?? Unpacked(page);
     }
 
+    /// <summary>A page's bytes as sealed when the store holds them so; null for a packed page, which a fused read unpacks
+    /// into a room of its own (<see cref="Read"/>) rather than through the cache. Read only while the set is pinned or
+    /// leased.</summary>
+    public byte[]? Raw(StoredPage page)
+    {
+        CheckRead(page);
+        return page.Stored as byte[];
+    }
+
+    /// <summary>A page's bytes as sealed for a fused read (ViewSorter.PageRooms): its own array when the store holds it
+    /// so, otherwise unpacked into <paramref name="room"/> (at least the page's length; the page is its first
+    /// <see cref="StoredPage.Length"/> bytes), which the reader reuses for its next page. Nothing is cached or charged here:
+    /// the room was reserved when it was made. Read only while the set is pinned or leased.</summary>
+    public byte[] Read(StoredPage page, byte[] room)
+    {
+        CheckRead(page);
+        if (page.Stored is not PackedPage packed) return (byte[])page.Stored;
+        store.UnpackInto(packed, room.AsSpan(0, page.Length));
+        return room;
+    }
+
+    private void CheckRead(StoredPage page)
+    {
+        if (page.Set != this) throw new ArgumentException("The page is not this result's.", nameof(page));
+        if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
+            throw new InvalidOperationException("A result page was read without a pin.");
+    }
+
+    /// <summary>Reserves working memory from this set's budget (<see cref="ResultStore.TryReserveWork"/>): a fused read's
+    /// rooms and column extracts. Give it back with <see cref="ReturnWork"/>.</summary>
+    public bool TryReserveWork(long bytes) => store.TryReserveWork(Budget, bytes);
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
@@ -632,7 +664,7 @@ internal sealed class ResultSetBuffer
         return bodies;
     }
 
-    /// <summary>Returns working memory reserved by <see cref="BodiesTogether"/>.</summary>
+    /// <summary>Returns working memory reserved by <see cref="BodiesTogether"/> or <see cref="TryReserveWork"/>.</summary>
     public void ReturnWork(long bytes) => store.Return(Budget, bytes);
 
     private long FreeLocked()

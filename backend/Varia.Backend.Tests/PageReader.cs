@@ -33,6 +33,14 @@ internal static class Held
     /// <summary>What unpacking the set whole adds to its charge (an operation on all of it does that first): none unpacked.</summary>
     public static long Unpacking(ResultSetBuffer set) => set.SealedSnapshot().Sum(page => (long)page.Length - page.StoredLength);
 
+    /// <summary>The most a fused read of the set holds in rooms (ViewSorter.PageSource, PageRooms): one a reader at once, at
+    /// most one a packed page and one a worker past the request's own thread, each the largest packed page; none unpacked.</summary>
+    public static long Rooms(ResultSetBuffer set)
+    {
+        var packed = set.SealedSnapshot().Where(page => page.StoredLength != page.Length).ToArray();
+        return packed.Length == 0 ? 0 : Math.Min(packed.Length, Varia.Backend.Results.ViewSorter.Workers + 1) * (long)packed.Max(page => page.Length);
+    }
+
     /// <summary>What a store whose only result is <paramref name="set"/> would hold with its pages as sealed and none cached:
     /// the figure a check sizes a budget by, which an operation on all of it reaches once it has unpacked it.</summary>
     public static long AsSealed(ResultStore store, ResultSetBuffer set) => Bytes(store) + Unpacking(set);

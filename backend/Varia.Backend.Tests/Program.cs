@@ -378,6 +378,7 @@ if (liveGroup is null)
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
+        ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),

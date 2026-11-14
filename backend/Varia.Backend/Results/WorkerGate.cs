@@ -242,7 +242,8 @@ internal static partial class ViewSorter
             /// and the workers the gate starts for it, each worker with a <paramref name="state"/> of its own; returns when
             /// all have run, or rethrows the first exception (a cancellation, or one a body threw) once every worker has
             /// stopped. A worker over the lease's share hands its thread back between items, so items should be short
-            /// enough to give threads back promptly.</summary>
+            /// enough to give threads back promptly. A state that is <see cref="IDisposable"/> is disposed when its worker
+            /// stops (a fused read's room goes back to its pool).</summary>
             public void For<TState>(int items, Func<TState> state, Action<int, TState> body, CancellationToken token)
             {
                 if (items <= 0) return;
@@ -251,11 +252,15 @@ internal static partial class ViewSorter
                     // Threads held past its own, or a demand still at what it asked for, go back: the others' shares grow.
                     if (Count > 1 || Volatile.Read(ref demand) > 1) Settle();
                     var own = state();
-                    for (var index = 0; index < items; index++)
+                    try
                     {
-                        token.ThrowIfCancellationRequested();
-                        body(index, own);
+                        for (var index = 0; index < items; index++)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            body(index, own);
+                        }
                     }
+                    finally { (own as IDisposable)?.Dispose(); }
                     return;
                 }
                 // Not disposed: the last worker may still be returning from Set as the owner wakes, and an event that never
@@ -314,10 +319,10 @@ internal static partial class ViewSorter
             public void Work(bool owner)
             {
                 var handedBack = false;
+                TState own = default!;
+                var made = false;
                 try
                 {
-                    TState own = default!;
-                    var made = false;
                     while (Volatile.Read(ref failed) == 0)
                     {
                         if (!owner && !lease.Keep())
@@ -345,6 +350,7 @@ internal static partial class ViewSorter
                 }
                 finally
                 {
+                    if (made) (own as IDisposable)?.Dispose();
                     if (!owner && !handedBack) lease.Exit();
                 }
             }
