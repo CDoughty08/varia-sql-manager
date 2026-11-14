@@ -136,13 +136,14 @@ being true.
   collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
   (`CachePages`), kept only while the budget has spare room for it (`TryReserveSpare`), so many results' caches never
   take the budget past its figures; without room a page is unpacked for its read alone. A view read unpacks the base pages behind its rows 64 at
-  a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time through the cache when
-  refused); an operation on the whole result (sort, filter, distinct values, profile, row identity, diff, pivot, and a
+  a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time when refused,
+  keeping only the latest page); an operation on the whole result (sort, filter, distinct values, profile, row identity, diff, pivot, and a
   search, whose slots keep the pages it reads) first
   unpacks it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
   then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
-  A transposed Copy or Save keeps every page it reads, so it unpacks first too (`TryUnpackAll`, `TOO_LARGE` when refused); a
-  plain Copy or Save reads page by page through the cache. `ResultStore.PackingSnapshot` holds the
+  A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
+  held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page through
+  the cache. `ResultStore.PackingSnapshot` holds the
   counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
   `results.memory`.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,

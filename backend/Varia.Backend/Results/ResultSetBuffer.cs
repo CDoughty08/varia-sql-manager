@@ -592,9 +592,11 @@ internal sealed class ResultSetBuffer
     /// budget has no room: the caller then reads them one at a time through <see cref="Body"/>.</summary>
     public byte[][]? BodiesTogether(IReadOnlyList<StoredPage> wanted, out long reserved, CancellationToken token = default)
     {
+        // Reserved is set only once the reservation is made, so a throw before it leaves the caller holding nothing.
         reserved = 0;
         var bodies = new byte[wanted.Count][];
         var unpack = new List<int>();
+        long need = 0;
         for (var i = 0; i < wanted.Count; i++)
         {
             if (wanted[i].Set != this) throw new ArgumentException("The page is not this result's.", nameof(wanted));
@@ -603,21 +605,14 @@ internal sealed class ResultSetBuffer
             else
             {
                 unpack.Add(i);
-                reserved += wanted[i].Length;
+                need += wanted[i].Length;
             }
         }
         if (unpack.Count == 0) return bodies;
-        if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
-        {
-            reserved = 0;
-            throw new InvalidOperationException("A result page was read without a pin.");
-        }
-        if (!store.TryReserveWork(Budget, reserved))
-        {
-            reserved = 0;
-            return null;
-        }
-        var held = reserved;
+        if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0) throw new InvalidOperationException("A result page was read without a pin.");
+        if (!store.TryReserveWork(Budget, need)) return null;
+        reserved = need;
+        var held = need;
         try
         {
             using var threads = ViewSorter.Gate.Take(Math.Min(unpack.Count, ViewSorter.Workers));

@@ -265,6 +265,16 @@ internal static class PackingChecks
         var narrow = ViewPages.Build(bigView, 0, 3000).Select(page => page.Body()).ToArray();
         check(narrow.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)) && narrow.Length == expected.Length,
             "with no room to unpack pages together a view read still reads them one at a time");
+
+        // With no room for a group or the cache, a view in base order unpacks each page once (again after each output page,
+        // which keeps nothing across a wait for credit), not once a row.
+        tight.TryReserve(tight.BeginQuery("filler"), tight.GlobalBytes - tight.UsedBytes - 64 * 1024, false, out _);
+        var baseView = tight.AddView(big, [.. Enumerable.Range(0, (int)big.RowsAvailable)], [], false, true, 0, null);
+        var unpackedBefore = tight.PackingSnapshot().PagesUnpacked;
+        var inOrder = ViewPages.Build(baseView, 0, 20_000).Select(page => page.Body()).ToArray();
+        var touched = big.SealedSnapshot().Count(page => page.FirstRow < 20_000);
+        check(inOrder.Length > 0 && touched > 1 && tight.PackingSnapshot().PagesUnpacked - unpackedBefore <= touched + inOrder.Length && tight.PackingSnapshot().CacheBytes == 0,
+            "a view read refused room for groups and the cache unpacks each base page once an output page, not once a row");
     }
 
     private static void Service(Action<bool, string> check)
@@ -284,14 +294,14 @@ internal static class PackingChecks
         Call<object>("results.search", new { resultId = set.ResultId, text = "59999", fromRow = 0, maxMatches = 1 });
         check(!set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]) && store.UsedBytes > packed,
             "a search unpacks a packed result first, so the pages it keeps are charged");
+        // A transposed Copy keeps the pages its rows lie on: it unpacks only those, as working memory returned when it ends.
+        CopyPartArgs[] scattered = [new([[0, 0], [8000, 8000], [16000, 16000], [24000, 24000], [32000, 32000], [40000, 40000], [48000, 48000], [56000, 56000]], [[0, 1]])];
+        var rawTurned = ResultJobs.EstimateCopy(set, scattered, true, false, transposed: true);
         set.Pack();
         packed = store.UsedBytes;
-
-        // A transposed Copy keeps every page it reads too: it unpacks first, and answers TOO_LARGE without room.
-        var turnedBytes = ResultJobs.EstimateCopy(set, [new CopyPartArgs([[0, 99]], [[0, 1]])], true, false, transposed: true);
-        check(turnedBytes > 0 && !set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]), "a transposed Copy unpacks a packed result first");
-        set.Pack();
-        packed = store.UsedBytes;
+        var turnedBytes = ResultJobs.EstimateCopy(set, scattered, true, false, transposed: true);
+        check(turnedBytes == rawTurned && turnedBytes > 0 && set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed,
+            "a transposed Copy of a packed result reads its rows' pages unpacked, leaves the result packed and returns the working memory");
         var sorted = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         check(sorted.Rows == set.RowsAvailable && !set.HasPacked && store.UsedBytes > packed,
             "an operation on the whole result unpacks it first and leaves it unpacked for the stage-1 policy to pack again");
@@ -301,7 +311,7 @@ internal static class PackingChecks
         var code = Code("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 1, descending = false, mode = "value" } } });
         check(code == "TOO_LARGE" && set.HasPacked, "an operation whose result cannot be unpacked for want of budget answers TOO_LARGE and leaves it packed");
         string? turnedCode = null;
-        try { ResultJobs.EstimateCopy(set, [new CopyPartArgs([[0, 99]], [[0, 1]])], true, false, transposed: true); }
+        try { ResultJobs.EstimateCopy(set, scattered, true, false, transposed: true); }
         catch (RequestException error) { turnedCode = error.Code; }
         check(turnedCode == "TOO_LARGE" && set.HasPacked, "a transposed Copy that cannot unpack the result answers TOO_LARGE and leaves it packed");
 

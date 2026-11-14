@@ -1615,9 +1615,10 @@ internal static class ViewPages
                         var body = page.Body();
                         var first = PageView.Parse(body, columns);
                         layout = (body, first.Layout, first.BlobStart);
-                        // Once grouping is refused, a packed page's unpacked copy is not kept past its row: only the set's
-                        // cache (charged) keeps pages, so the pages of an output page never pile up uncharged.
-                        if (!packedSource || grouping) parsed[index] = layout;
+                        // Once grouping is refused, only the latest packed page is kept (uncharged, one page), so rows on
+                        // one page unpack it once and the pages of an output page never pile up uncharged.
+                        if (packedSource && !grouping) parsed.Clear();
+                        parsed[index] = layout;
                     }
                 }
                 Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);

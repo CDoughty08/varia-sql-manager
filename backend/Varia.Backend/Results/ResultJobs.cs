@@ -92,8 +92,9 @@ internal sealed class ResultJobs(ResultStore store)
     /// <summary>Reads a source column by column: each row's page is found once, then every line reads it there, so no rows
     /// are copied and nothing is held but the stored pages themselves.</summary>
     /// <param name="named">The fields' names are written (headers, or JSON): otherwise none are read or made.</param>
-    /// <remarks>It keeps every page it reads, so it pins the set and unpacks a packed one first, its pages charged (TOO_LARGE
-    /// without room): dispose it when the job ends.</remarks>
+    /// <remarks>It keeps every page it reads, so it pins the set and, for each part it plans, unpacks the packed pages that
+    /// part's rows lie on together as working memory held until it is disposed (TOO_LARGE without room): a small selection
+    /// of a large packed result unpacks only its own pages. Dispose it when the job ends.</remarks>
     private sealed class Turner : IDisposable
     {
         /// <summary>Cells written between looks at the token and the output.</summary>
@@ -101,29 +102,42 @@ internal sealed class ResultJobs(ResultStore store)
         private readonly Source source;
         private readonly int? headerColumn;
         private readonly bool named;
+        private readonly CancellationToken token;
         private readonly PagePin pin;
+        private readonly StoredPage[] pages;
         private readonly RowAccess access;
+        /// <summary>Working memory reserved for the unpacked pages <see cref="access"/> keeps, returned at disposal.</summary>
+        private long held;
 
         public Turner(Source source, int? headerColumn, bool named, CancellationToken token = default)
         {
             this.source = source;
             this.headerColumn = headerColumn;
             this.named = named;
+            this.token = token;
             pin = source.Set.Pin();
-            try
-            {
-                if (!source.Set.TryUnpackAll(token))
-                    throw new RequestException("TOO_LARGE", "There is not enough result memory to turn these rows. Close other results and try again.");
-            }
-            catch
-            {
-                pin.Dispose();
-                throw;
-            }
-            access = new(source.Set.SealedSnapshot(), source.Set.Columns.Count);
+            pages = source.Set.SealedSnapshot();
+            access = new(pages, source.Set.Columns.Count);
         }
 
-        public void Dispose() => pin.Dispose();
+        public void Dispose()
+        {
+            source.Set.ReturnWork(held);
+            held = 0;
+            pin.Dispose();
+        }
+
+        /// <summary>Unpacks together the packed pages of these rows that are not yet kept, as working memory.</summary>
+        private void Hold(int[] pageOf)
+        {
+            if (!source.Set.HasPacked) return;
+            int[] wanted = [.. pageOf.Distinct().Where(page => !access.Keeps(page))];
+            if (wanted.Length == 0) return;
+            var bodies = source.Set.BodiesTogether([.. wanted.Select(page => pages[page])], out var reserved, token)
+                ?? throw new RequestException("TOO_LARGE", "There is not enough result memory to turn these rows. Close other results and try again.");
+            held += reserved;
+            for (var i = 0; i < wanted.Length; i++) access.Keep(wanted[i], bodies[i]);
+        }
 
         public TurnedPlan Plan(Plan plan)
         {
@@ -137,11 +151,11 @@ internal sealed class ResultJobs(ResultStore store)
             var pageOf = new int[positions.Count];
             var indexOf = new int[positions.Count];
             var names = new string[named ? positions.Count : 0];
-            for (var i = 0; i < pageOf.Length; i++)
-            {
-                pageOf[i] = access.PageOf(source.View is { } view ? view.Order[positions[i]] : positions[i], out indexOf[i]);
-                if (named) names[i] = headerColumn is { } header ? ResultTextWriter.FieldName(access.Page(pageOf[i], out _), indexOf[i], header) : ResultTextWriter.RowName(positions[i]);
-            }
+            for (var i = 0; i < pageOf.Length; i++) pageOf[i] = access.PageOf(source.View is { } view ? view.Order[positions[i]] : positions[i], out indexOf[i]);
+            Hold(pageOf);
+            if (named)
+                for (var i = 0; i < pageOf.Length; i++)
+                    names[i] = headerColumn is { } header ? ResultTextWriter.FieldName(access.Page(pageOf[i], out _), indexOf[i], header) : ResultTextWriter.RowName(positions[i]);
             return new TurnedPlan([.. positions], pageOf, indexOf, ResultTextWriter.UniqueFields(names), plan.Columns, capped);
         }
 
