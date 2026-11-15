@@ -236,6 +236,7 @@ internal static class ActionLiveChecks
             if (result.Status != "completed") throw new InvalidOperationException("Delete permission fixture failed: " + result.Error);
             return result;
         }
+        async Task<string?> Access(string name) => (await Exec("SELECT user_access_desc FROM sys.databases WHERE name = " + Literal(name) + ";")).Scalar;
         if (!await scratch.CreateLoginAsync())
         {
             if (required) throw new InvalidOperationException("Delete parity's permission checks require a SQL Server that accepts SQL logins.");
@@ -278,14 +279,33 @@ internal static class ActionLiveChecks
             var exact = identity is not null && (await Exec(Count(identity))).Scalar == "1";
             var staleCreated = identity is null ? null : await client.Delete(database, identity: identity with { Created = "2000-01-01T00:00:00.000" });
             var staleId = identity is null ? null : await client.Delete(database, identity: identity with { Id = identity.Id + 100_000 });
-            var unbound = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
-                [new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: new(identity.Id, new DateTime(2000, 1, 1)))], CancellationToken.None);
+            var stale = new DatabaseBinding(identity?.Id ?? 0, new DateTime(2000, 1, 1));
+            var staleBound = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale)], CancellationToken.None);
+            // Past the preflight, a stale check in SINGLE_USER's batch skips the DROP and leaves no compensation due; a stale check in the
+            // compensation's batch (after an unbound SINGLE_USER and a DROP its stale check refuses) leaves the access alone and says so.
+            static bool NotDropped(IReadOnlyList<string> statuses) => statuses.Count < 2 || statuses[1] != "done";
+            var staleClose = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.SetSingleUser, "master", [owned], Bound: stale), new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale),
+                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [owned], StepKind.Compensation, Undoes: 0, When: NotDropped, Bound: stale)], CancellationToken.None);
+            var staleCloseAccess = await Access(owned);
+            var staleRestore = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.SetSingleUser, "master", [owned]), new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale),
+                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [owned], StepKind.Compensation, Undoes: 0, When: NotDropped, Bound: stale)], CancellationToken.None);
+            var staleRestoreAccess = await Access(owned);
+            await Exec("ALTER DATABASE " + Bracket(owned) + " SET MULTI_USER;");
             var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "1";
             static bool Refused(ActionExecuteResult? result) => result is { Error.Code: "NOT_FOUND" } && result.Steps.All(step => step.Status != "done")
                 && result.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal);
-            check(exact && Refused(staleCreated) && staleCreated!.Steps.Count == 0 && Refused(staleId) && staleId!.Steps.Count == 0 && Refused(unbound) && kept,
+            check(exact && Refused(staleCreated) && staleCreated!.Steps.Count == 0 && Refused(staleId) && staleId!.Steps.Count == 0 && Refused(staleBound) && kept,
                 "Delete Object names the database it read, and a Delete or a bound DROP naming another database (another create_date or id) drops nothing ("
-                + identity?.Created + "; " + staleCreated?.Error?.Code + ", " + staleId?.Error?.Code + ", " + unbound?.Error?.Code + " " + unbound?.Error?.Message + ")");
+                + identity?.Created + "; " + staleCreated?.Error?.Code + ", " + staleId?.Error?.Code + ", " + staleBound?.Error?.Code + " " + staleBound?.Error?.Message + ")");
+            check(Refused(staleClose) && staleClose!.Steps.Select(step => step.Status).SequenceEqual(["failed", "skipped"]) && staleCloseAccess == "MULTI_USER"
+                && staleRestore is { Error.Code: "NOT_FOUND" } && staleRestore.Steps.Select(step => (step.Status, step.Compensates)).SequenceEqual([("done", (bool?)null), ("failed", null), ("failed", true)])
+                && staleRestore.Error.Message.Contains("may still be single-user", StringComparison.Ordinal) && staleRestoreAccess == "SINGLE_USER",
+                "a stale check in SINGLE_USER's batch skips the DROP and restores nothing, and one in the compensation's batch leaves the access alone and says so ("
+                + string.Join(", ", staleClose?.Steps.Select(step => step.Status) ?? []) + "; " + staleCloseAccess + "; "
+                + string.Join(", ", staleRestore?.Steps.Select(step => step.Status + (step.Compensates == true ? "*" : "")) ?? []) + "; " + staleRestoreAccess + "; " + staleRestore?.Error?.Message + ")");
             var deleted = await client.Delete(database, identity: identity);
             var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "0";
             check(Done(deleted) && gone, "and deletes it, naming the database it read (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");

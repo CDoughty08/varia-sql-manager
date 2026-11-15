@@ -285,6 +285,10 @@ internal static partial class ActionSql
     /// <summary>Why a bound statement left a database alone: another database has taken the name since Delete Object read it.</summary>
     internal const string NotTheDatabase = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, perhaps while Varia waited for its connections to close. Varia did not change it. Close Delete Object and open it again.'";
 
+    /// <summary>Why the access a failed DROP restores was left alone: another database has the name now, so the one Varia set to single-user
+    /// may still be single-user under another name.</summary>
+    internal const string NotTheDatabaseRestored = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, so Varia did not restore its access. The database Varia set to single-user may still be single-user under another name. Close Delete Object and open it again.'";
+
     /// <summary>The templates a database's Delete binds to the database it read (<see cref="DatabaseBinding"/>): every statement its plan
     /// runs on the database by name.</summary>
     public static bool DatabaseBound(ActionTemplate template) =>
@@ -295,10 +299,17 @@ internal static partial class ActionSql
     public const string DatabaseCheck = "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, "
         + NotTheDatabase + ", 1;\n";
 
-    /// <summary>The batch a planned statement runs: its template's, after <see cref="DatabaseCheck"/> when it is bound. A dry run selects the
+    /// <summary><see cref="DatabaseCheck"/> for the access a compensation restores, whose refusal says what it leaves behind.</summary>
+    public const string RestoreCheck = "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, "
+        + NotTheDatabaseRestored + ", 1;\n";
+
+    /// <summary>The check a bound statement of <paramref name="template"/> runs first.</summary>
+    public static string CheckOf(ActionTemplate template) => template is ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser ? RestoreCheck : DatabaseCheck;
+
+    /// <summary>The batch a planned statement runs: its template's, after its check (<see cref="CheckOf"/>) when it is bound. A dry run selects the
     /// statement alone, as Script shows it.</summary>
     public static string Executable(PlannedStatement plan, bool dryRun = false) =>
-        (plan.Bound is not null && !dryRun ? DatabaseCheck : "") + Executable(plan.Template, dryRun);
+        (plan.Bound is not null && !dryRun ? CheckOf(plan.Template) : "") + Executable(plan.Template, dryRun);
 
     /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
     internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
@@ -624,7 +635,7 @@ internal static partial class ActionSql
         // Detach's permission and the login kind its files note reads (Database, DetachInside).
         "N'db_owner'", "N'SQL LOGIN'",
         // Restore Database's cleanup (DropRestoring), and a database's Delete bound to the database it read (DatabaseCheck).
-        NotRestoring, NotTheDatabase,
+        NotRestoring, NotTheDatabase, NotTheDatabaseRestored,
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
         // Its guarded DROPs (PrincipalBinding).

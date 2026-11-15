@@ -204,7 +204,9 @@ internal static class ActionChecks
         var boundBatches = boundPlan.Where(plan => plan.Bound is not null).Select(plan => ActionSql.Executable(plan)).ToList();
         check(boundPlan.Select(plan => plan.Template).SequenceEqual([ActionTemplate.SetSingleUser, ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory, ActionTemplate.SetMultiUser])
             && boundPlan.Select(plan => plan.Bound).SequenceEqual([binding, binding, null, binding]) && ActionService.ScriptText(boundPlan) == full
-            && boundBatches.Count == 3 && boundBatches.All(text => text.StartsWith(ActionSql.DatabaseCheck, StringComparison.Ordinal) && text.Contains("THROW 50010, ", StringComparison.Ordinal))
+            && boundBatches.Count == 3 && boundBatches.Take(2).All(text => text.StartsWith(ActionSql.DatabaseCheck, StringComparison.Ordinal))
+            && boundBatches[2].StartsWith(ActionSql.RestoreCheck, StringComparison.Ordinal) && ActionSql.RestoreCheck.Contains("may still be single-user", StringComparison.Ordinal)
+            && ActionSql.RestoreCheck.Contains("THROW 50010, ", StringComparison.Ordinal) && ActionSql.DatabaseCheck.Contains("THROW 50010, ", StringComparison.Ordinal)
             && ActionSql.DatabaseCheck.Contains("d.name = @p1 AND d.database_id = @id AND d.create_date = @created", StringComparison.Ordinal)
             && boundPlan.All(plan => ActionSql.Executable(plan, dryRun: true) == ActionSql.Executable(plan.Template, dryRun: true))
             && ActionService.Plan(Delete(database, close: true) with { Identity = read }, database, new(false, 2)).Single(plan => plan.Kind == StepKind.Compensation) is { Template: ActionTemplate.SetRestrictedUser, Bound: { } restrictedBinding } && restrictedBinding == binding

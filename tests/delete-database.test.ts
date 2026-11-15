@@ -59,8 +59,11 @@ describe('Delete Object on a database (D3d)', () => {
     expect(actionExecuteRequestSchema.safeParse(request).success).toBe(true)
     expect(actionExecuteRequestSchema.safeParse({ ...request, target: orders }).success).toBe(false)
     expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 0, created: identity.created } }).success).toBe(false)
-    const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
-    expect(service).toContain('is not the one Delete Object read')
+    // Main refuses what the backend's parse refuses: a shaped but impossible date, which Date would roll over.
+    for (const created of ['2026-13-45T25:61:61.000', '2026-02-30T00:00:00.000', '2026-01-02T24:00:00.000']) {
+      expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 7, created } }).success).toBe(false)
+    }
+    expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 7, created: '2024-02-29T23:59:59.997' } }).success).toBe(true)
   })
 
   it('greys Close existing connections where the server cannot set SINGLE_USER, and never sends it there', () => {

@@ -148,7 +148,9 @@ or replaced since, so that another now has the name, is refused before anything 
 read"; close the dialog and open it again), rather than dropped on warnings and sessions the dialog never showed for it.
 Each statement it runs on the database by name (Close existing connections, the DROP, and the access it restores after a
 failed DROP) checks the identity again in its own batch, so a database that takes the name while Varia frees the database
-of its pooled sessions or SET SINGLE_USER waits is not closed, dropped or given another access mode either.
+of its pooled sessions or SET SINGLE_USER waits is not set to single-user, dropped or given another access mode either
+(Varia may still have closed its own idle pooled sessions in it). When the access a failed DROP restores is refused this way,
+the database Varia set to single-user may still be single-user under its new name, and the error says so.
 
 For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
 is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database
