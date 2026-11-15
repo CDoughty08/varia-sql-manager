@@ -101,7 +101,7 @@ internal sealed class RequestContext : IDisposable
     }
 
     /// <summary>Claims the reason and announces the cancel. <paramref name="offThread"/> runs the token's callbacks on the thread
-    /// pool: the protocol reader passes it, since a callback may block (a query Stop sends SqlClient's attention synchronously)
+    /// pool: the protocol reader passes it, since a callback may block (an object action's Stop sends SqlClient's attention synchronously)
     /// and the reader must keep answering PING.</summary>
     public void Cancel(CancelReason why, bool offThread = false)
     {

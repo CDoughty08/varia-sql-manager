@@ -2803,8 +2803,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 - **Reader thread** (`varia-ipc-reader`) handles every frame inline: HELLO; REQUEST (validate the envelope, register
   the request, start its task); CANCEL; CREDIT; and PING, whose PONG it queues on the control lane itself, so liveness
   survives a starved thread pool (SMO is synchronous). A unary request's `CANCELLED` answer is queued inline, but every
-  token callback runs on the thread pool: a query's Stop sends SqlClient's attention synchronously, which must not hold
-  up a PONG. More than 288 requests in flight are answered `BUSY`. At stdin EOF (main exited or closed the generation)
+  token callback runs on the thread pool: an object action's Stop (or a query's backstop CANCEL) sends SqlClient's
+  attention synchronously, which must not hold up a PONG. More than 288 requests in flight are answered `BUSY`. At stdin EOF (main exited or closed the generation)
   it cancels everything, waits at most 1.5 s, disposes the service and exits 0.
 - **Thread pool floor** (`ThreadPoolFloor`): the service raises the pool's minimum worker and completion threads to 64
   when it starts, so the pool makes threads at once up to there instead of about two a second. SqlClient's managed SNI

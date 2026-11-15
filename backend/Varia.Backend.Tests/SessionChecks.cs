@@ -34,13 +34,13 @@ internal static class SessionChecks
             && SqlService.LostMessage(session, committing: true, commit: true) == SqlService.LostWhileCommitting
             && !SqlService.LostAfterUnfinishedCommit.Contains("Nothing was committed", StringComparison.Ordinal),
             "after a commit that never answered, a session found lost never says that nothing was committed");
-
-        DisconnectDuringSessionOpen(check);
     }
 
     /// <summary>A tab's first execute stores its new session under sessionGate after checking the target; a disconnect landing
-    /// in between must still find and close it, not leave a session that counts against the limit until the tab closes.</summary>
-    private static void DisconnectDuringSessionOpen(Action<bool, string> check)
+    /// in between must still find and close it, not leave a session that counts against the limit until the tab closes.
+    /// Its own suite in OfflineSuites.Alone: it reads the process-wide Monitor.LockContentionCount, which another suite's
+    /// contention could satisfy early and let the race go unseen.</summary>
+    public static void DisconnectDuringSessionOpen(Action<bool, string> check)
     {
         using var sql = new SqlService();
         var flags = BindingFlags.Instance | BindingFlags.NonPublic;

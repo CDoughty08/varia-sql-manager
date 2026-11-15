@@ -234,7 +234,7 @@ internal static class HostChecks
             check(slotsTaken && pong?.Header.Arg == 4242 && host.Dispatcher.Completed == completedBefore,
                 "PING is answered by the reader thread while every metadata slot is busy (slots taken " + slotsTaken + ", " + watch.ElapsedMilliseconds + " ms)");
 
-            // A CANCEL whose token callback blocks (a query Stop's synchronous attention) must not hold the reader: PING is
+            // A CANCEL whose token callback blocks (an action Stop's synchronous attention) must not hold the reader: PING is
             // still answered, and the request ends once the callback returns.
             host.Request(21, "test.blockingStop", new { });
             // The CANCEL must find the callback registered, or nothing would block with or without the fix.
@@ -612,7 +612,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };
             case "test.blockingStop":
-                // As a query Stop does: the token's callback calls SqlCommand.Cancel, which sends the attention synchronously.
+                // As an object action's Stop does (StatementStop calls SqlCommand.Cancel, which sends the attention synchronously).
                 var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 using (context!.Token.Register(() =>
                 {
