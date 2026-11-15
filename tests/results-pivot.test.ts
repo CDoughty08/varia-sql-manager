@@ -236,6 +236,20 @@ describe('PivotService', () => {
     expect(results.getSnapshot().t1.groups[0].pivot!.sources).toEqual([expect.objectContaining({ name: 'Open orders', number: 1 })])
   })
 
+  it('names a Pivot of one of two results of one name with its number, so the two Pivots are told apart', async () => {
+    const { results, pivot, run } = fixture()
+    run(2, { names: { 0: 'Totals', 1: 'Totals' } })
+    const second = keyAt(results, 't1', 1)
+    pivot.open('t1', second)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ sourceName: 'Totals (Result 2)' })
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    await settle()
+    const made = results.getSnapshot().t1.sets.at(-1)!
+    expect(made.label).toBe('Pivot of Totals (Result 2)')
+    expect(results.getSnapshot().t1.groups[1].pivot!.sources).toEqual([expect.objectContaining({ name: 'Totals (Result 2)', number: 2 })])
+  })
+
   it('makes no pivot of a Pivot, a comparison or a plan set, and none in a bare run', async () => {
     const { client, results, pivot, run } = fixture()
     const [first] = run(2)

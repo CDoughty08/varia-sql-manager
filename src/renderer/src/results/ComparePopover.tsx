@@ -7,7 +7,7 @@ import { windows } from '../core/windows'
 import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
-import { comparedNames, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
+import { comparedNames, distinctName, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
@@ -66,9 +66,11 @@ function naturalHeight(form: HTMLElement): number {
 /** Why a column is not compared, naming each result: only one has it, its name repeats in its own result (the other's
  *  column of that name already paired, whatever the types), or the other's holds another kind of value (text and binary). */
 function unpairedWhy(column: UnpairedColumn, own: ResultSetEntry, other: ResultSetEntry): string {
-  if (column.otherType === undefined) return `only in ${entryName(own)}`
-  if (column.repeat) return `a second column of this name in ${entryName(own)}`
-  return `${column.dataType} in ${entryName(own)}, ${column.otherType} in ${entryName(other)}`
+  // Each result by its name, with its number when the two share it, so the sentence says which one.
+  const [ownName, otherName] = comparedNames(own, other)
+  if (column.otherType === undefined) return `only in ${ownName}`
+  if (column.repeat) return `a second column of this name in ${ownName}`
+  return `${column.dataType} in ${ownName}, ${column.otherType} in ${otherName}`
 }
 
 /** Popovers drawn per tab: one that goes while its picker is open (its pane hidden, another tab shown) closes the picker,
@@ -97,7 +99,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   useLayoutEffect(() => { setHost(home.current?.ownerDocument.body) }, [])
   const picker = state.pickers[tabId]
   const active = picker ? entryOf(tab.sets, picker.active) : undefined
-  const name = active ? entryName(active) : ''
+  // With its number when another result of the run has its name, so the heading says which of them is compared.
+  const name = active ? distinctName(active, tab.sets) : ''
   const targets = active ? compare.targetsOf(tabId, active.key) : []
   const sides = compare.sidesOf(tabId)
   const running = !!sides && !!picker && compare.isRunning(tabId, sides.old.key, sides.neu.key, picker.exact)
@@ -275,7 +278,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
             <span>{unpairedWhy(column, own, other)}</span>
           </li>)}</ul>
         </section>}
-        {filtered.length > 0 && <p className="compare-note warning"><Icon name="filter" /><span>{filtered.map(entryName).join(' and ')} {filtered.length > 1 ? 'are' : 'is'} sorted or filtered here. The comparison uses all the stored rows, in their own order.</span></p>}
+        {filtered.length > 0 && <p className="compare-note warning"><Icon name="filter" /><span>{filtered.map(entry => distinctName(entry, tab.sets)).join(' and ')} {filtered.length > 1 ? 'are' : 'is'} sorted or filtered here. The comparison uses all the stored rows, in their own order.</span></p>}
         {/* Mounted, and in the accessibility tree, while the popover is, so a failure written into it is read out. */}
         <p className={picker.error ? 'compare-note error' : picker.cancelled ? 'compare-note' : 'visually-hidden'} role="status">{picker.error ?? (picker.cancelled ? 'Comparison cancelled.' : '')}</p>
       </div>

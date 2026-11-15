@@ -5,7 +5,7 @@ import { DerivedJobs } from './derived-jobs'
 import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
 import { ResultError, type OperationProgressListener, type PivotSpec, type ResultView } from './ResultClient'
 import type { EntryKey, PivotProvenance, ResultGroup, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
-import { entryName, filtersIdentity, groupOf, pivotOutOfDate, resultLimits, selectedEntry, setKey, shownFilters, slotOf } from './ResultsService'
+import { distinctName, entryName, filtersIdentity, groupOf, pivotOutOfDate, resultLimits, selectedEntry, setKey, shownFilters, slotOf } from './ResultsService'
 
 /**
  * When a Pivot rebuilds by itself after its Table's filters change (the owner's figures, 2026-11-12): the Table's result
@@ -333,7 +333,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         if (last?.get(item.ordinal)?.filters === reads) last.delete(item.ordinal)
         return
       }
-      const sourceLabel = entryName(entry), snapshot = entry.handle.getSnapshot()
+      const sourceLabel = distinctName(entry, this.results.getSnapshot()[tabId]?.sets ?? []), snapshot = entry.handle.getSnapshot()
       const provenance: PivotProvenance = {
         recipe: spec, filters, inputRows: result.rows, truncated: snapshot.truncated !== undefined, incomplete: snapshot.incomplete, approximate: result.approximate, buildMs,
         ...auto ? { followed: true as const } : {}
@@ -470,7 +470,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)?.text
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
-      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? entryName(group.table.entry) : `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
+      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? distinctName(group.table.entry, tab.sets) : `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live,
       ...live?.queued ? { queued: live.queued } : {}, ...failed ? { error: failed } : {}
     }

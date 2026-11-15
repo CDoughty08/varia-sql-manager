@@ -1,6 +1,6 @@
 import { useId, type CSSProperties, type ReactNode } from 'react'
 import Icon from '../Icon'
-import type { Bar, BytesFormat, NerdMetricsModel } from './memory-details'
+import type { Bar, BytesFormat, NerdMetricsModel, ResultLabel } from './memory-details'
 
 const width = (share: number) => ({ '--memory-share': `${Math.max(0, Math.min(1, share)) * 100}%` }) as CSSProperties
 
@@ -36,10 +36,9 @@ export function NerdMetrics({ open, pinned, onToggle, trend, children }: { open:
 
 /** A result's name, its tab's part giving way first: tabs often share a long file name, and the Results caption after it
  *  ("Result 2") is what tells their rows apart. */
-function ResultName({ name }: { name: string }) {
-  const at = name.lastIndexOf(' · ')
+function ResultName({ name, label }: { name: string; label: ResultLabel }) {
   return <span className="memory-biggest-name" title={name}>
-    {at < 0 ? <span>{name}</span> : <><span className="memory-biggest-tab">{name.slice(0, at)}</span><span>{name.slice(at)}</span></>}
+    {label.tab === undefined ? <span>{label.result}</span> : <><span className="memory-biggest-tab">{label.tab}</span><span>{` · ${label.result}`}</span></>}
   </span>
 }
 
@@ -64,7 +63,7 @@ export function NerdDetails({ model }: { model: NerdMetricsModel }) {
       <h4>Biggest results<span className="memory-group-aside">rows <Icon name="arrow-right" /> stored</span></h4>
       {model.biggest.length === 0 ? <p className="memory-nerd-empty">No results held.</p> : <ul className="memory-biggest" aria-label="Biggest results">
         {model.biggest.map(row => <li key={row.resultId}>
-          <ResultName name={row.name} />
+          <ResultName name={row.name} label={row.label} />
           <span className="memory-mini" aria-hidden="true"><span style={width(row.logicalShare)} /><span data-state={row.state} style={width(row.storedShare)} /></span>
           <span className="memory-muted"><span className="visually-hidden">rows </span>{row.logical}</span>
           <span className="memory-stored"><span className="visually-hidden">stored </span>{row.stored}</span>

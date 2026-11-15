@@ -609,7 +609,7 @@ describe('named results in the stack', () => {
     // The splitters are named by the result above them, by its name when it has one.
     expect(splitters()).toEqual([`Resize ${long}`, 'Resize Result 2', 'Resize Totals'])
     // The caption's buttons name it in full.
-    expect(all('.rs-caption-close').map(button => button.getAttribute('aria-label'))[0]).toBe(`Close ${long}`)
+    expect(all('.rs-caption-close').map(button => button.getAttribute('aria-label'))[0]).toBe(`Close ${long}, Result 1`)
     // The name reaches the DOM as text, never as markup.
     expect(all('.rs-caption-name')[0].children).toHaveLength(0)
   })

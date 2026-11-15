@@ -322,7 +322,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (!o.quiet && this.shows(tabId, tab.queryId, old, neu, o.exact)) this.update(tabId, { error: undefined, cancelled: false })
     this.publishRunning()
     // The toolbar's strip shows it, with a Cancel of its own beside the popover's.
-    const [fromName, toName] = comparedNames(from, to)
+    const [fromName, toName] = comparedNames(from, to, this.results.getSnapshot()[tabId]?.sets ?? [])
     const ticket = this.results.operations.begin(tabId, { kind: 'compare', target: `${fromName} → ${toName}`, cancel: () => this.cancel(tabId, old, neu, o.exact) })
     let done = false
     try {

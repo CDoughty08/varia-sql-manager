@@ -4,7 +4,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -148,6 +148,8 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry), number = entrySecondary(entry)
+  // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
+  const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.
   const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
@@ -161,17 +163,17 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const refocus = useCallback(() => toggleRef.current?.focus(), [])
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} data-named={named || undefined}
-      {...number ? { title: `${name} · ${number}` } : named ? { title: name } : {}} onClick={() => onToggle(entry.key)}>
+      {...number ? { title: `${name} · ${number}`, 'aria-label': spoken } : named ? { title: name } : {}} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
-    <FilterChips tabId={tabId} entry={entry} name={name} sort={sort} refocus={refocus} />
+    <FilterChips tabId={tabId} entry={entry} name={spoken} sort={sort} refocus={refocus} />
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} source={pivotSource ?? `Result ${pivotOf}`} stale={!!stale} running={running} refocus={refocus} />}
-    {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
+    {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${spoken} As…`} title={`Save ${spoken} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
-    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`}
+    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${spoken}`} title={running ? `Close ${spoken} (unavailable while the query runs)` : `Close ${spoken}${others}`}
       disabled={running} onClick={() => onClose(entry.key)}><Icon name="close" /></button>}
   </div>
 })
@@ -200,7 +202,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       // What a Table's close takes with it, for its button's tooltip.
       map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others: group.pivot ? ' and its Pivot' : '', named: slotNamed(group.table) })
       // A Pivot whose Table's filters changed since it was built is marked on its caption, with Update.
-      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '', source: entryName(group.table.entry), named: slotNamed(group.pivot), ...pivotOutOfDate(tab, group) ? { stale: true } : {} })
+      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '', source: distinctName(group.table.entry, tab.sets), named: slotNamed(group.pivot), ...pivotOutOfDate(tab, group) ? { stale: true } : {} })
     }
     for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '', named: slotNamed(slot) })
     return map

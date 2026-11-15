@@ -296,6 +296,9 @@ try {
   const named = resultTabs(page).getByRole('tab')
   await expect(named).toHaveText(['Totals', 'Result 2', 'Totals', longName])
   await expect(named.nth(0)).toHaveAttribute('title', 'Totals · Result 1')
+  // Two tabs of one name have accessible names told apart by their numbers.
+  await expect(resultTab(page, 'Totals, Result 1')).toHaveCount(1)
+  await expect(resultTab(page, 'Totals, Result 3')).toHaveCount(1)
   await expect(named.nth(1)).not.toHaveAttribute('title', /./)
   await expect(named.nth(3)).toHaveAttribute('title', `${longName} · Result 4`)
   expect(await nameCut(named.nth(3))).toBe(true)

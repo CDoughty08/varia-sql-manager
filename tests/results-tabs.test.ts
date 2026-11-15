@@ -1004,11 +1004,25 @@ describe('named results as tabs', () => {
     // The name is the tab's text alone: the tab's widest is a theme metric and the text ends in an ellipsis there.
     expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
     expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
-    expect(closer(long)).toBeTruthy()
+    // A named result's tab and close button are named with its number too, for a screen reader; others as before.
+    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', null])
+    expect(closer(`${long}, Result 1`)).toBeTruthy()
+    expect(closer('Result 2')).toBeTruthy()
     // The view tabs keep their words; a Pivot's accessible name uses the Table's name.
     act(() => { resultTabs()[2].click() })
     draw()
     expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals')
+  })
+  it("tell two results of one name apart in their tabs' accessible names and their Pivot's", () => {
+    const { draw, resultTabs, closer, all } = fixture(['Totals', undefined, 'Totals'])
+    draw()
+    expect(resultTabs().slice(0, 3).map(button => button.getAttribute('aria-label'))).toEqual(['Totals, Result 1', null, 'Totals, Result 3'])
+    expect(closer('Totals, Result 1')).toBeTruthy()
+    expect(closer('Totals, Result 3')).toBeTruthy()
+    act(() => { resultTabs()[2].click() })
+    draw()
+    expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals (Result 3)')
+    expect(all('[data-tab-row="view"] [role="tab"]').map(tab => tab.getAttribute('aria-label'))).toEqual(['Table', 'Pivot of Totals (Result 3)'])
   })
   it('list named results with their numbers in the picker, filter on both, and keep Go to Result 1 to 8 positional', () => {
     const { results, one, three } = fixture(['Totals', undefined, 'Totals'])

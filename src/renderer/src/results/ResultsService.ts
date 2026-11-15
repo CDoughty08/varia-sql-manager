@@ -65,9 +65,19 @@ export const numberedName = (entry: Named): string => {
 /** Two compared results' names, for a comparison's title: each its name, and each with its number when the two names are
  *  the same ("Totals (Result 1)" and "Totals (Result 3)"), so the title says which way round it is. Unnamed results'
  *  names are their numbers, which never collide. */
-export const comparedNames = (old: Named, neu: Named): [string, string] => {
-  const a = entryName(old), b = entryName(neu)
-  return a === b ? [`${a} (${entryNumber(old)})`, `${b} (${entryNumber(neu)})`] : [a, b]
+export const comparedNames = (old: Named, neu: Named, sets: readonly Named[] = [old, neu]): [string, string] => [distinctName(old, [...sets, old, neu]), distinctName(neu, [...sets, old, neu])]
+/** An entry's name, with its number when another of the run's results has the same name ("Totals (Result 3)"): for the
+ *  titles a Pivot or comparison takes from its sources, and their sources' links, so two of one name are told apart.
+ *  Unnamed results' names are their numbers, which never collide, so theirs read as before. */
+export const distinctName = (entry: Named, sets: readonly Named[]): string => {
+  const name = entryName(entry)
+  return sets.some(other => other.number !== entry.number && entryName(other) === name) ? `${name} (${entryNumber(entry)})` : name
+}
+/** An entry's accessible name: a named result's name with its number ("Totals, Result 3"), so two tabs, captions or
+ *  buttons of one name are told apart by a screen reader; anything else its name alone. */
+export const spokenName = (entry: Named): string => {
+  const number = entrySecondary(entry)
+  return number ? `${entryName(entry)}, ${number}` : entryName(entry)
 }
 /** Whether a slot shows a name the query gave: a named Table, or a Pivot or comparison made from a named result (its frozen
  *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
@@ -1389,7 +1399,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
     // Pivot, a comparison or a plan set), and a group has one, so a new one takes the slot of the one it had.
     const group = view === 'comparison' ? undefined : origin?.group
-    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: entryName(source), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
+    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })

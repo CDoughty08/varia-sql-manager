@@ -37,7 +37,9 @@ function duration(microseconds: number): string {
 export interface Tile { readonly label: string; readonly value: string; readonly unit?: string; readonly note: string; readonly tone?: 'saved' }
 export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'returned'; readonly label: string; readonly bytes: number; readonly share: number }
 export interface Bar { readonly label: string; readonly total: number; readonly segments: readonly Segment[] }
-export interface BiggestRow { readonly resultId: number; readonly name: string; readonly logical: string; readonly stored: string; readonly state: ResultMemoryEntry['state']; readonly stateLabel: string; readonly logicalShare: number; readonly storedShare: number }
+/** A result's name in Biggest results in its two parts: its query tab's, which gives way first, and the Results part. */
+export interface ResultLabel { readonly tab?: string; readonly result: string }
+export interface BiggestRow { readonly resultId: number; readonly name: string; readonly label: ResultLabel; readonly logical: string; readonly stored: string; readonly state: ResultMemoryEntry['state']; readonly stateLabel: string; readonly logicalShare: number; readonly storedShare: number }
 export interface Counter { readonly label: string; readonly value: string }
 export interface NerdMetricsModel {
   /** Whether any page is compressed: the ring's second tone, the packed chip and the ratio only show then. */
@@ -65,7 +67,7 @@ export const anyCompressed = (detail: ResultMemoryDetail | undefined): boolean =
 
 /** The Nerd metrics section from a results.memory event's detail. Nothing is invented: a figure compression has not
  *  produced yet shows a dash, and the parts that only compression fills are left out until a page is packed. */
-export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemoryEntry) => string): NerdMetricsModel {
+export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemoryEntry) => ResultLabel): NerdMetricsModel {
   const { logicalBytes: logical, storedBytes: stored, compressedBytes: compressed, packedLogicalBytes: packedLogical, cacheBytes: cache, codec, heap } = detail
   const isCompressed = anyCompressed(detail)
   const codecOn = codec.name !== undefined
@@ -90,7 +92,7 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const legend = [segment('raw', rawBytes), ...[segment('packed', compressed), segment('cache', cache), segment('returned', givenBack)].filter(part => part.bytes > 0)]
   const widest = Math.max(1, ...detail.largest.map(entry => entry.logicalBytes))
   const biggest = detail.largest.map(entry => ({
-    resultId: entry.resultId, name: name(entry), logical: bytes(entry.logicalBytes), stored: bytes(entry.storedBytes), state: entry.state,
+    resultId: entry.resultId, label: name(entry), name: labelText(name(entry)), logical: bytes(entry.logicalBytes), stored: bytes(entry.storedBytes), state: entry.state,
     stateLabel: entry.state === 'unpacking' && entry.progress !== undefined ? `Unpacking ${entry.progress}%` : stateLabels[entry.state],
     logicalShare: entry.logicalBytes / widest, storedShare: Math.min(entry.storedBytes, entry.logicalBytes) / widest
   }))
@@ -114,14 +116,16 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   }
 }
 
+export const labelText = (label: ResultLabel): string => label.tab ? `${label.tab} · ${label.result}` : label.result
+
 /** A result's name in Biggest results: its query tab and Results caption ("Query 3 · Result 1", "Query 3 · Open orders")
  *  when a tab shows it; a named one with its number, so two of one name are told apart ("Query 3 · Totals · Result 2"). */
 export function resultNames(tabs: Readonly<Record<string, { readonly sets: readonly { readonly descriptor: { readonly generation: number; readonly resultId: number; readonly name?: string }; readonly label?: string; readonly number: number }[] }>>,
-  documentName: (tabId: string) => string | undefined, generation: number | undefined): (entry: ResultMemoryEntry) => string {
-  const names = new Map<number, string>()
+  documentName: (tabId: string) => string | undefined, generation: number | undefined): (entry: ResultMemoryEntry) => ResultLabel {
+  const names = new Map<number, ResultLabel>()
   for (const [tabId, tab] of Object.entries(tabs)) {
     const document = documentName(tabId)
-    for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, `${document ? document + ' · ' : ''}${numberedName(set)}`)
+    for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, { ...document ? { tab: document } : {}, result: numberedName(set) })
   }
-  return entry => names.get(entry.resultId) ?? (entry.live ? 'Live view table' : 'Unlisted result')
+  return entry => names.get(entry.resultId) ?? { result: entry.live ? 'Live view table' : 'Unlisted result' }
 }

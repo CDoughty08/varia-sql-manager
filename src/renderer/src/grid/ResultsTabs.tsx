@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, pivotOutOfDate, spokenName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
@@ -385,12 +385,14 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
         // A named result's tooltip has its whole name (the tab may cut it short) and its number; a named comparison's, its name.
         const tip = [item.number ? `${item.name} · ${item.number}` : item.named ? item.name : '', batch].filter(Boolean).join(' · ')
+        // A named result's accessible name carries its number too, so a screen reader tells two of one name apart.
+        const spoken = item.number ? `${item.name}, ${item.number}` : item.name
         return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}>
-          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined}
+          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...item.number ? { 'aria-label': spoken } : {}}
             aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => select(item.group ? groupView(item.group) : item.key)}>
             {item.group?.planSet && <Icon name="execution-plan" />}{item.comparison && <Icon name="git-compare" />}<span className="rt-name">{item.name}</span>
           </button>
-          {!tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${item.name}`} title={closeTitle(item.name, others)} disabled={running}
+          {!tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${spoken}`} title={closeTitle(spoken, others)} disabled={running}
             onClick={event => close(item.key, 'result', event)}><Icon name="close" /></button>}
         </div>
       })}
@@ -401,12 +403,12 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       {picking && <ResultsPicker tab={tab} anchor={pickerAnchor} selected={selected?.key} onPick={pick} onClose={closePicker} />}
     </div>
     <div className="rt-views">
-      {group ? <div className="rt-view-tabs" role="tablist" aria-label={`Views of ${entryName(group.table.entry)}`} data-tab-row="view" onKeyDown={viewKey}>
+      {group ? <div className="rt-view-tabs" role="tablist" aria-label={`Views of ${distinctName(group.table.entry, tab.sets)}`} data-tab-row="view" onKeyDown={viewKey}>
         {views.map(view => {
           const on = view.key === selected.key, pivot = view.view === 'pivot', marked = pivot && stale
           return <div key={view.key} className="rt-view" data-tab-entry={view.key} data-selected={on || undefined}>
             <button type="button" role="tab" id={tabIdOf(view.key, 'view')} aria-selected={on} tabIndex={on ? 0 : -1} {...on ? { 'aria-controls': id + 'panel' } : {}}
-              aria-label={pivot ? `Pivot of ${entryName(group.table.entry)}` : group.planSet ? 'Plan set' : 'Table'} {...marked ? { 'aria-description': 'Out of date', title: "Out of date: its Table's filters changed" } : {}} onClick={() => select(view.key)}>
+              aria-label={pivot ? `Pivot of ${distinctName(group.table.entry, tab.sets)}` : group.planSet ? 'Plan set' : 'Table'} {...marked ? { 'aria-description': 'Out of date', title: "Out of date: its Table's filters changed" } : {}} onClick={() => select(view.key)}>
               {pivot ? 'Pivot' : group.planSet ? 'Plan set' : 'Table'}{marked && <span className="rt-dot" aria-hidden="true" />}
             </button>
             {pivot && !tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${entryName(view.entry)}`} title={closeTitle(entryName(view.entry))} disabled={running}
@@ -415,9 +417,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
         })}
       </div> : <span className="rt-view-label"><Icon name="git-compare" />Comparison</span>}
       <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} />
-      {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={entryName(group.table.entry)} stale={stale} running={running} refocus={refocusView} />}
-      <FilterChips tabId={tabId} entry={selected} name={selectedName} sort={sort} refocus={refocusView} />
-      <SaveView tabId={tabId} entry={selected} name={selectedName} />
+      {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={distinctName(group.table.entry, tab.sets)} stale={stale} running={running} refocus={refocusView} />}
+      <FilterChips tabId={tabId} entry={selected} name={spokenName(selected)} sort={sort} refocus={refocusView} />
+      <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
     </div>
     <div className="rt-panel" role="tabpanel" id={id + 'panel'} aria-labelledby={labelledBy}>
       {/* Keyed by result: another view is another grid, and the one it replaces unmounts and gives back its pool; so is a
