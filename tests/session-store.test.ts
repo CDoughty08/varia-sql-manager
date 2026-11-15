@@ -89,6 +89,21 @@ describe('the hot exit session store', () => {
     expect((await store.take(true))?.documents).toEqual(tabs.documents)
   })
 
+  it('sets an unrestored session aside instead of replacing it when the page never finished reopening it', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    const unrestored = await readFile(join(folder, 'session.json'), 'utf8')
+    const read = vi.spyOn(jsonFile, 'readJsonFile').mockRejectedValueOnce(new Error('Antivirus held the file.'))
+    await expect(store.take(true)).rejects.toThrow('Antivirus held the file.')
+    read.mockRestore()
+    const later: SessionInput = { activeIndex: 0, documents: [{ name: 'Later.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 9' }] }
+    await store.write(later, 2, true)
+    const kept = (await files()).filter(name => /^session\.json\.invalid-/.test(name))
+    expect(kept).toHaveLength(1)
+    expect(await readFile(join(folder, kept[0]), 'utf8')).toBe(unrestored)
+    expect((await store.take(true))?.documents.map(document => document.name)).toEqual(['Later.sql'])
+  })
+
   const workspace = () => connectionWorkspaceSchema.parse({ version: 1, targets: [
     { id: randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { displayName: 'Production', environment: 'Production', autoReconnect: 'off' }, inExplorer: true, resumeWanted: false },
     { id: randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: {}, inExplorer: false, resumeWanted: true }

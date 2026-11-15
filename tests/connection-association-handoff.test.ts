@@ -191,6 +191,24 @@ describe('connection association checkpoints', () => {
     } finally { value.dispose() }
   })
 
+  it('lets a window close (a Windows session end) cancel a pending details review instead of being refused', async () => {
+    const value = await fixture()
+    try {
+      const opened = (await acceptConnectionReceipt(value.receipt()))!
+      const cancelled = vi.fn(() => opened.association!.abandon(true))
+      const unregister = value.connections.yieldToCheckpoint(cancelled)
+      await value.files.closeWindow(async () => {})
+      expect(cancelled).toHaveBeenCalledTimes(1)
+      expect(value.files.getSnapshot().error).not.toContain('Wait for query tabs to finish connecting')
+      expect(value.api.keepSession).toHaveBeenCalled()
+      expect(value.api.closeWindow).toHaveBeenCalledTimes(1)
+      // A yield runs once; a later checkpoint does not call a review that already ended.
+      unregister()
+      value.connections.assertCheckpointReady()
+      expect(cancelled).toHaveBeenCalledTimes(1)
+    } finally { value.dispose() }
+  })
+
   it.each(['source-stop', 'canonical-disconnect-rollback', 'abort'] as const)('preserves %s made inside the synchronous adoption publication', async intent => {
     const value = await fixture(), controller = new AbortController()
     let applied = false

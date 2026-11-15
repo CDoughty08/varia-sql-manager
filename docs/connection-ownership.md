@@ -130,6 +130,9 @@ delete its saved profile or credentials.
 Backend generation loss invalidates old transports, pending work and process-local affinity. Cleanup is always
 generation-scoped; an old handle cannot be sent into a replacement backend. Backend shutdown owns accepted transport
 disposal. Main retains only the nonsecret authentication pins needed to validate explicit or silent reconnect.
+A disk restore pins Windows and Entra accounts only as far as the workspace seal proves main wrote them
+(`connection-workspace-seal.ts`); an unproven silent target is pinned without an account, so background reconnect
+refuses it. A failed session read retires every pin not reachable through a live handle or pending request.
 Replacement-page restoration reconciles pins against the trusted saved workspace before restoring its identities,
 protecting current live, pending and delivered owners. Empty workspaces retire orphan pins too. Stale disk readers
 cannot prune a newer page's pins, and late credential settlement cannot reintroduce an old page's orphan target.

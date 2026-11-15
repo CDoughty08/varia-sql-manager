@@ -41,6 +41,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   private readonly targetEpochs = new Map<string, number>()
   private readonly targetStates = new Map<string, string>()
   private readonly associationHandoffs = new Map<symbol, () => void>()
+  private readonly checkpointYields = new Set<() => void>()
   private targetRevision = 0
   private readonly unsubscribe: () => void
   constructor(readonly connectionTargets = new ConnectionTargetService()) {
@@ -53,7 +54,16 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   /** The connection is still there and was not lost with its backend generation. */
   isLive(id: string): boolean { return isLiveConnection(this.get(id)) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
+  /**
+   * A pending choice that holds a handoff open (the Connection Details review) and that a close or reload cancels instead
+   * of being refused by it: a Windows session end must not wait on a dialog. Returns the unregistration.
+   */
+  yieldToCheckpoint(cancel: () => void): () => void {
+    this.checkpointYields.add(cancel)
+    return () => { this.checkpointYields.delete(cancel) }
+  }
   assertCheckpointReady(): void {
+    for (const cancel of [...this.checkpointYields]) { this.checkpointYields.delete(cancel); cancel() }
     if (this.associationHandoffs.size) throw new Error('Wait for query tabs to finish connecting, or cancel the connection dialog, before closing or reloading.')
   }
   /** Canonical adoption and query affinity must be one durable checkpoint, including across main's acknowledgement. */

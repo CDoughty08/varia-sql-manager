@@ -374,6 +374,8 @@ Considered and rejected (do not re-propose without new numbers):
   plans keep their existing weight because that run had no SQL endpoint and skipped them. Hot exit uses its last green
   Linux/Windows measurements of 17/18 seconds plus the five-second grace now exercised by its forced replacement-window
   regression. The resulting modeled shard totals are 301/301/302 seconds on Linux and 310/310/310 on Windows, within the
-  existing 360-second budget; no job was added and no suite timeout increased.
+  existing 360-second budget, and no job was added. The per-suite watchdog (four times the weight, at least 300 seconds)
+  rose with the weights: Activity Monitor to 364 seconds on both platforms, and menus to 304 seconds on Linux and 412 on Windows. The job
+  timeouts did not change.
 - **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs` (runner-minutes,
   job count, queue) in its PR and here.

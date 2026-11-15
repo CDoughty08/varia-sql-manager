@@ -75,7 +75,9 @@ sessions migrate with their server and database hints intact; the migration does
 a server name. Unknown fields, secrets, duplicate target IDs and query associations to missing targets are rejected
 and the file is quarantined. A failed or oversized write leaves the previous checkpoint available.
 Temporary read or quarantine failures preserve the original bytes and refuse a replacement or clear until the file
-can be read or safely quarantined. Reload checkpoints also keep each surviving tab's matching AutoRecover copy when
+can be read or safely quarantined. If a start took the session but never finished reopening it (the read failed, or the
+restore stopped part-way), that run's close sets `session.json` and `previous.json` aside as quarantined copies, kept as
+long as Keep AutoRecover information for, instead of overwriting or deleting them. Reload checkpoints also keep each surviving tab's matching AutoRecover copy when
 an unavailable file is omitted.
 
 AutoRecover is unchanged: a hot-exit close counts as handling every query, so AutoRecover's copies are deleted and the
@@ -97,6 +99,14 @@ Reopened queries immediately show their remembered server and **Disconnected**, 
 The connection workspace restores before the queries. Automatic reconnect uses the global setting and each target's
 override, and respects explicit Disconnect. It can restore a connection without running a query or opening browser
 sign-in. Missing credentials or a required sign-in leave the target available for an explicit reconnect.
+
+Windows Authentication and Microsoft Entra targets sign in without a password, so startup would send the account's
+credentials to the target's server before the account check could refuse it. Main therefore seals those targets'
+identities in `session.json` with an HMAC whose random key is protected by the operating system's secret storage (the
+same protection as remembered passwords, `src/main/connection-workspace-seal.ts`). A target the seal does not prove (an
+edited or added entry, a removed seal, or a seal that cannot be read this run) loses its remembered account and waits for
+an explicit Reconnect. Without OS secret storage (Linux with no keyring) there is no seal and the file is trusted as
+before. Password targets need no seal: their saved password is bound to the server and TLS settings.
 
 Only queries that wanted attachment to the exact successfully reconnected target attach. Each keeps its own database;
 an unavailable database needs an explicit choice and never silently falls back to another one. A new SQL session has

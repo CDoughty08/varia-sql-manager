@@ -784,6 +784,10 @@ async function rememberPassword() {
   await savedConnections(dialog, 'password-check').press('Enter')
   await expect(dialog).toHaveCount(0)
   expect((await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').map(call => call.params.password)).toEqual(['<redacted>'])
+  // Enter used the saved row, which reuses its live connection: the edited form was not submitted, and nothing new opened.
+  expect((await calls()).filter(call => call.method === 'connections.connect')).toHaveLength(attemptsBeforeEnter)
+  expect((await calls()).filter(call => call.method === 'connections.connect' && (call.params.server === 'other-server' || call.params.username === 'other-reader'))).toEqual([])
+  await expect(serverRows(page).filter({ hasText: 'other-server' })).toHaveCount(0)
   await expect(serverRows(page).filter({ hasText: 'password-check' })).toHaveCount(1)
   // (5) A forged request naming the entry gets no password for another server or a weaker certificate check.
   const forged = await page.evaluate(async profileId => {
