@@ -39,6 +39,11 @@ internal static class ResultNameChecks
             if (found != expected) differences.Add((string)item["name"]! + " gave [" + found + "], not [" + expected + "]");
         }
         check(cases.Count >= 30 && differences.Count == 0, "the marker scan finds each case's markers in tests/fixtures/result-names/markers.json: " + string.Join("; ", differences));
+        // The refused characters, held to the ranges the descriptor schema's test reads too (tests/result-name-descriptor.test.ts).
+        var refusedPath = Path.Combine(GoldenText.Repository(), "tests", "fixtures", "result-names", "refused.json");
+        var ranges = JsonNode.Parse(File.ReadAllText(refusedPath))!["ranges"]!.AsArray().Select(range => ((int)range![0]!, (int)range[1]!)).ToList();
+        var differ = Enumerable.Range(0, 0x10000).Where(code => ResultNames.IsRefused((char)code) != ranges.Any(range => code >= range.Item1 && code <= range.Item2)).ToList();
+        check(ranges.Count > 0 && differ.Count == 0, "ResultNames.IsRefused refuses exactly the code units in tests/fixtures/result-names/refused.json: " + string.Join(", ", differ.Take(8).Select(code => code.ToString("x4"))));
         // A batch's marker offsets are its own text's, so the comment they point at is in the batch as the server gets it.
         var script = "SELECT 1 AS a;\nGO\n/* #Name=\"Second\" */\nSELECT 2 AS b;";
         var second = SqlScript.Parse(script)[1];

@@ -172,12 +172,12 @@
       ]
     },
     {
-      "name": "a tab is a control character",
-      "sql": "-- #Name=\"a\tb\"\nSELECT 1 AS a;",
+      "name": "a tab is white space, collapsed with the spaces around it",
+      "sql": "-- #Name=\"Open\t \torders\"\nSELECT 1 AS a;",
       "markers": [
         {
           "line": 1,
-          "malformed": true
+          "name": "Open orders"
         }
       ]
     },
@@ -298,6 +298,46 @@
         {
           "line": 3,
           "name": "Crlf"
+        }
+      ]
+    },
+    {
+      "name": "lone CR line breaks",
+      "sql": "SELECT 0 AS z;\r/*\r #Name=\"Cr\"\r*/\rSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 3,
+          "name": "Cr"
+        }
+      ]
+    },
+    {
+      "name": "the bound is the collapsed name's length, however much white space the quotes hold",
+      "sql": "-- #Name=\"a                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        b\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "a b"
+        }
+      ]
+    },
+    {
+      "name": "129 characters after collapsing is malformed",
+      "sql": "-- #Name=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "128 characters after collapsing and trimming",
+      "sql": "-- #Name=\"   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy   \"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
         }
       ]
     }

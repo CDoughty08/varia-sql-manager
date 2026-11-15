@@ -41,8 +41,6 @@ internal static class ResultNames
     /// <summary>The parse runs on a thread of its own with this much stack reserved (committed only as used): a long chain of
     /// AND, + or ELSE IF within MaxParseChars recurses deeper than a thread pool thread's stack allows.</summary>
     private const int ParseStackBytes = 256 * 1024 * 1024;
-    /// <summary>A quoted name longer than this is malformed without reading the rest of it.</summary>
-    private const int MaxQuotedChars = 4 * MaxChars;
 
     /// <summary>C0 and C1 controls, line and paragraph separators, bidirectional marks, embeddings, overrides and isolates,
     /// and the BOM: a marker whose name holds one is malformed (the zod schema's refusedResultNameChars).</summary>
@@ -52,7 +50,7 @@ internal static class ResultNames
     /// <summary>Whether a comment's text (without its delimiters) is a marker: <c>#Name</c> in any case, white space, <c>=</c>,
     /// white space, a double-quoted name with doubled quotes inside, and nothing else but white space. False: an ordinary
     /// comment. True with a null name: a malformed marker (no closing quote, text after it, empty, too long, a refused
-    /// character). The name is trimmed and its runs of white space become one space.</summary>
+    /// character other than a tab). The name is trimmed and its runs of white space, tabs included, become one space.</summary>
     public static bool TryMarker(ReadOnlySpan<char> comment, out string? name)
     {
         name = null;
@@ -63,25 +61,28 @@ internal static class ResultNames
         if (at >= text.Length || text[at] != '=') return true;
         at = Skip(text, at + 1);
         if (at >= text.Length || text[at] != '"') return true;
-        var quoted = new StringBuilder();
+        // Collapsed as it is read (leading white space dropped, each run one space), so the bound is the name's own length
+        // however much white space the quotes hold, and reading stops once the name is too long.
+        var collapsed = new StringBuilder(MaxChars + 2);
         for (at++; ; at++)
         {
-            if (at >= text.Length || quoted.Length > MaxQuotedChars) return true;
+            if (at >= text.Length) return true;
             var c = text[at];
             if (c == '"')
             {
-                if (at + 1 < text.Length && text[at + 1] == '"') { quoted.Append('"'); at++; continue; }
-                break;
+                if (at + 1 >= text.Length || text[at + 1] != '"') break;
+                at++;
             }
-            if (IsRefused(c)) return true;
-            quoted.Append(c);
+            // A tab is white space like any other; every other refused character makes the marker malformed.
+            else if (c != (char)0x09 && IsRefused(c)) return true;
+            if (!char.IsWhiteSpace(c)) collapsed.Append(c);
+            else if (collapsed.Length > 0 && collapsed[^1] != ' ') collapsed.Append(' ');
+            // One more than the bound may be a trailing space, trimmed below.
+            if (collapsed.Length > MaxChars + 1) return true;
         }
         // The text was trimmed, so the closing quote must end it.
         if (at != text.Length - 1) return true;
-        var collapsed = new StringBuilder(quoted.Length);
-        foreach (var c in quoted.ToString().Trim())
-            if (!char.IsWhiteSpace(c)) collapsed.Append(c);
-            else if (collapsed[^1] != ' ') collapsed.Append(' ');
+        if (collapsed.Length > 0 && collapsed[^1] == ' ') collapsed.Length--;
         if (collapsed.Length is 0 or > MaxChars) return true;
         name = collapsed.ToString();
         return true;
@@ -198,6 +199,8 @@ internal sealed class ResultNamePlan
             return Refused(markers, $"was not applied: its batch is longer than {ResultNames.MaxParseChars.ToString("N0", CultureInfo.InvariantCulture)} characters.");
         if (batch.ParenDepth > ResultNames.MaxParenDepth)
             return Refused(markers, "was not applied: its batch nests parentheses too deeply to place it.");
+        // Before the parse as well as while waiting: a parse can finish before WaitAsync looks at the token.
+        token.ThrowIfCancellationRequested();
         var firstLine = sourceStartLine + batch.StartLine - 1;
         TSqlFragment? fragment;
         int errors;
