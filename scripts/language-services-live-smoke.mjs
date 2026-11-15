@@ -90,6 +90,8 @@ async function connect(database) {
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 60000 })
   await expect(queryDatabase(page)).toHaveValue(database)
+  // The database can show before the server select takes the new connection's id: read the id only once it is set.
+  await expect(queryServer(page)).not.toHaveValue('')
   return { connectionId: await queryServer(page).inputValue(), tab: await activeDocumentName(page) }
 }
 async function suggest(target, scope, { prefix, suffix, label }) {
