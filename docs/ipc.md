@@ -1848,7 +1848,7 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 
 - **`results.profile { resultId, columns: 0 – 32, viewId? }`** answers `{ rows, complete, rowBytes?, columns }`. Columns
   are distinct and within the result (`INVALID_PARAMS`); no columns answers only `rowBytes`. Through a view it describes
-  the view's rows (its sort now, its filter once views filter), else the rows sealed when it ran; `complete` says those
+  the view's rows (those its filters keep, in any order), else the rows sealed when it ran; `complete` says those
   were every row of a finished set. Main forwards an answer only when it names the columns asked, in order.
 - **Per column** `{ column, values, nulls, distinct, distinctExact, min?, max?, approximate, chars?, bytes?, histogram? }`.
   Values compare as a sort does ([Sorted views](#sorted-views)): NULL and unreadable cells count as `nulls` and are never
@@ -1861,6 +1861,12 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
   types by instant (`time`, .NET ticks), text by `chars`, binary by `bytes`; other types have none.
 - **`rowBytes`** is the rows' sizes, `{ min, max, average, exact }` from each page's row sums: the grid's row-size bar
   scales to its `max`.
+- **Rows, not order.** Every figure is order-free and compares by the column's type and collation, never by a sort key's
+  `mode`, so the panel (`ColumnProfilePanel.tsx`, `profiledRows`) keys a profile to its result, the view's resolved filters
+  (compared by what they keep, as `sameFilters` does) and the rows they were applied to, not to the view: a new view for a
+  sort alone (another key, direction or Sort Text By mode) sends no request and keeps the cards, and a view without filters
+  over every row counts as the result's own rows. A view it is reading stays open (`ResultsService.holdView`) until its
+  answer arrives, though the grid sorts again meanwhile.
 - **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
   view's rows. The pages are read in runs on several threads (a run of pages each, up to the threads the operations share), each with
   figures of its own, merged in page order: every figure is a count, a sum, a lowest or highest, or a set, so the profile
