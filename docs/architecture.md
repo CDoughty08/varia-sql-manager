@@ -159,6 +159,19 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Named result sets (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` marker
+  comment names the next top-level statement's first result set in its batch. The user's SQL is still sent unchanged: a
+  marker is a comment to the server, found by `SqlScript.Parse`'s own masking (so one in a string, a quoted name or a
+  nested comment is not a marker). Only a batch with a well-formed marker is parsed, once before its first execution
+  however often `GO n` repeats it, by ScriptDom on a thread of its own with a large stack, and only within
+  `ResultNames.MaxParseChars` and `MaxParenDepth`: ScriptDom's recursion can overflow a normal stack and end the process.
+  Each top-level statement is classed None, One or Unknown; a name binds by position (the batch execution's sets with
+  columns, plans left out) only where every statement before it is known, an Unknown statement's names only when nothing
+  after it can return a set. While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
+  that fails returns no set), at a set whose column count its statement does not select, and at SHOWPLAN or STATISTICS
+  PROFILE text. A name not applied is an informational Messages line quoting the name and its line, never an error and
+  never logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name` carries it; a name never
+  changes a result's identity, which stays its ordinal.
 - Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
   the grids `ResultGrid` registers (one shared ResizeObserver per window, PaneService for the dock's `visibility:
   hidden` tabs, document visibility, no timers), as the whole set when it changes and again each time the backend
@@ -169,8 +182,8 @@ being true.
   sent by main alone when Tools › Options' limit changes, as each generation becomes ready and after each settings read that
   succeeds, `SettingsStore.onDidLoad`). They are replaced whole and
   each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
-  store and memory budget). Every operation on a whole result reserves its working memory before it builds (search reserves only what
-  unpacking takes, its comment says why); small steps go
+  store and memory budget). Every operation on a whole result reserves its working memory before it builds (search reserves only its
+  rooms for a packed result, or what unpacking takes through a sorted view; its comment says why); small steps go
   through `WorkSteps`, which asks the memory load once per 64 MiB held. `tests/working-memory-lint.test.ts` pins each
   operation's reservations in `SqlService`.
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
@@ -278,14 +291,26 @@ being true.
   in-order pass unpacks the next batch of pages on the workers while it reads the one before (`InOrder`, two batches of
   rooms). A pivot's output reads the rows it copies
   from pages read together (`RowAccess.Hold`, `BodiesTogether`; refused, the result is unpacked in place instead, which
-  adds only what packing saved). Pages held as sealed read exactly as before. The other
-  operations on the whole result (distinct values, whose snapshot keeps its pages for later reads; row identity; diff;
-  and a search, whose slots keep the pages it reads) first
-  unpack it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
-  then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
+  adds only what packing saved). Pages held as sealed read exactly as before. A distinct list, row identities, a diff
+  and a search read packed results fused too (`PageRooms.Over`, each worker a `RoomReader`; refused, `TOO_LARGE` with
+  the operation's sentence and nothing held). A diff's readers keep a few pages unpacked (`ResultDiffer.LeftSlots`,
+  `RightSlots`), since it reads the first result in the second result's order and goes back to cells after matching;
+  `ResultDiffer.Local` counts beforehand how many unpacks that order costs, and past `UnpacksPerPage` a page it unpacks
+  the first result in place instead (`TryUnpackAll`; refused, `TOO_LARGE`). The unified result is written on one
+  thread, so each side's packed pages are unpacked ahead on the workers in the order the writer reads them
+  (`PageAhead`, two batches of rooms, as a pivot's in-order pass, taken only from memory the budget can spare,
+  `TryReserveSpare`, and given back once the budget reaches the eighth it leaves free, `HasSpare`, so the output keeps
+  its room; without them the writer unpacks pages itself). Rooms ask the system's memory load once for
+  every `WorkCheckBytes` they take together, so many small rooms are refused under load as one large reservation would
+  be. A distinct snapshot keeps its result's pages, not their bytes (`KeptPages`): its later reads and value searches go
+  in row order through one `ReadRoom`, each page unpacked once, and it never holds page bytes after the result is packed
+  again. A search through a view far from its pages' order (`ResultSearcher.Local`: a sorted view) still unpacks the
+  result in place first (`SqlService.Unpack`: `UnpackNeed` reserved as working memory, then `UnpackAll`, stopped by a
+  release; a refusal answers `TOO_LARGE` with its sentence and unpacks none); in base order or through a filtered view it
+  reads fused, one room a run in base order and up to two through a filtered view (called directly through a far view, it reads through the accessor as before).
   A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
   held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
-  unpacking each packed page into one room of its own (`ResultJobs.ReadRoom`, the largest page reserved as working memory;
+  unpacking each packed page into one room of its own (`ReadRoom`, the largest page reserved as working memory;
   refused, the page is read through the accessor and its cache as before). An operation's unpack clears the set's packed
   mark, so the policy packs it again once it ends. `ResultStore.PackingSnapshot` holds the counters (packed, logical and
   cached bytes; pages packed, kept raw and unpacked; cache hits and lookups; time; the last whole unpack), which
@@ -449,8 +474,8 @@ being true.
   cancels the reads still running (`explorerCancel`) and drops their answers.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
-  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names
-  and definitions, by `IndexMemory`'s estimates) under one 512 MiB budget for all connections (`IndexBudget`); names and
+  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (packed object
+  entries in an `ObjectTable` per database, names and definitions, by `IndexMemory`'s estimates) under one 512 MiB budget for all connections (`IndexBudget`); names and
   definitions are held once across connections in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue) from
   `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
   `CatalogSql.Lint`, and the server's own objects from `ObjectSearchSql.Server` on the server's connection; it indexes every

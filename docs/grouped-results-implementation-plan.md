@@ -849,7 +849,7 @@ Outcome, accepted by the owner:
         bounded at 1,000 results; the picker, the arrow keys, Home, End, Find Next and the commands reach the rest. The
         result row's `role="tablist"` moved from `.rt-results` onto `.rt-strip`, so the button is not inside a tablist.
       - Commands (catalogue and generated pages regenerated). Owner review on PR 494 chose browser tab keys over SSMS's
-        query shortcuts (Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`; those can come back as palette commands that open a query):
+        query shortcuts (Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`; PR 499 made them, with Alt+F1's `sp_help`, palette commands that open a query):
         - **Next Result** and **Previous Result**: Ctrl+Alt+Page Down and Up from anywhere (the editor too), and Ctrl+Page
           Down and Up in the Results pane (`resultsFocus && multipleResults`: the focus in the Results pane or its picker,
           and two or more results or comparisons; Windows and Linux, as Next and Previous Query have them). Next and
@@ -889,7 +889,7 @@ Outcome, accepted by the owner:
       - Departures from the mock: the picker's button reads "+N" and a chevron, without the mock's count of every item;
         the Pivot row reads "Pivot" under its result rather than repeating the result's name; the mock's short pane hides
         the facts and strips at 330 px, where this folds the rows of tabs only when the grid would lose its rows.
-      - Left: the SSMS query shortcuts' procedures as palette commands; the 1,440 px Tabs button cutoff, narrow panes,
+      - Left: the 1,440 px Tabs button cutoff, narrow panes,
         Save names and popouts stay PR 15's.
 15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
     button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and

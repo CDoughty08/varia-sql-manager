@@ -161,11 +161,11 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
   compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a
   budget by what a result holds as sealed (`Held.AsSealed`), and a check about something other than pages (GC
-  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A sort, filter, profile or pivot reads a
-  packed result fused and holds rooms rather than its unpacked pages, so sizing its budget by `Held.AsSealed` leaves it
+  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A sort, filter, profile, pivot, distinct list,
+  row identity, diff or search reads a packed result fused and holds rooms rather than its unpacked pages, so sizing its budget by `Held.AsSealed` leaves it
   slack: a check that leaves just enough room for one adds `Held.Rooms` (an upper bound; how many rooms are made depends
   on the threads), and a check whose margin must be exact (a thread-count retry) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`, except one that sets each store's packing itself
-  (`FusedReadChecks`, which compares every fused operation with the same rows unpacked).
+  (`FusedReadChecks` and its `FusedWhole` suite, which compare every fused operation with the same rows unpacked).
   The checks also run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails. Live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
@@ -186,7 +186,9 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   `Unreachable.Source`, and find .NET waits with `VARIA_TEST_SLOW_MS=500`. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
   `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
   A bound on a wait that returns as soon as its condition holds costs nothing when it passes: make it generous (CI's 3 and
-  4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Two timers that race (a budget
+  4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Wait for file-bound background work (a
+  vault or library write that outlives its caller) by awaiting the promise its owner exposes, such as
+  `whenCancelledWorkDrained()`, never by polling a flag under `vi.waitFor`: a starved runner's disk has no bound to promise. Two timers that race (a budget
   that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
   run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
   Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or pass a fake one), and

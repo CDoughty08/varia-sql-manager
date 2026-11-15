@@ -1088,9 +1088,7 @@ internal static partial class ViewSorter
         private long extracted;
 
         /// <param name="tooLarge">What the operation answers (TOO_LARGE) when the budget refuses a room or an extract.</param>
-        /// <param name="eager">Reads every page whole now, as before fused reads (packed ones through their set's
-        /// accessor): for a source kept after its operation (a distinct snapshot's), which holds no rooms.</param>
-        public PageSource(StoredPage[] pages, int columns, string tooLarge = NoRoomToRead, bool eager = false)
+        public PageSource(StoredPage[] pages, int columns, string tooLarge = NoRoomToRead)
         {
             this.pages = pages;
             this.columns = columns;
@@ -1104,7 +1102,7 @@ internal static partial class ViewSorter
             {
                 var page = pages[i];
                 starts[i] = page.FirstRow;
-                var body = !eager && page.Set is { } set ? set.Raw(page) : page.Body();
+                var body = page.Set is { } set ? set.Raw(page) : page.Body();
                 if (body is null)
                 {
                     owner = page.Set;

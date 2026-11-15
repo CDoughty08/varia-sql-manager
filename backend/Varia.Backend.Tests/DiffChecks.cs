@@ -477,12 +477,13 @@ internal static class DiffChecks
         const string tooLarge = "TOO_LARGE: There is not enough result memory to show the differences. Close other results and try again.";
 
         // The budget runs out part-way: the sources, the alignment and about half the diff's rows fit.
-        // Measured raw: in the packed pass results.diff unpacks its sources before it compares them.
+        // Measured and run raw (the budget cutting a diff short, not pages): packed, the writer's rooms would take part of
+        // the room this sizes for rows (FusedReadChecks covers a writer refused its rooms).
         var roomy = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off };
         Pair(roomy, Rows(400, "1.00", 200), Rows(400, "2.00", 200));
         var sources = Held.Bytes(roomy);
         var working = ResultDiffer.WorkingBytes(400, 400) + ResultDiffer.CellChunk * ResultDiffer.CellBytes;
-        var store = new ResultStore(1L << 30, sources + working + sources / 2);
+        var store = new ResultStore(1L << 30, sources + working + sources / 2) { Packing = PagePacking.Off };
         using (var service = new SqlService(store))
         {
             var (left, right) = Pair(store, Rows(400, "1.00", 200), Rows(400, "2.00", 200));

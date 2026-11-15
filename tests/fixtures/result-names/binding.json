@@ -1,0 +1,664 @@
+{
+  "about": "The binding rule (docs/named-result-sets-scope.md, Binding rule and its case table) over SqlScript.Parse and ScriptDom, with no server. slots lists, per batch, the [position, name] pairs the plan names (positions count one batch execution's sets with columns, plans left out). notes lists every static note (unbatched markers first, then each batch's, before it runs), each as a fragment of its text, in order. run, when given, replays one execution of a batch: each set is {columns: n}, with plan: true for a plan set and showplan: true for SHOWPLAN or STATISTICS PROFILE text, and {error: true} is an error raised between sets; names lists the name each set with columns gets (null for none) and unapplied the notes after the execution.",
+  "cases": [
+    {
+      "name": "named SELECT, then an unnamed SELECT",
+      "sql": "/* #Name=\"Sample Query\" */\nSELECT @@SERVERNAME AS server_name, DB_NAME() AS database_name, SYSDATETIME() AS server_time;\n\nSELECT name FROM sys.databases;",
+      "slots": [
+        [
+          [
+            0,
+            "Sample Query"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 3
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "Sample Query",
+          null
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "statements of class None before it do not move it",
+      "sql": "SET NOCOUNT ON;\nDECLARE @x int = 1;\nPRINT 'x';\nUPDATE #t SET id = 2;\nSELECT 1 AS first_set;\n-- #Name=\"Second\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            1,
+            "Second"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          null,
+          "Second"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "named statement that returns no set",
+      "sql": "-- #Name=\"Changed\"\nUPDATE #t SET id = 2;\nSELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Changed\" (line 1) is unused: its statement returns no result set."
+      ]
+    },
+    {
+      "name": "named EXEC that returns three sets: the first is named",
+      "sql": "-- #Name=\"Order\"\nEXEC dbo.GetOrder @OrderId = 42;",
+      "slots": [
+        [
+          [
+            0,
+            "Order"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 4
+          },
+          {
+            "columns": 5
+          },
+          {
+            "columns": 2
+          }
+        ],
+        "names": [
+          "Order",
+          null,
+          null
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "three markers stacked before an EXEC that returns three sets",
+      "sql": "-- #Name=\"Order\"\n-- #Name=\"Lines\"\n-- #Name=\"Totals\"\nEXEC dbo.GetOrder @OrderId = 42;",
+      "slots": [
+        [
+          [
+            0,
+            "Order"
+          ],
+          [
+            1,
+            "Lines"
+          ],
+          [
+            2,
+            "Totals"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 4
+          },
+          {
+            "columns": 5
+          },
+          {
+            "columns": 2
+          }
+        ],
+        "names": [
+          "Order",
+          "Lines",
+          "Totals"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "more stacked markers than sets",
+      "sql": "-- #Name=\"Order\"\n-- #Name=\"Lines\"\n-- #Name=\"Totals\"\nEXEC dbo.GetOrder @OrderId = 42;",
+      "slots": [
+        [
+          [
+            0,
+            "Order"
+          ],
+          [
+            1,
+            "Lines"
+          ],
+          [
+            2,
+            "Totals"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 4
+          },
+          {
+            "columns": 5
+          }
+        ],
+        "names": [
+          "Order",
+          "Lines"
+        ],
+        "unapplied": [
+          "\"Totals\" (line 3) is unused: its statement returned fewer result sets than there are names."
+        ]
+      }
+    },
+    {
+      "name": "a named EXEC that returns no set",
+      "sql": "-- #Name=\"Order\"\nEXEC dbo.Quiet;\nSET NOCOUNT OFF;",
+      "slots": [
+        [
+          [
+            0,
+            "Order"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [],
+        "names": [],
+        "unapplied": [
+          "\"Order\" (line 1) is unused: its statement returned no result set."
+        ]
+      }
+    },
+    {
+      "name": "more stacked markers than a SELECT's one set",
+      "sql": "-- #Name=\"One\"\n-- #Name=\"Two\"\nSELECT 1 AS a;",
+      "slots": [
+        [
+          [
+            0,
+            "One"
+          ]
+        ]
+      ],
+      "notes": [
+        "\"Two\" (line 2) is unused: its statement returns one result set"
+      ]
+    },
+    {
+      "name": "name before IF: its first set takes it",
+      "sql": "-- #Name=\"Branch\"\nIF 1 = 1 SELECT 1 AS a; ELSE SELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "Branch"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "Branch"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "name before WHILE that returns no set",
+      "sql": "-- #Name=\"Loop\"\nWHILE 1 = 0 SELECT 1 AS a;",
+      "slots": [
+        [
+          [
+            0,
+            "Loop"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [],
+        "names": [],
+        "unapplied": [
+          "\"Loop\" (line 1) is unused: its statement returned no result set."
+        ]
+      }
+    },
+    {
+      "name": "name inside BEGIN ... END",
+      "sql": "BEGIN\n  -- #Name=\"Inside\"\n  SELECT 1 AS a;\nEND",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Inside\" (line 2) was not applied: it is inside a BEGIN \u2026 END statement on line 1, where how often"
+      ]
+    },
+    {
+      "name": "name inside a branch",
+      "sql": "IF 1 = 1\n  -- #Name=\"Branch body\"\n  SELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Branch body\" (line 2) was not applied: it is inside an IF statement on line 1"
+      ]
+    },
+    {
+      "name": "name inside a TRY block",
+      "sql": "BEGIN TRY\n  -- #Name=\"Tried\"\n  SELECT 1 AS a;\nEND TRY\nBEGIN CATCH\nEND CATCH",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Tried\" (line 2) was not applied: it is inside a TRY \u2026 CATCH statement on line 1"
+      ]
+    },
+    {
+      "name": "name before a UNION branch",
+      "sql": "SELECT 1 AS a\nUNION ALL\n-- #Name=\"Branch\"\nSELECT 2;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Branch\" (line 3) was not applied: it is inside a SELECT statement on line 1, not before one."
+      ]
+    },
+    {
+      "name": "name in a subquery",
+      "sql": "SELECT a FROM (\n  /* #Name=\"Sub\" */ SELECT 1 AS a\n) AS s;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Sub\" (line 2) was not applied: it is inside a SELECT statement on line 1"
+      ]
+    },
+    {
+      "name": "named statement after an EXEC",
+      "sql": "EXEC dbo.RefreshStaging;\n-- #Name=\"Staged rows\"\nSELECT * FROM dbo.Staging;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Staged rows\" (line 2) was not applied: an EXEC statement on line 1 before it returns an unknown number of result sets. Put GO between them."
+      ]
+    },
+    {
+      "name": "named statement after an IF",
+      "sql": "IF 1 = 1 SELECT 1 AS a;\n-- #Name=\"After\"\nSELECT 2 AS b;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"After\" (line 2) was not applied: an IF statement on line 1 before it"
+      ]
+    },
+    {
+      "name": "named EXEC followed by a statement that may return a set",
+      "sql": "-- #Name=\"Order\"\nEXEC dbo.GetOrder;\nSELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Order\" (line 1) was not applied: a SELECT statement on line 3 after it may also return result sets"
+      ]
+    },
+    {
+      "name": "name at the end of a batch",
+      "sql": "SELECT 1 AS a;\n-- #Name=\"Last\"\nGO\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"Last\" (line 2) is unused: no statement follows it in its batch."
+      ]
+    },
+    {
+      "name": "name in a batch of comments only, and a name never crosses a GO",
+      "sql": "SELECT 1 AS a;\nGO\n-- #Name=\"Alone\"\nGO\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"Alone\" (line 3) is unused: no statement follows it in its batch."
+      ]
+    },
+    {
+      "name": "the same name twice",
+      "sql": "-- #Name=\"Totals\"\nSELECT 1 AS a;\n-- #Name=\"Totals\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "Totals"
+          ],
+          [
+            1,
+            "Totals"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "Totals",
+          "Totals"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "GO 3: the batch is planned once and each repetition names its set",
+      "sql": "-- #Name=\"Repeated\"\nSELECT 1 AS a;\nGO 3",
+      "slots": [
+        [
+          [
+            0,
+            "Repeated"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "Repeated"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "a marker in a string or a nested comment names nothing",
+      "sql": "SELECT '-- #Name=\"x\"' AS a;\n/* /* #Name=\"y\" */ */\nSELECT 2 AS b;",
+      "slots": [
+        []
+      ],
+      "notes": []
+    },
+    {
+      "name": "a selection's lines are counted from its first line",
+      "sql": "SELECT 0 AS z;\n-- #Name=\"Changed\"\nUPDATE #t SET id = 2;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Changed\" (line 11) is unused"
+      ],
+      "startLine": 10
+    },
+    {
+      "name": "SET STATISTICS XML ON: plan sets are left out of the count",
+      "sql": "SET STATISTICS XML ON;\n-- #Name=\"Rows A\"\nSELECT 1 AS a;\n-- #Name=\"Rows B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "Rows A"
+          ],
+          [
+            1,
+            "Rows B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          }
+        ],
+        "names": [
+          "Rows A",
+          null,
+          "Rows B",
+          null
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "the batch does not parse",
+      "sql": "-- #Name=\"Broken\"\nSELECT FROM WHERE;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "Result names in the batch starting on line 1 were not applied: the batch does not parse."
+      ]
+    },
+    {
+      "name": "the second batch does not parse",
+      "sql": "SELECT 1 AS a;\nGO\n-- #Name=\"Broken\"\nSELECT FROM WHERE;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "Result names in the batch starting on line 3 were not applied: the batch does not parse."
+      ]
+    },
+    {
+      "name": "after the first error in a batch execution no name is applied",
+      "sql": "-- #Name=\"A\"\nSELECT 1 AS a;\nSELECT 1/0 AS z;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "A"
+          ],
+          [
+            2,
+            "B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          },
+          {
+            "error": true
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "A",
+          null,
+          null
+        ],
+        "unapplied": [
+          "\"B\" (line 4) was not applied: an error earlier in its batch made the place of its result set unknown."
+        ]
+      }
+    },
+    {
+      "name": "a set with another column count than its statement selects stops binding",
+      "sql": "UPDATE dbo.WithTrigger SET id = 2;\n-- #Name=\"Named\"\nSELECT 7 AS named;\n-- #Name=\"Later\"\nSELECT 8 AS later;",
+      "slots": [
+        [
+          [
+            0,
+            "Named"
+          ],
+          [
+            1,
+            "Later"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 2
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          null,
+          null,
+          null
+        ],
+        "unapplied": [
+          "\"Named\" (line 2) was not applied: a result set arrived that its batch's statements do not select",
+          "\"Later\" (line 4) was not applied: a result set arrived"
+        ]
+      }
+    },
+    {
+      "name": "SHOWPLAN or STATISTICS PROFILE text stops binding",
+      "sql": "-- #Name=\"Rows\"\nSELECT * FROM sys.objects;",
+      "slots": [
+        [
+          [
+            0,
+            "Rows"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 7,
+            "showplan": true
+          }
+        ],
+        "names": [
+          null
+        ],
+        "unapplied": [
+          "\"Rows\" (line 1) was not applied: SHOWPLAN or STATISTICS PROFILE output in its batch"
+        ]
+      }
+    },
+    {
+      "name": "DML with OUTPUT is named",
+      "sql": "-- #Name=\"Inserted\"\nINSERT INTO #t (id) OUTPUT inserted.id VALUES (1);",
+      "slots": [
+        [
+          [
+            0,
+            "Inserted"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "Inserted"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "DML with OUTPUT INTO returns no set",
+      "sql": "-- #Name=\"Logged\"\nINSERT INTO #t (id) OUTPUT inserted.id INTO @log (id) VALUES (1);",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Logged\" (line 1) is unused: its statement returns no result set."
+      ]
+    },
+    {
+      "name": "malformed markers name nothing and say nothing",
+      "sql": "-- #Name=\"unclosed\nSELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": []
+    }
+  ]
+}

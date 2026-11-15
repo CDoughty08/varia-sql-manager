@@ -46,9 +46,16 @@ internal static class RowIdentity
         public readonly long[] Spread = new long[rows];
     }
 
+    /// <summary>What results.identify answers (TOO_LARGE) when the budget has no room for its working memory or for the
+    /// rooms a packed result is read through.</summary>
+    public const string TooLarge = "There is not enough result memory to tell these rows apart. Close other results and try again.";
+
+    /// <summary>Hashes each row's identity. A packed result is read fused (<see cref="PageRooms"/>): each worker unpacks the
+    /// page it reads into a room of its own, so the result stays packed.</summary>
     public static (int Column, bool Unique, bool Approximate, long[] Ids) Build(ResultSetBuffer set, StoredPage[] pages, IdentityBy by, int column, CancellationToken token)
     {
         using var pin = set.Pin();
+        using var rooms = PageRooms.Over(pages, set.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
@@ -59,18 +66,18 @@ internal static class RowIdentity
         var working = new Working(rows);
         if (by == IdentityBy.Column)
         {
-            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token, working);
+            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token, working, rooms);
             return (column, unique, approximate, ids);
         }
         if (by == IdentityBy.Auto)
         {
             foreach (var candidate in Candidates(set.Columns, set.Wires).Take(MaxCandidates))
             {
-                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token, working);
+                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token, working, rooms);
                 if (unique && !approximate) return (candidate, true, false, ids);
             }
         }
-        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, working);
+        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, working, rooms);
         return (-1, rowsUnique, rowsApproximate, ids);
     }
 
@@ -84,21 +91,33 @@ internal static class RowIdentity
 
     /// <summary>Reads the pages on several threads (one per <see cref="MinSlice"/> rows, up to the sort's threads), each
     /// thread with a hasher of its own. Each page is an item, so the threads move between this and other operations
-    /// between pages; what a page writes is its own rows', so the order they are read in changes nothing.</summary>
-    internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read)
+    /// between pages; what a page writes is its own rows', so the order they are read in changes nothing. With
+    /// <paramref name="rooms"/>, a packed page is unpacked into the thread's own room (fused), which goes back when the
+    /// thread stops.</summary>
+    internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read, PageRooms? rooms = null)
     {
         using var threads = ViewSorter.Gate.Take((int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers));
         // The first thread to start uses the caller's hasher (results.identify reserves for no more), the others forks.
         var given = 0;
-        threads.For(pages.Length, () => (Hasher: Interlocked.Exchange(ref given, 1) == 0 ? hasher : hasher.Fork(), Scratch: new int[PageView.ScratchLength(hasher.Count)]),
-            (index, own) => read(own.Hasher, pages[index], PageView.Parse(pages[index].Body(), own.Hasher.Count, own.Scratch)), token);
+        threads.For(pages.Length, () => new Own(Interlocked.Exchange(ref given, 1) == 0 ? hasher : hasher.Fork(), new RoomReader(rooms, hasher.Count)),
+            (index, own) => read(own.Hasher, pages[index], own.Reader.Read(pages[index])), token);
+    }
+
+    /// <summary>A thread's hasher and page reader; disposing it gives the reader's room back.</summary>
+    private sealed class Own(CellHasher hasher, RoomReader reader) : IDisposable
+    {
+        public CellHasher Hasher { get; } = hasher;
+        public RoomReader Reader { get; } = reader;
+        public void Dispose() => Reader.Dispose();
     }
 
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row), the pages in runs on
     /// several threads; whether they were all distinct (a key column also needs no NULL), and whether a truncated value was
     /// hashed. With <paramref name="stopEarly"/> it stops at a NULL, a truncated value or, among the first
-    /// <see cref="Probe"/> rows, a repeat, leaving the array partly set: such a column is no key.</summary>
-    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token, Working? working = null)
+    /// <see cref="Probe"/> rows, a repeat, leaving the array partly set: such a column is no key. With
+    /// <paramref name="rooms"/>, packed pages are read fused.</summary>
+    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token, Working? working = null,
+        PageRooms? rooms = null)
     {
         working ??= new Working(ids.Length);
         if (stopEarly)
@@ -107,12 +126,12 @@ internal static class RowIdentity
             var approximate = false;
             var seen = working.Seen;
             seen.Clear();
-            var scratch = new int[PageView.ScratchLength(hasher.Count)];
+            using var reader = new RoomReader(rooms, hasher.Count);
             var probed = 0;
             foreach (var page in pages)
             {
                 token.ThrowIfCancellationRequested();
-                var view = PageView.Parse(page.Body(), hasher.Count, scratch);
+                var view = reader.Read(page);
                 var first = (int)page.FirstRow;
                 for (var r = 0; r < page.Rows && probed < Probe; r++, probed++)
                 {
@@ -154,7 +173,7 @@ internal static class RowIdentity
             if (isNull) Volatile.Write(ref nulls, 1);
             if (inexact) Volatile.Write(ref cut, 1);
             if (stopEarly && (isNull || inexact)) Volatile.Write(ref stop, 1);
-        });
+        }, rooms);
         if (nulls != 0 || (stopEarly && cut != 0)) return (false, cut != 0);
         return (Distinct(ids, working.Spread, token), cut != 0);
     }

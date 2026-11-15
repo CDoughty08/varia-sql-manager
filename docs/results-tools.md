@@ -1,5 +1,16 @@
 # Result grid tools
 
+**Named results.** A query can name a result set with a marker comment just before its statement:
+`/* #Name="Sample Query" */` or `-- #Name="Open orders"` (`#Name` in any case, the name in double quotes, a quote
+inside it doubled, at most 128 characters). The result's tab, caption and the lists that name results show the name
+where they showed "Result 2"; a result without a name keeps its number, so naming one never renumbers another. Several
+markers stacked before one `EXEC` name its result sets in order. The name goes on a result only when Varia can tell
+which result set the statement returns, from the batch's text: a marker inside `BEGIN … END`, a branch or a loop, or
+after an `EXEC`, `IF` or `WHILE` in the same batch, is not applied, nor is one after an error in the batch, and the
+Messages tab says why (put `GO` between such statements to name both). The query runs exactly as written; a marker is
+an ordinary comment to SQL Server. A table trigger that returns rows can still shift a name when its result has the
+same number of columns as the named statement's.
+
 Right-click a result column header or cell, or press Shift+F10 in the grid, to open its menu.
 
 - **Copy Column Name** copies that column's raw name only, without data, brackets or a display-name fallback. An unnamed
@@ -222,12 +233,7 @@ is the one commands act on again. Pivots and comparisons are not rebuilt.
 
 ## Where a result's name shows
 
-A query names a result set with a marker comment before its statement, `/* #Name="Open orders" */` or
-`-- #Name="Open orders"`. The comment holds the marker alone; `#Name` is matched in any case, the name is in double
-quotes (a quote inside it is doubled) and is 1 to 128 characters. It names the first result set of the next statement
-in the same batch; where that set cannot be known (after an `EXEC`, `IF` or `WHILE` in the batch, or inside a block)
-the name is not applied and Messages says why. The server sees an ordinary comment, so the script runs unchanged
-elsewhere.
+Named results (the marker rules are at the top of this page) read as follows.
 
 A named result shows its name wherever the results pane says "Result 2" for an unnamed one, and keeps its number
 beside it where two results of one name must be told apart. An unnamed result reads exactly as before, and naming one
