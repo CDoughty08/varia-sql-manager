@@ -178,10 +178,10 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   request: (target, model, draft) => {
     const database = target.kind === 'database'
     const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
-    // The login the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
-    return target.kind === 'login' && model.login
-      ? { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
-      : request
+    // The login or database the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
+    if (target.kind === 'login' && model.login)
+      return { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
+    return database && model.identity ? { ...request, identity: model.identity } : request
   },
   removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
   afterSuccess: effects => effects.refreshListing(),

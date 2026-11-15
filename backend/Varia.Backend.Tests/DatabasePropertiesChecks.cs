@@ -72,7 +72,8 @@ internal static class DatabasePropertiesChecks
             ("closeConnections on a table's rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "AppData", "dbo", "Orders"), "B", CloseConnections: false)),
             ("a database rename's identity at id 0", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", Identity: new(0, "2026-01-02T03:04:05.000"))),
             ("dropConnections on a database rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", DropConnections: true)),
-            ("an identity on a delete", new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), null, false, false, Identity: new(7, "2026-01-02T03:04:05.000"))),
+            // A database's Delete names the database it read (ActionChecks); a schema object's has no identity.
+            ("an identity on a view's delete", new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("view", "AppData", "dbo", "V"), null, false, false, Identity: new(7, "2026-01-02T03:04:05.000"))),
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for Database Properties: " + string.Join(", ", accepted));

@@ -44,7 +44,14 @@ internal static class ScriptingErrors
         return builder.ToString();
     }
 
-    public static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
+    public static string Clip(string text, int max)
+    {
+        if (text.Length <= max) return text;
+        // Never split a surrogate pair: the cut steps back over a pair's first half.
+        var cut = max - 1;
+        if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut] + "…";
+    }
 
     /// <summary>The index of the first unpaired UTF-16 surrogate, or −1.</summary>
     public static int UnpairedSurrogate(string text)

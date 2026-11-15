@@ -143,7 +143,14 @@ OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statem
 
 Delete Object for a database also offers "Delete backup and restore history information for databases" (checked,
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
-confirmation.
+confirmation. OK names the database the dialog read (its database_id and create_date): a database renamed, dropped
+or replaced since, so that another now has the name, is refused before anything runs ("… is not the one Delete Object
+read"; close the dialog and open it again), rather than dropped on warnings and sessions the dialog never showed for it.
+Each statement it runs on the database by name (Close existing connections, the DROP, and the access it restores after a
+failed DROP) checks the identity again in its own batch, so a database that takes the name while Varia frees the database
+of its pooled sessions or SET SINGLE_USER waits is not set to single-user, dropped or given another access mode either
+(Varia may still have closed its own idle pooled sessions in it). When the access a failed DROP restores is refused this way,
+the database Varia set to single-user may still be single-user under another name, and the error says so.
 
 For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
 is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database
@@ -876,7 +883,7 @@ Server's message for a failed one, and for some a detail (a name) or progress. T
 skipped. An action may also plan compensation steps, each undoing one earlier step once that step completed and a later one
 failed or was stopped (restoring a database's user access after a failed rename, for example), and cleanup steps that run
 after any failure or Stop (removing a partly restored database Varia created). They run on the same connection under a fresh
-budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended. A
+budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended and why one failed. A
 Stop's reply waits for SQL Server to end the statement and then for them, so it never reports an unknown outcome while
 Varia's own cleanup runs. An action can instead run its steps in one transaction (the table designer's Save): a failure or
 Stop rolls it back, and only the commit, which Stop no longer reaches, completes it. The steps that had completed are then

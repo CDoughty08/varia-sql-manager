@@ -541,7 +541,10 @@ being true.
   the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
   or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
-  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
+  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. A database's Delete that names the database Delete
+  Object read (`DatabaseIdentityDto`) binds every statement it runs on it by name (SINGLE_USER, the DROP, the restored access) through
+  `PlannedStatement.Bound`, so each batch first checks `database_id` and `create_date` (`ActionSql.CheckOf`); the lint lets only those bound
+  batches read `@id` and `@created`. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
   (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
   the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
   run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),

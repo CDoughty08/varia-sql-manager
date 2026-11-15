@@ -24,6 +24,11 @@ internal enum ActionTemplate
     DropLogin, DropMappedUser, CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential
 }
 
+/// <summary>The database a statement was planned for (<see cref="ActionSql.DatabaseBound"/>): the database_id and create_date Delete Object
+/// read. SQL Server checks both in the statement's own batch, right before it (<see cref="ActionSql.DatabaseCheck"/>), so a database that
+/// took the name after the preflight (while Varia's pools left it, or SET SINGLE_USER waited) is never closed, dropped or given access.</summary>
+internal sealed record DatabaseBinding(int Id, DateTime Created);
+
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
 /// checks them in the statement's own batch, waiting behind any change to the row, and rolls the DROP back when the name it quoted
 /// belonged to another principal by then: a user renamed or remapped in an open transaction while the scan read past it, or a login
@@ -47,7 +52,7 @@ internal enum StepKind { Main, Compensation, Cleanup }
 /// as true or false, from <see cref="ActionSql.Detach"/>; a partly restored database's name and its database_id as decimal digits,
 /// from <see cref="ActionSql.DropRestoring"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
 internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
-    Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null);
+    Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null, DatabaseBinding? Bound = null);
 
 /// <summary>All SQL of the action path, as constant text per template, kind and version band. DDL is built by SQL Server
 /// from that text: names reach it only as nvarchar(128) parameters (@db, @p1…) passed through QUOTENAME, or as a
@@ -130,6 +135,7 @@ internal static partial class ActionSql
         if (plan.Principal is { } bound && (!(Guarded(plan.Template) || BindingOf(plan.Template) is not null) || bound.Sid.Length is < 1 or > 85
             || (plan.Template == ActionTemplate.DropLogin || BindingOf(plan.Template)?.Login == true) != (bound.PrincipalId is not null && bound.Created is not null)))
             throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
+        if (plan.Bound is { } database && (!DatabaseBound(plan.Template) || database.Id < 1)) throw new InvalidOperationException("The database binding does not fit " + plan.Template + ".");
         return plan;
     }
 
@@ -275,6 +281,36 @@ internal static partial class ActionSql
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
+
+    /// <summary>Why a bound statement left a database alone: another database has taken the name since Delete Object read it.</summary>
+    internal const string NotTheDatabase = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, perhaps while Varia waited for its connections to close. Varia did not change it. Close Delete Object and open it again.'";
+
+    /// <summary>Why the access a failed DROP restores was left alone: another database has the name now, so the one Varia set to single-user
+    /// may still be single-user under another name. The DROP's own refusal (<see cref="NotTheDatabase"/>) comes first in the message, so this
+    /// one does not repeat its advice.</summary>
+    internal const string NotTheDatabaseRestored = "N'The database with this name is not the one Delete Object read, so Varia did not restore its access. The database Varia set to single-user may still be single-user under another name.'";
+
+    /// <summary>The templates a database's Delete binds to the database it read (<see cref="DatabaseBinding"/>): every statement its plan
+    /// runs on the database by name.</summary>
+    public static bool DatabaseBound(ActionTemplate template) =>
+        template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser;
+
+    /// <summary>A bound statement's check, the first statement of its batch: the database with its name (@p1, compared, never run) is the
+    /// one with the bound database_id (@id) and create_date (@created), else 50010 (NOT_FOUND) before anything runs. The text is constant.</summary>
+    public const string DatabaseCheck = "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, "
+        + NotTheDatabase + ", 1;\n";
+
+    /// <summary><see cref="DatabaseCheck"/> for the access a compensation restores, whose refusal says what it leaves behind.</summary>
+    public const string RestoreCheck = "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, "
+        + NotTheDatabaseRestored + ", 1;\n";
+
+    /// <summary>The check a bound statement of <paramref name="template"/> runs first.</summary>
+    public static string CheckOf(ActionTemplate template) => template is ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser ? RestoreCheck : DatabaseCheck;
+
+    /// <summary>The batch a planned statement runs: its template's, after its check (<see cref="CheckOf"/>) when it is bound. A dry run selects the
+    /// statement alone, as Script shows it.</summary>
+    public static string Executable(PlannedStatement plan, bool dryRun = false) =>
+        (plan.Bound is not null && !dryRun ? CheckOf(plan.Template) : "") + Executable(plan.Template, dryRun);
 
     /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
     internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
@@ -599,8 +635,8 @@ internal static partial class ActionSql
         "N'SERVER ROLE'", "N'dbcreator'",
         // Detach's permission and the login kind its files note reads (Database, DetachInside).
         "N'db_owner'", "N'SQL LOGIN'",
-        // Restore Database's cleanup (DropRestoring).
-        NotRestoring,
+        // Restore Database's cleanup (DropRestoring), and a database's Delete bound to the database it read (DatabaseCheck).
+        NotRestoring, NotTheDatabase, NotTheDatabaseRestored,
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
         // Its guarded DROPs (PrincipalBinding).
@@ -635,7 +671,7 @@ internal static partial class ActionSql
     private static partial Regex NamedArgument();
     [GeneratedRegex(@"@p\d+")]
     private static partial Regex Placeholder();
-    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
+    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=WHERE d\.name = )@p1(?= AND d\.database_id = @id AND d\.create_date = @created\) THROW )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
     private static partial Regex QuotedPlaceholder();
     /// <summary>Builder batches' keyword text: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote,
     /// bracket, comment or line break can be written with it, and it comes only from an embedded catalogue.</summary>
@@ -656,8 +692,9 @@ internal static partial class ActionSql
     private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
 
     /// <summary>Problems with one executable batch (empty when it passes): leftover format holes, a name parameter outside
-    /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments.</summary>
-    public static List<string> LintExecutable(string text, ActionTemplate template)
+    /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments. Only a
+    /// <paramref name="bound"/> batch of a <see cref="DatabaseBound"/> template may read @id and @created, which only its check binds.</summary>
+    public static List<string> LintExecutable(string text, ActionTemplate template, bool bound = false)
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
@@ -666,7 +703,8 @@ internal static partial class ActionSql
         if (Placeholder().IsMatch(bare)) problems.Add("uses a name parameter outside QUOTENAME or a procedure argument");
         // The database a batch runs in reaches T-SQL only as QUOTENAME(@db) + N'.sys.…'.
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
-        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").Concat(Bindings(template)).ToHashSet(StringComparer.Ordinal);
+        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").Concat(Bindings(template))
+            .Concat(bound && DatabaseBound(template) ? ["@id", "@created"] : []).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Placeholder().Matches(text)) if (!parameters.Contains(used.Value)) problems.Add("uses " + used.Value + ", which the template does not bind");
         // A guarded DROP's constant check and recheck are sp_executesql's own batch, whose variables its constant parameter list declares.
         problems.AddRange(Undeclared(GuardedTexts.Aggregate(text, (rest, inner) => rest.Replace(inner, "N''", StringComparison.Ordinal)), parameters));
@@ -780,6 +818,8 @@ internal static partial class ActionSql
         foreach (var template in Enum.GetValues<ActionTemplate>())
             foreach (var dry in new[] { false, true })
                 yield return (template + (dry ? " (dry run)" : ""), LintExecutable(Executable(template, dry), template));
+        foreach (var template in Enum.GetValues<ActionTemplate>().Where(DatabaseBound))
+            yield return (template + " (bound)", LintExecutable(Executable(new PlannedStatement(template, "master", ["x"], Bound: new(1, DateTime.UnixEpoch))), template, bound: true));
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             foreach (var kind in new[] { "table", "view", "procedure", "function" }) yield return (kind + " band " + band, LintCatalog(Object(kind, band), band, database: true));

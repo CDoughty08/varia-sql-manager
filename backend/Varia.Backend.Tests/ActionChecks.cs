@@ -93,7 +93,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 20 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 3 + 2 + (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 + 4 + 2
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + Enum.GetValues<ActionTemplate>().Count(ActionSql.DatabaseBound) + 6 * 5 + 20 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 3 + 2 + (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 + 4 + 2
                 + Catalog.Logins.Securables.Types.Count * PermissionSql.Forms.Count * 2 + 4 + TableAlter.Lint(Catalog).Count(), "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's and Login Properties' builders and facts, Check Names, User Mapping's reads, the Securables page's and Table Properties' statements included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
@@ -194,6 +194,41 @@ internal static class ActionChecks
         check(ActionService.Plan(Delete(database, close: true, history: true), database, new(true, 0)).Select(plan => plan.Template)
                 .SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
             "an offline database has no sessions to close: its Delete runs no SINGLE_USER and nothing to restore");
+        // A Delete naming the database it read binds every statement it runs on the database by name to it: each batch first checks the
+        // database_id and create_date (DatabaseCheck); the dry run (and Script, which shows the same text) does not; a binding fits no other
+        // template; and a Delete without one runs as before.
+        var read = new DatabaseIdentityDto(7, "2026-01-02T03:04:05.677");
+        var boundPlan = ActionService.Plan(Delete(database, close: true, history: true) with { Identity = read }, database, new(false, 0));
+        var binding = new DatabaseBinding(7, new DateTime(2026, 1, 2, 3, 4, 5, 677));
+        string Fits(PlannedStatement plan) { try { ActionSql.Checked(plan); return "accepted"; } catch (InvalidOperationException) { return "refused"; } }
+        var boundBatches = boundPlan.Where(plan => plan.Bound is not null).Select(plan => ActionSql.Executable(plan)).ToList();
+        check(boundPlan.Select(plan => plan.Template).SequenceEqual([ActionTemplate.SetSingleUser, ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory, ActionTemplate.SetMultiUser])
+            && boundPlan.Select(plan => plan.Bound).SequenceEqual([binding, binding, null, binding]) && ActionService.ScriptText(boundPlan) == full
+            && boundBatches.Count == 3 && boundBatches.Take(2).All(text => text.StartsWith(ActionSql.DatabaseCheck, StringComparison.Ordinal))
+            && boundBatches[2].StartsWith(ActionSql.RestoreCheck, StringComparison.Ordinal) && ActionSql.RestoreCheck.Contains("may still be single-user", StringComparison.Ordinal)
+            && ActionSql.RestoreCheck.Contains("THROW 50010, ", StringComparison.Ordinal) && ActionSql.DatabaseCheck.Contains("THROW 50010, ", StringComparison.Ordinal)
+            && ActionSql.DatabaseCheck.Contains("d.name = @p1 AND d.database_id = @id AND d.create_date = @created", StringComparison.Ordinal)
+            && boundPlan.All(plan => ActionSql.Executable(plan, dryRun: true) == ActionSql.Executable(plan.Template, dryRun: true))
+            && ActionService.Plan(Delete(database, close: true) with { Identity = read }, database, new(false, 2)).Single(plan => plan.Kind == StepKind.Compensation) is { Template: ActionTemplate.SetRestrictedUser, Bound: { } restrictedBinding } && restrictedBinding == binding
+            && ActionService.Plan(Delete(database, close: true, history: true), database, new(false, 0)).All(plan => plan.Bound is null)
+            && ActionService.BoundOf(null) is null && ActionService.BoundOf(new(7, "2026-01-02T03:04:05")) is null && ActionService.BoundOf(new(7, "2026-13-45T25:61:61.000")) is null
+            && Fits(new PlannedStatement(ActionTemplate.DropTable, "AppData", ["dbo", "T"], Bound: binding)) == "refused"
+            && Fits(new PlannedStatement(ActionTemplate.DropDatabase, "master", ["AppData"], Bound: new(0, DateTime.UnixEpoch))) == "refused"
+            && boundPlan.All(plan => Fits(plan) == "accepted"),
+            "a Delete naming the database it read binds SINGLE_USER, the DROP and the access it restores to that database_id and create_date in each batch, scripts the same text, "
+            + "and a binding fits no other template");
+        // The lint catches a bound batch whose name reaches the text, or whose check reads a value it does not bind.
+        var boundDrop = boundBatches[1];
+        var boundMutations = new[] { boundDrop.Replace("QUOTENAME(@p1)", "@p1", StringComparison.Ordinal), boundDrop.Replace("@created", "@when", StringComparison.Ordinal),
+            boundDrop.Replace("WHERE d.name = @p1 AND", "WHERE d.name = @p1 OR", StringComparison.Ordinal) };
+        var readsBinding = "IF @id = 1 AND @created IS NULL RETURN;\n" + ActionSql.Executable(ActionTemplate.DropDatabase);
+        check(ActionSql.LintExecutable(boundDrop, ActionTemplate.DropDatabase, bound: true).Count == 0
+            && boundMutations.All(text => text != boundDrop && ActionSql.LintExecutable(text, ActionTemplate.DropDatabase, bound: true).Count > 0)
+            && ActionSql.LintExecutable(boundDrop, ActionTemplate.DropDatabase).Count > 0
+            && ActionSql.LintExecutable(readsBinding, ActionTemplate.DropDatabase).Count > 0 && ActionSql.LintExecutable(readsBinding, ActionTemplate.DropDatabase, bound: true).Count == 0
+            && ActionSql.LintExecutable(ActionSql.DatabaseCheck + ActionSql.Executable(ActionTemplate.DropTable), ActionTemplate.DropTable, bound: true).Count > 0,
+            "the lint refuses a bound batch that runs its name unquoted, compares it outside the check or reads an unbound value, an unbound batch that reads @id or "
+            + "@created, and the check on a template that binds no database");
         check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
             && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
             && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,
@@ -325,15 +360,21 @@ internal static class ActionChecks
             ("bring online with dropConnections", BringOnline(appData) with { DropConnections = true }), ("take offline with a new name", TakeOffline(appData, false) with { NewName = "x" }),
             ("take offline with delete flags", TakeOffline(appData, true) with { CloseConnections = true }), ("bring online with changes", BringOnline(appData) with { Changes = new() }),
             ("an identity of id 0", TakeOffline(appData, false, new(0, "2026-01-02T03:04:05.678"))), ("an identity without milliseconds", BringOnline(appData, new(5, "2026-01-02T03:04:05"))),
-            ("an identity with a line break", BringOnline(appData, new(5, "2026-01-02T03:04:05.678\n"))), ("dropConnections on a rename", Rename(table, "x") with { DropConnections = false }),
+            ("an identity with a line break", BringOnline(appData, new(5, "2026-01-02T03:04:05.678\n"))),
+            ("an identity on a day that does not exist", TakeOffline(appData, false, new(5, "2026-02-30T00:00:00.000"))), ("an identity in year 0", BringOnline(appData, new(5, "0000-01-01T00:00:00.000"))), ("dropConnections on a rename", Rename(table, "x") with { DropConnections = false }),
             ("dropConnections on a delete", Delete(table) with { DropConnections = true }),
+            ("an identity on a table's delete", Delete(table) with { Identity = new(5, "2026-01-02T03:04:05.678") }),
+            ("a delete's identity of id 0", Delete(appData) with { Identity = new(0, "2026-01-02T03:04:05.678") }),
+            ("a delete's identity without milliseconds", Delete(appData) with { Identity = new(5, "2026-01-02T03:04:05") }),
             ("dropConnections on properties", new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), appData, CloseConnections: false,
                 Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }), DropConnections: false))
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses: " + string.Join(", ", accepted));
         check(Refused(Rename(table, " ")) == "accepted" && Refused(Rename(table, Long("q]'); --"))) == "accepted" && Refused(Rename(table, "orders")) == "accepted"
-            && Refused(Delete(new ObjectRefDto("database", Name: "AppData"), close: true, history: true)) == "accepted", "hostile, single-space and case-changed names are accepted verbatim");
+            && Refused(Delete(new ObjectRefDto("database", Name: "AppData"), close: true, history: true)) == "accepted"
+            && Refused(Delete(appData, close: true) with { Identity = new(5, "2026-01-02T03:04:05.678") }) == "accepted",
+            "hostile, single-space and case-changed names are accepted verbatim, and a database's Delete may name the database it read");
         var hostile = new ObjectRefDto("database", Name: Long("q]'); --"));
         check(Refused(TakeOffline(hostile, false)) == "accepted" && Refused(TakeOffline(appData, true, new(5, "2026-01-02T03:04:05.678"))) == "accepted"
             && Refused(BringOnline(hostile)) == "accepted" && Refused(BringOnline(appData, new(int.MaxValue, "2026-01-02T03:04:05.678"))) == "accepted"
