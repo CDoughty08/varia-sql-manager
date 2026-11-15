@@ -432,7 +432,7 @@ try {
   await expect.poll(buildWhole).toBe(true)
   await builder.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await enlargeOutput(page)
-  console.log('Grouped results checks: a narrow pane folds the results toolbar with ⋯ holding every tool, a 128-character name is cut in its tab, caption and picker row without pushing anything out, and a short pane keeps the toolbar one row.')
+  console.log('Grouped results checks: a narrow pane folds the results toolbar with ⋯ holding every tool, a 128-character name is cut in its tab, caption and picker row without pushing anything out, the search field keeps its whole placeholder, and a short pane keeps the toolbar one row and Build Pivot whole.')
 
   // 10. Popped out, Results shows the same names, and its toolbar folds to the popout's width, its ⋯ opening there.
   const opened = application.waitForEvent('window', { timeout: 30000 })

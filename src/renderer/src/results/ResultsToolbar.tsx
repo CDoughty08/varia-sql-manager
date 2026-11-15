@@ -209,7 +209,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
     <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true, 'results-space')}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false, 'results-sort', sortHeld)}
-    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
+    {/* Icons only, so the toolbar folds as little as it can in a narrow pane (the Show group folds last). */}
     <div className="results-segments results-show" role="group" aria-label="Show">
       <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>

@@ -2179,19 +2179,30 @@ try {
 
   // 14b. White space: the results toolbar marks spaces and tabs, then line breaks and invisible characters too. The marks
   // are drawn only: the active cell's name and Copy keep the value, and the grid's menu checks the choice that is on.
-  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true })
-  const choice = name => whitespace.getByRole('button', { name, exact: true })
+  // A window as narrow as CI's 1024 px displays may fold White space into ⋯ (with Linux's fonts the search field's whole
+  // placeholder leaves it no room); its buttons still say the choice, and the grid's menu then makes it.
+  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true, includeHidden: true })
+  const choice = name => whitespace.getByRole('button', { name, exact: true, includeHidden: true })
+  const whitespaceFolded = !(await whitespace.isVisible())
+  const fromGridMenu = async name => {
+    await cell(1, 0).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitemcheckbox', { name }).click()
+  }
   const cellText = (row, column) => cell(row, column).evaluate(element => element.textContent)
   await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
   expect(await cellText(3, 2)).toBe('😀 astral')
-  await choice('Spaces').click()
+  if (whitespaceFolded) await fromGridMenu(/^Show Spaces and Tabs/)
+  else await choice('Spaces').click()
   await expect(choice('Spaces')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cellText(3, 2)).toBe('😀·astral')
   // A line break Spaces does not mark stays one line, as it shows when off.
   expect(await cellText(5, 2)).toBe('tab→line quote"\\')
-  await choice('Spaces').press('ArrowRight')
-  await expect(choice('All')).toBeFocused()
-  await page.keyboard.press('Enter')
+  if (whitespaceFolded) await fromGridMenu(/^Show All White Space/)
+  else {
+    await choice('Spaces').press('ArrowRight')
+    await expect(choice('All')).toBeFocused()
+    await page.keyboard.press('Enter')
+  }
   await expect(choice('All')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cellText(5, 2)).toBe('tab→lineLFquote"\\')
   await expect(cell(5, 2).locator(gridPart.whitespaceBadge)).toHaveText('LF')

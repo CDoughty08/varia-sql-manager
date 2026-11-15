@@ -1123,8 +1123,9 @@ Outcome, accepted by the owner:
         - The search field: PR 15's box kept 160 px, but its count, arrows and Data or Columns took most of it, leaving
           the input about 32 px ("Se" at 1500 px) and about 12 px once Transposed and Compare folded. The field's least
           width is now its whole placeholder, set by the placeholder drawn unseen beside the input, so it follows fonts
-          and popouts; the box no longer gives up its width at any fold, and the groups fold sooner instead (at a
-          1,024 px window, Sort text by, White space and Show may now be in ⋯). `grouped-results-smoke` checks the
+          and popouts; the box no longer gives up its width at any fold, and the groups fold sooner instead. Measured on
+          Windows in a 1,024 px window, Sort text by now folds into ⋯ and White space stays with 34 px to spare; Linux's
+          wider fonts may fold White space too, so `results-smoke` 14b then makes its choices from the grid's menu. `grouped-results-smoke` checks the
           placeholder fits in both modes, at 900 px and in the popout at 640 and 360 px.
         - The Pivot builder in a short pane: below about 180 px its footer note and Build Pivot were cut off. A container
           query on the builder (`pivot-panel`, at most 200 px tall) hides its explanations (`pivot-aside`), never its
