@@ -357,7 +357,8 @@ internal sealed class SmoScriptRunner
 
     /// <summary>SMO's batches for every pass of the verb, unframed, at most <paramref name="max"/> characters in all. The
     /// comment SMO writes as a batch for each reference it could not resolve is left out: it holds the referenced name
-    /// unescaped, so a name could end it and run the rest as SQL. Which batches those are comes from SMO itself (its
+    /// (as "?" since SMO 181.38.1 when it contains /* or */, otherwise as is, line breaks included), so a name could break
+    /// it, and "?" would hide which reference it was; the warning names it. Which batches those are comes from SMO itself (its
     /// progress event for the unresolved entity), and each one's URN is added to <paramref name="unresolved"/>. The objects
     /// SMO reports creating go to <paramref name="scripted"/> (it reports none for ALTER or CREATE OR ALTER).</summary>
     private List<string> Run(Server smo, Urn urn, ResolvedTarget target, ScriptVerb verb, ScriptingOptionsDto dto, long max, bool headers, bool dependencies, List<string> warnings,
