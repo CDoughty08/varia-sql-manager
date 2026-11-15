@@ -257,11 +257,21 @@ internal sealed class ResultNamePlan
             return Refused(markers, $"was not applied: a SET {ResultNames.SkipsStatements(found)} statement on line {(firstLine + found.StartLine - 1).ToString("N0", CultureInfo.InvariantCulture)} in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.");
         // The markers before each statement, in order; a marker inside a statement or after the last names nothing.
         var named = new List<ResultMarker>?[statements.Count];
+        // Where a statement's own text ends: ScriptDom gives a statement the semicolons after it, ";WITH"'s included, so a marker
+        // before ";WITH" would be inside the statement before.
+        static int End(TSqlStatement statement)
+        {
+            var tokens = statement.ScriptTokenStream;
+            var last = statement.LastTokenIndex;
+            while (tokens is not null && last > statement.FirstTokenIndex && tokens[last].TokenType is TSqlTokenType.Semicolon or TSqlTokenType.WhiteSpace
+                or TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment) last--;
+            return tokens is null || last < 0 ? statement.StartOffset + statement.FragmentLength : tokens[last].Offset + tokens[last].Text.Length;
+        }
         // Markers and statements are both in text order, so one pass places them all.
         var next = 0;
         foreach (var marker in markers)
         {
-            while (next < statements.Count && statements[next].StartOffset + statements[next].FragmentLength <= marker.Offset) next++;
+            while (next < statements.Count && End(statements[next]) <= marker.Offset) next++;
             if (next == statements.Count) notes.Add(ResultNames.Note(marker, "is unused: no statement follows it in its batch."));
             else if (statements[next].StartOffset < marker.End)
                 notes.Add(ResultNames.Note(marker, classes[next].Kind is "IF" or "WHILE" or "BEGIN … END" or "TRY … CATCH"

@@ -824,6 +824,56 @@
         ],
         "unapplied": []
       }
+    },
+    {
+      "name": "a marker before ;WITH names the CTE's set, though ScriptDom gives the semicolon to the statement before",
+      "sql": "SET NOCOUNT ON;\n/* #Name=\"x\" */\n;WITH c AS (SELECT 1 AS a) SELECT a FROM c;\nSELECT 1 AS b\n-- #Name=\"y\"\n;WITH d AS (SELECT 2 AS e) SELECT e FROM d;\n",
+      "slots": [
+        [
+          [
+            0,
+            "x"
+          ],
+          [
+            2,
+            "y"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "x",
+          null,
+          "y"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "a marker before the semicolon that ends a statement is after it, not inside it",
+      "sql": "SELECT 1 AS a /* #Name=\"z\" */;\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            1,
+            "z"
+          ]
+        ]
+      ],
+      "notes": []
     }
   ]
 }
