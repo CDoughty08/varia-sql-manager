@@ -46,7 +46,7 @@ describe('dependency floors', () => {
   // Monaco's sanitiser the way the renderer build does and read the version that ships.
   describe('the DOMPurify Monaco bundles', () => {
     const shipped = async (plugins: Plugin[]) => {
-      const built = await build({ configFile: false, logLevel: 'silent', plugins, build: { write: false, minify: true, rollupOptions: { input: 'node_modules/monaco-editor/esm/vs/base/browser/domSanitize.js', preserveEntrySignatures: 'strict' } } })
+      const built = await build({ configFile: false, logLevel: 'silent', plugins, build: { write: false, minify: true, rolldownOptions: { input: 'node_modules/monaco-editor/esm/vs/base/browser/domSanitize.js', preserveEntrySignatures: 'strict' } } })
       return [built].flat().flatMap(result => 'output' in result ? result.output : []).flatMap(chunk => chunk.type === 'chunk' ? domPurifyVersions(chunk.code) : [])
     }
     it('is the installed package, at or above its floor, in place of the vendored copy', async () => {

@@ -30,13 +30,12 @@ export async function runTextQualityComparison({ browser, baseline = 'origin/mai
       // Virtual modules have no .ts suffix, so explicitly strip the historical TypeScript.
       async transform(code, id) {
         if (id !== '\0plan-text-baseline') return
-        const { transformWithEsbuild } = require('vite')
-        return transformWithEsbuild(code, 'PlanCanvas.ts', { loader: 'ts' })
+        const { transformWithOxc } = require('vite')
+        return transformWithOxc(code, 'PlanCanvas.ts', { lang: 'ts' })
       }
     }],
     build: { write: false, minify: false,
-      lib: { entry: resolve(root, 'scripts/fixtures/plan-text-quality/render.ts'), formats: ['iife'], name: 'PlanTextQuality' },
-      rollupOptions: { output: { inlineDynamicImports: true } }
+      lib: { entry: resolve(root, 'scripts/fixtures/plan-text-quality/render.ts'), formats: ['iife'], name: 'PlanTextQuality' }
     }
   })
   const result = Array.isArray(bundle) ? bundle[0] : bundle

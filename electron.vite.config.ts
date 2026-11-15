@@ -12,8 +12,8 @@ export const cspMeta: Plugin = {
 }
 
 const vendoredDomPurify = /\/monaco-editor\/esm\/vs\/base\/browser\/dompurify\/dompurify\.js$/
-// DOMPurify's own statement of its version, as written, bundled or minified.
-const domPurifyVersion = /\.version\s*=\s*["'](\d+\.\d+\.\d+)["'][,;]\s*[\w$]+\.removed\s*=\s*\[\]/g
+// DOMPurify's own statement of its version, as written, bundled or minified (Vite 8's minifier quotes it with backticks).
+const domPurifyVersion = /\.version\s*=\s*["'`](\d+\.\d+\.\d+)["'`][,;]\s*[\w$]+\.removed\s*=\s*\[\]/g
 
 /** The versions of every DOMPurify copy in `code`. */
 export const domPurifyVersions = (code: string) => [...code.matchAll(domPurifyVersion)].map(match => match[1])
@@ -51,7 +51,7 @@ export function patchedDomPurify(): Plugin {
 export default defineConfig({
   main: {},
   preload: {
-    build: { rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }
+    build: { rolldownOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }
   },
   renderer: {
     plugins: [react(), cspMeta, patchedDomPurify()],
