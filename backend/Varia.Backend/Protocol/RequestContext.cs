@@ -100,12 +100,21 @@ internal sealed class RequestContext : IDisposable
         lock (eventGate) return Interlocked.Exchange(ref settled, 1) == 0;
     }
 
-    public void Cancel(CancelReason why)
+    /// <summary>Claims the reason and announces the cancel. <paramref name="offThread"/> runs the token's callbacks on the thread
+    /// pool: the protocol reader passes it, since a callback may block (a query Stop sends SqlClient's attention synchronously)
+    /// and the reader must keep answering PING.</summary>
+    public void Cancel(CancelReason why, bool offThread = false)
     {
         if (Interlocked.CompareExchange(ref reason, (int)why, 0) != 0) return;
         // Answer before cancelling the token: its callbacks run newest first, so a handler awaiting it would resume (often
         // inline) and settle with its result ahead of the CANCELLED answer main has already acted on, leaking what it stored.
         Announce();
+        if (offThread) ThreadPool.UnsafeQueueUserWorkItem(static context => context.CancelToken(), this, preferLocal: false);
+        else CancelToken();
+    }
+
+    private void CancelToken()
+    {
         try { source.Cancel(); }
         catch (ObjectDisposedException) { /* The handler finished concurrently. */ }
     }

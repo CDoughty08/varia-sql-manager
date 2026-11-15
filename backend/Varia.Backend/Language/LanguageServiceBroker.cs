@@ -28,6 +28,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
     private readonly Dictionary<string, Binding> documents = new(StringComparer.Ordinal);
     private bool disposed;
     private int suspensions;
+    private long uses;
     private sealed class Binding
     {
         public readonly SemaphoreSlim Serial = new(1, 1);
@@ -42,6 +43,8 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         public long Epoch;
         public Task<LanguageCloseResult>? CloseTask;
         public bool Closing;
+        /// <summary>When a request was last admitted (the broker's use counter): the cap reclaims the oldest idle document.</summary>
+        public long LastUsed;
     }
     private sealed class BackgroundRequest(CancellationTokenSource cancellation)
     {
@@ -100,6 +103,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
             while (true)
             {
                 Task? closing;
+                Task? reclaimed = null;
                 lock (gate)
                 {
                     ObjectDisposedException.ThrowIf(disposed, this);
@@ -107,14 +111,29 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
                     if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
                     if (!documents.TryGetValue(request.DocumentId, out binding!))
                     {
-                        if (documents.Count >= MaxDocuments) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
-                        binding = new();
-                        documents.Add(request.DocumentId, binding);
+                        if (documents.Count >= MaxDocuments)
+                        {
+                            // A document whose close never came (a window that went without closing its tabs) must not hold
+                            // a slot for good: reclaim the least recently used idle one. Requests carry the full text, so
+                            // that tab's next request opens it again.
+                            (string Id, Binding Binding)? idle = null;
+                            foreach (var (id, candidate) in documents)
+                                if (!candidate.Closing && candidate.Foreground == 0 && candidate.Background.Count == 0 && (idle is null || candidate.LastUsed < idle.Value.Binding.LastUsed))
+                                    idle = (id, candidate);
+                            if (idle is not { } oldest) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
+                            reclaimed = BeginClose(oldest.Id, oldest.Binding);
+                        }
+                        else
+                        {
+                            binding = new();
+                            documents.Add(request.DocumentId, binding);
+                        }
                     }
-                    closing = binding.Closing ? binding.CloseTask : null;
-                    epoch = binding.Epoch;
+                    closing = reclaimed ?? (binding.Closing ? binding.CloseTask : null);
                     if (closing is null)
                     {
+                        epoch = binding.Epoch;
+                        binding.LastUsed = ++uses;
                         if (background)
                         {
                             if (binding.Foreground != 0) throw new RequestException("STALE", "SQL analysis is paused while an interactive language request finishes.");
@@ -137,6 +156,13 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
                     }
                 }
                 if (closing is null) break;
+                if (reclaimed is not null)
+                {
+                    // The reclaimed document's cleanup failing is not this request's failure; its slot is free once it ends.
+                    try { await reclaimed.WaitAsync(deadline.Token); }
+                    catch (Exception) when (!deadline.Token.IsCancellationRequested) { }
+                    continue;
+                }
                 // An accepted close can still be retiring an idle language process. A newly registered request belongs
                 // to the next binding; requests registered before Closing retain the old binding and reject as stale.
                 await closing.WaitAsync(deadline.Token);
@@ -198,28 +224,38 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         lock (gate)
         {
             if (!documents.TryGetValue(id, out binding)) return new(false);
-            binding.Closing = true;
-            binding.Active?.Cancel();
-            cleanup = binding.CloseTask ??= Task.Run(CloseCoreAsync);
+            cleanup = BeginClose(id, binding);
         }
-        _ = cleanup.ContinueWith(done => _ = done.Exception, TaskContinuationOptions.OnlyOnFaulted);
         try { return await cleanup.WaitAsync(TimeSpan.FromSeconds(5), token); }
         catch (TimeoutException) { return new(true); } // Accepted: marked closed immediately; bounded cleanup finishes in the background.
+    }
 
-        async Task<LanguageCloseResult> CloseCoreAsync()
+    /// <summary>Marks the document closed and starts its cleanup, once. Called under the gate.</summary>
+    private Task<LanguageCloseResult> BeginClose(string id, Binding binding)
+    {
+        binding.Closing = true;
+        binding.Active?.Cancel();
+        if (binding.CloseTask is null)
         {
-            // Closing is cleanup: finish releasing state even when the renderer's close deadline expires while queued.
-            await binding.Serial.WaitAsync(CancellationToken.None);
-            try
-            {
-                if (binding.Provider is { } provider) await provider.CloseAsync(id, CancellationToken.None);
-                return new(true);
-            }
-            finally
-            {
-                lock (gate) if (documents.TryGetValue(id, out var current) && ReferenceEquals(current, binding)) documents.Remove(id);
-                binding.Serial.Release();
-            }
+            binding.CloseTask = Task.Run(() => CloseCoreAsync(id, binding));
+            _ = binding.CloseTask.ContinueWith(done => _ = done.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        }
+        return binding.CloseTask;
+    }
+
+    private async Task<LanguageCloseResult> CloseCoreAsync(string id, Binding binding)
+    {
+        // Closing is cleanup: finish releasing state even when the renderer's close deadline expires while queued.
+        await binding.Serial.WaitAsync(CancellationToken.None);
+        try
+        {
+            if (binding.Provider is { } provider) await provider.CloseAsync(id, CancellationToken.None);
+            return new(true);
+        }
+        finally
+        {
+            lock (gate) if (documents.TryGetValue(id, out var current) && ReferenceEquals(current, binding)) documents.Remove(id);
+            binding.Serial.Release();
         }
     }
 

@@ -158,7 +158,8 @@ internal sealed class ProtocolHost
             case FrameKind.Cancel:
                 if (header.Arg is < 1 or > 4) return Fatal("PROTOCOL_ERROR", "Invalid CANCEL reason.", ExitProtocolError, "cancel reason");
                 // Unknown or finished ids are ignored: the request may have completed while the CANCEL was in flight.
-                if (contexts.TryGetValue(header.Id, out var cancelled)) cancelled.Cancel((CancelReason)header.Arg);
+                // Off the reader thread: the token's callbacks may block, and this thread answers PING.
+                if (contexts.TryGetValue(header.Id, out var cancelled)) cancelled.Cancel((CancelReason)header.Arg, offThread: true);
                 return null;
             case FrameKind.Credit:
                 if (header.Arg is < 1 or > 16 * 1024 * 1024) return Fatal("PROTOCOL_ERROR", "Invalid CREDIT.", ExitProtocolError, "credit");
@@ -436,7 +437,7 @@ internal sealed class ProtocolHost
     private int Shutdown()
     {
         if (Volatile.Read(ref exitCode) >= 0) return exitCode;
-        foreach (var context in contexts.Values) context.Cancel(CancelReason.Shutdown);
+        foreach (var context in contexts.Values) context.Cancel(CancelReason.Shutdown, offThread: true);
         try { dispatcher?.CancelAll(); } catch (Exception) { /* Best effort while exiting. */ }
         try { Task.WaitAll([.. work.Keys], options.DrainTimeout); } catch (AggregateException) { }
         // Main gives a generation with such work a longer grace (methodPolicies' drainMs) before it kills the process.

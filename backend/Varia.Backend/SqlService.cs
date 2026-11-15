@@ -770,8 +770,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         live.Forget(args.ConnectionId);
         sessionActions.Forget(args.ConnectionId);
         foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
-        foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
-            if (sessions.TryRemove(item.Key, out var session)) session.Close();
+        // Session() checks the target and stores a new session under sessionGate, so one it was creating as the target went
+        // is either found here or refused NOT_CONNECTED, never left behind. Closing waits on the network, so it is outside.
+        var closing = new List<QuerySession>();
+        lock (sessionGate)
+            foreach (var item in sessions.Where(item => item.Value.ConnectionId == args.ConnectionId))
+                if (sessions.TryRemove(item.Key, out var session)) closing.Add(session);
+        foreach (var session in closing) session.Close();
         // Results stay readable, copyable and saveable after a disconnect, as in SSMS.
         // Each initial catalog has its own pool; clear every one this connection used.
         entraPools.TryRemove(args.ConnectionId, out var authentication);

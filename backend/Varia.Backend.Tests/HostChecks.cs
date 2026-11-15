@@ -234,6 +234,19 @@ internal static class HostChecks
             check(slotsTaken && pong?.Header.Arg == 4242 && host.Dispatcher.Completed == completedBefore,
                 "PING is answered by the reader thread while every metadata slot is busy (slots taken " + slotsTaken + ", " + watch.ElapsedMilliseconds + " ms)");
 
+            // A CANCEL whose token callback blocks (a query Stop's synchronous attention) must not hold the reader: PING is
+            // still answered, and the request ends once the callback returns.
+            host.Request(21, "test.blockingStop", new { });
+            Thread.Sleep(50);
+            host.Send(FrameKind.Cancel, 21, 1, []);
+            var stopEntered = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.StopEntered) == 1, 15000);
+            host.Send(FrameKind.Ping, 0, 4343, []);
+            var stopPong = host.Next(FrameKind.Pong);
+            host.Dispatcher.StopRelease.Set();
+            var stopAnswer = host.Next(FrameKind.Response);
+            check(stopEntered && stopPong?.Header.Arg == 4343 && stopAnswer?.Header.Id == 21 && ErrorCode(stopAnswer.Value) is null,
+                "a CANCEL runs the token's callbacks off the reader thread, so PING is answered while a Stop's callback blocks");
+
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
             host.Dispatcher.DrainFor = TimeSpan.FromMilliseconds(400);
@@ -529,13 +542,16 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int CancelAllCalls;
     public int Unsent;
     public int LateStarted;
+    /// <summary>test.blockingStop: its token callback has started, and it blocks until StopRelease is set.</summary>
+    public int StopEntered;
+    public readonly ManualResetEventSlim StopRelease = new();
     /// <summary>How many test.hold and test.park handlers have started; each ends once the Release it started under is set.</summary>
     public int Parked;
     public TaskCompletionSource Release { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.hold", "test.park","test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
-    public RequestLane LaneOf(string method) => method switch { "test.slow" or "test.hold" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.hold", "test.park","test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret", "test.blockingStop"];
+    public RequestLane LaneOf(string method) => method switch { "test.slow" or "test.hold" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, "test.blockingStop" => RequestLane.Query, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
     public readonly ConcurrentQueue<string> AskedSensitive = new();
     public bool Sensitive(string method)
@@ -593,6 +609,17 @@ internal sealed class StubDispatcher : IRequestDispatcher
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };
+            case "test.blockingStop":
+                // As a query Stop does: the token's callback calls SqlCommand.Cancel, which sends the attention synchronously.
+                var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (context!.Token.Register(() =>
+                {
+                    Interlocked.Increment(ref StopEntered);
+                    StopRelease.Wait();
+                    stopped.TrySetResult();
+                }))
+                    await stopped.Task;
+                return new { Stopped = true };
             case "test.unsentLate":
                 // As results.diff when a CANCEL lands after its work: it answers anyway, after the host answered CANCELLED.
                 context!.Dropped = () => Interlocked.Increment(ref Unsent);

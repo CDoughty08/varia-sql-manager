@@ -110,6 +110,40 @@ internal static class LspTransportChecks
                 catch (IOException) { failed++; }
             check(failed == 2, "LSP malformed response fields fail the transport without stranding their pending waiter");
         }
+        // Notifications queue while a callback runs, bounded by characters with a cost per entry rather than by count: a burst
+        // of a thousand used to overflow a 256-entry queue and stop the language server.
+        foreach (var (count, survives) in new[] { (1000, true), (LspClient.MaxQueuedNotificationCharacters / LspClient.NotificationEntryCost + 1, false) })
+        {
+            var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            int delivered = 0, outOfOrder = 0;
+            await using var bursting = new LspClient(path, arguments, async (method, parameters) =>
+            {
+                if (method != "fixture/burst") return;
+                await blocked.Task;
+                // Callbacks run one at a time, in arrival order.
+                if (parameters.GetProperty("index").GetInt32() != Volatile.Read(ref delivered)) outOfOrder++;
+                Volatile.Write(ref delivered, delivered + 1);
+            });
+            await bursting.RequestAsync("echo", new { }, timeout: StartupWait);
+            var answered = false;
+            try { answered = (await bursting.RequestAsync("burst", new { count }, timeout: CheckWait)).GetBoolean(); }
+            catch (IOException) { }
+            blocked.TrySetResult();
+            if (survives)
+            {
+                var all = SpinWait.SpinUntil(() => Volatile.Read(ref delivered) == count, CheckWait);
+                var echoed = (await bursting.RequestAsync("echo", new { text = "after" }, timeout: CheckWait)).GetProperty("text").GetString();
+                check(answered && all && outOfOrder == 0 && echoed == "after" && !bursting.Completion.IsCompleted,
+                    "LSP notifications that arrive in a burst while a callback runs are all delivered, in order, and the transport stays up (" + delivered + " of " + count + ")");
+            }
+            else
+            {
+                var stopped = false;
+                try { await bursting.Completion.WaitAsync(CheckWait); }
+                catch (IOException) { stopped = true; }
+                check(!answered && stopped, "LSP notifications past the queue's character budget stop the transport rather than grow without bound");
+            }
+        }
         await using (var bounded = new LspClient(path, arguments))
         {
             // Warm up the child before testing the cap, without depending on process startup timing.
@@ -235,6 +269,11 @@ internal static class LspTransportChecks
                 case "stderr":
                     await Console.Error.WriteAsync(new string('x', 20_000));
                     await Console.Error.FlushAsync();
+                    await Send(new { jsonrpc = "2.0", id, result = true }); break;
+                case "burst":
+                    // Notifications back to back, as SQL Tools Service publishes diagnostics for many documents at once.
+                    for (var index = 0; index < message.GetProperty("params").GetProperty("count").GetInt32(); index++)
+                        await output.WriteAsync(Frame(JsonSerializer.SerializeToUtf8Bytes(new { jsonrpc = "2.0", method = "fixture/burst", @params = new { index } })));
                     await Send(new { jsonrpc = "2.0", id, result = true }); break;
                 case "error": await Send(new { jsonrpc = "2.0", id, error = new { code = -32602, message = "secret password and SQL" } }); break;
                 case "malformed": await Send(new { jsonrpc = "2.0", id, error = new { code = "invalid" } }); break;

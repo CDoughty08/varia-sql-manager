@@ -331,6 +331,33 @@ internal static class SqlLanguageChecks
             check((await next.WaitAsync(CheckWait)).Items.Count == 0 && (await refresh.WaitAsync(CheckWait)).Refreshed && provider.Requests == 2,
                 "new context work resumes after accepted-close cleanup instead of receiving a stale binding error");
         }
+
+        // A tab whose language.close never came must not hold one of the broker's slots for good.
+        var capped = new StubProvider("sqlserver");
+        using (var broker = new LanguageServiceBroker([capped]))
+        {
+            var open = Enumerable.Range(0, LanguageServiceBroker.MaxDocuments).Select(_ => Request()).ToArray();
+            foreach (var document in open) await broker.CompleteAsync(document, default);
+            await broker.CompleteAsync(open[0] with { Version = 2 }, default);
+            var extra = Request();
+            var admitted = (await broker.CompleteAsync(extra, default).WaitAsync(CheckWait)).Items.Count == 0;
+            check(admitted && capped.Closed.SequenceEqual([open[1].DocumentId]) && capped.Requests == LanguageServiceBroker.MaxDocuments + 2,
+                "at the document cap the broker reclaims the least recently used idle document and admits the new one");
+            await broker.CompleteAsync(open[1] with { Version = 2 }, default).WaitAsync(CheckWait);
+            check(capped.Closed.SequenceEqual([open[1].DocumentId, open[2].DocumentId]), "a reclaimed document opens again on its next request, reclaiming the next idle one");
+        }
+        var busy = new StubProvider("sqlserver") { CompleteRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using (var broker = new LanguageServiceBroker([busy]))
+        {
+            var held = Enumerable.Range(0, LanguageServiceBroker.MaxDocuments).Select(_ => broker.CompleteAsync(Request(), default)).ToArray();
+            var all = SpinWait.SpinUntil(() => Volatile.Read(ref busy.Requests) == LanguageServiceBroker.MaxDocuments, CheckWait);
+            string? refused = null;
+            try { await broker.CompleteAsync(Request(), default).WaitAsync(CheckWait); }
+            catch (RequestException error) { refused = error.Code; }
+            busy.CompleteRelease.TrySetResult();
+            await Task.WhenAll(held).WaitAsync(CheckWait);
+            check(all && refused == "BUSY" && busy.Closes == 0, "at the document cap with every document in use, a new document is refused BUSY and none is reclaimed");
+        }
     }
 
     private static async Task RefreshChecks(Action<bool, string> check, string settings)
@@ -544,14 +571,23 @@ internal static class SqlLanguageChecks
         public int Resets;
         public readonly TaskCompletionSource CloseStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource? CloseRelease;
+        /// <summary>Holds every completion until set, so its document stays in use.</summary>
+        public TaskCompletionSource? CompleteRelease;
+        public readonly ConcurrentQueue<string> Closed = new();
         public LanguageProviderStatus Status() => new(Id, true, true, true, Refresh: true);
-        public Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token) { Requests++; return Task.FromResult(new LanguageCompletionResult([], false)); }
+        public async Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token)
+        {
+            Interlocked.Increment(ref Requests);
+            if (CompleteRelease is { } release) await release.Task.WaitAsync(token);
+            return new LanguageCompletionResult([], false);
+        }
         public Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token) => Task.FromResult<LanguageHover?>(null);
         public Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) => Task.FromResult(new LanguageDiagnosticResult(request.Version, [], false));
         public Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token) => Task.FromResult(new LanguageRefreshResult(true));
         public async Task<LanguageCloseResult> CloseAsync(string documentId, CancellationToken token)
         {
-            Closes++;
+            Interlocked.Increment(ref Closes);
+            Closed.Enqueue(documentId);
             CloseStarted.TrySetResult();
             if (CloseRelease is { } release) await release.Task.WaitAsync(token);
             return new(true);
