@@ -1638,6 +1638,81 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.results.getSnapshot().t1.jobNotice).toBe('Building was cancelled, so Pivot of Result 1 still shows its last build.')
   })
 
+  it("keeps a failed Build Pivot's reason when the Pivot then follows the filters from its own recipe, and marks a followed build", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // Another recipe in the draft, built over F1; the filters change to F2 while it runs, and it is refused.
+    f.pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    let reject: (error: unknown) => void = () => {}
+    f1.pivot.mockImplementationOnce(() => new Promise((_, no) => { reject = no }))
+    const building = f.pivot.run('t1')
+    f.results.setCollapsed('t1', new Set())
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    reject(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await building
+    await wait()
+    // The Pivot follows F2 from its own recipe, not the draft, and the builder still says why the Build Pivot failed.
+    expect(f2.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.anything())
+    expect(f.group().pivot).toMatchObject({ entry: { descriptor: { resultId: 902 } }, pivot: { filters: f2.filters, followed: true } })
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('There is not enough result memory to pivot these rows. Close other results and try again, or close Pivot of Result 1 and build it again.')
+    // A build the user asks for clears it and is not marked as followed.
+    f2.pivot.mockResolvedValueOnce(pivoted(903))
+    await f.pivot.run('t1')
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(f.group().pivot!.pivot!.followed).toBeUndefined()
+  })
+
+  it('decides nothing over a view the grid shows that the results have yet to publish, and follows it once published', async () => {
+    let layout: ResultsLayout = 'tabs'
+    const listeners = new Set<() => void>(), clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => layout, onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    // Tabs, the Table selected: filter A shows and publishes, so the hidden Pivot is marked.
+    f.results.focusEntry('t1', one)
+    const showView = async (shown: ResultView, publish: boolean) => {
+      vi.mocked(first.sort).mockResolvedValueOnce(shown)
+      f.results.sortBy('t1', one, 0, 'ascending')
+      await settle()
+      if (publish) f.flush()
+      f.results.viewShown('t1', one, shown)
+      if (publish) f.flush()
+      await wait()
+    }
+    const a = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    await showView(a, true)
+    expect(pivotOutOfDate(f.results.getSnapshot().t1, f.results.getSnapshot().t1.groups[0])).toBe(true)
+    // Filter B's view shows in the grid, its publish still a frame away, when the layout turns stacked (the Pivot shown):
+    // nothing starts over A or B until B publishes.
+    const b = view(first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    b.pivot.mockResolvedValueOnce(pivoted(902))
+    await showView(b, false)
+    expect(f.results.sortOf('t1', one)!.view).toBe(b)
+    expect(f.results.getSnapshot().t1.sorts.get(one)!.view).toBe(a)
+    layout = 'stacked'
+    for (const listener of listeners) listener()
+    await wait()
+    expect(a.pivot).not.toHaveBeenCalled()
+    expect(b.pivot).not.toHaveBeenCalled()
+    f.flush()
+    await wait()
+    expect(b.pivot).toHaveBeenCalledOnce()
+    f.flush()
+    const tab = f.results.getSnapshot().t1
+    expect(tab.groups[0].pivot).toMatchObject({ entry: { descriptor: { resultId: 902 } }, pivot: { filters: b.filters } })
+    expect(pivotOutOfDate(tab, tab.groups[0])).toBe(false)
+  })
+
   it('follows nothing without a layout host, nor in a run that has no Pivot yet', async () => {
     // The checks that build no host: nothing follows.
     const { results, pivot, run } = fixture()

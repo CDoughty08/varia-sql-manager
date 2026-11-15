@@ -67,6 +67,8 @@ export interface PivotProvenance {
   /** How long the build took in milliseconds, from taking its place to its answer (its waits left out): under
    *  `pivotFollow.maxLastBuildMs` the Pivot may rebuild by itself when its Table's filters change. */
   readonly buildMs?: number
+  /** The Pivot rebuilt by itself, following its Table's filters (nobody clicked): Tabs does not select it for that. */
+  readonly followed?: true
 }
 /**
  * A presentation slot: one view the stack draws. Its identity is `key`, the key of the entry it shows, which is also where

@@ -78,14 +78,16 @@ once the SQL backend has stopped.
 
 A Pivot that is small and quick to build **follows its result's filters by itself**: when the result stores at most
 500,000 rows and the Pivot's last build took under a quarter of a second (250 ms), a filter change rebuilds it at once,
-as Update would, with no mark in between. The result's stored rows count, not the rows its filters keep, since a build
+as Update would: its caption shows "Building again…" with Cancel (its strip still says it is out of date) until the new
+Pivot replaces it. The result's stored rows count, not the rows its filters keep, since a build
 reads them all. Otherwise it stays marked out of date with Update. Only a Pivot you can see rebuilds by itself: in Tabs
 layout while its Pivot tab is selected, stacked while its caption is expanded, and only while Results (not Messages) is
 showing. A Pivot that is hidden keeps its mark and rebuilds when you show it (select its Pivot tab, expand it, switch
 back to Results or to the stacked layout). A newer filter change stops a rebuild still running and starts one for the
 newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
-marked, says why in the results toolbar, and is not tried again by itself until the filters change again (Update still
-asks for it). A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
+marked, says why in the results toolbar, and is not tried again by itself for those filters in this run (Update still
+asks for it). A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
+clear what the builder says about a Build Pivot of yours that failed. A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
 letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
 reach it.
 

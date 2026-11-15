@@ -265,8 +265,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   /** One build of a group's Pivot from `spec`: Build Pivot's (the draft) or Update's (`update`, the Pivot's recipe), which
-   *  is also what a Pivot following its Table's filters runs (`auto`, the identity of the filters it reads). */
-  private async start(tabId: string, tab: TabResults, group: ResultGroup, spec: PivotSpec, update: boolean, auto?: string): Promise<void> {
+   *  is also what a Pivot following its Table's filters runs (`auto`). */
+  private async start(tabId: string, tab: TabResults, group: ResultGroup, spec: PivotSpec, update: boolean, auto = false): Promise<void> {
     const entry = group.table.entry
     let builds = this.running.get(tabId)
     if (!builds) this.running.set(tabId, builds = new Map())
@@ -283,7 +283,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // Per Pivot slot, a newer build gives up the older.
     builds.get(group.ordinal)?.abort.abort()
     builds.delete(group.ordinal)
-    this.errors.get(tabId)?.delete(group.ordinal)
+    // A user's build starts afresh; an automatic one leaves what the last build said (a Build Pivot of another recipe
+    // that failed while the filters changed), so following the filters never hides why the user's build failed.
+    if (!auto) this.errors.get(tabId)?.delete(group.ordinal)
     const abort = new AbortController()
     // The rows as the grid shows them now: canPivot refused while a sort or filter was being built.
     const shown = this.results.sortOf(tabId, entry.key)?.view
@@ -291,9 +293,12 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // These filters have now been built over, whatever the build's end: the Pivot does not rebuild by itself for them again.
     let tried = this.tried.get(tabId)
     if (!tried) this.tried.set(tabId, tried = new Map())
-    tried.set(group.ordinal, { queryId: tab.queryId, filters: filtersIdentity(shown?.filters ?? []) })
+    const reads = filtersIdentity(shown?.filters ?? [])
+    tried.set(group.ordinal, { queryId: tab.queryId, filters: reads })
     const item: Build = {
-      abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto === undefined ? {} : { auto },
+      // An automatic build is named by the filters of the view it reads (the results' own state, which may be a frame
+      // ahead of the snapshot that started it), so it is superseded only by filters it does not read.
+      abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto ? { auto: reads } : {},
       queued: undefined, cancelled: false
     }
     builds.set(group.ordinal, item)
@@ -314,7 +319,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       }
       const sourceLabel = entryName(entry), snapshot = entry.handle.getSnapshot()
       const provenance: PivotProvenance = {
-        recipe: spec, filters, inputRows: result.rows, truncated: snapshot.truncated !== undefined, incomplete: snapshot.incomplete, approximate: result.approximate, buildMs
+        recipe: spec, filters, inputRows: result.rows, truncated: snapshot.truncated !== undefined, incomplete: snapshot.incomplete, approximate: result.approximate, buildMs,
+        ...auto ? { followed: true as const } : {}
       }
       // Only the run that holds the Table takes the pivot; otherwise (a re-run, a closed tab) it is released, and the
       // builder says why when its run is still the one it pivoted.
@@ -567,6 +573,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const recipe = group.pivot?.pivot?.recipe
     // A build already given up (superseded, cancelled) is no longer in flight here, though it stays listed until it settles.
     const build = this.running.get(tabId)?.get(group.ordinal), live = build?.queryId === tab.queryId && !build.abort.signal.aborted ? build : undefined
+    // The grid's filters may have shown a newer view not yet published (results publish on the next frame): its publish
+    // looks again, so nothing is decided over filters about to change.
+    const published = tab.sorts.get(group.table.key)?.view
+    if (published !== this.results.sortOf(tabId, group.table.key)?.view) return
     const filters = filtersIdentity(shownFilters(tab, group.table.key))
     const superseded = live?.auto !== undefined && live.auto !== filters
     if (superseded) {
@@ -580,6 +590,6 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const tried = this.tried.get(tabId)?.get(group.ordinal)
     if (tried?.queryId === tab.queryId && tried.filters === filters) return
     if (!pivotShown(tab, group, layout, collapsed) || !followsByItself(group) || !this.canPivot(tabId, group.table.key)) return
-    void this.start(tabId, tab, group, recipeSpec(recipe), true, filters)
+    void this.start(tabId, tab, group, recipeSpec(recipe), true, true)
   }
 }
