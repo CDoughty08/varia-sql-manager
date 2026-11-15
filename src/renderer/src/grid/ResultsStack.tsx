@@ -343,9 +343,10 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const toggle = useCallback((key: EntryKey) => {
     const next = new Set(view.collapsed)
     if (!next.delete(key)) next.add(key)
-    view.collapsed = next
     setCollapsedState(next)
-  }, [view])
+    // Through the service, which publishes it: a Pivot expanded again is shown, and follows its Table's filters.
+    results.setCollapsed(tabId, next)
+  }, [view, results, tabId])
   // Search in results: the grid holding the active match opens and scrolls into view, which mounts it; the grid then
   // scrolls the match itself into view (ResultGrid). Layout effects run before the grid's effect takes the reveal, so the
   // stack still sees it pending; a collapsed grid opens first and scrolls once its new layout is in.
@@ -372,7 +373,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const [revealTick, setRevealTick] = useState(0)
   const revealAsked = useRef<EntryKey | undefined>(undefined), commandFocus = useRef<EntryKey | undefined>(undefined)
   useEffect(() => {
-    const requests = stackReveals.subscribe(request => { if (request.tabId === tabId) { revealAsked.current = request.key; setRevealTick(tick => tick + 1) } })
+    const take = () => { const key = stackReveals.take(tabId); if (key !== undefined) { revealAsked.current = key; setRevealTick(tick => tick + 1) } }
+    take()
+    const requests = stackReveals.subscribe(requested => { if (requested === tabId) take() })
     return () => requests.dispose()
   }, [tabId])
   useLayoutEffect(() => {

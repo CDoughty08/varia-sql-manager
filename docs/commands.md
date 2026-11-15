@@ -87,17 +87,17 @@ keys it uses are listed below.
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
-| Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown (`activePanel != 'output'`) | Ctrl+Tab, Ctrl+PageDown (`activePanel != 'output'`) | ⌃⇥ | `multipleDocuments` | Window › Next Query |
-| Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp (`activePanel != 'output'`) | Ctrl+Shift+Tab, Ctrl+PageUp (`activePanel != 'output'`) | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
-| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`activePanel != 'output'`) | Ctrl+1 (`activePanel != 'output'`) | ⌘1 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`activePanel != 'output'`) | Ctrl+2 (`activePanel != 'output'`) | ⌘2 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`activePanel != 'output'`) | Ctrl+3 (`activePanel != 'output'`) | ⌘3 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`activePanel != 'output'`) | Ctrl+4 (`activePanel != 'output'`) | ⌘4 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`activePanel != 'output'`) | Ctrl+5 (`activePanel != 'output'`) | ⌘5 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`activePanel != 'output'`) | Ctrl+6 (`activePanel != 'output'`) | ⌘6 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`activePanel != 'output'`) | Ctrl+7 (`activePanel != 'output'`) | ⌘7 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`activePanel != 'output'`) | Ctrl+8 (`activePanel != 'output'`) | ⌘8 (`activePanel != 'output'`) | `hasActiveDocument` | — |
-| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`activePanel != 'output'`) | Ctrl+9 (`activePanel != 'output'`) | ⌘9 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | Ctrl+Tab, Ctrl+PageDown (`!resultsFocus \|\| !multipleResults`) | ⌃⇥ | `multipleDocuments` | Window › Next Query |
+| Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | Ctrl+Shift+Tab, Ctrl+PageUp (`!resultsFocus \|\| !multipleResults`) | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
+| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | Ctrl+1 (`!resultsFocus \|\| !multipleResults`) | ⌘1 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | Ctrl+2 (`!resultsFocus \|\| !multipleResults`) | ⌘2 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | Ctrl+3 (`!resultsFocus \|\| !multipleResults`) | ⌘3 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | Ctrl+4 (`!resultsFocus \|\| !multipleResults`) | ⌘4 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | Ctrl+5 (`!resultsFocus \|\| !multipleResults`) | ⌘5 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | Ctrl+6 (`!resultsFocus \|\| !multipleResults`) | ⌘6 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | Ctrl+7 (`!resultsFocus \|\| !multipleResults`) | ⌘7 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | Ctrl+8 (`!resultsFocus \|\| !multipleResults`) | ⌘8 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
+| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | Ctrl+9 (`!resultsFocus \|\| !multipleResults`) | ⌘9 (`!resultsFocus \|\| !multipleResults`) | `hasActiveDocument` | — |
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
@@ -203,17 +203,17 @@ keys it uses are listed below.
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs |
-| Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`activePanel == 'output'`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`activePanel == 'output'`) | ⌃⌥⇟ | `hasResultSets` | — |
-| Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`activePanel == 'output'`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`activePanel == 'output'`) | ⌃⌥⇞ | `hasResultSets` | — |
-| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`activePanel == 'output'`) | Ctrl+1 (`activePanel == 'output'`) | ⌘1 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 2 | `output.goToResult2` | Ctrl+2 (`activePanel == 'output'`) | Ctrl+2 (`activePanel == 'output'`) | ⌘2 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 3 | `output.goToResult3` | Ctrl+3 (`activePanel == 'output'`) | Ctrl+3 (`activePanel == 'output'`) | ⌘3 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 4 | `output.goToResult4` | Ctrl+4 (`activePanel == 'output'`) | Ctrl+4 (`activePanel == 'output'`) | ⌘4 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 5 | `output.goToResult5` | Ctrl+5 (`activePanel == 'output'`) | Ctrl+5 (`activePanel == 'output'`) | ⌘5 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 6 | `output.goToResult6` | Ctrl+6 (`activePanel == 'output'`) | Ctrl+6 (`activePanel == 'output'`) | ⌘6 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 7 | `output.goToResult7` | Ctrl+7 (`activePanel == 'output'`) | Ctrl+7 (`activePanel == 'output'`) | ⌘7 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Result 8 | `output.goToResult8` | Ctrl+8 (`activePanel == 'output'`) | Ctrl+8 (`activePanel == 'output'`) | ⌘8 (`activePanel == 'output'`) | `hasResultSets` | — |
-| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`activePanel == 'output'`) | Ctrl+9 (`activePanel == 'output'`) | ⌘9 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
+| Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
+| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 2 | `output.goToResult2` | Ctrl+2 (`resultsFocus && multipleResults`) | Ctrl+2 (`resultsFocus && multipleResults`) | ⌘2 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 3 | `output.goToResult3` | Ctrl+3 (`resultsFocus && multipleResults`) | Ctrl+3 (`resultsFocus && multipleResults`) | ⌘3 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 4 | `output.goToResult4` | Ctrl+4 (`resultsFocus && multipleResults`) | Ctrl+4 (`resultsFocus && multipleResults`) | ⌘4 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 5 | `output.goToResult5` | Ctrl+5 (`resultsFocus && multipleResults`) | Ctrl+5 (`resultsFocus && multipleResults`) | ⌘5 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 6 | `output.goToResult6` | Ctrl+6 (`resultsFocus && multipleResults`) | Ctrl+6 (`resultsFocus && multipleResults`) | ⌘6 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 7 | `output.goToResult7` | Ctrl+7 (`resultsFocus && multipleResults`) | Ctrl+7 (`resultsFocus && multipleResults`) | ⌘7 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 8 | `output.goToResult8` | Ctrl+8 (`resultsFocus && multipleResults`) | Ctrl+8 (`resultsFocus && multipleResults`) | ⌘8 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result… |
@@ -1007,7 +1007,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (158)
+## Context keys (160)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1026,6 +1026,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid (a query's, or a live view's with Query Output's menu), which copies its selected cells rather than text. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
+| `resultsFocus` | boolean | focus | Focus is in the Results pane (either layout) or its overflow picker; activePanel is then 'output', except in the picker. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
 | `explorerFocus` | boolean | focus | Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
 | `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
@@ -1085,6 +1086,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
 | `hasResults` | boolean | state | The active query has results (result sets or captured execution plans), and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `hasResultSets` | boolean | state | The active query has a result set a grid shows (rows, a Pivot, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count. |
+| `multipleResults` | boolean | state | The active query has two or more results or comparisons to step through (the results pane takes the browser tab keys only then). |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
 | `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |

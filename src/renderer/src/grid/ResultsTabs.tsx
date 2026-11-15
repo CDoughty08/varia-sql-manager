@@ -3,7 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
-import { observeResize } from '../core/windows'
+import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
@@ -225,7 +225,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const seen = pivots.current
     pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot && setKey(item.pivot.entry.descriptor)]))
     if (!seen) return
-    const built = tab.groups.filter(item => item.pivot && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
+    // A Pivot that rebuilt by itself was shown when it started, and the user may have gone back to its Table since: it
+    // selects nothing.
+    const built = tab.groups.filter(item => item.pivot && !item.pivot.pivot?.followed && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
     const shown = group && !group.planSet ? built.find(item => item === group) : built[0]
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!shown?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return
@@ -297,9 +299,11 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
   const foldRef = useRef(fold)
   foldRef.current = fold
-  useEffect(() => {
+  // Measured before the first paint too: each run draws a new layout, which would show both rows for a frame, then fold.
+  useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
+    setFold(tabsFold(root.clientHeight))
     const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight)))
     return () => observer.dispose()
   }, [!selected])
@@ -314,7 +318,13 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const pickerFrom = useRef<HTMLElement | undefined>(undefined)
   useEffect(() => {
     // Opened by a request (Go to Result…), Escape gives the focus back to where it was, the editor or a grid.
-    const open = () => { const active = rootRef.current?.ownerDocument.activeElement; pickerFrom.current = active instanceof HTMLElement ? active : undefined; setPicking(true) }
+    // Asked again while it is open (the focus is in it), it keeps where it was opened from.
+    // Read in the window the user is in, which may not be this layout's (the pane popped out, the editor in the main one).
+    const open = () => {
+      const active = windows.activeElement()
+      if (!(active instanceof HTMLElement && active.closest('[data-results-picker]'))) pickerFrom.current = active instanceof HTMLElement ? active : undefined
+      setPicking(true)
+    }
     if (pickerRequests.take(tabId)) open()
     const requests = pickerRequests.subscribe(requested => { if (requested === tabId && pickerRequests.take(tabId)) open() })
     return () => requests.dispose()
@@ -327,12 +337,27 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const from = pickerFrom.current
     pickerFrom.current = undefined
     if (!restore) return
-    if (from?.isConnected && from !== from.ownerDocument.body) from.focus({ preventScroll: true })
+    if (from?.isConnected && from !== from.ownerDocument.body) {
+      // In another window (the editor, with the pane popped out): that window comes forward first.
+      if (from.ownerDocument !== rootRef.current?.ownerDocument) from.ownerDocument.defaultView?.focus()
+      from.focus({ preventScroll: true })
+    }
+    // Where it was opened from may be hidden now (the pane folded while it was open): then as if it had gone.
+    if (from && from.ownerDocument.activeElement === from) return
+    if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })
     else (overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
   }
+  // With no rows of tabs drawn (the shortest pane), the grid shown takes the focus in a tab's place.
+  const panelGrid = () => rootRef.current?.querySelector<HTMLElement>('.rt-panel [data-result-grid]')
   // A view picked: shown, and the focus goes to its result's tab once the window drawn has moved to it.
   const pick = (key: EntryKey) => {
     setPicking(false)
+    if (foldRef.current === 'none') {
+      // The grid of the view picked takes the focus: at once when it is the one shown, else once it is drawn.
+      if (key === selected?.key) panelGrid()?.focus({ preventScroll: true })
+      else { gridFocus.current = true; select(key) }
+      return
+    }
     select(key)
     const item = topItems(results.getSnapshot()[tabId] ?? tab).find(top => top.key === key || top.group?.pivot?.key === key)
     focusTab.current = item?.key

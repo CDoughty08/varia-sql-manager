@@ -58,6 +58,8 @@ describe('contextual references', () => {
     expect(lessonShortcut('query.execute', 'queryEditor', platform, rules)).toBe('F5')
     expect(lessonShortcut('query.execute', 'resultsGrid', platform, rules)).toBeUndefined()
     expect(lessonShortcut('output.copy', 'resultsGrid', platform, rules)).toBe(platform === 'darwin' ? '⌘C' : 'Ctrl+C')
+    expect(lessonShortcut('output.goToResult1', 'resultsGrid', platform, rules)).toBe(platform === 'darwin' ? '⌘1' : 'Ctrl+1')
+    expect(lessonShortcut('output.goToLastResult', 'resultsGrid', platform, rules)).toBe(platform === 'darwin' ? '⌘9' : 'Ctrl+9')
     expect(lessonShortcut('query.execute', 'queryEditor', platform, rules.filter(rule => rule.command !== 'query.execute'))).toBeUndefined()
     const remapped = [...rules.filter(rule => rule.command !== 'query.execute'), resolveKeybinding('query.execute', { key: 'mod+shift+enter', when: 'editorFocus || queryBarFocus' }, platform)!]
     expect(lessonShortcut('query.execute', 'queryEditor', platform, remapped)).toBe(platform === 'darwin' ? '⇧⌘↩' : 'Ctrl+Shift+Enter')

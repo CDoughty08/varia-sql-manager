@@ -43,7 +43,12 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     commands.register('editor.toggleOvertype', { when: () => inputMode.getSnapshot().available, run: () => inputMode.toggle() }),
     commands.register('document.next', { run: () => step(1) }),
     commands.register('document.previous', { run: () => step(-1) }),
-    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`document.goToQuery${place}`, { when: () => documents.getSnapshot().documents.length >= place, run: () => jump(place - 1) })),
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`document.goToQuery${place}`, {
+      when: () => documents.getSnapshot().documents.length >= place,
+      // With a query open but not that many (the catalogue's hint says to open one).
+      unavailable: () => documents.getSnapshot().documents.length ? `Open ${place} queries first.` : undefined,
+      run: () => jump(place - 1)
+    })),
     commands.register('document.goToLastQuery', { run: () => jump(documents.getSnapshot().documents.length - 1) }),
     commands.register('document.moveLeft', { when: context => canMove(context?.tabId, -1), run: context => move(context?.tabId, -1) }),
     commands.register('document.moveRight', { when: context => canMove(context?.tabId, 1), run: context => move(context?.tabId, 1) }),

@@ -22,18 +22,29 @@ describe('editor group and tab keys', () => {
   it('reopens the last closed query with Ctrl+Shift+T or Cmd+Shift+T', () => {
     for (const platform of platforms) expect(commandFor(event('T', 'KeyT', { shiftKey: true, ...platform === 'darwin' ? { metaKey: true } : { ctrlKey: true } }), platform)).toBe('file.reopenClosed')
   })
-  it('give the browser tab keys to results in the output panes and to queries elsewhere', () => {
+  it('give the browser tab keys to results in the Results pane while there are two or more, and to queries otherwise', () => {
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+      const grid = { activePanel: 'output', outputGridFocus: true, resultsFocus: true, multipleResults: true } as const
+      const picker = { inputFocus: true, textInputFocus: true, resultsFocus: true, multipleResults: true } as const
+      const editorText = { activePanel: 'editor', editorFocus: true, editorTextFocus: true, multipleResults: true } as const
+      // Messages and the plan are output panes too, but keep the query keys; so does a Results pane with one result.
+      const messages = { activePanel: 'output', messagesFocus: true, multipleResults: true } as const
+      const single = { activePanel: 'output', outputGridFocus: true, resultsFocus: true } as const
       for (const [digit, place] of [['1', 'goToResult1'], ['8', 'goToResult8'], ['9', 'goToLastResult']] as const) {
-        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, { activePanel: 'output', outputGridFocus: true }), `${platform} ${digit}`).toBe(`output.${place}`)
-        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, { activePanel: 'editor', editorFocus: true, editorTextFocus: true }), `${platform} ${digit}`).toBe(digit === '9' ? 'document.goToLastQuery' : `document.goToQuery${digit}`)
+        const query = digit === '9' ? 'document.goToLastQuery' : `document.goToQuery${digit}`
+        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, grid), `${platform} ${digit}`).toBe(`output.${place}`)
+        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, picker), `${platform} ${digit} in the picker`).toBe(`output.${place}`)
+        for (const [name, context] of [['editor', editorText], ['messages', messages], ['one result', single]] as const) expect(commandFor(event(digit, `Digit${digit}`, primary), platform, context), `${platform} ${digit} ${name}`).toBe(query)
       }
-      // Ctrl+Alt+Page Down steps results from anywhere; Ctrl+Page Down only in the output panes (queries elsewhere, and
+      // Ctrl+Alt+Page Down steps results from anywhere; Ctrl+Page Down only in the Results pane (queries otherwise, and
       // not at all on macOS, which has no Ctrl+Page Down for queries either).
+      const darwin = platform === 'darwin'
       expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true, altKey: true }), platform, { activePanel: 'editor', editorFocus: true })).toBe('output.nextResult')
-      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, { activePanel: 'output' })).toBe(platform === 'darwin' ? undefined : 'output.nextResult')
-      expect(commandFor(event('PageUp', 'PageUp', { ctrlKey: true }), platform, { activePanel: 'editor', editorFocus: true })).toBe(platform === 'darwin' ? undefined : 'document.previous')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, grid)).toBe(darwin ? undefined : 'output.nextResult')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, messages)).toBe(darwin ? undefined : 'document.next')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, single)).toBe(darwin ? undefined : 'document.next')
+      expect(commandFor(event('PageUp', 'PageUp', { ctrlKey: true }), platform, { activePanel: 'editor', editorFocus: true })).toBe(darwin ? undefined : 'document.previous')
       expect(commandFor(event('O', 'KeyO', { shiftKey: true, ...primary }), platform)).toBe('output.goToResult')
     }
   })

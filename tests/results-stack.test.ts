@@ -196,9 +196,12 @@ describe('the stacked results', () => {
     expect(grids()).toEqual([one, three, pivot])
     expect(splitters()).toEqual(['Resize Result 1', 'Resize Result 3'])
     expect([...results.viewState('t1').collapsed]).toEqual([])
-    // Collapsing the entry now second collapses Result 3.
+    // Collapsing the entry now second collapses Result 3, and the results publish it (a Pivot expanded again is shown,
+    // and follows its Table's filters).
+    const published = results.getSnapshot().t1
     toggle(1)
     expect([...results.viewState('t1').collapsed]).toEqual([three])
+    expect(results.getSnapshot().t1).not.toBe(published)
     // The focused entry going takes its group with it (the Pivot too) and leaves the entry before to take the focus.
     results.removeEntry('t1', three)
     draw()
@@ -370,7 +373,23 @@ describe('the stacked results', () => {
       // Another query's request is not this stack's.
       act(() => { stackReveals.request('t2', three) })
       expect(view.stackScrollTop).toBe(0)
+      expect(stackReveals.take('t2')).toBe(three)
       editor.remove()
+      // A stack drawn after the request (its pane closed and opened again for the command) takes it when it mounts.
+      act(() => { root?.unmount() })
+      container?.remove()
+      container = document.createElement('div')
+      document.body.append(container)
+      root = createRoot(container)
+      act(() => { results.focusEntry('t1', pivot); stackReveals.request('t1', pivot) })
+      view.collapsed = new Set([pivot])
+      draw()
+      act(() => { container!.querySelector('.rs-stack')!.dispatchEvent(new Event('scroll')) })
+      expect(view.collapsed.has(pivot)).toBe(false)
+      expect(view.stackScrollTop).toBeGreaterThan(0)
+      // A request no stack took in time lapses.
+      stackReveals.request('t3', one, 0)
+      expect(stackReveals.take('t3', 2001)).toBeUndefined()
     } finally {
       if (scrollTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTop)
       else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop

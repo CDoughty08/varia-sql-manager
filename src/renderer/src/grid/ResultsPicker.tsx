@@ -77,7 +77,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   }, [shown])
   useLayoutEffect(() => { activeKey.current = shown[active]?.key }, [active])
 
-  // Placed under its anchor, right-aligned, else above it; clamped to the window. Again on resize and scroll.
+  // Placed under its anchor, right-aligned, else above it; clamped to the window. Again when the window or the anchor
+  // changes size; an anchor with no size left (its pane hidden, Ctrl+R) closes the picker.
   const measure = useRef<() => void>(() => {})
   measure.current = () => {
     const target = anchor(), element = card.current
@@ -92,8 +93,15 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     if (!element || !view) return
     const again = () => measure.current()
     const resized = observeResize(element, () => setViewHeight(element.clientHeight))
+    const target = anchor()
+    const moved = target && observeResize(target, () => {
+      const rect = target.getBoundingClientRect()
+      // Closed with the focus in it, the focus goes back (to where it was opened from, else the layout), not to the page.
+      if (!target.isConnected || (rect.width === 0 && rect.height === 0)) onClose(!!card.current?.contains(card.current.ownerDocument.activeElement))
+      else again()
+    })
     view.addEventListener('resize', again)
-    return () => { resized.dispose(); view.removeEventListener('resize', again) }
+    return () => { resized.dispose(); moved?.dispose(); view.removeEventListener('resize', again) }
   }, [host])
   // In: the filter box takes the focus once the picker is placed (until then it is hidden, and a hidden box cannot take
   // it); its window comes forward when the picker opened from another one's palette.
@@ -110,7 +118,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     if (!doc || !view) return
     const press = (event: PointerEvent) => {
       const at = event.target as Element | null
-      if (card.current?.contains(at)) return
+      // Nor its filter box's context menu (Paste), drawn in the menu layer.
+      if (card.current?.contains(at) || at?.closest('.menu-layer')) return
       // The overflow button is a toggle: its own press closes the picker.
       if (at?.closest('.rt-overflow') && anchor()?.closest('.rt-root')?.contains(at)) return
       onClose(false)
@@ -125,9 +134,10 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   if (!host) return null
   const leave = (event: FocusEvent<HTMLDivElement>) => {
     const to = event.relatedTarget as Element | null
-    // Not its overflow button, a toggle that closes it itself; not another dialog (the palette), which gives the focus back.
+    // Not its overflow button, a toggle that closes it itself; not another dialog (the palette) or a context menu, which
+    // give the focus back.
     const toggle = !!to?.closest('.rt-overflow') && !!anchor()?.closest('.rt-root')?.contains(to)
-    if (to && !event.currentTarget.contains(to) && !toggle && !to.closest('[role="dialog"]')) onClose(false)
+    if (to && !event.currentTarget.contains(to) && !toggle && !to.closest('[role="dialog"], .menu-layer')) onClose(false)
   }
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const page = Math.max(1, Math.floor(height / rowHeight) - 1)
@@ -141,7 +151,10 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   // The active row is named only while it is drawn (a wheel can scroll it away).
   const named = shown[active] && active >= from && active < end
   const optionId = (place: number) => `${id}option-${place}`
-  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" style={place ?? { visibility: 'hidden' }} onBlur={leave}>
+  // `data-results-picker`: the focus here counts as the Results pane's for its keys (`resultsFocus`).
+  // A press anywhere in it but the filter box leaves the focus there, so its keys keep working.
+  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" data-results-picker="" style={place ?? { visibility: 'hidden' }} onBlur={leave}
+    onMouseDown={event => { if (event.target !== input.current) event.preventDefault() }}>
     <label className="rt-picker-head">
       <Icon name="search" />
       <input ref={input} type="text" role="combobox" value={query} placeholder="Go to a result, view or comparison" aria-label="Filter results, views and comparisons"

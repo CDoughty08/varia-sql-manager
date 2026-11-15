@@ -54,7 +54,8 @@ export interface SourceRef { readonly key: EntryKey; readonly set: string; reado
  * What a Pivot was built from, recorded when its build publishes and kept with its slot: the recipe (row columns, column
  * group, values, in the Table's columns), the Table's resolved filters the build applied (none when it read the stored
  * rows), the rows it read, and whether the Table was cut short (truncated, incomplete) or long values were grouped by a
- * prefix (approximate). PR 11 compares `filters` with the Table's to say the Pivot is out of date.
+ * prefix (approximate), and how long it took (`buildMs`). PR 11 compares `filters` with the Table's to say the Pivot is out
+ * of date; PR 17 rebuilds it by itself when it is shown, small and quick enough.
  */
 export interface PivotProvenance {
   readonly recipe: { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly { readonly aggregate: string; readonly column?: number }[] }
@@ -63,6 +64,11 @@ export interface PivotProvenance {
   readonly truncated: boolean
   readonly incomplete: boolean
   readonly approximate: boolean
+  /** How long the build took in milliseconds, from taking its place to its answer (its waits left out): under
+   *  `pivotFollow.maxLastBuildMs` the Pivot may rebuild by itself when its Table's filters change. */
+  readonly buildMs?: number
+  /** The Pivot rebuilt by itself, following its Table's filters (nobody clicked): Tabs does not select it for that. */
+  readonly followed?: true
 }
 /**
  * A presentation slot: one view the stack draws. Its identity is `key`, the key of the entry it shows, which is also where
@@ -148,6 +154,11 @@ export function shownFilters(tab: Pick<TabResults, 'sorts'>, key: EntryKey): rea
 export function pivotOutOfDate(tab: Pick<TabResults, 'sorts'>, group: Pick<ResultGroup, 'table' | 'pivot'> | undefined): boolean {
   const built = group?.pivot?.pivot
   return !!group && !!built && !sameFilters(built.filters, shownFilters(tab, group.table.key))
+}
+/** The view the Tabs layout shows: the entry whose grid last had the focus, else the run's first. While a run streams the
+ *  first stays selected, since results arrive after it; a tab the user picks is focused, so it stays picked. */
+export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'>): ResultSetEntry | undefined {
+  return entryOf(tab.sets, tab.focused) ?? tab.sets[0]
 }
 /**
  * A grid's sort and filters (results.view): its keys in order, with the text mode each was sorted by, its filters, and the
@@ -446,6 +457,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The tabs with a result set a grid can show (`hasResultSets`), which Find and Save Results As need: an emptied run that
    *  keeps captured plans is in `context` but not here. It publishes only when that set of tabs changes. */
   readonly resultSets: ExternalStore<Readonly<Record<string, true>>> = this.setsStore
+  private readonly steppableStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs with two or more results or comparisons to step through (`multipleResults`): the browser tab keys in the
+   *  results pane act on results only then, and fall through to query tabs otherwise. */
+  readonly steppable: ExternalStore<Readonly<Record<string, true>>> = this.steppableStore
   private readonly turnedStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedOrientation>>> { set(value: Readonly<Record<string, FocusedOrientation>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
@@ -687,6 +702,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return true
   }
 
+  /** The stack's collapsed entries (a caption's toggle, a search opening a grid): kept in the tab's view state and
+   *  published, so what reads whether a view is shown (a Pivot following its Table's filters) sees it change. */
+  setCollapsed(tabId: string, collapsed: ReadonlySet<EntryKey>): void {
+    const view = this.viewState(tabId)
+    if (view.collapsed === collapsed) return
+    view.collapsed = collapsed
+    this.publishNow(tabId)
+  }
+
   /** The tab's view state, created on first use. */
   viewState(tabId: string): TabViewState {
     let view = this.views.get(tabId)
@@ -820,6 +844,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       state.selection = undefined
       this.controllers.get(key)?.repaint()
     }
+  }
+
+  /** The entry a copy of this tab's runs now (the service's own state, a frame ahead of the published job list): a
+   *  rebuild nobody asked for waits for it rather than cancel it. */
+  copyingEntry(tabId: string): EntryKey | undefined {
+    const copying = this.copying
+    return copying && copying.tabId === tabId && this.runs.get(tabId)?.jobs.includes(copying.job) ? copying.job.entry : undefined
   }
 
   /**
@@ -1180,6 +1211,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.controllers.clear()
     this.contextStore.clear()
     this.setsStore.clear()
+    this.steppableStore.clear()
     this.turnedStore.clear()
     this.clearListeners()
   }
@@ -1363,7 +1395,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (grids && state) grids.set(key, carriedState(state, moved, descriptor.columns.length))
     this.settleDerived(run, setKey(descriptor), descriptor)
     run.emptied = false
-    run.view = 'results'
+    // A rebuild the user asked for shows the results; one that followed its Table's filters by itself leaves the pane alone.
+    if (!pivot?.followed) run.view = 'results'
     // Published now, before the old result is released: no snapshot ever points a grid at a released handle.
     this.publishNow(tabId)
     // A save of the old Pivot may still be in its file dialog, before main checks the result is there: it is released
@@ -1769,15 +1802,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** `hasResults` per tab: a set or captured plan the backend still holds, in results neither closed nor lost with the
    *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, plan sets and comparisons). */
   private updateContext(): void {
-    const results: Record<string, true> = {}, sets: Record<string, true> = {}
+    const results: Record<string, true> = {}, sets: Record<string, true> = {}, steppable: Record<string, true> = {}
     for (const [tabId, run] of this.runs) {
       if (run.status === 'closed' || run.status === 'lost') continue
       const grids = run.sets.some(held)
       if (grids) sets[tabId] = true
+      // The Tabs layout's top row: each result (its Pivot is under it) and each comparison.
+      if (!run.bare && run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length > 1) steppable[tabId] = true
       if (grids || run.planSets.some(held)) results[tabId] = true
     }
     publishTabs(this.contextStore, results)
     publishTabs(this.setsStore, sets)
+    publishTabs(this.steppableStore, steppable)
   }
 
   private snapshotOf(run: Run): TabResults {

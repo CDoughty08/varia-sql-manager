@@ -1,18 +1,14 @@
 import { Emitter } from '../core/events'
 import type { Disposable } from '../core/types'
 import { formatCount } from '../results/status'
-import { entryName, entryOf, pivotOutOfDate, type EntryKey, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
 
 // The Tabs layout's navigation, without React: the top row's items, the view a group's tab selects, the next and previous
 // item and view (Next Result, Previous Result and their view commands), and the overflow picker's rows, filter and window
 // of drawn rows. The picker lists every view of a run, so a run of 1,000 results is a list of 1,000 or more rows of which
 // it draws a screenful (tests/results-tabs.test.ts and tests/bench/grid.bench.ts measure that case).
 
-/** The view the Tabs layout shows: the entry whose grid last had the focus, else the run's first. While a run streams the
- *  first stays selected, since results arrive after it; a tab the user picks is focused, so it stays picked. */
-export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'>): ResultSetEntry | undefined {
-  return entryOf(tab.sets, tab.focused) ?? tab.sets[0]
-}
+export { selectedEntry }
 
 /** One item of the top row: a group (its Table and Pivot) or a comparison. */
 export interface TopItem { readonly key: EntryKey; readonly name: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
@@ -142,11 +138,19 @@ export const pickerRequests = new PickerRequests()
 /**
  * Next Result, Previous Result and Go to Result N in the Stacked layout: the stack drawn for the query scrolls the
  * selected view into view (opening it when collapsed), so its grid mounts, and moves the focus there when the focus was in
- * the stack. A stack not drawn (Messages had the Results view's place) reveals the focused view when it mounts anyway.
+ * the stack. A stack not drawn yet (the Results view hidden behind Messages, or its pane closed and opened again for the
+ * command) takes the request when it mounts, as Go to Result…'s picker does; one no stack took in time lapses.
  */
 class StackReveals {
-  private readonly emitter = new Emitter<{ readonly tabId: string; readonly key: EntryKey }>()
-  request(tabId: string, key: EntryKey): void { this.emitter.emit({ tabId, key }) }
-  subscribe(listener: (request: { readonly tabId: string; readonly key: EntryKey }) => void): Disposable { return this.emitter.subscribe(listener) }
+  private readonly pending = new Map<string, { readonly key: EntryKey; readonly at: number }>()
+  private readonly emitter = new Emitter<string>()
+  request(tabId: string, key: EntryKey, now = performance.now()): void { this.pending.set(tabId, { key, at: now }); this.emitter.emit(tabId) }
+  /** The view a request for the tab asked for, if one waits and is still fresh; it is taken either way. */
+  take(tabId: string, now = performance.now()): EntryKey | undefined {
+    const request = this.pending.get(tabId)
+    this.pending.delete(tabId)
+    return request && now - request.at <= pickerRequestMs ? request.key : undefined
+  }
+  subscribe(listener: (tabId: string) => void): Disposable { return this.emitter.subscribe(listener) }
 }
 export const stackReveals = new StackReveals()
