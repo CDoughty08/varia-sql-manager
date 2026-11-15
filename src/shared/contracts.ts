@@ -425,7 +425,8 @@ export type ResultsFormat = 'csv' | 'tsv' | 'json'
 export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[]; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export.
  *  `transposed` and `headerColumn` are as a copy's. */
-export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; viewId?: number; transposed?: boolean; headerColumn?: number }
+/** `suggestedSuffix` ends `suggestedName` and tells results apart ('-Result2-Pivot'): main never cuts it when it shortens the name. */
+export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; suggestedSuffix?: string; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** `rows`: the result's rows written. `partial`: the set was still open, so open-ended selections ended at the rows stored
  *  then. `capped`: the rows a transposed copy or save left out, for lying past the rows a transposed grid draws (0 otherwise). */
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean; capped: number }
@@ -642,7 +643,7 @@ export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding;
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]
-/** Files main opened for the page (the command line, a second instance, macOS's open-file, a drop, Recent Files), with
+/** Files main opened for the page (File › Open, the command line, a second instance, macOS's open-file, a drop, Recent Files), with
  *  what could not be opened: at most 32 errors, each "name: message". */
 export interface OpenedFiles { files: OpenSqlFile[]; errors: string[] }
 /** A registered file another program changed or deleted (`varia:files-check`). */
@@ -819,7 +820,8 @@ export interface VariaApi {
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
-  openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
+  /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
+  openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
   /** Shows an open query's saved file in the file manager; main looks its path up by id. */

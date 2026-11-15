@@ -159,10 +159,10 @@ keys it uses are listed below.
 | Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As… |
-| Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results |
+| Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results; Results toolbar › More results tools › Close Results |
 | Close Result | `output.closeResult` | — | — | — | `!documentBusy` | Query Output context menu › Close Just This Result |
-| Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
-| Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
+| Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs; Results toolbar › More results tools › Show Spaces and Tabs |
+| Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space; Results toolbar › More results tools › Show All White Space |
 | Sort Ascending (not in the palette) | `output.sortAscending` | — | — | — | Always | Query Output context menu › Sort Ascending |
 | Sort Descending (not in the palette) | `output.sortDescending` | — | — | — | Always | Query Output context menu › Sort Descending |
 | Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
@@ -182,8 +182,8 @@ keys it uses are listed below.
 | Filter for Duplicate Rows (not in the palette) | `output.filterDuplicateRows` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicate Rows |
 | Keep Selected Rows (not in the palette) | `output.keepSelectedRows` | — | — | — | Always | Query Output context menu › Filter › Keep Selected Rows |
 | Clear Filters (not in the palette) | `output.clearFilters` | — | — | — | Always | Query Output context menu › Filter › Clear Filters |
-| Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
-| Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
+| Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | Results toolbar › More results tools › Sort Text by Characters |
+| Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | Results toolbar › More results tools › Sort Text by Bytes |
 | Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |
 | Highlight Rows Yellow (not in the palette) | `output.highlightYellow` | — | — | — | Always | Query Output context menu › Highlight › Yellow |
 | Highlight Rows Green (not in the palette) | `output.highlightGreen` | — | — | — | Always | Query Output context menu › Highlight › Green |
@@ -193,16 +193,16 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
-| Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare… |
-| Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
+| Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare…; Results toolbar › More results tools › Compare… |
+| Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results…; Results toolbar › More results tools › Pivot… |
 | Update Pivot | `output.updatePivot` | — | — | — | Always | Query Output context menu › Update Pivot |
-| Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
+| Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed; Results toolbar › More results tools › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
-| Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers… |
+| Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
-| Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
-| Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs |
+| Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
+| Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
 | Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
 | Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
 | Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
@@ -216,8 +216,8 @@ keys it uses are listed below.
 | Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
-| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result… |
-| Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
+| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
+| Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size; Results toolbar › More results tools › Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
@@ -1006,6 +1006,26 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **S**chema-Qualified Name | `search.copySchemaName` | `searchHitSchema` |
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
+
+#### Results toolbar › More results tools (`output.tools`)
+
+Click the ⋯ button at the end of the results toolbar (More results tools), or press Enter or Space on it. It holds every tool of the toolbar, so those a narrow pane folds away stay in reach, and Show Results as Tabs. Items act on the query the toolbar belongs to, as its buttons do.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_layout` | Results as Ta**b**s | `output.toggleResultsTabs` | Always |
+| `1_layout` | **G**o to Result… | `output.goToResult` | Always |
+| `2_view` | **P**ivot… | `output.pivot` | Always |
+| `2_view` | **C**ompare… | `output.compare` | Always |
+| `2_view` | **T**ransposed | `output.transpose` | Always |
+| `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
+| `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
+| `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |
+| `4_text` | **S**how Spaces and Tabs | `output.showSpaces` | Always |
+| `4_text` | Show All **W**hite Space | `output.showAllWhitespace` | Always |
+| `4_text` | So**r**t Text by Characters | `output.sortTextByChars` | Always |
+| `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
+| `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 ## Context keys (160)
 

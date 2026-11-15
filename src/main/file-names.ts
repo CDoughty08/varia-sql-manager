@@ -1,15 +1,12 @@
 import { basename, dirname, join } from 'node:path'
 import { scriptLimits } from '../shared/scripting/catalog.ts'
+import { fileNameBytes, unsafeFileNameChars as unsafe } from '../shared/file-names.ts'
 
-// C0 and C1 controls, line and paragraph separators, bidi marks, embeddings, overrides and isolates, the BOM, and the
-// characters Windows forbids in file names (which also covers path separators).
-const unsafe = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\\/:*?"<>|]/g
 // Windows' device names, which it ignores trailing spaces after; COM and LPT take a digit 0-9 or a superscript ¹²³.
 const reserved = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(\.|$)/i
 const fallback = 'Script.sql'
 const trailing = /[. ]+$/
-/** ext4 and APFS allow 255 bytes per name; this leaves room for a suffix the Save dialog or the user adds. */
-const maxBytes = 240
+const maxBytes = fileNameBytes
 
 /** `text` cut to whole code points so that it and `extension` fit `units` UTF-16 units and `bytes` UTF-8 bytes. */
 function fit(text: string, extension: string, units: number, bytes: number): string {

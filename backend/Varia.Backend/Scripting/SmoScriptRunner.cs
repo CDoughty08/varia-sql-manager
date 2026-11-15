@@ -351,9 +351,11 @@ internal sealed class SmoScriptRunner
         return text.ToString();
     }
 
-    /// <summary>Ledger tables and views, which SMO 181 scripts for an older version by dropping the LEDGER clause and
-    /// keeping the ledger columns: a script no older server runs.</summary>
-    private static readonly HashSet<string> LedgerSubtypes = ["updatableLedger", "appendOnlyLedger", "ledgerHistory", "ledger"];
+    /// <summary>A pass's options, with the SMO server's own major version as the source's (for Managed Instance, its
+    /// engine's). It is read whatever Match script settings to source says; that costs nothing, because SMO reads its
+    /// server information once per connection and needs it to script anyway.</summary>
+    internal static MappedOptions MapPass(Server smo, ScriptingOptionsDto dto, ScriptVerb pass, Explorer.ServerProfile profile, bool headers, bool cloud, bool dependencies) =>
+        SmoOptionsMapper.Map(dto, pass, profile, headers, cloud, dependencies, smo.ServerVersion.Major);
 
     /// <summary>SMO's batches for every pass of the verb, unframed, at most <paramref name="max"/> characters in all. The
     /// comment SMO writes as a batch for each reference it could not resolve is left out: it holds the referenced name
@@ -370,9 +372,9 @@ internal sealed class SmoScriptRunner
         for (var index = 0; index < passes.Count; index++)
         {
             var pass = passes[index];
-            var mapped = SmoOptionsMapper.Map(dto, pass, session.Profile, headers, session.Cloud, dependencies);
+            var mapped = MapPass(smo, dto, pass, session.Profile, headers, session.Cloud, dependencies);
             Target = mapped.Target;
-            if (pass != ScriptVerb.Drop && LedgerSubtypes.Contains(target.Subtype) && SmoOptionsMapper.Known.First(item => item.Value == mapped.Target).Number < 160)
+            if (SmoOptionsMapper.LedgerNeedsNewer(target.Subtype, pass, mapped.Target, mapped.EngineType))
                 throw new UnsupportedVersionException("Ledger tables and views need SQL Server 2022 or later.");
             foreach (var warning in mapped.Warnings) if (!warnings.Contains(warning)) warnings.Add(warning);
             // Prefetch over a CREATE's or DROP's dependency list reads every table's columns for each type and XML schema

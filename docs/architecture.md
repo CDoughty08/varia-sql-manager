@@ -465,7 +465,9 @@ being true.
   input recorded by `WindowRegistry`, including input in a popout.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. The session's
+  only granted permission is a sanitized clipboard write from the main window's main frame; its permission request and
+  check handlers answer alike (`src/main/permissions.ts`), since Electron's default check grants everything. On Linux,
   Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
   the click lands) with no role or gate: in each window the page cancels every middle-button release event
   (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and every middle-button pointermove (how a
