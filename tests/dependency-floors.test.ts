@@ -6,8 +6,8 @@ import { domPurifyVersions, patchedDomPurify } from '../electron.vite.config'
 // The lowest versions with the security fixes Varia relies on. The audit workflow's npm audit (audit.yml) catches a new advisory; this catches a
 // downgrade below a fix offline, in npm run check, including ones the advisory database does not list.
 const floors: Record<string, string> = {
-  // 44.11.1 and 44.11.3 backport Chromium, V8, ANGLE and Skia security fixes.
-  electron: '44.11.3',
+  // 45.3.2: Chromium 156 with backported ANGLE, Chromium, Dawn, Skia and V8 security fixes.
+  electron: '45.3.2',
   zod: '4.6.6',
   // 26.18 ships the bounded NSIS per-user path copy (build/nsis-check.cjs).
   'app-builder-lib': '26.18.0',

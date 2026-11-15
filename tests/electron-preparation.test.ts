@@ -16,7 +16,7 @@ const { buildElectronArtifactConfig } = builderRequire('./out/util/electronGet.j
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
 const bytes = Buffer.from('synthetic test archive; no executable is launched')
-const version = '44.11.3', platform = 'win32', arch = 'x64'
+const version = '45.3.2', platform = 'win32', arch = 'x64'
 const filename = `electron-v${version}-${platform}-${arch}.zip`
 const canonical = `https://github.com/electron/electron/releases/download/v${version}/${filename}`
 const checksums = { [filename]: createHash('sha256').update(bytes).digest('hex') }
