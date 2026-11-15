@@ -57,6 +57,7 @@
 
 ### Fixed
 
+- **Activity Monitor and Object Explorer status on a busy server:** a probe or Details read that runs past its time limit, or a view closed while it reads, no longer makes every other live view on that connection reconnect. A connection that still works after the read is stopped keeps its session; only one that no longer answers is discarded, as before.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.

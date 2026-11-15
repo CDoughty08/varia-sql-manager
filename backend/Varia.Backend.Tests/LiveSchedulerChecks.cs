@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Activity;
 using Varia.Backend.Live;
@@ -813,6 +814,16 @@ internal static class LiveSchedulerChecks
             catch (Exception error) { ended = error.GetType().Name; }
             check(lookups == 1 && ended == "cancelled" && service.Gates.Busy == 0,
                 "a subscription cancelled while an SSISDB source reads why its catalog's database will not open ends cancelled, however SqlClient words the cancel: " + ended);
+        }
+        {
+            // The check that lets a cancelled statement's connection be kept or pooled: a connection that is not open never passes
+            // it (and it sends nothing), and what it runs reads no table and takes no lock.
+            using var unopened = new SqlConnection("Server=127.0.0.1,1;Integrated Security=true;Connect Timeout=1");
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var answers = await LiveConnections.AnswersAsync(unopened).WaitAsync(TimeSpan.FromSeconds(15));
+            check(!answers && watch.ElapsedMilliseconds < 1000 && unopened.State == System.Data.ConnectionState.Closed
+                && LiveConnections.Check == "SELECT @@TRANCOUNT;" && LiveConnections.CheckMs == 1000,
+                "a connection that is not open never passes the clean-connection check, which runs only SELECT @@TRANCOUNT within 1 s");
         }
     }
 

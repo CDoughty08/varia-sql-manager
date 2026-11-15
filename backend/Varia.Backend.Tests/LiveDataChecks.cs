@@ -201,8 +201,12 @@ internal static class LiveDataChecks
             var before = view.Value.Recorder.Ticks.Count;
             var recovered = await view.Value.Recorder.WaitAsync(recorder => recorder.Ticks.Skip(before).Any(tick => tick.Samples.Count > 0), 20_000);
             var after = view.Value.Recorder.Ticks.Skip(before).FirstOrDefault(tick => tick.Samples.Count > 0);
-            check(recovered && after is { Spid: > 0, Samples: [{ Gap: "baseline" }] } && !view.Value.Task.IsCompleted,
-                "after a timeout the view reconnects on its own (the dropped connection is never pooled: a new session in the tick) and samples again from a baseline");
+            // SqlClient ended each cancelled WAITFOR on the server, so the connection passes the clean-connection check and the view
+            // keeps its session: no tick names a new one, and no timeout cleared the pool the other views share.
+            check(recovered && after is { Spid: null, Samples: [{ Gap: "baseline" }] } && view.Value.Recorder.Opened is { Spid: > 0 }
+                && view.Value.Recorder.Ticks.All(tick => tick.Spid is null) && !view.Value.Task.IsCompleted,
+                "after a timeout the view keeps its session (the cancelled statement's connection still answers, so it is neither dropped nor its pool cleared) and samples again from a baseline: "
+                + string.Join(", ", view.Value.Recorder.Ticks.Select(tick => tick.Spid?.ToString(CultureInfo.InvariantCulture) ?? "-")));
         }
         finally
         {
@@ -210,6 +214,18 @@ internal static class LiveDataChecks
             if (view is { } running) await stop(running);
         }
         check(service.Live.Gates.Busy == 0, "a view stopped after timeouts holds no live gate");
+
+        // The clean-connection check itself: an open connection with nothing running passes, and one with a transaction open fails
+        // (its caller then clears the pool rather than hand the transaction to another view).
+        var host = (ILiveHost)service;
+        await using var probe = host.PoolConnection(connectionId, null, LiveConnections.ServerSuffix);
+        await host.OpenAsync(probe, CancellationToken.None);
+        var clean = await LiveConnections.AnswersAsync(probe);
+        await using (var begin = new Microsoft.Data.SqlClient.SqlCommand("BEGIN TRAN;", probe)) await begin.ExecuteNonQueryAsync();
+        var inTransaction = await LiveConnections.AnswersAsync(probe);
+        await using (var rollback = new Microsoft.Data.SqlClient.SqlCommand("IF @@TRANCOUNT > 0 ROLLBACK;", probe)) await rollback.ExecuteNonQueryAsync();
+        check(clean && !inTransaction && await LiveConnections.AnswersAsync(probe),
+            "the clean-connection check passes an open idle connection and fails one with a transaction open (" + clean + ", " + inTransaction + ")");
     }
 
     /// <summary>An open transaction holding an X lock: the probe (made to read the locked table first, by the test hook)

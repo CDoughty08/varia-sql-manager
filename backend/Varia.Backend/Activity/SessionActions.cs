@@ -292,6 +292,9 @@ internal sealed partial class SessionActions
         }
         finally
         {
+            // A read cancelled at the budget (or by the request) leaves a connection that may still be clean: one that answers
+            // goes back to the pool, so a slow Details never clears the pool the live views share.
+            if (!healthy) healthy = await LiveConnections.AnswersAsync(connection).ConfigureAwait(false);
             if (!healthy)
             {
                 try { SqlConnection.ClearPool(connection); }
