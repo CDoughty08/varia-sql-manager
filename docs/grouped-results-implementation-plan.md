@@ -959,7 +959,8 @@ Outcome, accepted by the owner:
         Results (`replaceSet` leaves `run.view` alone for `followed` provenance). `tried` keeps only the last set of filters
         a group was built over: returning to filters that failed earlier builds them again, once.
         A Copy of the Pivot the user started holds an automatic build back (one in flight is given up) until the copy ends,
-        since `replaceSet` cancels a copy of the entry it replaces. While the newer filter's view is still being built the
+        since `replaceSet` cancels a copy of the entry it replaces; it reads `ResultsService.copyingEntry`, the live copy a
+        frame ahead of the published job list, and an automatic answer landing after a copy began is released. While the newer filter's view is still being built the
         older automatic build is not given up (decisions are over published views), so a Table whose view takes longer
         than the Pivot publishes the older Pivot briefly first. results-smoke 13b2's first check needs the 100-row Pivot's
         build to take under 250 ms, round trip included, which holds with a wide margin.

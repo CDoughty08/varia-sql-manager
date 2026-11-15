@@ -1676,6 +1676,51 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.group().pivot!.pivot!.followed).toBeUndefined()
   })
 
+  it('releases an automatic answer that lands after a copy of the Pivot started, before the copy is published', async () => {
+    const clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    const pivotKey = f.results.getSnapshot().t1.groups[0].pivot!.key
+    // F1's rebuild runs.
+    const f1 = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const answer = deferred<ReturnType<typeof pivoted>>()
+    f1.pivot.mockImplementationOnce(() => answer.promise)
+    vi.mocked(first.sort).mockResolvedValueOnce(f1)
+    f.results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    f.flush()
+    f.results.viewShown('t1', one, f1)
+    f.flush()
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    // The user copies the Pivot, and the rebuild's answer lands before the next frame publishes the copy.
+    const copying = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(copying.promise)
+    f.results.setSelection('t1', pivotKey, selectAll(pivotKey))
+    const copied = f.results.copy('t1', pivotKey, false)
+    answer.resolve(pivoted(901))
+    await wait()
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(f.client.released()).toContain(901)
+    expect(f.results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(801)
+    // The copy ends: the same filters are built again.
+    f1.pivot.mockResolvedValueOnce(pivoted(902))
+    copying.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await copied
+    f.flush()
+    await wait()
+    f.flush()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(902)
+  })
+
   it("holds a rebuild by itself back while the user's copy of the Pivot runs, giving up one in flight, and follows once it ends", async () => {
     const f = await following()
     const pivotKey = f.group().pivot!.key

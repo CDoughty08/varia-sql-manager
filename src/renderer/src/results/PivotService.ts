@@ -62,8 +62,8 @@ export interface PivotSnapshot {
   readonly building: Readonly<Record<string, readonly number[]>>
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView' | 'notify'> & Partial<Pick<ResultsService, 'viewState'>>
-/** How the window lays results out (queryResults.grid.layout), for whether a Pivot is shown. Without one no Pivot follows its
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView' | 'notify' | 'copyingEntry'> & Partial<Pick<ResultsService, 'viewState'>>
+/** How the window lays results out (queryResults.grid.layout) and whether the Results panel shows, for whether a Pivot is shown. Without one no Pivot follows its
  *  Table's filters by itself (the checks that do not ask for it). */
 export interface PivotFollowHost {
   layout(): ResultsLayout
@@ -321,6 +321,14 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       if (abort.signal.aborted) {
         this.results.discard(result.descriptor)
         if (item.cancelled && replaces !== undefined) error = cancelledText(group)
+        return
+      }
+      // A copy of the Pivot started after this build's last look (before the follow could give it up): the answer is
+      // released rather than cancel the copy, and its filters are built again once the copy ends.
+      if (auto && replaces !== undefined && this.results.copyingEntry(tabId) === replaces) {
+        this.results.discard(result.descriptor)
+        const last = this.tried.get(tabId)
+        if (last?.get(item.ordinal)?.filters === reads) last.delete(item.ordinal)
         return
       }
       const sourceLabel = entryName(entry), snapshot = entry.handle.getSnapshot()
@@ -592,8 +600,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // Hidden while it builds (Messages picked, another view selected, its item collapsed), it is given up too: only a shown
     // Pivot rebuilds by itself, and it rebuilds when shown again.
     // A copy of the Pivot the user started is never stopped by a rebuild nobody asked for (`replaceSet` cancels it): the
-    // Pivot waits until it ends, whose publish looks again.
-    const copying = tab.jobs.some(job => job.kind === 'copy' && job.entry === group.pivot!.key)
+    // Pivot waits until it ends, whose publish looks again. The service's own state is read: a copy started this frame is
+    // not yet in the published job list.
+    const copying = this.results.copyingEntry(tabId) === group.pivot!.key
     const superseded = live?.auto !== undefined && (live.auto !== filters || copying || !pivotShown(tab, group, layout, collapsed, showing))
     if (superseded) {
       // Given up by this service, not ended: its filters were never built over, so they may be tried again (the change
