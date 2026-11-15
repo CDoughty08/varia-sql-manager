@@ -60,11 +60,16 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   }
   const count = searchCount(search, formatCount)
   const columns = search.mode === 'columns'
+  const placeholder = columns ? 'Search column names' : 'Search all results'
   return <div className="results-search" data-mode={search.mode}>
     <Icon name="search" className="results-search-icon" />
-    <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
-      value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
-      onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    {/* The field is at least as wide as its placeholder, drawn unseen beside the input (data-placeholder), so the whole
+        placeholder shows in every font; the toolbar folds its groups rather than narrow it, until none is left to fold. */}
+    <span className="results-search-field" data-placeholder={placeholder}>
+      <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={placeholder}
+        value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
+        onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    </span>
     {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
     <span className="results-search-count" title={search.error}>{count}</span>
     <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
@@ -81,8 +86,8 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
 /**
  * How the results toolbar gives way in a narrow pane, in order: Tabs goes (it is in the ⋯ menu and the Window menu), the
  * groups tighten (no icons beside them, the search box's magnifier and Previous and Next go: Enter, Shift+Enter and F3 still
- * step), then Transposed, Headers and Compare go and the search box gives up its width, then Sort text by, White space, and
- * the Show group. Search, Close Results
+ * step), then Transposed, Headers and Compare, then Sort text by, White space, and the Show group. The search field never
+ * narrows past its placeholder until every group has folded; only then does it give up width. Search, Close Results
  * and ⋯ (which holds every tool) stay. The toolbar measures its own width, not the window's, so a pane docked beside the
  * editor or popped out into a window of its own folds as a narrow window does, whatever the fonts.
  */
@@ -99,7 +104,7 @@ export const foldWords = (fold: number): string => toolbarFolds.slice(0, fold).j
 export const moreIsTabStop = (fold: number): boolean => fold > toolbarFolds.indexOf('space')
 
 /**
- * Folds the toolbar to its width (`fitFold`) whenever it, its head or what shares the head changes size: the pane resized,
+ * Folds the toolbar to its width (`fitFold`) whenever it, one of its groups, its head or what shares the head changes size: the pane resized,
  * the status line or a job strip came or went, a font arrived, Headers appeared. Written to the element, not React state, so
  * a fold never renders the toolbar again; laying it out folded and unfolded settles on the same answer, so the observers
  * it triggers change nothing more.
@@ -121,12 +126,17 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     let watched: { dispose(): void } | undefined
     const watch = () => {
       watched?.dispose()
-      watched = observeResize([head, ...head.children], fit)
+      // The toolbar's own groups too: once it is as wide as its pane, a group growing inside it (Headers, a choice turning
+      // bold, the search count) changes no size outside it.
+      watched = observeResize([head, ...head.children, ...element.children], fit)
     }
     watch()
     const view = head.ownerDocument.defaultView
     const added = view ? new view.MutationObserver(() => { watch(); fit() }) : undefined
     added?.observe(head, { childList: true })
+    // A tool coming or going, or a choice pressed, anywhere in the toolbar: a group folded away has no size to watch, so
+    // Headers leaving the Show group it folded must still unfold it. fit writes only data-fold and tabIndex, never these.
+    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed'] })
     return () => { added?.disconnect(); watched?.dispose() }
   }, [])
   return useCallback((element: HTMLDivElement | null) => { toolbar.current = element }, [])
@@ -204,7 +214,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
     <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true, 'results-space')}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false, 'results-sort', sortHeld)}
-    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
+    {/* Icons only, so the toolbar folds as little as it can in a narrow pane (the Show group folds last). */}
     <div className="results-segments results-show" role="group" aria-label="Show">
       <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>

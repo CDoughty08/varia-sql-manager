@@ -11,7 +11,7 @@ import { join, resolve } from 'node:path'
 import { enlargeOutput, sizeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, captionFits, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, popoutDockButton, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  anyResultGrid, backendReady, captionFits, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, popoutDockButton, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
   resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
@@ -81,6 +81,12 @@ try {
     return { fits: tools.scrollWidth <= tools.clientWidth && button.getBoundingClientRect().right <= right + 0.5, right, width: tools.clientWidth, scroll: tools.scrollWidth, font: getComputedStyle(tools).font }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
+  // The search field shows its whole placeholder, in either mode ("Search column names" is the longer).
+  expect(await searchPlaceholderFit(page)).toMatchObject({ fits: true, placeholder: 'Search all results' })
+  const searchIn = name => resultsToolbar(page).getByRole('group', { name: 'Search in', exact: true }).getByRole('button', { name, exact: true })
+  await searchIn('Columns').click()
+  await expect.poll(() => searchPlaceholderFit(page)).toMatchObject({ fits: true, placeholder: 'Search column names' })
+  await searchIn('Data').click()
   await show('Tabs').click()
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => page.evaluate(() => window.varia.getSettings().then(result => result.value.values['queryResults.grid.layout']))).toBe('tabs')
@@ -355,16 +361,16 @@ try {
   console.log('Grouped results checks: Stacked again from the palette, with every grid drawn.')
 
   // 9. Narrow and short panes and popouts (grouped results PR 15), with a name of the longest a marker gives (128
-  // characters). A pane too narrow for every tool folds the results toolbar by its own width: Tabs goes first and the
-  // search box keeps a readable width until Transposed and Compare fold too; ⋯ (More results tools) holds every tool,
-  // Results as Tabs among them.
+  // characters). A pane too narrow for every tool folds the results toolbar by its own width: Tabs goes first, and the
+  // search field keeps its whole placeholder until every group has folded; ⋯ (More results tools) holds every tool, Results as Tabs among
+  // them.
   const name128 = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region, by month and '.padEnd(128, 'z')
   expect(name128).toHaveLength(128)
   await resizeContent(application, page, 900, 900)
   await expect.poll(async () => (await resultsToolbarFit(page)).fits).toBe(true)
   const narrow = await resultsToolbarFit(page)
-  expect(narrow.fold, JSON.stringify(narrow)).toMatch(/^layout( |$)/)
-  if (!/\bview\b/.test(narrow.fold)) expect(narrow.search, JSON.stringify(narrow)).toBeGreaterThanOrEqual(150)
+  expect(narrow.fold, JSON.stringify(narrow)).toMatch(/^layout\b/)
+  expect(await searchPlaceholderFit(page)).toMatchObject({ fits: true })
   await expect(show('Tabs')).toBeHidden()
   await moreResultsTools(page).click()
   const tabsItem = () => resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })
@@ -407,8 +413,26 @@ try {
   const inPanel = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), panel = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5 })
   await expect.poll(() => inPanel(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
   await expect.poll(() => inPanel(gridCell(anyResultGrid(page), 0, 0))).toBe(true)
+  // The Pivot builder in that short pane: with a Pivot built, its "Building again replaces…" note goes, so Build Pivot
+  // stays whole inside the builder.
   await enlargeOutput(page)
-  console.log('Grouped results checks: a narrow pane folds the results toolbar with ⋯ holding every tool, a 128-character name is cut in its tab, caption and picker row without pushing anything out, and a short pane keeps the toolbar one row.')
+  await moreResultsTools(page).click()
+  await resultsToolsMenu(page).getByRole('menuitem', { name: 'Pivot…', exact: true }).click()
+  const builder = pivotPanel(page)
+  await builder.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ index: 1 })
+  await builder.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  await expect(viewTabs(page).getByRole('tab')).toHaveCount(2)
+  await expect(builder.getByText(/^Building again replaces /)).toBeVisible()
+  await sizeOutput(page, 120)
+  await expect(builder.getByText(/^Building again replaces /)).toBeHidden()
+  const buildWhole = () => builder.getByRole('button', { name: 'Build Pivot', exact: true }).evaluate(button => {
+    const box = button.getBoundingClientRect(), panel = button.closest('aside').getBoundingClientRect()
+    return box.height > 0 && box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5
+  })
+  await expect.poll(buildWhole).toBe(true)
+  await builder.getByRole('button', { name: 'Close Pivot', exact: true }).click()
+  await enlargeOutput(page)
+  console.log('Grouped results checks: a narrow pane folds the results toolbar with ⋯ holding every tool, a 128-character name is cut in its tab, caption and picker row without pushing anything out, the search field keeps its whole placeholder, and a short pane keeps the toolbar one row and Build Pivot whole.')
 
   // 10. Popped out, Results shows the same names, and its toolbar folds to the popout's width, its ⋯ opening there.
   const opened = application.waitForEvent('window', { timeout: 30000 })
@@ -424,6 +448,18 @@ try {
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(640, 480) })
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/^layout tight view/)
   expect((await resultsToolbarFit(popout)).fits).toBe(true)
+  expect(await searchPlaceholderFit(popout)).toMatchObject({ fits: true })
+  // A group growing from inside a toolbar already as wide as its pane (Headers appearing, a pressed choice turning bold;
+  // here the Show group, which folds last, by 400 px, past what the search box can give) folds it again rather than push ⋯
+  // past its clipped edge, and unfolds it when the group shrinks back.
+  const grown = resultsToolbar(popout).getByRole('group', { name: 'Show', exact: true }), before = (await resultsToolbarFit(popout)).fold
+  expect(before).not.toMatch(/\bshow\b/)
+  await grown.evaluate(group => { const wide = group.ownerDocument.createElement('span'); wide.dataset.smokeGrowth = ''; wide.style.cssText = 'display: inline-block; width: 400px'; group.append(wide) })
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
+  expect((await resultsToolbarFit(popout)).fits).toBe(true)
+  await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
+  await resultsToolbar(popout).evaluate(tools => tools.querySelector('[data-smoke-growth]').remove())
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe(before)
   await moreResultsTools(popout).click()
   await expect(resultsToolsMenu(popout)).toBeVisible()
   await expect(resultsToolsMenu(page)).toHaveCount(0)
@@ -433,8 +469,15 @@ try {
   // While White space shows, its chosen button is the toolbar's Tab stop; narrower still, it folds away with the stop and
   // ⋯ takes it, so Tab still reaches the toolbar.
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
-  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(360, 480) })
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
+  const popoutWidth = width => application.evaluate(({ BrowserWindow }, width) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(width, 480) }, width)
+  // At 400 px the whole toolbar fits, ⋯ and Close Results included: once every group has folded the field gives up its
+  // placeholder's width rather than push them past the toolbar's clipped edge. (At 360 px the views, the status's least
+  // width and the pane menu leave the toolbar no more than it needs on Windows; wider fonts tip it over.)
+  await popoutWidth(400)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fits, { message: JSON.stringify(await resultsToolbarFit(popout)) }).toBe(true)
+  await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
+  await popoutWidth(360)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()

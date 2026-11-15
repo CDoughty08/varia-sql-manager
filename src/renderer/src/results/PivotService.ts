@@ -5,7 +5,7 @@ import { DerivedJobs } from './derived-jobs'
 import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
 import { ResultError, type OperationProgressListener, type PivotSpec, type ResultView } from './ResultClient'
 import type { EntryKey, PivotProvenance, ResultGroup, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
-import { distinctName, entryName, filtersIdentity, groupOf, pivotOutOfDate, resultLimits, selectedEntry, setKey, shownFilters, slotOf } from './ResultsService'
+import { distinctName, entryName, entryNumber, filtersIdentity, pivotName, groupOf, pivotOutOfDate, resultLimits, selectedEntry, setKey, shownFilters, slotOf } from './ResultsService'
 
 /**
  * When a Pivot rebuilds by itself after its Table's filters change (the owner's figures, 2026-11-12): the Table's result
@@ -92,9 +92,9 @@ interface Built { readonly result: ResultsPivotResult; readonly filters: readonl
 const recipeSpec = (recipe: PivotProvenance['recipe']): PivotSpec =>
   ({ rows: [...recipe.rows], ...recipe.column === undefined ? {} : { column: recipe.column }, values: recipe.values.map(value => ({ ...value })) }) as PivotSpec
 /** What the builder says when the user cancels a build while the group shows a Pivot, which stays. */
-const cancelledText = (group: Pick<ResultGroup, 'table' | 'pivot'>) => `Building was cancelled, so ${pivotName(group)} still shows its last build.`
+const cancelledText = (group: Pick<ResultGroup, 'table' | 'pivot'>) => `Building was cancelled, so ${groupPivotName(group)} still shows its last build.`
 /** "Pivot of Result 2", "Pivot of Open orders": how the builder names a group's Pivot. */
-const pivotName = (group: Pick<ResultGroup, 'table' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : `Pivot of ${entryName(group.table.entry)}`
+const groupPivotName = (group: Pick<ResultGroup, 'table' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : pivotName(entryName(group.table.entry))
 
 /** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a comparison or a plan set. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
@@ -340,7 +340,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       }
       // Only the run that holds the Table takes the pivot; otherwise (a re-run, a closed tab) it is released, and the
       // builder says why when its run is still the one it pivoted.
-      const added = this.results.addSet(tabId, result.descriptor, `Pivot of ${sourceLabel}`, [setKey(entry.descriptor)], { pivot: provenance })
+      const added = this.results.addSet(tabId, result.descriptor, pivotName(sourceLabel), [setKey(entry.descriptor)], { pivot: provenance })
       if (added === undefined) {
         const now = this.results.getSnapshot()[tabId]
         if (now?.queryId === tab.queryId) {
@@ -366,7 +366,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         const message = failure instanceof Error ? failure.message : 'The results could not be pivoted.'
         // The old Pivot is never freed to make room: closing it first is the user's choice.
         error = replaces !== undefined && failure instanceof ResultError && failure.code === 'TOO_LARGE'
-          ? `${message.replace(/\.\s*$/, '')}, or close ${pivotName(group)} and build it again.`
+          ? `${message.replace(/\.\s*$/, '')}, or close ${groupPivotName(group)} and build it again.`
           : message
       }
     } finally {
@@ -472,7 +472,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)?.text
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
-      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? distinctName(group.table.entry, tab.sets) : `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
+      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? distinctName(group.table.entry, tab.sets) : entryNumber({ number: ordinal }) }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live,
       ...live?.queued ? { queued: live.queued } : {}, ...failed ? { error: failed } : {}
     }
