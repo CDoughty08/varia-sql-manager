@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Activity;
 using Varia.Backend.Live;
@@ -813,6 +814,74 @@ internal static class LiveSchedulerChecks
             catch (Exception error) { ended = error.GetType().Name; }
             check(lookups == 1 && ended == "cancelled" && service.Gates.Busy == 0,
                 "a subscription cancelled while an SSISDB source reads why its catalog's database will not open ends cancelled, however SqlClient words the cancel: " + ended);
+        }
+        {
+            // The check that lets a cancelled statement's connection be kept or pooled: a connection that is not open (a connect that
+            // failed or was cancelled) never passes it, and it neither opens one nor throws. The live checks (LiveDataChecks) prove
+            // what it does on an open connection.
+            using var unopened = new SqlConnection("Server=127.0.0.1,1;Integrated Security=true;Connect Timeout=1");
+            var answers = await LiveConnections.AnswersAsync(unopened).WaitAsync(TimeSpan.FromSeconds(15));
+            check(!answers && unopened.State == System.Data.ConnectionState.Closed,
+                "a connection that is not open never passes the clean-connection check, which opens nothing");
+        }
+        {
+            // A view that ends before any statement was sent leaves nothing dirty, so it never clears the pool the other views share:
+            // neither while its connection opens, nor while it waits for a live gate.
+            var host = new HangingHost(id);
+            using var connecting = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
+            var probe = new LiveProbeState(overview, 2000);
+            await connecting.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            using var ending = new CancellationTokenSource();
+            var sampling = connecting.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], ending.Token);
+            SpinWait.SpinUntil(() => Volatile.Read(ref host.Opens) >= 1, 15_000);
+            ending.Cancel();
+            string connectEnd;
+            try { await sampling.WaitAsync(TimeSpan.FromSeconds(15)); connectEnd = "sampled"; }
+            catch (OperationCanceledException) { connectEnd = "cancelled"; }
+
+            var scripted = new ScriptedOpenHost(id);
+            var connected = false;
+            scripted.Open = (_, _) => { connected = true; return Task.CompletedTask; };
+            // One gate in the backend, held here: the scripted connect returns at once without opening anything (no server is
+            // reached), and the sample then waits for the gate, which nothing releases: a sample that has connected and not
+            // completed is waiting for it. Keeping an open connection after such a cancel would need a server, so it is not
+            // checked here.
+            var gates = new LiveGates(2, 1, scripted.IsConnected);
+            using var held = await gates.WaitAsync(id, 1000, CancellationToken.None);
+            using var waiting = new SqlSampler(scripted, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(scripted, id));
+            await waiting.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            using var closing = new CancellationTokenSource();
+            var waited = waiting.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), 10_000, 2000)], closing.Token);
+            var stillWaiting = connected && !waited.IsCompleted;
+            closing.Cancel();
+            string gateEnd;
+            try { await waited.WaitAsync(TimeSpan.FromSeconds(15)); gateEnd = "sampled"; }
+            catch (OperationCanceledException) { gateEnd = "cancelled"; }
+            check(connectEnd == "cancelled" && connecting.PoolClears == 0 && held is not null && stillWaiting && gateEnd == "cancelled" && waiting.PoolClears == 0 && gates.Busy == 1,
+                "a view that ends while its connection opens, or while it waits for a live gate, sends nothing and clears no pool: " + connectEnd + " " + connecting.PoolClears + ", " + gateEnd + " " + waiting.PoolClears);
+        }
+        {
+            // An SSISDB source whose catalog's database will not open (4060) reads why on another connection; a view that ends while
+            // that lookup opens has sent it nothing, so the lookup clears no pool. The one clear counted is the failed open's own.
+            var host = new ScriptedOpenHost(id);
+            using var ending = new CancellationTokenSource();
+            var lookups = 0;
+            host.Open = (connection, token) =>
+            {
+                if (connection.Database.Length > 0) throw ConnectionFailureChecks.Sql(4060);
+                Interlocked.Increment(ref lookups);
+                ending.Cancel();
+                throw ConnectionFailureChecks.Sql(0, 0, 11, "server", "Operation cancelled by user.");
+            };
+            var catalogSource = LiveCatalog.Current.Sources["ssis.catalog"];
+            var catalogProbe = new LiveProbeState(LiveCatalog.Current.Probes[LiveSql.CatalogProbe], 10_000);
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, catalogSource, LiveCatalog.Current.Limits, null);
+            await sampler.OpenAsync([new LiveProbeState(LiveCatalog.Current.Probes[LiveSql.CatalogProbe], 10_000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            string ended;
+            try { await sampler.SampleAsync([new LiveDue(catalogProbe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), catalogProbe.BudgetMs, 10_000)], ending.Token).WaitAsync(TimeSpan.FromSeconds(15)); ended = "sampled"; }
+            catch (OperationCanceledException) { ended = "cancelled"; }
+            check(lookups == 1 && ended == "cancelled" && sampler.PoolClears == 1,
+                "an SSISDB view that ends while it looks up why its catalog's database will not open clears no pool for the lookup, which sent nothing: " + ended + " " + sampler.PoolClears);
         }
     }
 

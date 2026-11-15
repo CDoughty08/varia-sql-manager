@@ -59,6 +59,7 @@
 
 ### Fixed
 
+- **Activity Monitor and Object Explorer status on a busy server:** a probe or Details read that runs past its time limit, or a view closed while it reads, no longer makes every other live view on that connection reconnect. A connection that still works after the read is stopped keeps its session; only one that no longer answers is discarded, as before.
 - **Save Results As JSON:** a bigint, decimal, numeric or money value of more than 15 significant digits (such as a long `decimal(38,0)` key or bigint) is now written as a JSON string, so readers that parse numbers as doubles, JavaScript and spreadsheets among them, no longer change its digits. Values of 15 significant digits or fewer are still JSON numbers, and CSV and tab-delimited text are unchanged.
 - **Results memory after FOR XML and FOR JSON:** joining a large FOR XML or FOR JSON value no longer leaves buffers of up to 4 MB held outside result memory once the value is stored.
 - **Script As on Azure SQL Database and Managed Instance:** ledger tables and views now script on Azure SQL Database, where they were refused by mistake (SQL Server Management Objects keeps the LEDGER clause there), and on Managed Instance with Match script settings to source on (or a chosen version of SQL Server 2022 or later; an older chosen version still refuses them). On Managed Instance with Match script settings to source on, scripts target the engine version read from the instance rather than SQL Server 2014, which it reports as its version, so newer features are no longer left out.

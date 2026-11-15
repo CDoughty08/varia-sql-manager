@@ -2448,8 +2448,13 @@ restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above 
 `CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
 advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
 must change, 18452 untrusted domain) `LOGIN_FAILED`, terminal, since retrying alone would only count more failures against
-the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
-connection or a budget cancel drops the connection without returning it to the pool (its pool is cleared), and the next
+the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A
+statement cancelled at its budget (a probe's, or the session probe's as the view opens), or by a view that ends (and a
+Details read cancelled the same way), leaves a connection
+that is kept, or goes back to the pool, only when it passes the clean-connection check (`LiveConnections.AnswersAsync`: open,
+`SELECT @@TRANCOUNT` answers 0 within 1 s, outside the live gates for a sampler and inside Details' own gate), so one view's
+timeout never clears the pool every view on the connection shares. A lost connection, or one that fails the check, is
+dropped without returning it to the pool (its pool is cleared), and the next
 due tick reopens it under the back-off, for as long as the view runs; only `NOT_CONNECTED` (the connection id is gone)
 ends the view `disconnected`. Nothing is logged.
 

@@ -241,8 +241,8 @@ internal static class ActivityActionChecks
         var details = await actions.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
         var detailsMs = Environment.TickCount64 - started;
         check(details is { State: "unknown", Error: { Code: "TIMEOUT", Retryable: true } } && details.Error.Message == "Reading the session took longer than 1 second. Refresh to try again."
-            && detailsMs < 15_000 && live.Gates.Busy == 0,
-            $"a Details read past its budget (a server that never answers) is a TIMEOUT value, and its live gate is back ({detailsMs} ms)");
+            && detailsMs < 15_000 && live.Gates.Busy == 0 && actions.PoolClears == 0,
+            $"a Details read past its budget (a server that never answers) is a TIMEOUT value, its live gate is back, and having sent nothing it clears no pool the live views share ({detailsMs} ms, {actions.PoolClears} clears)");
         // A kill holds its connection's gate; a second kill on the same connection is BUSY rather than queueing behind it.
         // The first kill has the gate once it asks for its connection, and its open ends only on Stop, long before its budget:
         // nothing but the second kill's own gate wait is timed. (With the first ending on a 3 s budget and the second sent
