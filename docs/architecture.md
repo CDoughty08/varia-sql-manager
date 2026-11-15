@@ -515,7 +515,7 @@ being true.
   pool (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling), runs SMO only through
   `ScriptPipeline` with a fresh `Server` per job and prefetch limited to one object's own children, applies
   `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
-  unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
+  with line breaks unescaped, and since SMO 181.38.1 a name with a comment delimiter as "?", so the warning names it) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
 - Object actions (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, a login's Disable and Enable, and folder actions such as Databases › Attach), their dialogs, pages and database options live only
   in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the

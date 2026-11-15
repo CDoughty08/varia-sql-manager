@@ -572,7 +572,7 @@ internal static class TextChecks
         check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Json or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
             && ColumnPlan.FallbackOf(CellCodec.Chars, WireKind.Text, false) == CellCodec.Value && ColumnPlan.FallbackOf(CellCodec.Bytes, WireKind.Binary, true) == CellCodec.Stream,
             "a long column whose value could not be read keeps a streaming reader, never GetValue");
-        // SqlClient 7.1.1 misreads json's UTF-8 under SequentialAccess: GetChars one byte a character, GetTextReader throws
+        // SqlClient 7.1.1 (7.1.2 lists no fix) misreads json's UTF-8 under SequentialAccess: GetChars one byte a character, GetTextReader throws
         // when a read ends inside a sequence. Varia decodes the bytes itself (the live checks read non-ASCII json).
         var json = ColumnPlan.Choose(35, null, true, typeof(string), false);
         check(json == (CellCodec.Json, WireKind.Text, "json", ColumnPlan.DocumentCap), "json is decoded from its UTF-8 bytes, not read with GetChars: " + json);

@@ -21,9 +21,11 @@ internal static partial class HeaderGuard
     public const string Warning = "Descriptive headers were left out because an object name or definition would break them (it contains /*, */ or a line break).";
 
     /// <summary>The batch SMO 181 writes for an object Generate script for dependent objects found referenced but could
-    /// not resolve (ScriptMaker.ScriptCreateUnresolvedEntity): the object's URN as is, where only apostrophes are
-    /// doubled, so a name in it can end the comment early or break it over lines.</summary>
-    public static string Unresolved(string urn) => "/****** Cannot script Unresolved Entities : " + urn + " ******/";
+    /// not resolve (ScriptMaker.ScriptCreateUnresolvedEntity): the object's URN, where only apostrophes are doubled. Since
+    /// 181.38.1 a URN holding /* or */ is written as "?" (SmoUtility.EscapeSqlBlockComment); one holding a line break is
+    /// still written as is, so a name in it can break the comment over lines.</summary>
+    public static string Unresolved(string urn) => "/****** Cannot script Unresolved Entities : "
+        + (urn.Contains("/*", StringComparison.Ordinal) || urn.Contains("*/", StringComparison.Ordinal) ? "?" : urn) + " ******/";
 
     /// <summary>Whether a batch SMO writes as a comment of its own is still one: a batch that opens with "/****** " and
     /// ends with " ******/", as SMO's comment batches do, must be a single comment on a single line that closes only

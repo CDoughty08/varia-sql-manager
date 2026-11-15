@@ -455,7 +455,7 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>json arrives as UTF-8, which it is decoded from here: SqlClient 7.1.1's GetChars under SequentialAccess
-    /// decodes it one byte a character (é reads as Ã©), and its GetTextReader throws when a read ends inside a multi-byte
+    /// (7.1.2 lists no fix) decodes it one byte a character (é reads as Ã©), and its GetTextReader throws when a read ends inside a multi-byte
     /// sequence. The decoder carries a sequence split between chunks. Up to cap + 1 characters (and at most one chunk's
     /// more) are kept; the rest is decoded into the buffer after them only to be counted. The bytes are the UTF-8 read.</summary>
     private bool Json(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)

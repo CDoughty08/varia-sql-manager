@@ -16,7 +16,8 @@ const { buildElectronArtifactConfig } = builderRequire('./out/util/electronGet.j
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
 const bytes = Buffer.from('synthetic test archive; no executable is launched')
-const version = '44.11.3', platform = 'win32', arch = 'x64'
+// The installed Electron's version, so its own checksums.json names the archives the manifest test looks up.
+const version = (require('electron/package.json') as { version: string }).version, platform = 'win32', arch = 'x64'
 const filename = `electron-v${version}-${platform}-${arch}.zip`
 const canonical = `https://github.com/electron/electron/releases/download/v${version}/${filename}`
 const checksums = { [filename]: createHash('sha256').update(bytes).digest('hex') }
@@ -61,8 +62,7 @@ describe('verified Electron preparation', () => {
   })
 
   it('seeds the npm-pinned manifest for all packaging targets during concurrent preparation', async () => {
-    const options = await fixture(), pinned = require('electron/checksums.json'), pkg = require('electron/package.json')
-    expect(pkg.version).toBe(version)
+    const options = await fixture(), pinned = require('electron/checksums.json')
     await Promise.all([seedElectronChecksums(options.cacheRoot, version, pinned), seedElectronChecksums(options.cacheRoot, version, pinned)])
     for (const [platformName, arch] of [['win32', 'x64'], ['linux', 'x64'], ['darwin', 'x64'], ['darwin', 'arm64']]) {
       const config = await buildElectronArtifactConfig({ version, platformName, arch, artifactName: 'electron', electronDownload: { cache: options.cacheRoot } })
