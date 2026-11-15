@@ -6,13 +6,15 @@ import { domPurifyVersions, patchedDomPurify } from '../electron.vite.config'
 // The lowest versions with the security fixes Varia relies on. The audit workflow's npm audit (audit.yml) catches a new advisory; this catches a
 // downgrade below a fix offline, in npm run check, including ones the advisory database does not list.
 const floors: Record<string, string> = {
-  electron: '44.9.1',
+  // 44.11.1 and 44.11.3 backport Chromium, V8, ANGLE and Skia security fixes.
+  electron: '44.11.3',
   zod: '4.6.6',
   // 26.18 ships the bounded NSIS per-user path copy (build/nsis-check.cjs).
   'app-builder-lib': '26.18.0',
   'electron-builder': '26.18.0',
-  // GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f (Monaco's markdown hovers).
-  dompurify: '3.4.17',
+  // GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f (Monaco's markdown hovers); 3.4.18 fixes a SAFE_FOR_TEMPLATES
+  // bypass and a clobbering-check property read.
+  dompurify: '3.4.18',
   // GHSA-4w7w-5xrc-9h26 and others: @electron/get's download path when electron installs.
   undici: '7.30.1'
 }

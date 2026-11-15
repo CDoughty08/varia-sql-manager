@@ -18,12 +18,10 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.91.1" />
-    <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="181.36.0" />
-    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.140.0" />
-    <!-- SqlClient 7.1.1 resolves 9.0.18, which CVE-2026-84008 and CVE-2026-70162 affect; remove once SqlClient pulls a patched version. -->
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.2" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.92.0" />
+    <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="181.38.1" />
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.154.0" />
   </ItemGroup>
   <ItemGroup>
     <!-- The column-name casing table the renderer and the fake backend share (OrdinalNames reads its ranges). -->

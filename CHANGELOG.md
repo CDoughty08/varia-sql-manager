@@ -95,6 +95,7 @@
 - **Opening several files:** in File › Open, one selected file that could not be read (access denied, removed meanwhile) no longer stops the others from opening; they open, and the message names the file that could not be read. A folder chosen there (a macOS package) is reported the same way instead of doing nothing.
 - **Security:** permission checks in the workbench window and its popouts are now refused like their permission requests (the workbench window may still write the clipboard), instead of being granted by default.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
+- **Security and stability updates:** Electron 44.11.3 (Chromium, V8, ANGLE and Skia security fixes), Microsoft.Data.SqlClient 7.1.2 (stricter checks on malformed server responses, and correct `HasRows` when informational messages come before the first row), SMO 181.38.1, ScriptDom 180.154.0, MSAL 4.92.0 and DOMPurify 3.4.18 for Monaco's markdown hovers.
 
 ## [0.8.0] - 2026-11-10
 

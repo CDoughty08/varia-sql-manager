@@ -12,9 +12,9 @@ namespace Varia.Backend.Results;
 /// <summary>Streams an xml cell under CommandBehavior.SequentialAccess. SqlClient sends xml as UTF-16 text, and its
 /// GetXmlReader there lets XmlReader guess the encoding from the first bytes: a value that does not start with '<' throws,
 /// or, when both bytes of its first characters are printable (U+3441 is "A4"), reads as other text. SqlClient fixed that
-/// after 7.1.1 (dotnet/SqlClient#4757); until a release has it, this opens the column's sequential stream exactly as
-/// GetXmlReader does, through the internals the offline checks pin, and <see cref="XmlFeed"/> reads it as UTF-16. Without
-/// them, it falls back to GetXmlReader.</summary>
+/// in 8.0.0-preview1 (dotnet/SqlClient#4757), not in 7.1.2; until a stable release has it, this opens the column's
+/// sequential stream exactly as GetXmlReader does, through the internals the offline checks pin, and <see cref="XmlFeed"/>
+/// reads it as UTF-16. Without them, it falls back to GetXmlReader.</summary>
 internal static class SequentialXml
 {
     private const BindingFlags Internal = BindingFlags.Instance | BindingFlags.NonPublic;
