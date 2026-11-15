@@ -612,6 +612,16 @@ describe('the Tabs layout in a short pane', () => {
       const down = (target: Element) => { const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); act(() => { target.dispatchEvent(event) }); return event.defaultPrevented }
       expect(down(document.querySelector('.rt-picker-foot')!)).toBe(true)
       expect(down(input())).toBe(false)
+      // Its filter box's context menu (Paste) takes the focus and a press without closing it.
+      const menu = document.createElement('div')
+      menu.className = 'menu-layer'
+      menu.innerHTML = '<div role="menu" tabindex="-1"></div>'
+      document.body.append(menu)
+      act(() => { menu.querySelector<HTMLElement>('[role="menu"]')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) })
+      act(() => { menu.querySelector<HTMLElement>('[role="menu"]')!.focus() })
+      expect(picker()).not.toBeNull()
+      menu.remove()
+      act(() => { input().focus() })
       press('Escape')
       expect(picker()).toBeNull()
     } finally {

@@ -118,7 +118,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     if (!doc || !view) return
     const press = (event: PointerEvent) => {
       const at = event.target as Element | null
-      if (card.current?.contains(at)) return
+      // Nor its filter box's context menu (Paste), drawn in the menu layer.
+      if (card.current?.contains(at) || at?.closest('.menu-layer')) return
       // The overflow button is a toggle: its own press closes the picker.
       if (at?.closest('.rt-overflow') && anchor()?.closest('.rt-root')?.contains(at)) return
       onClose(false)
@@ -133,9 +134,10 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   if (!host) return null
   const leave = (event: FocusEvent<HTMLDivElement>) => {
     const to = event.relatedTarget as Element | null
-    // Not its overflow button, a toggle that closes it itself; not another dialog (the palette), which gives the focus back.
+    // Not its overflow button, a toggle that closes it itself; not another dialog (the palette) or a context menu, which
+    // give the focus back.
     const toggle = !!to?.closest('.rt-overflow') && !!anchor()?.closest('.rt-root')?.contains(to)
-    if (to && !event.currentTarget.contains(to) && !toggle && !to.closest('[role="dialog"]')) onClose(false)
+    if (to && !event.currentTarget.contains(to) && !toggle && !to.closest('[role="dialog"], .menu-layer')) onClose(false)
   }
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const page = Math.max(1, Math.floor(height / rowHeight) - 1)

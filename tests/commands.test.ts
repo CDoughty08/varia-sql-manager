@@ -472,6 +472,8 @@ describe('context keys', () => {
     expect(focusFacts(element('div', { pane: 'messages', messages: true }), editor(false))).toMatchObject({ activePanel: 'output', messagesFocus: true, outputGridFocus: false, resultsFocus: false })
     // The Results pane's tabs and its picker, drawn over the page outside any pane, take the results' browser tab keys.
     expect(focusFacts(element('button', { pane: 'results' }), editor(false))).toMatchObject({ activePanel: 'output', resultsFocus: true })
+    // The Messages strip in the Results pane takes the query keys, as the Messages pane does.
+    expect(focusFacts(element('div', { pane: 'results', messages: true }), editor(false))).toMatchObject({ activePanel: 'output', messagesFocus: true, resultsFocus: false })
     expect(focusFacts(element('input', { picker: true }), editor(false))).toMatchObject({ activePanel: '', inputFocus: true, resultsFocus: true })
     expect(focusFacts(element('div', { pane: 'plan' }), editor(false))).toMatchObject({ activePanel: 'output', resultsFocus: false })
     expect(focusFacts(element('div', { pane: 'explorer', tree: 'idle' }), editor(false))).toMatchObject({ activePanel: 'explorer', explorerFocus: true, explorerTypeAhead: false })

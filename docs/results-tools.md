@@ -165,7 +165,7 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   Results pane, on Windows and Linux) select the next or previous result or comparison, wrapping round; a result shows
   the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9, ⌘ on macOS, in the
   Results pane) pick one as a browser's keys pick a tab. "In the Results pane" means the focus is in it or in the
-  overflow picker and the query has two or more results or comparisons; otherwise, Messages and the plan included, the
+  overflow picker and the query has two or more results or comparisons; otherwise, Messages (its strip in the Results pane too) and the plan included, the
   same keys pick query tabs (Go to Query 1 to 8, Go to Last Query) and Ctrl+Page Down and Up step through queries. A
   Results pane that is closed, hidden by Toggle Results Pane (Ctrl+R) or behind another output pane comes forward for
   these commands and Go to Result…; one in a popout window has its tab selected there (Go to Result… also brings that window forward), and Stacked still scrolls to the result.

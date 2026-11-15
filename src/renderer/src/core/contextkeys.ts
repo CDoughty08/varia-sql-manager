@@ -74,8 +74,9 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
     documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), messagesFocus: !!element.closest('[data-output-view="messages"]'),
-    // The Results pane, or its overflow picker, which is drawn over the page outside any pane.
-    resultsFocus: pane === 'results' || !!element.closest('[data-results-picker]'),
+    // The Results pane (not its Messages strip, which takes the query keys as the Messages pane does), or its overflow
+    // picker, which is drawn over the page outside any pane.
+    resultsFocus: (pane === 'results' && !element.closest('[data-output-view="messages"]')) || !!element.closest('[data-results-picker]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
     explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]')
   }
