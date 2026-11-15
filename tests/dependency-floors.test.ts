@@ -64,6 +64,10 @@ describe('dependency floors', () => {
       if (vendored[0] === lock.packages['node_modules/dompurify'].version) await expect(refused).resolves.toEqual(vendored)
       else await expect(refused).rejects.toThrow(`ships DOMPurify ${vendored[0]}`)
     }, 120_000)
+    it('refuses a bundle in which it reads no DOMPurify version, rather than passing without checking', async () => {
+      const built = build({ configFile: false, logLevel: 'silent', plugins: [patchedDomPurify()], build: { write: false, minify: true, rolldownOptions: { input: 'src/shared/csp.ts' } } })
+      await expect(built).rejects.toThrow('names no DOMPurify version')
+    }, 120_000)
     it('is in the plugins of the renderer build', () => {
       expect(readFileSync('electron.vite.config.ts', 'utf8')).toMatch(/renderer: \{\s+plugins: \[[^\]]*patchedDomPurify\(\)/)
     })
