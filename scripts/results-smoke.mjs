@@ -5,7 +5,7 @@
 // server through the Release backend. No assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
@@ -1011,6 +1011,16 @@ try {
   await page.keyboard.press('Control+S')
   await expect.poll(async () => (await application.evaluate(() => globalThis.variaSave.dialogs.length))).toBe(4)
   expect(await files()).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  // Save names follow the view and the query's names (grouped results PR 15): two results whose names make one file name
+  // keep their numbers, and an unnamed one is named by its number, through main's dialog.
+  await run('-- varia-fake: sets=N1*5,N1*5,N1*5 names=Totals,,totals')
+  for (const [of, expected, file] of [[namedResultGrid(page, 'Totals', 1), /^SQLQuery1-Totals-Result1\.[a-z]+$/, 'totals1.csv'], [grid('Result 2'), /^SQLQuery1-Result2\.[a-z]+$/, 'result2.csv']]) {
+    await choose(join(saveDir, file))
+    await cell(0, 0, of).click()
+    await page.keyboard.press('Control+S')
+    await expect(notice).toHaveText(`Saved 5 rows to ${file}.`)
+    expect(basename((await lastDialog()).defaultPath)).toMatch(expected)
+  }
   // A save held after its first page shows its strip; Escape in the grid cancels it, and neither the file nor its
   // temporary file is left.
   await run('-- varia-fake: sets=W1*5000')
@@ -1042,7 +1052,7 @@ try {
   await expect(notice).toHaveText('Saved 5,000 rows to kept.csv.', { timeout: 30000 })
   await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
-  expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  expect(await files()).toEqual(['kept.csv', 'result2.csv', 'totals1.csv', 'w1.csv', 'w1.json', 'w1.txt'])
   // The saves above ended in view and showed no toast. One that ends while its query is in the background says so in a
   // toast with Show results, which Focus Notifications reaches from the keyboard.
   const toast = toasts(page)

@@ -8,10 +8,10 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { enlargeOutput, sizeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, nameCut, namedResultGrid, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  anyResultGrid, backendReady, captionFits, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, popoutDockButton, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
   resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
@@ -51,8 +51,8 @@ try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; clicks and focus wait for frames.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
-  // Wide enough for the results toolbar's Tabs, which gives way at 1,440 pixels and below (CI's Windows display is
-  // narrower, but its windows may be wider than it).
+  // Wide enough for every tool of the results toolbar, Tabs included, which gives way first when the toolbar does not fit
+  // (CI's Windows display is narrower, but its windows may be wider than it).
   await resizeContent(application, page, 1500, 900)
   await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThan(1440)
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
@@ -352,6 +352,86 @@ try {
   await expect(resultTabs(page)).toHaveCount(0)
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
+  console.log('Grouped results checks: Stacked again from the palette, with every grid drawn.')
+
+  // 9. Narrow and short panes and popouts (grouped results PR 15), with a name of the longest a marker gives (128
+  // characters). A pane too narrow for every tool folds the results toolbar by its own width: Tabs goes first and the
+  // search box keeps a readable width; ⋯ (More results tools) holds every tool, Results as Tabs among them.
+  const name128 = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region, by month and '.padEnd(128, 'z')
+  expect(name128).toHaveLength(128)
+  await resizeContent(application, page, 900, 900)
+  await expect.poll(async () => (await resultsToolbarFit(page)).fits).toBe(true)
+  const narrow = await resultsToolbarFit(page)
+  expect(narrow.fold, JSON.stringify(narrow)).toMatch(/^layout( |$)/)
+  expect(narrow.search, JSON.stringify(narrow)).toBeGreaterThanOrEqual(150)
+  await expect(show('Tabs')).toBeHidden()
+  await moreResultsTools(page).click()
+  const tabsItem = () => resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })
+  await expect(tabsItem()).toHaveAttribute('aria-checked', 'false')
+  await tabsItem().click()
+  await expect(resultsToolsMenu(page)).toHaveCount(0)
+  await expect(resultTabs(page)).toHaveCount(1)
+  await run(`-- varia-fake: sets=N1*5,N1*5 names=${encodeURIComponent(name128)},`)
+  const longTab = resultTabs(page).getByRole('tab').first()
+  await expect(longTab).toHaveText(name128)
+  await expect(longTab).toHaveAttribute('title', `${name128} · Result 1`)
+  expect(await nameCut(longTab)).toBe(true)
+  // The tab stops at its widest and the next tab still shows beside it; the view row's facts give way inside the pane.
+  await expect(resultTab(page, 'Result 2')).toBeVisible()
+  expect(await fitsAcross(viewTabs(page).locator('xpath=..'))).toBe(true)
+  expect((await resultsToolbarFit(page)).fits).toBe(true)
+  // Go to Result… lists it whole in a row that fits the picker, which stays inside the window.
+  await textbox().focus()
+  await menu('output.goToResult')
+  const longOption = resultsPickerOption(page, `${name128}, Result 1, Table`)
+  await expect(longOption).toBeVisible()
+  expect(await fitsAcross(longOption)).toBe(true)
+  expect(await resultsPicker(page).evaluate(picker => picker.getBoundingClientRect().right <= innerWidth + 0.5)).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(resultsPicker(page)).toHaveCount(0)
+  // Stacked from the ⋯ menu: the caption's name gives way to an ellipsis, its facts and buttons stay inside it.
+  await moreResultsTools(page).click()
+  await expect(tabsItem()).toHaveAttribute('aria-checked', 'true')
+  await tabsItem().click()
+  await expect(page.locator(part.resultStack)).toHaveCount(1)
+  expect(await captionFits(resultToggle(page, `${name128}, Result 1`))).toEqual({ fits: true, ellipsis: true })
+  expect(await nameCut(resultToggle(page, `${name128}, Result 1`))).toBe(true)
+  await toggleFromPalette()
+  await expect(resultTabs(page)).toHaveCount(1)
+  // A short pane: the rows of tabs fold (PR 14) and the toolbar stays one row; the grid's header and first row show whole.
+  const tall = (await resultsToolbarFit(page)).rows
+  await sizeOutput(page, 120)
+  await expect.poll(() => resultTabsFold(page)).not.toBe('')
+  expect((await resultsToolbarFit(page)).rows).toBe(tall)
+  const inPanel = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), panel = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5 })
+  await expect.poll(() => inPanel(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => inPanel(gridCell(anyResultGrid(page), 0, 0))).toBe(true)
+  await enlargeOutput(page)
+  console.log('Grouped results checks: a narrow pane folds the results toolbar with ⋯ holding every tool, a 128-character name is cut in its tab, caption and picker row without pushing anything out, and a short pane keeps the toolbar one row.')
+
+  // 10. Popped out, Results shows the same names, and its toolbar folds to the popout's width, its ⋯ opening there.
+  const opened = application.waitForEvent('window', { timeout: 30000 })
+  await movePane(page, 'results', 'window')
+  const popout = await opened
+  popout.setDefaultTimeout(30000)
+  popout.on('pageerror', error => failures.push(error.message))
+  await expect(popoutTabs(popout)).toBeVisible()
+  const poppedTab = resultTab(popout, `${name128}, Result 1`)
+  await expect(poppedTab).toHaveText(name128)
+  await expect(poppedTab).toHaveAttribute('title', `${name128} · Result 1`)
+  await expect(resultTab(popout, 'Result 2')).toBeVisible()
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(640, 480) })
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/^layout tight view/)
+  expect((await resultsToolbarFit(popout)).fits).toBe(true)
+  await moreResultsTools(popout).click()
+  await expect(resultsToolsMenu(popout)).toBeVisible()
+  await expect(resultsToolsMenu(page)).toHaveCount(0)
+  await expect(resultsToolsMenu(popout).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await popout.keyboard.press('Escape')
+  await expect(resultsToolsMenu(popout)).toHaveCount(0)
+  await popoutDockButton(popout).click()
+  await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()
+  console.log('Grouped results checks: popped out, Results shows the same names, and its toolbar folds to the width of the popout with ⋯ opening there.')
   expect(failures).toEqual([])
   console.log('Grouped results checks passed: tabs and view tabs with one grid, state kept across switches, Find Next across tabs, closing with focus, the Messages strip, a row too long to fit, switching from a grid with its focus kept and Stacked again.')
 } catch (error) {
