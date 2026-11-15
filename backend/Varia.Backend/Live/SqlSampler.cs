@@ -411,7 +411,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             if (server is not null && !await LiveConnections.AnswersAsync(server).ConfigureAwait(false))
             {
                 try { SqlConnection.ClearPool(server); }
-                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+                catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
             }
             throw new OperationCanceledException(token);
         }
@@ -652,23 +652,27 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         connection = null;
         if (!healthy)
         {
+            PoolClears++;
             try { SqlConnection.ClearPool(held); }
-            catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+            catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
         }
         held.Dispose();
     }
 
+    /// <summary>How many times this sampler cleared its pool (the checks read it: ClearPool itself cannot be seen offline).</summary>
+    internal int PoolClears { get; private set; }
+
     /// <summary>Whether the held connection survived a cancelled statement (LiveConnections.AnswersAsync); false with none held.</summary>
     private async Task<bool> HeldAnswersAsync() => connection is { } held && await LiveConnections.AnswersAsync(held).ConfigureAwait(false);
 
-    /// <summary>The subscription ended while this source opened or sampled. A connection that never opened (the connect was
-    /// cancelled) holds nothing pooled and goes without clearing the pool; an open one with no statement sent (a gate wait) is
-    /// clean and goes back to the pool when the sampler is disposed; one whose statement was cancelled does too only when it
-    /// still answers, and is otherwise never pooled again.</summary>
+    /// <summary>The subscription ended while this source opened or sampled. Before any statement was sent (the connect or a gate
+    /// wait was cancelled) nothing on the connection can be dirty: it goes without clearing the pool (an open one back to the pool
+    /// when the sampler is disposed). After one was sent, a connection that still answers goes back to the pool too; one that
+    /// does not, or that SqlClient closed because the cancel broke it, clears the pool as before.</summary>
     private async Task SettleCancelledAsync(bool sent)
     {
-        if (connection is not { State: ConnectionState.Open }) Drop(healthy: true);
-        else if (sent && !await HeldAnswersAsync().ConfigureAwait(false)) Drop();
+        if (!sent) { if (connection is not { State: ConnectionState.Open }) Drop(healthy: true); }
+        else if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop();
     }
 
     public void Idle() => Drop(healthy: true);

@@ -824,6 +824,38 @@ internal static class LiveSchedulerChecks
             check(!answers && unopened.State == System.Data.ConnectionState.Closed,
                 "a connection that is not open never passes the clean-connection check, which opens nothing");
         }
+        {
+            // A view that ends before any statement was sent leaves nothing dirty, so it never clears the pool the other views share:
+            // neither while its connection opens, nor while it waits for a live gate.
+            var host = new HangingHost(id);
+            using var connecting = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
+            var probe = new LiveProbeState(overview, 2000);
+            await connecting.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            using var ending = new CancellationTokenSource();
+            var sampling = connecting.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], ending.Token);
+            SpinWait.SpinUntil(() => Volatile.Read(ref host.Opens) >= 1, 15_000);
+            ending.Cancel();
+            string connectEnd;
+            try { await sampling.WaitAsync(TimeSpan.FromSeconds(15)); connectEnd = "sampled"; }
+            catch (OperationCanceledException) { connectEnd = "cancelled"; }
+
+            var scripted = new ScriptedOpenHost(id);
+            // One gate in the backend, held here: the sample's connect succeeds (it never reaches a server) and then waits for it.
+            var gates = new LiveGates(2, 1, scripted.IsConnected);
+            using var held = await gates.WaitAsync(id, 1000, CancellationToken.None);
+            using var waiting = new SqlSampler(scripted, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(scripted, id));
+            await waiting.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            using var closing = new CancellationTokenSource();
+            var waited = waiting.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), 10_000, 2000)], closing.Token);
+            SpinWait.SpinUntil(() => waited.IsCompleted, 300);
+            var stillWaiting = !waited.IsCompleted;
+            closing.Cancel();
+            string gateEnd;
+            try { await waited.WaitAsync(TimeSpan.FromSeconds(15)); gateEnd = "sampled"; }
+            catch (OperationCanceledException) { gateEnd = "cancelled"; }
+            check(connectEnd == "cancelled" && connecting.PoolClears == 0 && held is not null && stillWaiting && gateEnd == "cancelled" && waiting.PoolClears == 0 && gates.Busy == 1,
+                "a view that ends while its connection opens, or while it waits for a live gate, sends nothing and clears no pool: " + connectEnd + " " + connecting.PoolClears + ", " + gateEnd + " " + waiting.PoolClears);
+        }
     }
 
     /// <summary>The activity source through SqlService, with no SQL Server: refused as values before any connection.</summary>

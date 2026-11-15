@@ -298,7 +298,7 @@ internal sealed partial class SessionActions
             if (!healthy)
             {
                 try { SqlConnection.ClearPool(connection); }
-                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+                catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
             }
             await connection.DisposeAsync().ConfigureAwait(false);
         }
