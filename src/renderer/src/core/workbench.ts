@@ -351,11 +351,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // The strict workspace keeps target identity and intent, never passwords or runtime transport/session handles.
-    hotExit: () => {
+    hotExit: (final = true) => {
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
       if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned) || connectionTargets.getSnapshot().length)
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady() })
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady(final) })
     }
   })
   const recentFiles = new RecentFilesService(api)

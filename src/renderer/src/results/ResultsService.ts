@@ -119,7 +119,7 @@ const filterIdentity = (filter: ResolvedViewFilter): string => {
 /** A list of filters as what it keeps: each keeps rows among those the ones before it kept, which is an intersection, so
  *  the order matters only around a duplicates filter (it counts the rows it is given). The runs between duplicates
  *  filters are sorted, and each duplicates filter stays where it is. */
-const filtersIdentity = (filters: readonly ResolvedViewFilter[]): string => {
+export const filtersIdentity = (filters: readonly ResolvedViewFilter[]): string => {
   const parts: string[] = []
   let run: string[] = []
   for (const filter of filters) {

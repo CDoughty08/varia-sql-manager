@@ -246,6 +246,7 @@ describe('SSIS properties documents', () => {
     pending.resolve({ ok: true, value: { model: { ...folder, description: 'stale' }, elapsedMs: 1 } })
     await settled()
     expect(state(id)).toMatchObject({ loading: false, disconnected: true, model: folder })
+    expect(ssisHeaderState(state(id))).toMatchObject({ tone: 'warning', label: 'Disconnected' })
     expect(documents.follows(id, 'C1.EXAMPLE ')).toBe(false)
     connect({ ...connectionInfo('c3', 2), server: 'c1.example' })
     retarget.retarget('c1', 'c3')

@@ -3,6 +3,7 @@ import type { BackendHealth, BackendState, ConnectionOptions } from '../../share
 import type { ConnectionDetails } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
+import { isLiveConnection } from './services/connection-availability'
 import { documentKind, isCustomKind, isQueryDocument, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import QueryStatusBar from './QueryStatusBar'
@@ -35,7 +36,7 @@ import ConnectDialog from './ConnectDialog'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
 import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
-import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, type OpenedConnection } from './services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
@@ -89,6 +90,11 @@ export default function App() {
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
   const [detailsReview, setDetailsReview] = useState<OpenedConnection>()
+  // A close or reload drops the review as Cancel would, rather than be refused while its handoff is open.
+  useEffect(() => {
+    if (!detailsReview) return
+    return yieldReviewToClose(detailsReview, () => setDetailsReview(current => current === detailsReview ? undefined : current))
+  }, [detailsReview])
   // The connected server whose Environment dialog is open.
   const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
@@ -108,7 +114,8 @@ export default function App() {
     && groups.some(group => group.active && isQueryDocument(documents.get(group.active))))
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
-  const liveConnection = connection?.lost ? undefined : connection
+  // Disconnecting is no longer live: the output panes and status bar must not offer it as connected meanwhile.
+  const liveConnection = isLiveConnection(connection) ? connection : undefined
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
