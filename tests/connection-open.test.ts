@@ -106,6 +106,9 @@ describe('main connection ownership', () => {
     const { service, request, authentication, savedPasswords } = await fixture()
     const entered = deferred<void>(), release = deferred<void>(), original = savedPasswords.set.bind(savedPasswords)
     vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await release.promise; return original(...args) })
+    // Holds the settlement's next vault step open, as a starved CI disk does: draining must wait for it however long it takes.
+    const reconciling = deferred<void>(), stalled = deferred<void>(), reconcile = savedPasswords.reconcile.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'reconcile').mockImplementationOnce(async (...args) => { reconciling.resolve(); await stalled.promise; return reconcile(...args) })
     const context = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, context)
     await entered.promise
     expect(authentication.resolve(context.targetId)).toBeDefined()
@@ -114,7 +117,13 @@ describe('main connection ownership', () => {
     expect(authentication.resolve(context.targetId)).toBeUndefined()
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await reconciling.promise
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    // Main's own drain, not a polling deadline: the settlement's file I/O has no bound a wall-clock wait could promise.
+    const drained = service.whenCancelledWorkDrained()
+    stalled.resolve()
+    await drained
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
     expect(authentication.resolve(context.targetId)).toBeUndefined()
   })
 
@@ -132,7 +141,8 @@ describe('main connection ownership', () => {
     service.retainTargets([])
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await service.whenCancelledWorkDrained()
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
     expect(authentication.resolve(targetId)).toBeUndefined()
   })
 
