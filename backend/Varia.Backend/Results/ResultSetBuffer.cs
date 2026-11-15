@@ -453,6 +453,10 @@ internal sealed class ResultSetBuffer
     /// of that size would.</summary>
     public bool TryReserveWork(long bytes, bool checkSystem) => store.TryReserve(Budget, bytes, checkSystem, out _);
 
+    /// <summary>Reserves memory that only makes an operation faster (<see cref="ResultStore.TryReserveSpare"/>): refused unless
+    /// an eighth of the budget stays free. Give it back with <see cref="ReturnWork"/>.</summary>
+    public bool TryReserveSpare(long bytes) => store.TryReserveSpare(Budget, bytes);
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;

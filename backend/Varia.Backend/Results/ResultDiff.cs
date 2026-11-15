@@ -50,6 +50,10 @@ internal sealed class DiffModel(DiffEntry[] entries, (int Left, int Right)[] pai
 internal sealed class DiffStages
 {
     public long Identity, Matching, Aligning;
+    /// <summary>The first result was packed and read so far from its pages' order that it was unpacked in place.</summary>
+    public bool Unpacked;
+    /// <summary>Packed pages the unified result's writer had unpacked ahead on the workers, and those it unpacked itself.</summary>
+    public long WrittenAhead, WrittenBehind;
 }
 
 /// <summary>Random access to a complete result's stored rows: each page's header is parsed once. Several threads may read
@@ -141,6 +145,71 @@ internal sealed class RowAccess
     }
 
     private sealed record Parsed(byte[] Body, int[] Layout, int BlobStart);
+
+    /// <summary>A reader of rows for one thread over a result that may be packed (<see cref="RowReader"/>).</summary>
+    public RowReader Reader(PageRooms? rooms, int slots) => new(this, rooms, slots);
+
+    /// <summary>One thread's rows of a result read fused: pages held as sealed (or kept, <see cref="Keep"/>) through the
+    /// shared parsed headers, as <see cref="At(long, out int)"/> reads them; packed ones through a <see cref="RoomReader"/>
+    /// of its own, which keeps the last <c>slots</c> pages it unpacked in its rooms, so rows read in about their pages'
+    /// order unpack each page once. No packed page is unpacked through the set's cache and kept uncharged. With no rooms
+    /// (no page was packed when the operation began) it reads exactly as <see cref="At(long, out int)"/> does.</summary>
+    internal sealed class RowReader(RowAccess access, PageRooms? rooms, int slots) : IDisposable
+    {
+        private readonly RoomReader packed = new(rooms, access.columns, slots);
+        private PageAhead? ahead;
+
+        /// <summary>Packed pages this reader has unpacked.</summary>
+        public long Unpacked => packed.Unpacked + AheadUnpacked;
+        /// <summary>Packed pages unpacked ahead (<see cref="Ahead"/>).</summary>
+        public long AheadUnpacked => ahead?.Unpacked ?? 0;
+        /// <summary>Packed pages this thread unpacked itself.</summary>
+        public long Behind => packed.Unpacked;
+
+        /// <summary>Reads the rows <paramref name="rows"/> lists (in the order this thread will ask for them, negative ones
+        /// skipped) with their packed pages unpacked ahead on the workers (<see cref="PageAhead"/>), each page listed once a
+        /// batch; a row asked for out of that order is read as before. The list of pages stops at a few uses a page, past which pages are read as before.</summary>
+        public void Ahead(IEnumerable<int> rows, CancellationToken token)
+        {
+            if (rooms is null) return;
+            var uses = new List<int>();
+            var cap = 4 * access.pages.Length + 2 * ViewSorter.Workers;
+            var batch = PageAhead.Batch;
+            foreach (var row in rows)
+            {
+                if (row < 0) continue;
+                var page = access.PageOf(row, out _);
+                var stored = access.pages[page];
+                if (access.Keeps(page) || stored.Set?.Raw(stored) is not null) continue;
+                // A page read again straight after, or one its batch already lists, is read from that batch again
+                // (PageAhead.TryRead).
+                var listed = uses.Count > 0 && uses[^1] == page;
+                for (var u = uses.Count - uses.Count % batch; u < uses.Count && !listed; u++) listed = uses[u] == page;
+                if (listed) continue;
+                if (uses.Count == cap) break;
+                uses.Add(page);
+            }
+            ahead = PageAhead.TryStart(rooms.Set, access.pages, [.. uses], rooms.Length, access.columns, token);
+        }
+
+        public PageView At(long row, out int index) => At(row, out index, out _);
+
+        public PageView At(long row, out int index, out PageLengths lengths)
+        {
+            var page = access.PageOf(row, out index);
+            var stored = access.pages[page];
+            if (rooms is null || access.Keeps(page) || stored.Set?.Raw(stored) is not null) return access.Page(page, out lengths);
+            lengths = stored.Lengths;
+            if (ahead is not null && ahead.TryRead(page, out var view)) return view;
+            return packed.Read(stored);
+        }
+
+        public void Dispose()
+        {
+            ahead?.Dispose();
+            packed.Dispose();
+        }
+    }
 }
 
 /// <summary>Aligns two complete results (results.diff). Columns pair by name (case-insensitively, in the first result's
@@ -171,6 +240,23 @@ internal static class ResultDiffer
 
     /// <summary>The most shared columns a diff compares: the unified result adds a marker, two row numbers and a tone.</summary>
     public const int MaxPairs = PageBuilder.MaxColumns - 4;
+
+    /// <summary>What results.diff answers (TOO_LARGE) when the budget has no room for its working memory, the rooms a packed
+    /// result is read through, or unpacking its first result.</summary>
+    public const string TooLarge = "There is not enough result memory to compare these results. Close other results and try again.";
+
+    /// <summary>Packed pages of the first result each reader keeps unpacked while the alignment and the unified result read
+    /// its rows in the second result's order: rows that moved a little (a parallel plan's chunks) still find their page.</summary>
+    internal const int LeftSlots = 4;
+
+    /// <summary>Packed pages of the second result each reader keeps: it reads them in order, so one, and one more for the
+    /// unified result's pairs.</summary>
+    internal const int RightSlots = 2;
+
+    /// <summary>Unpacks of the first result's packed pages the alignment may make, per packed page, before it unpacks the
+    /// first result in place instead: past that its rows are read so far from their pages' order (the results are sorted
+    /// differently) that unpacking it once costs less time than finding its pages again.</summary>
+    internal const int UnpacksPerPage = 4;
 
     /// <summary>The shared columns: each visible column of the first result with a visible column of the same name and wire
     /// (text or binary) in the second, in the first result's order. A column whose wire differs is one-sided: the unified
@@ -223,6 +309,10 @@ internal static class ResultDiffer
         var rightHasher = new CellHasher(compared, right.Wires);
         var leftIds = new long[leftTotal];
         var rightIds = new long[rightTotal];
+        // Packed results are read fused: each reader unpacks the page it reads into a room of its own and both stay packed.
+        using var leftOwned = PageRooms.Over(leftPages, left.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
+        var leftRooms = leftOwned;
+        using var rightRooms = PageRooms.Over(rightPages, right.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
         var keyPair = -1;
         var approximate = false;
         var rightCandidates = RowIdentity.Candidates(right.Columns, right.Wires).ToHashSet();
@@ -232,9 +322,9 @@ internal static class ResultDiffer
             var pair = Array.FindIndex(pairs, item => item.Left == candidate);
             if (pair < 0 || !rightCandidates.Contains(pairs[pair].Right)) continue;
             if (++tried > RowIdentity.MaxCandidates) break;
-            var (leftUnique, leftApproximate) = RowIdentity.Fill(leftHasher, leftPages, candidate, leftIds, stopEarly: true, token);
+            var (leftUnique, leftApproximate) = RowIdentity.Fill(leftHasher, leftPages, candidate, leftIds, stopEarly: true, token, rooms: leftRooms);
             if (!leftUnique || leftApproximate) continue;
-            var (rightUnique, rightApproximate) = RowIdentity.Fill(rightHasher, rightPages, pairs[pair].Right, rightIds, stopEarly: true, token);
+            var (rightUnique, rightApproximate) = RowIdentity.Fill(rightHasher, rightPages, pairs[pair].Right, rightIds, stopEarly: true, token, rooms: rightRooms);
             if (!rightUnique || rightApproximate) continue;
             keyPair = pair;
             break;
@@ -243,8 +333,8 @@ internal static class ResultDiffer
         {
             var leftColumns = pairs.Select(pair => pair.Left).ToArray();
             var rightColumns = pairs.Select(pair => pair.Right).ToArray();
-            approximate |= Rows(leftHasher, leftPages, leftColumns, leftIds, token);
-            approximate |= Rows(rightHasher, rightPages, rightColumns, rightIds, token);
+            approximate |= Rows(leftHasher, leftPages, leftColumns, leftIds, token, leftRooms);
+            approximate |= Rows(rightHasher, rightPages, rightColumns, rightIds, token, rightRooms);
         }
 
         var matching = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -252,9 +342,70 @@ internal static class ResultDiffer
         var (matchedLeft, rightMatch) = Match(leftIds, rightIds, token);
         var aligning = System.Diagnostics.Stopwatch.GetTimestamp();
         if (stages is not null) stages.Matching += aligning - matching;
-        var (entries, cells) = Align(leftHasher, leftPages, rightHasher, rightPages, pairs, exact, matchedLeft, rightMatch, reserve, ref approximate, token);
+        if (leftRooms is not null && !Local(leftPages, rightMatch, token))
+        {
+            // Read in the second result's order, the first result's rows would unpack a page for most rows: it is unpacked
+            // in place instead, as before fused reads, its rooms given back first (refused: TOO_LARGE, changing nothing).
+            leftOwned!.Dispose();
+            leftRooms = null;
+            if (!left.TryUnpackAll(token)) throw new RequestException("TOO_LARGE", TooLarge);
+            if (stages is not null) stages.Unpacked = true;
+        }
+        var (entries, cells) = Align(leftHasher, leftPages, rightHasher, rightPages, pairs, exact, matchedLeft, rightMatch, reserve, ref approximate, token, leftRooms, rightRooms);
         if (stages is not null) stages.Aligning += System.Diagnostics.Stopwatch.GetTimestamp() - aligning;
         return new DiffModel(entries, pairs, cells, keyPair, approximate);
+    }
+
+    /// <summary>The runs the alignment splits the second result's rows into, one a thread asked for.</summary>
+    private static int Runs(int rightTotal) => Math.Clamp(rightTotal / RowIdentity.MinSlice, 1, ViewSorter.Workers);
+
+    /// <summary>Whether the alignment's readers, reading the first result's packed pages in the second result's order with
+    /// <see cref="LeftSlots"/> pages each (a reader a run, as <see cref="Align"/> splits them), would unpack at most
+    /// <see cref="UnpacksPerPage"/> times a packed page, and each reader its slots. Counted on the workers from the row
+    /// numbers alone, reading no page; a run stops counting once the runs together are past the allowance.</summary>
+    internal static bool Local(StoredPage[] leftPages, int[] rightMatch, CancellationToken token)
+    {
+        var access = new RowAccess(leftPages, 0);
+        var packed = new bool[leftPages.Length];
+        long packedPages = 0;
+        for (var p = 0; p < leftPages.Length; p++)
+            if (leftPages[p].Set is { } set && set.Raw(leftPages[p]) is null) { packed[p] = true; packedPages++; }
+        var runs = Runs(rightMatch.Length);
+        var allowed = UnpacksPerPage * packedPages + (long)runs * LeftSlots;
+        long unpacks = 0;
+        using var threads = ViewSorter.Gate.Take(runs);
+        threads.For(runs, run =>
+        {
+            Span<int> held = stackalloc int[LeftSlots];
+            Span<long> used = stackalloc long[LeftSlots];
+            held.Fill(-1);
+            long clock = 0, own = 0;
+            for (int j = ViewSorter.RunStart(rightMatch.Length, run, runs), end = ViewSorter.RunStart(rightMatch.Length, run + 1, runs); j < end; j++)
+            {
+                if ((j & (CancelEvery - 1)) == 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (Interlocked.Read(ref unpacks) + own > allowed) break;
+                }
+                var i = rightMatch[j];
+                if (i < 0) continue;
+                var page = access.PageOf(i, out _);
+                if (!packed[page]) continue;
+                var slot = 0;
+                var hit = false;
+                for (var k = 0; k < LeftSlots; k++)
+                {
+                    if (held[k] == page) { used[k] = ++clock; hit = true; break; }
+                    if (used[k] < used[slot]) slot = k;
+                }
+                if (hit) continue;
+                held[slot] = page;
+                used[slot] = ++clock;
+                own++;
+            }
+            Interlocked.Add(ref unpacks, own);
+        }, token);
+        return unpacks <= allowed;
     }
 
     /// <summary>Each right row's left row with its identity, the k-th copy to the k-th copy, and each left row's right row
@@ -349,13 +500,13 @@ internal static class ResultDiffer
     /// joined in run order and each entry's cells moved on by the cells of the runs before it: the entries and cells one
     /// pass makes. Each run charges its cells as it finds them, a chunk at a time.</summary>
     private static (DiffEntry[] Entries, int[] Cells) Align(CellHasher leftHasher, StoredPage[] leftPages, CellHasher rightHasher, StoredPage[] rightPages, (int Left, int Right)[] pairs,
-        bool exact, int[] matchedLeft, int[] rightMatch, Func<long, bool>? reserve, ref bool approximate, CancellationToken token)
+        bool exact, int[] matchedLeft, int[] rightMatch, Func<long, bool>? reserve, ref bool approximate, CancellationToken token, PageRooms? leftRooms = null, PageRooms? rightRooms = null)
     {
         var leftTotal = matchedLeft.Length;
         var rightTotal = rightMatch.Length;
         var leading = 0;
         while (leading < leftTotal && matchedLeft[leading] < 0) leading++;
-        var runs = Math.Clamp(rightTotal / RowIdentity.MinSlice, 1, ViewSorter.Workers);
+        var runs = Runs(rightTotal);
         using var threads = ViewSorter.Gate.Take(runs);
         int Start(int run) => ViewSorter.RunStart(rightTotal, run, runs);
         var places = new long[runs + 1];
@@ -387,6 +538,10 @@ internal static class ResultDiffer
         threads.For(runs, run =>
         {
             var (ownLeft, ownRight) = run == 0 ? (leftHasher, rightHasher) : (leftHasher.Fork(), rightHasher.Fork());
+            // A run reads its second result's rows in order and the first result's in about their order (Local), so a few
+            // pages kept unpacked a run serve them.
+            using var leftReader = leftAccess.Reader(leftRooms, LeftSlots);
+            using var rightReader = rightAccess.Reader(rightRooms, RightSlots);
             var cells = found[run] = [];
             var counted = 0;
             var at = (int)places[run];
@@ -402,7 +557,7 @@ internal static class ResultDiffer
                 var i = rightMatch[j];
                 if (i < 0) { entries[at++] = new DiffEntry(DiffKind.Added, -1, j); continue; }
                 var before = cells.Count;
-                inexact |= CompareCells(ownLeft, leftAccess, i, ownRight, rightAccess, j, pairs, exact, cells, out var hard);
+                inexact |= CompareCells(ownLeft, leftReader, i, ownRight, rightReader, j, pairs, exact, cells, out var hard);
                 if (cells.Count > counted)
                 {
                     // The runs' cells together, charged a chunk at a time as one pass charges them, however many runs find them.
@@ -442,7 +597,7 @@ internal static class ResultDiffer
     }
 
     /// <summary>Each row's identity over the given columns.</summary>
-    private static bool Rows(CellHasher hasher, StoredPage[] pages, int[] columns, long[] ids, CancellationToken token)
+    private static bool Rows(CellHasher hasher, StoredPage[] pages, int[] columns, long[] ids, CancellationToken token, PageRooms? rooms)
     {
         var cut = 0;
         RowIdentity.EachPage(hasher, pages, ids.Length, token, (own, page, view) =>
@@ -450,12 +605,12 @@ internal static class ResultDiffer
             var inexact = false;
             for (var r = 0; r < page.Rows; r++) ids[page.FirstRow + r] = own.Row(view, r, columns, ref inexact) & RowIdentity.Mask;
             if (inexact) Volatile.Write(ref cut, 1);
-        });
+        }, rooms);
         return cut != 0;
     }
 
     /// <summary>Appends the pairs whose values differ (~pair for a soft difference); whether a truncated value was compared.</summary>
-    private static bool CompareCells(CellHasher leftHasher, RowAccess leftAccess, int leftRow, CellHasher rightHasher, RowAccess rightAccess, int rightRow,
+    private static bool CompareCells(CellHasher leftHasher, RowAccess.RowReader leftAccess, int leftRow, CellHasher rightHasher, RowAccess.RowReader rightAccess, int rightRow,
         (int Left, int Right)[] pairs, bool exact, List<int> cells, out bool hard)
     {
         var approximate = false;
@@ -540,17 +695,38 @@ internal static class UnifiedDiff
 
     /// <summary>Writes the rows into <paramref name="set"/> (opened with <see cref="Columns"/> and <see cref="Wires"/>), then
     /// completes it.</summary>
-    public static void Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token)
+    /// <param name="tooLarge">What it answers (TOO_LARGE) when the budget has no room for the rooms a packed result is
+    /// read through: each side's rows are read fused, a few pages kept unpacked (<see cref="ResultDiffer.LeftSlots"/>), in
+    /// about the order the comparison read them.</param>
+    public static void Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token,
+        string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null)
     {
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
-        var sides = (Left: new Side(new RowAccess(leftPages, left.Wires.Count), model.Pairs, true, left.Lengths, right.Lengths),
-            Right: new Side(new RowAccess(rightPages, right.Wires.Count), model.Pairs, false, right.Lengths, right.Lengths));
+        using var leftRooms = PageRooms.Over(leftPages, left.Wires.Count, () => new RequestException("TOO_LARGE", tooLarge));
+        using var rightRooms = PageRooms.Over(rightPages, right.Wires.Count, () => new RequestException("TOO_LARGE", tooLarge));
+        using var leftReader = new RowAccess(leftPages, left.Wires.Count).Reader(leftRooms, ResultDiffer.LeftSlots);
+        using var rightReader = new RowAccess(rightPages, right.Wires.Count).Reader(rightRooms, ResultDiffer.RightSlots);
+        var sides = (Left: new Side(leftReader, model.Pairs, true, left.Lengths, right.Lengths),
+            Right: new Side(rightReader, model.Pairs, false, right.Lengths, right.Lengths));
         var shown = Shown(model, context);
+        // One thread writes the rows: each side's packed pages are unpacked ahead on the workers, in the order it reads them.
+        IEnumerable<int> Read(bool isLeft)
+        {
+            for (var k = 0; k < model.Entries.Length; k++)
+            {
+                if (!shown[k]) continue;
+                var entry = model.Entries[k];
+                if (isLeft ? entry.Kind is DiffKind.Removed or DiffKind.Changed : entry.Kind is not DiffKind.Removed) yield return isLeft ? entry.Left : entry.Right;
+            }
+        }
         var tone = new System.Text.StringBuilder(64);
         var counter = 0;
         try
         {
+            // Refused rooms end the write here as anywhere else: the result is completed with what it holds (nothing).
+            leftReader.Ahead(Read(true), token);
+            rightReader.Ahead(Read(false), token);
             for (var k = 0; k < model.Entries.Length; k++)
             {
                 if (++counter == 1 << 10) { counter = 0; token.ThrowIfCancellationRequested(); }
@@ -567,7 +743,15 @@ internal static class UnifiedDiff
                 if (!stored) break;
             }
         }
-        finally { set.Complete(); }
+        finally
+        {
+            set.Complete();
+            if (stages is not null)
+            {
+                stages.WrittenAhead = leftReader.AheadUnpacked + rightReader.AheadUnpacked;
+                stages.WrittenBehind = leftReader.Behind + rightReader.Behind;
+            }
+        }
     }
 
     /// <summary>The tone text: the kind, then the differing cells' column numbers in order, each run of adjacent columns of
@@ -604,7 +788,7 @@ internal static class UnifiedDiff
 
     /// <summary>One result's side of the diff: its rows, which of each pair's columns is its, its columns' byte rules, and
     /// the unified result's (the second result's).</summary>
-    private sealed record Side(RowAccess Access, (int Left, int Right)[] Pairs, bool IsLeft, IReadOnlyList<ColumnLength> Rules, IReadOnlyList<ColumnLength> Shown)
+    private sealed record Side(RowAccess.RowReader Access, (int Left, int Right)[] Pairs, bool IsLeft, IReadOnlyList<ColumnLength> Rules, IReadOnlyList<ColumnLength> Shown)
     {
         public int Column(int pair) => IsLeft ? Pairs[pair].Left : Pairs[pair].Right;
     }

@@ -267,14 +267,25 @@ being true.
   in-order pass unpacks the next batch of pages on the workers while it reads the one before (`InOrder`, two batches of
   rooms). A pivot's output reads the rows it copies
   from pages read together (`RowAccess.Hold`, `BodiesTogether`; refused, the result is unpacked in place instead, which
-  adds only what packing saved). Pages held as sealed read exactly as before. The other
-  operations on the whole result (distinct values, whose snapshot keeps its pages for later reads; row identity; diff;
-  and a search, whose slots keep the pages it reads) first
-  unpack it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
-  then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
+  adds only what packing saved). Pages held as sealed read exactly as before. A distinct list, row identities, a diff
+  and a search read packed results fused too (`PageRooms.Over`, each worker a `RoomReader`; refused, `TOO_LARGE` with
+  the operation's sentence and nothing held). A diff's readers keep a few pages unpacked (`ResultDiffer.LeftSlots`,
+  `RightSlots`), since it reads the first result in the second result's order and goes back to cells after matching;
+  `ResultDiffer.Local` counts beforehand how many unpacks that order costs, and past `UnpacksPerPage` a page it unpacks
+  the first result in place instead (`TryUnpackAll`; refused, `TOO_LARGE`). The unified result is written on one
+  thread, so each side's packed pages are unpacked ahead on the workers in the order the writer reads them
+  (`PageAhead`, two batches of rooms, as a pivot's in-order pass, taken only from memory the budget can spare,
+  `TryReserveSpare`; without it the writer unpacks them itself). Rooms ask the system's memory load once for
+  every `WorkCheckBytes` they take together, so many small rooms are refused under load as one large reservation would
+  be. A distinct snapshot keeps its result's pages, not their bytes (`KeptPages`): its later reads and value searches go
+  in row order through one `ReadRoom`, each page unpacked once, and it never holds page bytes after the result is packed
+  again. A search through a view far from its pages' order (`ResultSearcher.Local`: a sorted view) still unpacks the
+  result in place first (`SqlService.Unpack`: `UnpackNeed` reserved as working memory, then `UnpackAll`, stopped by a
+  release; a refusal answers `TOO_LARGE` with its sentence and unpacks none); in base order or through a filtered view it
+  reads fused, two slots a run (called directly through a far view, it reads through the accessor as before).
   A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
   held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
-  unpacking each packed page into one room of its own (`ResultJobs.ReadRoom`, the largest page reserved as working memory;
+  unpacking each packed page into one room of its own (`ReadRoom`, the largest page reserved as working memory;
   refused, the page is read through the accessor and its cache as before). An operation's unpack clears the set's packed
   mark, so the policy packs it again once it ends. `ResultStore.PackingSnapshot` holds the counters (packed, logical and
   cached bytes; pages packed, kept raw and unpacked; cache hits and lookups; time; the last whole unpack), which

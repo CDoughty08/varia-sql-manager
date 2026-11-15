@@ -75,11 +75,17 @@ internal static class ResultSearcher
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
+        // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
+        // reads base order or a view near it). Through a view far from its pages' order (Local) SqlService unpacks the result
+        // first; a caller that did not reads its pages through the set's accessor and its cache, as before fused reads.
+        using var rooms = view is not null && !Local(pages, view.Order) ? null : PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
+        if (rooms is not null) slots = Math.Min(slots, PackedSlots);
         void Read(int run)
         {
             var part = parts[run] = new Part();
-            Scan(part, new Source(pages, columns, slots), view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped);
+            using var source = new Source(pages, columns, slots, rooms);
+            Scan(part, source, view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped);
         }
         threads.For(runs, Read);
         long total = 0, before = 0, first = -1;
@@ -248,9 +254,53 @@ internal static class ResultSearcher
         public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => scratch.Hex(cell).Contains(text, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>What a search answers (TOO_LARGE) when the budget has no room for the rooms a packed result is read through,
+    /// or to unpack it first.</summary>
+    public const string TooLarge = "There is not enough result memory to search these rows. Close other results and try again.";
+
+    /// <summary>Slots a run keeps when the result is packed: each holds a room, and a run reads its pages in order.</summary>
+    internal const int PackedSlots = 2;
+
+    /// <summary>Unpacks a fused search through a view may make per packed page, with <see cref="PackedSlots"/> slots,
+    /// before a packed result is unpacked first instead.</summary>
+    internal const int UnpacksPerPage = 4;
+
+    /// <summary>Whether a search through a view of this order would read the packed pages in about their order: with
+    /// <see cref="PackedSlots"/> direct-mapped slots, at most <see cref="UnpacksPerPage"/> unpacks a packed page (rows past
+    /// the pages skipped). A filter of a result in its own order is; a sort is not. Counted from the row numbers alone, and
+    /// stopped once past the allowance. The caller holds the set's pin.</summary>
+    public static bool Local(StoredPage[] pages, int[] order)
+    {
+        var starts = new long[pages.Length];
+        var packed = new bool[pages.Length];
+        long packedPages = 0, rows = 0;
+        for (var i = 0; i < pages.Length; i++)
+        {
+            starts[i] = pages[i].FirstRow;
+            rows += pages[i].Rows;
+            if (pages[i].Set is { } set && set.Raw(pages[i]) is null) { packed[i] = true; packedPages++; }
+        }
+        if (packedPages == 0) return true;
+        var allowed = UnpacksPerPage * packedPages + PackedSlots;
+        Span<int> held = stackalloc int[PackedSlots];
+        held.Fill(-1);
+        long unpacks = 0;
+        foreach (var row in order)
+        {
+            if (row >= rows) continue;
+            var index = Array.BinarySearch(starts, (long)row);
+            if (index < 0) index = ~index - 1;
+            if (!packed[index] || held[index % PackedSlots] == index) continue;
+            held[index % PackedSlots] = index;
+            if (++unpacks > allowed) return false;
+        }
+        return true;
+    }
+
     /// <summary>The sealed pages a search reads, a row's page found by binary search and parsed when reached, its layout kept
-    /// in one of a few slots (direct-mapped by page index) so a wide result's layouts never outgrow the cache.</summary>
-    internal sealed class Source
+    /// in one of a few slots (direct-mapped by page index) so a wide result's layouts never outgrow the cache. With rooms, a
+    /// packed page is unpacked into its slot's own room (fused); disposing the source gives the rooms back.</summary>
+    internal sealed class Source : IDisposable
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
@@ -258,12 +308,15 @@ internal static class ResultSearcher
         private readonly int[]?[] slotLayouts;
         private readonly byte[]?[] slotBodies;
         private readonly int[] slotBlobStarts;
+        private readonly PageRoom?[] slotRooms;
+        private readonly PageRooms? rooms;
         private readonly int columns;
 
-        public Source(StoredPage[] pages, int columns, int slots)
+        public Source(StoredPage[] pages, int columns, int slots, PageRooms? rooms = null)
         {
             this.pages = pages;
             this.columns = columns;
+            this.rooms = rooms;
             starts = new long[pages.Length];
             for (var i = 0; i < pages.Length; i++)
             {
@@ -276,6 +329,7 @@ internal static class ResultSearcher
             slotLayouts = new int[slots][];
             slotBodies = new byte[slots][];
             slotBlobStarts = new int[slots];
+            slotRooms = new PageRoom?[slots];
         }
 
         public long Rows { get; }
@@ -291,14 +345,27 @@ internal static class ResultSearcher
             var slot = index % slotPages.Length;
             if (slotPages[slot] != index)
             {
-                var body = slotBodies[slot] = page.Body();
-                var parsed = PageView.Parse(body, columns, slotLayouts[slot]);
+                slotPages[slot] = -1;
+                byte[] body;
+                if (rooms is not null && page.Set is { } set && set.Raw(page) is null) body = set.Read(page, (slotRooms[slot] ??= rooms.Rent()).Bytes);
+                else body = page.Body();
+                slotBodies[slot] = body;
+                var parsed = PageView.Parse(body.AsSpan(0, page.Length), columns, slotLayouts[slot]);
                 slotLayouts[slot] = parsed.Layout;
                 slotBlobStarts[slot] = parsed.BlobStart;
                 slotPages[slot] = index;
             }
             local = (int)(row - page.FirstRow);
-            return PageView.At(slotBodies[slot]!, slotBlobStarts[slot], slotLayouts[slot]!, page.FirstRow, page.Rows, columns);
+            return PageView.At(slotBodies[slot].AsSpan(0, page.Length), slotBlobStarts[slot], slotLayouts[slot]!, page.FirstRow, page.Rows, columns);
+        }
+
+        public void Dispose()
+        {
+            for (var i = 0; i < slotRooms.Length; i++)
+            {
+                slotRooms[i]?.Dispose();
+                slotRooms[i] = null;
+            }
         }
     }
 }
