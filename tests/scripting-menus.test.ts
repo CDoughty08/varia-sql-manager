@@ -163,8 +163,8 @@ describe('Script As in Object Explorer\'s context menu', () => {
       expect(request.scriptAsTitle ?? '', JSON.stringify(target)).toBe(scriptMenuState(target).title)
       expect(request.visible.filter(id => (scriptCommandIds as readonly string[]).includes(id)).length, JSON.stringify(target)).toBe(Object.values(scriptMenuState(target).verbs).filter(Boolean).length * 3)
     }
-    // A table: 30 script commands (its greyed verbs too), Select Top 1000 Rows, Copy Name, Rename, Delete and Refresh.
+    // A table: 30 script commands (its greyed verbs too), Select Top 1000 Rows, Copy Name, Rename, Delete, Refresh and Properties.
     expect(largest).toBeLessThanOrEqual(64)
-    expect(largest).toBe(36)
+    expect(largest).toBe(37)
   })
 })

@@ -32,7 +32,7 @@ export interface QueryDocument {
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help'
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'tableProperties' | 'newDatabase' | SsisDocumentKind | 'activityMonitor' | 'ssisOperations' | 'restoreDatabase' | 'objectSearch' | 'peek' | 'releaseNotes' | 'help'
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -44,7 +44,7 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help'])
+const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help'])
 /** A kind whose provider owns its content (DocumentService.registerProvider): no text, no model, nothing AutoRecover keeps. */
 export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
 /** A document whose content is text in the editor (a query or a value), as opposed to a table designer, Database Properties,
@@ -62,6 +62,7 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
   sqlplan: { language: 'xml', icon: 'execution-plan', label: 'Execution plan', value: 'execution plan', blankName: 'PLAN' },
   tableDesigner: { language: '', icon: 'table', label: 'Table Designer', value: 'table', blankName: 'Table Designer' },
   databaseProperties: { language: '', icon: 'settings-gear', label: 'Database Properties', value: 'database properties', blankName: 'Database Properties' },
+  tableProperties: { language: '', icon: 'settings-gear', label: 'Table Properties', value: 'table properties', blankName: 'Table Properties' },
   newDatabase: { language: '', icon: 'database', label: 'New Database', value: 'new database', blankName: 'New Database' },
   activityMonitor: { language: '', icon: 'pulse', label: 'Activity Monitor', value: 'activity monitor', blankName: 'Activity Monitor' },
   ssisOperations: { language: '', icon: 'pulse', label: 'Integration Services Operations', value: 'operations', blankName: 'Operations' },

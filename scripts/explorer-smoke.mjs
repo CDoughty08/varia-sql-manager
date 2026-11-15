@@ -748,8 +748,8 @@ try {
   expect(await topRowRuns()).toHaveLength(3)
   const peekActions = peekDocument.getByRole('group', { name: 'dbo.Orders actions', exact: true })
   await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
-  // A table has no Properties dialog yet (databases and logins do), so its tab offers none.
-  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toHaveCount(0)
+  // A table has Table Properties, so its tab offers Properties.
+  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toBeEnabled()
   await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await topRowRuns()).length).toBe(4)

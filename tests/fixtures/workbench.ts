@@ -77,6 +77,7 @@ import { TableDesignerService } from '../../src/renderer/src/designer/TableDesig
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { TablePropertiesService } from '../../src/renderer/src/properties/TablePropertiesService'
 import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
 import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActionProgressService } from '../../src/renderer/src/actions/ActionProgressService'
@@ -420,6 +421,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer, targetIdOf })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, targetIdOf })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, targetIdOf, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const tableProperties = new TablePropertiesService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const actionProgress = new ActionProgressService(api)
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
@@ -457,6 +459,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recovery,
     designer: designers.context,
     properties: properties.context,
+    tableProperties: tableProperties.context,
     newDatabase: newDatabase.context,
     restore: restore.context,
     notifications,
@@ -540,6 +543,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    tableProperties,
     newDatabase,
     restore,
     actionProgress,
@@ -626,6 +630,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    tableProperties.dispose()
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
@@ -680,6 +685,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    tableProperties,
     newDatabase,
     restore,
     actionProgress,

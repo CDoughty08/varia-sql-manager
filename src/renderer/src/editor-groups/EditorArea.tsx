@@ -28,6 +28,7 @@ import { liveQuerySession } from '../services/queries'
 import TableDesigner from '../designer/TableDesigner'
 import SsisProperties from '../ssis/SsisProperties'
 import DatabaseProperties from '../properties/DatabaseProperties'
+import TableProperties from '../properties/TableProperties'
 import NewDatabase from '../new-database/NewDatabase'
 import RestoreDatabase from '../restore/RestoreDatabase'
 import ActivityMonitor from '../activity/ActivityMonitor'
@@ -132,6 +133,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
   return <div className="document-view">
     {kind === 'tableDesigner' && <TableDesigner documentId={id} />}
     {kind === 'databaseProperties' && <DatabaseProperties documentId={id} />}
+    {kind === 'tableProperties' && <TableProperties documentId={id} />}
     {kind === 'newDatabase' && <NewDatabase documentId={id} />}
     {isSsisDocumentKind(kind) && <SsisProperties documentId={id} />}
     {kind === 'activityMonitor' && <ActivityMonitor documentId={id} />}

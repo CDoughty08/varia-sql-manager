@@ -420,6 +420,7 @@ if (liveGroup is null)
         ("LoginDelete", () => LoginDeleteChecks.RunAsync(Check)),
         ("Unlock", () => UnlockChecks.RunAsync(Check)),
         ("LoginProperties", Sync(() => LoginPropertiesChecks.Run(Check))),
+        ("TableProperties", Sync(() => TablePropertiesChecks.Run(Check))),
         ("Securables", Sync(() => SecurablesChecks.Run(Check))),
         ("LoginKinds", () => LoginKindsChecks.RunAsync(Check)),
         ("DatabaseProperties", Sync(() => DatabasePropertiesChecks.Run(Check))),
@@ -950,6 +951,7 @@ try
     await Suite("Securables", () => SecurablesLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("LoginKinds", () => LoginKindsLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("DatabaseProperties", () => DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("TableProperties", () => TablePropertiesLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Designer", () => DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("NewDatabase", () => NewDatabaseLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Ssis", () => SsisLiveChecks.RunAsync(Check, service, info, Live, json));

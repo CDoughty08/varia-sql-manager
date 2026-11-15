@@ -15,7 +15,8 @@
     {"action":"unlock","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"title":"Unlock Login…"},
     {"action":"createDatabase","class":"dialog","cleanupMs":10000,"engines":["box"],"scope":"server","title":"New Database…"},
     {"action":"createLogin","class":"create","cleanupMs":10000,"engines":["box","managedInstance"],"title":"New Login"},
-    {"action":"loginProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"login","title":"Login Properties","verb":"properties"}
+    {"action":"loginProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"login","title":"Login Properties","verb":"properties"},
+    {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"}
   ],
   "compatibilityLevels": [100,110,120,130,140,150,160,170],
   "databaseOptions": [
@@ -91,7 +92,8 @@
     {"action":"bringOnline","dialog":"bringOnline","pages":["general"]},
     {"action":"detach","dialog":"detachDatabase","pages":["general"]},
     {"action":"unlock","dialog":"unlockLogin","pages":["general"]},
-    {"action":"loginProperties","dialog":"loginProperties","pages":["general","serverRoles","userMapping","securables","status"]}
+    {"action":"loginProperties","dialog":"loginProperties","pages":["general","serverRoles","userMapping","securables","status"]},
+    {"action":"tableProperties","dialog":"tableProperties","pages":["general","permissions","changeTracking","storage","securityPredicates","extendedProperties"]}
   ],
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
@@ -146,18 +148,18 @@
     {"disabled":[],"enabled":["rename","delete","properties","takeOffline","bringOnline","detach","restore","restoreFiles"],"kind":"database","subtype":""},
     {"disabled":["rename","delete","takeOffline","bringOnline","detach","restore","restoreFiles"],"enabled":["properties"],"kind":"database","subtype":"system"},
     {"disabled":["rename"],"enabled":["delete","properties"],"kind":"database","subtype":"snapshot"},
-    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":""},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"systemVersioned"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"history"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"updatableLedger"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"appendOnlyLedger"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"ledgerHistory"},
-    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":"graphNode"},
-    {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"table","subtype":"graphEdge"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"fileTable"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"external"},
-    {"disabled":["rename","delete"],"enabled":[],"kind":"table","subtype":"droppedLedger"},
-    {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"table","subtype":"system"},
+    {"disabled":[],"enabled":["selectTop","rename","delete","properties"],"kind":"table","subtype":""},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"systemVersioned"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"history"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"updatableLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"appendOnlyLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"ledgerHistory"},
+    {"disabled":[],"enabled":["selectTop","rename","delete","properties"],"kind":"table","subtype":"graphNode"},
+    {"disabled":[],"enabled":["selectTop","rename","delete","properties"],"kind":"table","subtype":"graphEdge"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"fileTable"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"external"},
+    {"disabled":["rename","delete"],"enabled":["properties"],"kind":"table","subtype":"droppedLedger"},
+    {"disabled":["rename","delete"],"enabled":["selectTop","properties"],"kind":"table","subtype":"system"},
     {"disabled":[],"enabled":["selectTop","rename","delete"],"kind":"view","subtype":""},
     {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"view","subtype":"system"},
     {"disabled":["rename","delete"],"enabled":["selectTop"],"kind":"view","subtype":"ledger"},
@@ -192,5 +194,6 @@
     {"extensions":[".ldf"],"purpose":"log"},
     {"extensions":[],"purpose":"folder"}
   ],
+  "tables": {"extendedPropertyOps":["add","update","drop"],"limits":{"extendedProperties":256,"extendedPropertyChanges":64,"extendedPropertyValue":3750,"partitions":1000,"permissions":1024,"predicateChars":4000,"securityPredicates":256},"lockEscalation":["TABLE","AUTO","DISABLE"],"messages":{"applied":"The changes were applied.","changed":"The table changed since its properties were read. Discard Changes, then Refresh and apply again.","databaseTracking":"Change tracking is off for the database. Turn it on for the database first (ALTER DATABASE … SET CHANGE_TRACKING = ON).","droppedLedger":"A dropped ledger table cannot be changed.","duplicateName":"Another extended property has this name.","externalTable":"An external table's properties cannot be changed here.","memoryOptimized":"A memory-optimized table has no lock escalation.","nonStringValue":"This value is not text (its type is shown); Varia changes only text values.","notTheTable":"The table is not the one these properties were read from: it was renamed, dropped or replaced since. Discard Changes, then Refresh to read its properties again.","nothingToChange":"The table already has these settings.","primaryKey":"Change tracking needs a primary key on the table.","readFailed":"The table could not be read.","readOnlyDatabase":"The database is read-only.","rolledBack":"SQL Server rolled back the transaction, so the table is as it was.","systemTable":"SQL Server's own tables cannot be changed here.","trackingMemoryOptimized":"A memory-optimized table has no change tracking.","trackingOff":"Track columns updated applies only while change tracking is on."},"steps":{"add":"Add the extended property","disableTracking":"Turn off change tracking","drop":"Remove the extended property","enableTracking":"Turn on change tracking","lockEscalation":"Set lock escalation","update":"Change the extended property"}},
   "version": 4
 }

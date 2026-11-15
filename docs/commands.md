@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (312)
+## Commands (316)
 
 ### File
 
@@ -307,6 +307,15 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### Table Properties
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Apply Changes | `tableProperties.apply` | — | — | — | `activeDocumentIsTableProperties && propertiesApplicable` | — |
+| Discard Changes | `tableProperties.discard` | — | — | — | `activeDocumentIsTableProperties && propertiesChanged && !propertiesApplying` | — |
+| Refresh | `tableProperties.refresh` | — | — | — | `activeDocumentIsTableProperties && propertiesRefreshable` | — |
+| Stop | `tableProperties.stop` | — | — | — | `activeDocumentIsTableProperties && propertiesApplying` | — |
 
 ### New Database
 
@@ -971,7 +980,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (157)
+## Context keys (158)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1018,10 +1027,11 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |
 | `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
 | `activeDocumentIsProperties` | boolean | state | The active document is Database Properties. |
-| `propertiesChanged` | boolean | state | The active Database Properties document has changes that are not applied yet. |
-| `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
-| `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
-| `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsTableProperties` | boolean | state | The active document is Table Properties. |
+| `propertiesChanged` | boolean | state | The active Database Properties or Table Properties document has changes that are not applied yet. |
+| `propertiesApplicable` | boolean | state | The active Database Properties or Table Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
+| `propertiesApplying` | boolean | state | The active Database Properties or Table Properties document is applying its changes (Stop cancels them in SQL Server). |
+| `propertiesRefreshable` | boolean | state | The active Database Properties or Table Properties document can read the database or table again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
 | `activeDocumentIsNewDatabase` | boolean | state | The active document is New Database. |
 | `newDatabaseCreatable` | boolean | state | The active New Database document can create its database now: it has read the server, nothing runs in it, and its server is connected. |
 | `newDatabaseCreating` | boolean | state | The active New Database document is creating its database (Stop cancels it in SQL Server). |

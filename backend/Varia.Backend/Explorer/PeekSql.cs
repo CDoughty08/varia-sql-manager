@@ -260,6 +260,13 @@ internal static class PeekSql
             ["userSeeks", "userScans", "userLookups", "userUpdates", "lastSeek", "lastScan", "lastLookup", "lastUpdate"])
     };
 
+    /// <summary>A table's FROM and WHERE (the row by @object_id, aliases o, s, t, i, ds, lob, pr and sp), which Table Properties reads its
+    /// facts from too (Actions/TableProperties.cs), so both say the same of a table.</summary>
+    internal static string TableFrom => Kinds["table"].From;
+
+    /// <summary>A table fact's expression over <see cref="TableFrom"/>, as Peek reads it (its own facts, then the common ones).</summary>
+    internal static string TableFact(string id) => Kinds["table"].Facts.GetValueOrDefault(id) ?? Common.GetValueOrDefault(id) ?? throw new InvalidOperationException("Peek has no table fact " + id + ".");
+
     /// <summary>The one column an optional statement answers when the login was refused.</summary>
     internal const string Refused = "refused";
 

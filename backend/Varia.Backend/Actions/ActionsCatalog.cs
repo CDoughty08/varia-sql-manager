@@ -21,6 +21,13 @@ internal sealed record RestoreCatalogJson(string Describe, List<string> Requests
     public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore limit " + key);
     public string Message(string key) => Messages.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore message " + key);
 }
+/// <summary>Table Properties' tokens, limits, messages and step titles (src/shared/actions/tables.ts tablesCatalog).</summary>
+internal sealed record TablesCatalogJson(List<string> LockEscalation, List<string> ExtendedPropertyOps, Dictionary<string, long> Limits, Dictionary<string, string> Messages, Dictionary<string, string> Steps)
+{
+    public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown table limit " + key);
+    public string Message(string key) => Messages.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown table message " + key);
+    public string Step(string key) => Steps.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown table step " + key);
+}
 /// <summary>A database option or scoped configuration as the catalogue resolves it for C#.</summary>
 internal sealed record OptionJson(string Key, string Label, string Control, bool Settable, int SmoOrder, List<string>? Tokens = null, RangeJson? Range = null, int? Since = null, List<string>? NotOn = null,
     bool? Exclusive = null, OptionSqlJson? Sql = null, bool? RefusedReadOnly = null);
@@ -52,7 +59,7 @@ internal sealed class ActionsCatalog
     private sealed record ServerFilesJson(string Purpose, List<string> Extensions);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DatabaseRuleJson> DatabaseRules,
         Dictionary<string, string> DatabaseStates, List<DescribeJson> Describes, List<DialogJson> Dialogs, List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn,
-        RestoreCatalogJson Restore, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
+        RestoreCatalogJson Restore, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles, TablesCatalogJson Tables);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
@@ -72,6 +79,7 @@ internal sealed class ActionsCatalog
         actions = json.Actions.ToDictionary(row => row.Action, StringComparer.Ordinal);
         Logins = new LoginRules(json.Logins);
         Restore = json.Restore;
+        Tables = json.Tables;
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         serverActions = json.Actions.Where(row => row.Scope == "server").Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
@@ -115,6 +123,7 @@ internal sealed class ActionsCatalog
     public LoginRules Logins { get; }
     /// <summary>Restore Database's describe id, request action, engines, limits, system databases and messages (src/shared/actions/restore.ts).</summary>
     public RestoreCatalogJson Restore { get; }
+    public TablesCatalogJson Tables { get; }
 
     /// <summary>Whether the action runs on a server of this engine (ExplorerProfile.ServerEngine).</summary>
     public bool Serves(string action, string engine) => actions.TryGetValue(action, out var row) ? row.Engines.Contains(engine) : throw new InvalidOperationException("Unknown object action " + action);

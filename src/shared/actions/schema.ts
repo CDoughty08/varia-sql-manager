@@ -26,6 +26,7 @@ import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
+import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
  *  Disable), a designer (src/shared/designer/catalog.ts), the
@@ -143,9 +144,17 @@ export interface LoginPropertiesRequest {
   readonly action: 'loginProperties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
   readonly loginIdentity?: LoginIdentity; readonly loginChanges: LoginChanges; readonly secrets?: LoginSecrets
 }
+/**
+ * Table Properties: only what differs from its describe (`tableChanges`), and the table it read (`identity`: its object_id and
+ * create_date, as Database Properties names a database), which the preflight and the transaction's first step check again.
+ */
+export interface TablePropertiesRequest {
+  readonly action: 'tableProperties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly tableChanges: TableChanges
+  readonly identity?: DatabaseIdentity
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
-  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest
+  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
@@ -344,6 +353,8 @@ export interface ActionDescribeResult {
   readonly windowsPrincipal?: WindowsPrincipal
   /** loginEffectivePermissions (D2d): what the login may do on the securable asked for. */
   readonly effectivePermissions?: EffectivePermissions
+  /** tableProperties: every page's facts. */
+  readonly tableProperties?: TablePropertiesModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -616,6 +627,29 @@ const loginPropertiesSchema = z.object({
   action: z.literal('loginProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), loginChanges: loginChangesSchema,
   secrets: loginSecretsSchema.optional()
 }).strict()
+// An extended property's value is text without NUL (a script writes it as an N'' literal), well formed, within sql_variant's bound.
+const extendedPropertyValue = z.string().max(tableLimits.extendedPropertyValue).refine(value => !value.includes('\0'), 'The value cannot contain a NUL character.')
+  .refine(wellFormed, 'The value holds a broken character (half of a surrogate pair).')
+const tableChangesSchema = z.object({
+  lockEscalation: z.enum(lockEscalationTokens).optional(),
+  changeTracking: z.object({ enabled: z.boolean(), trackColumnsUpdated: z.boolean().optional() }).strict().optional(),
+  extendedProperties: z.array(z.object({ op: z.enum(extendedPropertyOps), name: ident, value: extendedPropertyValue.optional() }).strict()).max(tableLimits.extendedPropertyChanges).optional()
+}).strict() satisfies z.ZodType<TableChanges>
+const tablePropertiesSchema = z.object({
+  action: z.literal('tableProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, tableChanges: tableChangesSchema, identity: identitySchema.optional()
+}).strict()
+/** Table Properties' rules beyond the shapes (C#: TableAlter.Validate): Track columns updated only with change tracking on, a value
+ *  exactly with an add or an update, each extended property changed once, and between one and actionLimits.statements statements. */
+function tablePropertiesIssues(request: z.infer<typeof tablePropertiesSchema>, context: z.RefinementCtx): void {
+  const changes = request.tableChanges
+  if (changes.changeTracking && !changes.changeTracking.enabled && changes.changeTracking.trackColumnsUpdated !== undefined) issue(context, 'tableChanges', 'Track columns updated goes only with change tracking on.')
+  const properties = changes.extendedProperties ?? []
+  if (properties.some(change => (change.op === 'drop') !== (change.value === undefined))) issue(context, 'tableChanges', 'An add or an update writes a value; a drop writes none.')
+  if (new Set(properties.map(change => change.name)).size !== properties.length) issue(context, 'tableChanges', 'An extended property changes twice.')
+  const count = tableStatements(changes)
+  if (count === 0) issue(context, 'tableChanges', 'There is nothing to change.')
+  if (count > actionLimits.statements) issue(context, 'tableChanges', 'Too many changes.')
+}
 const distinct = (values: readonly string[] | undefined) => !values || new Set(values).size === values.length
 const overlap = (a: readonly string[] | undefined, b: readonly string[] | undefined) => !!a && !!b && a.some(value => b.includes(value))
 /** Login Properties' rules beyond the shapes (C#: ActionService.ValidateLoginProperties): the policy chain where both are sent, the old
@@ -692,7 +726,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   detachSchema,
   loginStateSchema,
   unlockSchema,
-  loginPropertiesSchema
+  loginPropertiesSchema,
+  tablePropertiesSchema
 ]).superRefine((request, context) => {
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.
@@ -725,6 +760,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
     case 'loginProperties':
       loginPropertiesIssues(request, context)
+      break
+    case 'tableProperties':
+      tablePropertiesIssues(request, context)
       break
   }
 }) satisfies z.ZodType<ActionRequest>

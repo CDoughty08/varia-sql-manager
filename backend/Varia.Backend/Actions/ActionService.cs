@@ -291,6 +291,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.LoginChanges is not null && args.Action != "loginProperties") throw Invalid(args.Action + " takes no loginChanges.");
+        if (args.TableChanges is not null && args.Action != "tableProperties") throw Invalid(args.Action + " takes no tableChanges.");
         // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
         if (args.LoginIdentity is { } loginRead && (args.Action is not ("disable" or "enable" or "delete" or "unlock" or "loginProperties") || loginRead.Sid is null || !LoginSid().IsMatch(loginRead.Sid)
             || loginRead.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(loginRead.Created))) throw Invalid("loginIdentity.");
@@ -386,6 +387,12 @@ internal sealed partial class ActionService : IDisposable
                 return Target(args.Target, "detach");
             case "loginProperties":
                 return ValidateLoginProperties(args, script);
+            case "tableProperties":
+                if (args.LoginIdentity is not null || args.DropConnections is not null || args.Restore is not null || args.Login is not null || args.ServerRoles is not null || args.Status is not null
+                    || args.RestoreFiles is not null || args.Mappings is not null || args.Permissions is not null) throw Invalid("tableProperties takes only tableChanges and an identity.");
+                var table = Target(args.Target, "tableProperties");
+                TableAlter.Validate(catalog, args);
+                return table;
             default:
                 throw Invalid("action.");
         }
@@ -445,6 +452,7 @@ internal sealed partial class ActionService : IDisposable
                 "renameDatabase" => DescribeRenameJobAsync(connection, args.ConnectionId, target, profile.Explorer(explorer).ServerEngine, band, job),
                 _ when args.Dialog == catalog.Logins.CheckNamesDescribe => DescribeWindowsPrincipalJobAsync(connection, target, job),
                 "loginProperties" => DescribeLoginPropertiesJobAsync(connection, profile, target, band, job),
+                "tableProperties" => DescribeTablePropertiesJobAsync(connection, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
@@ -476,6 +484,7 @@ internal sealed partial class ActionService : IDisposable
                 "createDatabase" => ScriptNewDatabaseJobAsync(connection, args, profile, band, job),
                 "attach" => Task.FromResult(ScriptAttach(args)),
                 "loginProperties" => ScriptLoginPropertiesJobAsync(connection, args, target, job),
+                "tableProperties" => ScriptTableJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -506,6 +515,7 @@ internal sealed partial class ActionService : IDisposable
                 "restoreFiles" => ExecuteRestoreFilesJobAsync(connection, args, target, profile.Linux, progress, job),
                 "detach" => ExecuteDetachJobAsync(connection, args, target, profile.Linux, band, job),
                 "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
+                "tableProperties" => ExecuteTableJobAsync(connection, args, target, band, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

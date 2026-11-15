@@ -377,6 +377,8 @@ describe('menu state', () => {
       'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'ssis.refreshProperties',
       // The Database Properties document's header verbs.
       'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop',
+      // The Table Properties document's header verbs.
+      'tableProperties.apply', 'tableProperties.discard', 'tableProperties.refresh', 'tableProperties.stop',
       // The New Database document's header verbs.
       'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop',
       // The Restore Database document's header verbs.

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { databaseOptionDefs, scopedConfigurationDefs } from '../src/shared/actions/database'
-import { actionCancelSchema, actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionRequestSchema, actionScriptRequestSchema, actionTargetProblems } from '../src/shared/actions/schema'
+import { actionCancelSchema, actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionRequestSchema, actionScriptRequestSchema, actionTargetProblems, dialogTargetProblems } from '../src/shared/actions/schema'
 import { requestSchemas } from '../src/main/validation'
 
 const table = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } as const
@@ -140,7 +140,10 @@ describe('object action request schemas', () => {
       ['a new name on properties', properties({ newName: 'x' })], ['closeConnections missing', { ...properties(), closeConnections: undefined }]
     ] as const) expect(valid(request), name).toBe(false)
     expect(actionTargetProblems({ kind: 'database', name: 'master' }, 'properties')).toEqual([])
-    expect(actionTargetProblems(table, 'properties')).toEqual(['A table cannot be shown in Properties.'])
+    // A table's Properties is Table Properties, never Database Properties' document.
+    expect(actionTargetProblems(table, 'properties')).toEqual([])
+    expect(dialogTargetProblems(table, 'properties')).toEqual(['A table has its own Properties.'])
+    expect(dialogTargetProblems(table, 'tableProperties')).toEqual([])
   })
 })
 

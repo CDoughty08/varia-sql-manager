@@ -505,7 +505,14 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
-    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null);
+    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null);
+/// <summary>Table Properties' changes (src/shared/actions/tables.ts TableChanges): LockEscalation TABLE, AUTO or DISABLE; ChangeTracking
+/// on or off with Track columns updated (only with it on); extended properties to add, update (each with a text Value of at most the
+/// catalogue's extendedPropertyValue UTF-16 units) or drop (no Value), each name once. The tableProperties action takes them with Identity
+/// (the table's object_id and create_date).</summary>
+internal sealed record TableChangesDto(string? LockEscalation = null, TableTrackingDto? ChangeTracking = null, List<ExtendedPropertyChangeDto>? ExtendedProperties = null);
+internal sealed record TableTrackingDto(bool Enabled, bool? TrackColumnsUpdated = null);
+internal sealed record ExtendedPropertyChangeDto(string Op, string Name, string? Value = null);
 /// <summary>Which login the loginFacts describe read (its SID as hexadecimal, at most loginLimits.sidHex characters, and
 /// create_date as the describe writes it): Disable, Enable, Delete and Unlock refuse a principal that has taken the name since.</summary>
 internal sealed record LoginIdentityDto(string Sid, string Created);
@@ -657,7 +664,24 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
-    LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null);
+    LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
+    TablePropertiesDto? TableProperties = null);
+/// <summary>Table Properties' describe (src/shared/actions/tables.ts TablePropertiesModel): every page's facts, the lists clipped to the
+/// catalogue's limits (the flags say so), and why nothing can change, when nothing can.</summary>
+internal sealed record TablePropertiesDto(TableGeneralDto General, TableStorageDto Storage, TableChangeTrackingDto ChangeTracking, List<TablePermissionDto> Permissions, bool PermissionsTruncated,
+    List<TableExtendedPropertyDto> ExtendedProperties, bool ExtendedPropertiesTruncated, int Level, TableTemporalDto? Temporal = null, TableLedgerDto? Ledger = null,
+    List<TableSecurityPredicateDto>? SecurityPredicates = null, bool? SecurityPredicatesTruncated = null, string? ReadOnlyReason = null);
+internal sealed record TableGeneralDto(string Name, string Schema, string Created, bool SystemObject, bool Replicated, string LockEscalation, bool MemoryOptimized, bool FileTable, bool External,
+    int Id, string? Modified = null, bool? AnsiNulls = null, string? Durability = null, string? Graph = null);
+internal sealed record TableStorageDto(bool Partitioned, List<TablePartitionDto> Partitions, bool PartitionsTruncated, long? RowCount = null, long? DataSpaceKb = null, long? IndexSpaceKb = null,
+    string? Compression = null, string? Filegroup = null, string? TextFilegroup = null, string? FilestreamFilegroup = null, string? PartitionScheme = null, string? PartitionColumn = null);
+internal sealed record TablePartitionDto(int Number, long Rows, string Compression, string? Filegroup = null);
+internal sealed record TableTemporalDto(string Type, string? Other = null, string? PeriodStart = null, string? PeriodEnd = null, string? Retention = null);
+internal sealed record TableLedgerDto(string Type, bool Dropped, string? View = null, string? History = null);
+internal sealed record TableChangeTrackingDto(bool DatabaseEnabled, bool Enabled, bool TrackColumnsUpdated, bool PrimaryKey);
+internal sealed record TablePermissionDto(string Principal, string PrincipalType, string Permission, string State, string Grantor, string? Column = null);
+internal sealed record TableSecurityPredicateDto(string Policy, string Type, string Predicate, bool Enabled, string? Operation = null, bool? PredicateTruncated = null);
+internal sealed record TableExtendedPropertyDto(string Name, string Value, string? Type = null, bool? Truncated = null);
 /// <summary>Check Names (the windowsPrincipal describe, D2e; logins.ts WindowsPrincipal): the account as typed (xp_logininfo echoes it), whether a
 /// login gives it access (no row: the server found the account but none does), its type (user or group) and the path of its access.</summary>
 internal sealed record WindowsPrincipalDto(string AccountName, bool Access, string? Type = null, string? Via = null);
