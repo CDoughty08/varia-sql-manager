@@ -3,7 +3,7 @@
 Let a query name its result sets from its own text, so the results pane, the Compare picker and saved files say
 "Open orders" where they say "Result 2" today.
 
-Revision 1 (2026-11-14). This is a scope, not an implementation: no code changes with it. The owner accepted the six
+Revision 2 (2026-11-14). This is a scope, not an implementation: no code changes with it. The owner accepted the
 picks under [Decisions](#decisions) on 2026-11-14. It was worked out from the code on `main` and from PR #494's branch;
 nothing was tried against a live server, so two things are assumptions the first PR must check before it relies on
 them: that errors and result sets reach the backend in the order the server sent them, and what a ScriptDom parse of a
@@ -15,7 +15,7 @@ result is still a group with an ordinal, and the ordinal stays the identity. A n
 ## The feature in one example
 
 ```sql
-/* @Name="Sample Query" */
+/* #Name="Sample Query" */
 SELECT @@SERVERNAME AS server_name, DB_NAME() AS database_name, SYSDATETIME() AS server_time;
 
 SELECT name FROM sys.databases;
@@ -29,7 +29,8 @@ rename Result 3").
 
 | Topic | Decision |
 | --- | --- |
-| Syntax | A marker comment, `@Name="…"`, alone in a `/* */` or `--` comment. Double quotes required. |
+| Syntax | A marker comment, `#Name="…"`, alone in a `/* */` or `--` comment. Double quotes required. `#`, not `@`. |
+| Default query | The query a new user starts with names its result, so the feature is seen on the first run. |
 | Custom `GO` | Rejected: the script must run unchanged in SSMS, sqlcmd and Azure Data Studio. |
 | What a name binds to | The first result set of the next top-level statement in the same batch. |
 | Several sets from one statement | Stacked markers name the statement's successive sets, in order. |
@@ -63,8 +64,8 @@ rename Result 3").
 
 - **Splitting is the backend's alone.** `SqlScript.Parse` is a line-based scanner that masks nested `/* */` comments,
   `--` comments, strings, quoted and bracketed names, finds `GO` and `GO n` (at most 1,000 executions) and refuses
-  SQLCMD lines. Comments stay verbatim in the batch text; a batch that holds only comments is dropped. It records each batch's
-  start line and nothing finer.
+  SQLCMD lines. Comments stay verbatim in the batch text; a batch that holds only comments is dropped. It records
+  each batch's start line and nothing finer.
 - **Selection execute** sends only the selected text and its start line (`documents.getExecuteText`). No column, no end.
 - **Nothing maps a set to a statement.** `StatementCompleted` only feeds "(N rows affected)". The server does not say
   which statement produced a set, one statement can return none, one or many, and the descriptor has only the batch
@@ -77,14 +78,14 @@ rename Result 3").
 ## Syntax
 
 ```sql
-/* @Name="Sample Query" */
--- @Name="Open orders"
--- @name = "Says ""hello"""
+/* #Name="Sample Query" */
+-- #Name="Open orders"
+-- #name = "Says ""hello"""
 ```
 
 - The comment holds the marker and nothing else, apart from white space. Either comment form; a block comment may put
   the marker on a line of its own.
-- `@Name` is matched without regard to case. White space is allowed around `=`.
+- `#Name` is matched without regard to case. White space is allowed around `=`.
 - The name is in double quotes. A quote inside it is doubled. The name is trimmed and runs of white space become one
   space.
 - 1 to 128 characters after that (the length of a query tab's name, `tabNameChars`). No control characters, line
@@ -92,22 +93,25 @@ rename Result 3").
 - A malformed marker (no closing quote, text after it, empty, too long, a refused character) names nothing. It is an
   ordinary comment to the server either way.
 
-Why the quotes are required: commented-out T-SQL is full of `@name`.
+Why `#` and not `@`: the owner's first sketch was `@Name="…"`, changed on 2026-11-14 so a marker is never taken for a
+local variable or a parameter, by a reader or by the scanner. Commented-out T-SQL is full of `@name`:
 
 ```sql
 -- @Name NVARCHAR(100) = NULL,
 -- @name = 'Smith'
 ```
 
-A form that took the rest of the line would turn both into result names. T-SQL strings use single quotes, so
-`@Name="…"` does not turn up by accident.
+Why the quotes stay required: `#` starts temporary table names, so a form that took the rest of the line would make a
+result name of a commented-out `-- #Name (Id int, …)`. T-SQL strings use single quotes, so `#Name="…"` does not
+turn up by accident.
 
 ### Alternatives rejected
 
 | Alternative | Why not |
 | --- | --- |
 | `GO WITH NAME "…"` | SSMS, sqlcmd and Azure Data Studio fail on it, so the script stops being portable. It names a batch, not a statement, comes after what it names, and collides with `GO n`. |
-| `-- @name Sample Query` (rest of line) | Matches commented-out parameters and assignments, as above. |
+| `@Name="…"` | Reads as a variable or parameter; see above. |
+| `-- #name Sample Query` (rest of line) | Matches commented-out temporary table names, as above. |
 | Any comment before a statement is its title (DataGrip's default) | Every explanatory comment becomes a name. DataGrip itself offers a required prefix for this reason. |
 | `-- title: …` (DBeaver), `-- name: …` (sqlc) | Workable, but ordinary prose starts this way too ("-- name: the customer's"), and the owner's form is as short. |
 | A first column or `PRINT` that carries the name | Changes what the query returns or prints. |
@@ -117,7 +121,7 @@ Prior art: DataGrip titles a result tab from the comment before the query, optio
 reads `-- title:`; SQL Workbench/J reads `-- @WbResult Name` and takes the rest of the line. SSMS and Azure Data Studio
 have nothing. All three put the name in a comment before the statement, which is the owner's first idea.
 
-`@Key="value"` leaves room for other markers later. None is proposed here.
+`#Key="value"` leaves room for other markers later. None is proposed here.
 
 ## Binding rule
 
@@ -158,7 +162,7 @@ The cases:
 | Name at the end of a batch, or in a batch of comments only | Unused. A name never crosses a `GO`. |
 | The same name twice | Allowed. Both show it; lists also show each one's number ([Where the name shows](#where-the-name-shows)). |
 | `GO 3` | Each repetition's set gets the name; the repetition is already in the view's facts. |
-| `@Name="…"` in a string, or in a comment nested in another | Not a marker. Commenting out a block turns its markers off. |
+| `#Name="…"` in a string, or in a comment nested in another | Not a marker. Commenting out a block turns its markers off. |
 | Selection execute that leaves the marker out | No name. Selecting from the comment's line includes it. |
 | Estimated plan | Not result sets; nothing changes. |
 | Actual plan from the toolbar | Captured on another connection; no extra sets, nothing changes. |
@@ -166,15 +170,15 @@ The cases:
 | The batch does not parse | No names for that batch; one Messages line says so. The server reports the syntax error itself. |
 
 ```sql
--- @Name="Order"
--- @Name="Lines"
--- @Name="Totals"
+-- #Name="Order"
+-- #Name="Lines"
+-- #Name="Totals"
 EXEC dbo.GetOrder @OrderId = 42;
 ```
 
 ```sql
 EXEC dbo.RefreshStaging;      -- returns an unknown number of sets
--- @Name="Staged rows"        -- not applied; Messages says why
+-- #Name="Staged rows"        -- not applied; Messages says why
 SELECT * FROM dbo.Staging;
 ```
 
@@ -229,6 +233,22 @@ surface can show either or both.
   result across runs (Pivot drafts, highlights, the Compare popover's remembered choice) keeps following the ordinal.
   Editing the query so that "Open orders" moves from second to third leaves that state on the second result, as today.
 - **"Out of date"** is about a Table's filters and is not affected by names.
+- **The default query.** `welcomeQueryText` (`services/documents.ts`), the text of the query a new user starts with,
+  gains the marker and a line that says what it does, so the first F5 shows a named result:
+
+  ```sql
+  -- Connect this query to a server and press F5 to execute.
+  -- A #Name comment names the result that follows it.
+
+  /* #Name="Sample Query" */
+  SELECT
+      @@SERVERNAME AS server_name,
+      DB_NAME() AS database_name,
+      SYSDATETIME() AS server_time;
+  ```
+
+  The workbench, the output pane and the command catalogue read that constant (to know a query is still the untouched
+  default), so the PR checks each of them, and a session restored by hot exit that still holds the old text.
 - **Smoke locators.** `scripts/fixtures/ui.mjs` finds a grid by an accessible name that starts "Result 2". Unnamed
   results keep that; the locator gains a by-name form for the new checks.
 
@@ -279,6 +299,9 @@ optional field needs no protocol version change.
    - One naming function with the positional text apart; the hard-coded "Result N" sites moved to it; tab and caption
      ellipsis and its metric (`npx vitest run tests/theme-metrics.test.ts -u`); pickers showing and filtering on both;
      the accessible names; the by-name smoke locator.
+   - The default query gains the marker (above), here and not in PR 1, so a new user never sees a name that only some
+     surfaces show. Its users and `tests/sql-diagnostics-service.test.ts`, which holds the text, are updated, and
+     smoke suites that run the default query and look for "Result 1" move to the name.
    - Checks: `tests/results-caption.test.ts`, `tests/results-service.test.ts`, the Tabs and picker tests,
      `tests/compare-popover.test.ts`, `tests/results-pivot.test.ts`, grid accessible-name tests; a step in
      `scripts/results-smoke.mjs` and in the grouped-results suite (a named and an unnamed result in Tabs and Stacked,
@@ -294,7 +317,7 @@ optional field needs no protocol version change.
    - The marker drawn apart from ordinary comments (a decoration; the editor's second user of them after bookmarks).
    - A command, "Name Result", that inserts the marker above the caret's line (`src/shared/commands/catalog.ts`;
      `npx vitest run tests/commands-docs.test.ts -u`).
-   - A warning marker under a malformed `@Name`, under an owner of its own, apart from SQL Tools' diagnostics.
+   - A warning marker under a malformed `#Name`, under an owner of its own, apart from SQL Tools' diagnostics.
    - Checks: the scanner's vitest over the fixtures, command and menu tests, an editor smoke step.
    - Docs: `docs/language-services.md`, the `run-query` guide, CHANGELOG.
 
@@ -324,3 +347,5 @@ The owner accepted these on 2026-11-14.
 | Does selection execute look back for a marker? | No. |
 | Does state follow the name across runs? | Not in this work. |
 | Rename from the results pane? | Not in this work. The name shows on the Result tab and the Stacked caption; it is set only in the query text. |
+| `@Name` or `#Name`? | `#Name`, so it is not confused with variables and parameters. |
+| The default query? | It names its result, so new users see the feature at startup. |
