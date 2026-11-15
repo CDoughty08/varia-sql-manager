@@ -186,7 +186,7 @@ describe('closing one result', () => {
     const { results, run, tab, handle } = fixture()
     const keys = run(2)
     const list = await handle(1).distinct(0) as DistinctList & { close: ReturnType<typeof vi.fn> }
-    const view = { ...handle(1), viewId: 3, base: handle(1), keys: [], filters: [{ op: 'groups', column: 0, values: 1, nulls: false, keep: true }], rows: 1, baseRows: 2, complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView
+    const view = { ...handle(1), viewId: 3, base: handle(1), keys: [], filters: [{ op: 'groups', column: 0, snapshotId: 1, values: 1, nulls: false, keep: true, digest: 'e'.repeat(32) }], rows: 1, baseRows: 2, complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView
     handle(1).sort.mockResolvedValueOnce(view)
     expect(results.applyColumnFilter('t1', keys[0], 0, { kind: 'list', list, keep: true, values: [0], nulls: false } as never)).toBe(true)
     await settle()
@@ -392,7 +392,7 @@ describe('closing one result', () => {
       const first = 100 * (releasesRun.count++ + 1)
       const keys = run(2, 'q' + first, first)
       const list = await handle(first).distinct(0) as DistinctList & { close: ReturnType<typeof vi.fn> }
-      const view = { ...handle(first), viewId: 3, base: handle(first), keys: [], filters: [{ op: 'groups', column: 0, values: 1, nulls: false, keep: true }], rows: 1, baseRows: 2, complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView
+      const view = { ...handle(first), viewId: 3, base: handle(first), keys: [], filters: [{ op: 'groups', column: 0, snapshotId: 1, values: 1, nulls: false, keep: true, digest: 'e'.repeat(32) }], rows: 1, baseRows: 2, complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView
       handle(first).sort.mockResolvedValueOnce(view)
       results.applyColumnFilter('t1', keys[0], 0, { kind: 'list', list, keep: true, values: [0], nulls: false } as never)
       await settle()

@@ -660,14 +660,12 @@ Outcome, accepted by the owner:
         Pivot's recorded `filters` (PR 10's provenance) against `shownFilters`, the resolved filters of the view the
         Table's grid shows (none while it shows its stored rows). A view still being built does not count until it
         shows, so the mark changes with the grid. Nothing is stored for it, so nothing can fall out of step.
-      - `sameFilters` compares what filters keep: a `groups` filter by its column and snapshot (its other fields are
-        read from the snapshot), value and Keep Selected Rows filters by their rows in any order, a range by its two rows
-        in order, duplicates by its columns. Filters intersect, so their order counts only around a duplicates filter
-        (re-applying a filter moves it last, which changes nothing). Labels are not part of it, so naming a filter later
-        changes nothing. It compares the rows that stand for values, not the values: ticking the same values again in a
-        header's checklist makes a new snapshot, and a selection filter made again from other cells of the same values
-        resolves to other representative rows (the backend picks them from the cells selected), so either marks the
-        Pivot out of date though the rows kept are the same. That errs towards offering Update.
+      - `sameFilters` compares what filters keep: a `groups` filter by its digest, value and Keep Selected Rows filters by
+        their rows in any order, a range by its two rows in order, duplicates by its columns. Filters intersect, so their
+        order counts only around a duplicates filter (re-applying a filter moves it last, which changes nothing). Labels
+        are not part of it, so naming a filter later changes nothing. (PR 11 compared a `groups` filter by its snapshot
+        and value filters by the representative rows picked from the cells selected, so re-ticking the same values or
+        re-making a selection filter from other cells of the same values marked the Pivot; the follow-up below fixed it.)
       - Drawn on the Pivot's caption in Stacked, as the mock does: a warning chip "Out of date" and an **Update** button
         ("Update Pivot of Result N"), disabled while the query runs or the Table cannot be pivoted (its sort or filter
         being built, its rows lost). The strip starts with "Out of date: Result N's filters changed after this Pivot
@@ -695,9 +693,30 @@ Outcome, accepted by the owner:
         tab closing give an Update up through PR 10's rules, its late answer released, and nothing is said. After
         backend loss the Table cannot be pivoted, so Update is neither offered nor sent.
       - Left: rebuilding by itself (PR 17); a Pivot whose last build failed or was cancelled stays marked, with no
-        record of the failure on its caption (the toolbar's notice fades); comparing filters by the values they keep
-        rather than their representative rows and snapshots, so re-ticking the same values does not mark a Pivot (a
-        follow-up the owner asked for).
+        record of the failure on its caption (the toolbar's notice fades).
+    - **Filters compared by value** (the follow-up the owner asked for; `tests/results-pivot.test.ts`'s "does not mark a
+      Pivot for a filter made again of the same values", `FilterChecks`' lowest-row checks, `DistinctChecks`' digest
+      check and `results-smoke` step 13b2's selection and funnel cases hold its checks). No backend method was added;
+      `results.view` answers its resolved filters by value:
+      - A value filter (`in`, `notIn`, `between`) resolves each value to its lowest base row, whichever cells or rows
+        named it, so the same values give the same rows. Rows below a sealed row are sealed, so that row never changes as
+        more arrive. A view's first filter reads every row in base order anyway, so it finds them in its own pass
+        (`ViewSorter.KeepLowest`: In and NotIn from the binary search that decides a row, Between from its two
+        comparisons); a later one sees only the rows kept before it, so `ViewSorter.Lowest` finds them in a pass of its
+        own that stops once every value has met its lowest row, at the latest at the highest row named (at most 4,096
+        values, one binary search a row).
+      - A resolved `groups` filter carries `digest` (`DistinctSnapshot.Digest`), 32 hex digits of a SHA-256 of its column,
+        keep or drop, NULL and its frozen rows in value order, hashed once when the snapshot first filters, in 1 KiB chunks
+        outside the ticks' lock so nothing is held a row, and kept with the snapshot. A snapshot's rows are each the lowest
+        of the rows it grouped holding its value, so two snapshots over the same rows (the grid's other filters keeping
+        the same rows) that tick the same values have the same digest. The rows themselves are not sent: there is one
+        a distinct value, unbounded.
+      - Left: a `groups` filter and a value filter keeping the same values still differ (different ops, compared apart);
+        so do snapshots over different rows (another filter of the grid changed between) that freeze to the same rows
+        kept, and a snapshot frozen as `notIn` against one frozen as `in` (the result still loading, then complete).
+        Each errs towards offering Update. A filter's label reads its values from the resolved rows, so a selection
+        filter is named by its value's lowest row (under a CI collation 'a' for a selected 'A'), as the funnel's checklist
+        already lists that row's text.
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,

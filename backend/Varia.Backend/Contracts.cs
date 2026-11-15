@@ -140,7 +140,7 @@ internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// and highest). A "groups" filter comes back as it was asked, with whether it keeps (else drops) the Values it names, NULL
 /// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL. A "keepRows" filter
 /// comes back as the base Rows it keeps, ascending.</summary>
-internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null);
+internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null, string? Digest = null);
 /// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
 /// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
 /// or an estimated length.</summary>

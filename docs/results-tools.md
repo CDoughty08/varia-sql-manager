@@ -67,7 +67,8 @@ A Pivot records the filters of the result it was built from. When that result's 
 or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
 **Update** (in Tabs layout, on the row above the Pivot's grid, and its Pivot tab carries a dot), and its strip says so
 first. Sorting the result does not mark it, since the order of the rows changes no
-figure. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
+figure, and neither does a filter made again of the same values: ticking the same values again in a column's filter, or
+filtering by other cells that hold the same values. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
 last used) builds the Pivot again from what it
 was built with, not from an edit in the builder not yet built, over the result as it is filtered now, and replaces it as
 **Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or

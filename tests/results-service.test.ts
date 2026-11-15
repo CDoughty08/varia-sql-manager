@@ -1636,7 +1636,7 @@ describe('results service filters', () => {
     expect(filterLabel({ op: 'keepRows', rows: [7] }, columns)).toBe('1 selected row')
     expect(filterLabel({ op: 'keepRows', rows: Array.from({ length: 4095 }, (_, row) => row) }, columns)).toBe('4,095 selected rows')
     // A checklist's filter names what it keeps or drops: the one value, a count, NULL, or nothing at all.
-    const groups = { op: 'groups' as const, column: 1, snapshotId: 4 }
+    const groups = { op: 'groups' as const, column: 1, snapshotId: 4, digest: 'c'.repeat(32) }
     expect(filterLabel({ ...groups, keep: true, values: 1, nulls: false, row: 3 }, columns, ["'x'"])).toBe("Name = 'x'")
     expect(filterLabel({ ...groups, keep: false, values: 1, nulls: false, row: 3 }, columns, ["'x'"])).toBe("Name ≠ 'x'")
     expect(filterLabel({ ...groups, keep: false, values: 999_999, nulls: true }, columns)).toBe('Name not in (1,000,000 values)')
@@ -1719,13 +1719,13 @@ describe('results service filters', () => {
   it('names a checklist\'s filter by what the view says it keeps', async () => {
     const { service, handle } = filtered()
     const list = await handle.distinct(1)
-    handle.sort.mockResolvedValueOnce(resolvedView(handle, 1, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true }]))
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 1, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true, digest: 'c'.repeat(32) }]))
     service.applyColumnFilter('t1', keyAt(service, 't1', 0), 1, { kind: 'list', list })
     await settle()
     await settle()
     expect(service.sortOf('t1', keyAt(service, 't1', 0))?.filters[0]).toMatchObject({ label: '(No column name) not in (3 values)', named: true, list })
     // Built again (a sort), the filter goes as it was asked, and the grid keeps its snapshot.
-    handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true }]))
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true, digest: 'c'.repeat(32) }]))
     service.sortBy('t1', keyAt(service, 't1', 0), 0, 'ascending')
     await settle()
     expect(handle.sort.mock.lastCall?.[1]?.filters?.[0]).toMatchObject({ op: 'groups', column: 1, snapshotId: list.snapshotId })

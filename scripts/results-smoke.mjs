@@ -1750,7 +1750,58 @@ try {
   await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
   await expect(updatePivot).toHaveCount(0)
   await expect(pivoted).toBeFocused()
-  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update (caption or grid menu) builds it again in its slot from the filtered rows, keeping the focus.')
+  // A filter made again of the same values is no change: W1's active is 1 for ids 0 and 3. Filtering by id 0's value and
+  // updating, then removing it (out of date again) and filtering by id 3's leaves the Pivot up to date, as the backend
+  // resolves a value to its lowest row whichever cell named it.
+  // The grid draws only the columns in view, and a narrow window may leave active out: scroll to the last columns first.
+  const activeCell = async row => {
+    await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = element.scrollWidth })
+    const found = cell(row, 6, pivotTable)
+    await expect(found).toBeVisible()
+    return found
+  }
+  const filterActive = async (row, name) => {
+    const target = await activeCell(row)
+    await target.click()
+    await target.click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
+    await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name, exact: true }).click()
+  }
+  const pivotFilters = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
+  await filterActive(0, 'Filter for Selected Values')
+  await expect(updatePivot).toBeEnabled()
+  await updatePivot.click()
+  await expect(updatePivot).toHaveCount(0)
+  await pivotFilters.getByRole('button', { name: "Remove filter active = '1'", exact: true }).click()
+  await expect(updatePivot).toBeVisible()
+  await filterActive(3, 'Filter for Selected Values')
+  await expect(pivotFilters).toContainText("active = '1'")
+  await expect(updatePivot).toHaveCount(0)
+  // Likewise the header funnel: values ticked again in a new value list are no change. Its list of active, built and
+  // updated, then other values ticked (out of date) and the first ones ticked again leaves the Pivot up to date.
+  const tickActive = async (check, uncheck) => {
+    await (await activeCell(0)).click()
+    await page.keyboard.press('Alt+ArrowDown')
+    const list = page.getByRole('dialog', { name: 'Filter active', exact: true })
+    await list.getByRole('checkbox', { name: check, exact: true }).check()
+    await list.getByRole('checkbox', { name: uncheck, exact: true }).uncheck()
+    await list.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(list).toHaveCount(0)
+  }
+  await tickActive('0 (66)', '1 (34)')
+  await expect(pivotFilters).toContainText("active = '0'")
+  await expect(updatePivot).toBeEnabled()
+  await updatePivot.click()
+  await expect(updatePivot).toHaveCount(0)
+  await tickActive('1 (34)', '0 (66)')
+  await expect(pivotFilters).toContainText("active = '1'")
+  await expect(updatePivot).toBeVisible()
+  await tickActive('0 (66)', '1 (34)')
+  await expect(pivotFilters).toContainText("active = '0'")
+  await expect(updatePivot).toHaveCount(0)
+  await pivotFilters.getByRole('button', { name: "Remove filter active = '0'", exact: true }).click()
+  await expect(updatePivot).toBeVisible()
+  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update (caption or grid menu) builds it again in its slot from the filtered rows, keeping the focus; filtering again by the same values, from other cells or the header funnel, does not.')
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()

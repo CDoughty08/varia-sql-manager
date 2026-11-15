@@ -120,6 +120,19 @@ internal static class FilterChecks
         var single = Build(set, [], Cells(FilterOp.Between, 3, null, (0, 1)));
         check(Show(single.Order) == "0,2,5" && single.Filters[0].Rows is [0, 0] && Show(Build(set, [], single.Filters).Order) == "0,2,5",
             "Between over one value keeps that value, and its resolved rows (the same row twice) build it again");
+        // A value resolves to its lowest base row, whichever cells or rows named it, so filters of the same values compare equal.
+        check(Build(set, [], Cells(FilterOp.In, 1, null, (4, 2))).Filters[0].Rows is [0, 1] && Build(set, [], Named(FilterOp.NotIn, 1, [5, 4])).Filters[0].Rows is [0, 1]
+            && Build(set, [], Cells(FilterOp.In, 1, null, (2, 1))).Filters[0].Rows is [0],
+            "value filters resolve each value to its lowest row (b at 4 to 1, a at 5 or A at 2 to 0, by the column's collation)");
+        check(Build(set, [], Cells(FilterOp.Between, 3, null, (5, 2))).Filters[0].Rows is [0, 1] && Build(set, [], Cells(FilterOp.Between, 3, null, (5, 1))).Filters[0].Rows is [0, 0],
+            "Between resolves its two ends to their values' lowest rows (1 at 5 to 0, 2.0 at 6 to 1), one value's to that row twice");
+        var lateFirst = Build(set, [], Named(FilterOp.In, 0, [0, 1, 2, 4, 5, 6]), Cells(FilterOp.In, 1, null, (5, 1)));
+        check(Show(lateFirst.Order) == "0,2,5" && lateFirst.Filters[1].Rows is [0], "a later filter resolves to the lowest row of the result, not of the rows the ones before it kept");
+        // The first filter finds the lowest rows in its own pass, a later one in a pass of its own: they agree.
+        var everyId = Named(FilterOp.In, 0, [0, 1, 2, 3, 4, 5, 6]);
+        check(Build(set, [], everyId, Cells(FilterOp.Between, 3, null, (5, 2))).Filters[1].Rows is [0, 1] && Build(set, [], everyId, Cells(FilterOp.Between, 3, null, (5, 1))).Filters[1].Rows is [0, 0]
+            && Build(set, [], everyId, Cells(FilterOp.NotIn, 1, null, (4, 2))).Filters[1].Rows is [0, 1],
+            "a later Between or NotIn resolves to the same lowest rows as a first one, one value's Between to that row twice");
         var threw = Throws(() => Build(set, [], Cells(FilterOp.Between, 1, null, (3, 1))));
         check(threw == "INVALID_PARAMS", "Between over only NULL cells is refused");
         check(Throws(() => Build(set, [], Named(FilterOp.In, 1, [99]))) == "INVALID_PARAMS", "a filter row beyond the result is refused");

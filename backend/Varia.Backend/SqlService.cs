@@ -1828,7 +1828,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 var snapshot = store.FindSnapshot(args.ResultId, snapshotId) ?? throw SnapshotClosed();
                 if (snapshot.Column != listed) throw new RequestException("INVALID_PARAMS", "A groups filter's value list is of another column.");
                 var (kept, rows, nulls) = snapshot.Freeze();
-                filters[i] = new ViewFilter(kept, listed, rows, nulls, null, [], snapshotId);
+                filters[i] = new ViewFilter(kept, listed, rows, nulls, null, [], snapshotId, snapshot.Digest());
                 continue;
             }
             if (filter.SnapshotId is not null) throw new RequestException("INVALID_PARAMS", "Only a groups filter names a value list.");
@@ -1873,7 +1873,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
         FilterOp.KeepRows => new ViewFilterResult("keepRows", Rows: filter.Rows),
         _ when filter.Snapshot is { } snapshot => new ViewFilterResult("groups", filter.Column, Nulls: filter.Nulls, SnapshotId: snapshot, Keep: filter.Op == FilterOp.In,
-            Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null),
+            Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null, Digest: filter.Digest),
         _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)
     };
 
