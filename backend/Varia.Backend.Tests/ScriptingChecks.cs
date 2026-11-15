@@ -352,12 +352,16 @@ internal static class ScriptingChecks
         check(leading.All(comment => comment + "CREATE PROCEDURE p AS SELECT 1;" is var definition && !HeaderGuard.Safe(definition)
             && HeaderGuard.Aligned(["USE [db]", Header("p") + "\r\nSET ANSI_NULLS ON", definition], ["USE [db]", "SET ANSI_NULLS ON", definition])),
             "a definition that starts with an old header of any shape keeps SMO's headers beside it");
-        // SMO 181's own comment batch for a reference it could not resolve holds the name as is, with headers on or off.
-        string Banner(string name) => HeaderGuard.Unresolved("Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='" + name + "' and @Schema='dbo']");
-        check(Banner("t") == "/****** Cannot script Unresolved Entities : Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='t' and @Schema='dbo'] ******/",
-            "the comment SMO writes for an unresolved reference is rebuilt exactly as SMO 181 formats it");
-        var broken = new[] { Banner("x*/ DROP TABLE t /*"), Banner("a*/b") + "\r\n", Banner("n/*x"), Banner("a\r\nGO\r\nx*/ DROP TABLE t --"), Banner("a\r\nb"),
-            Banner("a ******/\r\nDROP TABLE t\r\n/****** b"), Banner("a" + (char)0x2028 + "b"), "/****** Future : x*/ DROP TABLE t /* ******/" };
+        // SMO 181's own comment batch for a reference it could not resolve, with headers on or off: the name as is, or "?"
+        // since 181.38.1 when it holds a comment delimiter. RawBanner is the as-is form earlier releases wrote for any name.
+        string Urn(string name) => "Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='" + name + "' and @Schema='dbo']";
+        string Banner(string name) => HeaderGuard.Unresolved(Urn(name));
+        string RawBanner(string name) => "/****** Cannot script Unresolved Entities : " + Urn(name) + " ******/";
+        check(Banner("t") == "/****** Cannot script Unresolved Entities : Server[@Name='srv']/Database[@Name='Sales']/UnresolvedEntity[@Name='t' and @Schema='dbo'] ******/"
+            && Banner("x*/ DROP TABLE t /*") == "/****** Cannot script Unresolved Entities : ? ******/" && Banner("n/*x") == Banner("a*/b") && Banner("a\r\nb") == RawBanner("a\r\nb"),
+            "the comment SMO writes for an unresolved reference is rebuilt exactly as SMO 181.38.1 formats it: \"?\" for a name with /* or */, any other as is");
+        var broken = new[] { RawBanner("x*/ DROP TABLE t /*"), RawBanner("a*/b") + "\r\n", RawBanner("n/*x"), RawBanner("a\r\nGO\r\nx*/ DROP TABLE t --"), Banner("a\r\nb"),
+            RawBanner("a ******/\r\nDROP TABLE t\r\n/****** b"), Banner("a" +(char)0x2028 + "b"), "/****** Future : x*/ DROP TABLE t /* ******/" };
         check(broken.All(batch => !HeaderGuard.Closed(batch)), "a comment batch of SMO's that a name ends early, nests a comment in, or breaks over lines fails the comment check");
         check(HeaderGuard.Closed(Banner("t")) && HeaderGuard.Closed(Banner("O''Brien") + "\n") && HeaderGuard.Closed(Header("p")) && HeaderGuard.Closed(Header("p") + "\r\nSET ANSI_NULLS ON")
             && HeaderGuard.Closed("SET ANSI_NULLS ON") && leading.All(comment => HeaderGuard.Closed(comment + "CREATE PROCEDURE p AS SELECT 1;"))

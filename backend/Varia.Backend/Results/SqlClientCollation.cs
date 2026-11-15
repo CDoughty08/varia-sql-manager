@@ -24,18 +24,19 @@ internal static class SqlClientCollation
     private static readonly PropertyInfo? Item = MetaData?.PropertyType.GetProperty("Item", Internal, null, null, [typeof(int)], null);
     // The type the indexer returns: SqlMetaDataPriv's subclass up to 7.1.1, TdsColumnMetadata (a TdsTypeInfo) from 7.1.2.
     private static readonly Type? Meta = Item?.PropertyType;
-    private static readonly FieldInfo? CollationField = Meta?.GetField("collation", Internal | BindingFlags.Public);
+    // Each found as a field or a property: 7.1.2 turned encoding and codePage into properties, and the rest may follow.
+    private static readonly (Type? Type, Func<object, object?>? Get) CollationMember = Member(Meta, "collation", "Collation");
     private static readonly (Type? Type, Func<object, object?>? Get) EncodingMember = Member(Meta, "encoding", "Encoding");
     private static readonly (Type? Type, Func<object, object?>? Get) CodePageMember = Member(Meta, "codePage", "CodePage");
-    private static readonly FieldInfo? NameField = Meta?.GetField("column", Internal | BindingFlags.Public);
-    private static readonly Type? Collation = CollationField?.FieldType;
+    private static readonly (Type? Type, Func<object, object?>? Get) NameMember = Member(Meta, "column", "Column");
+    private static readonly Type? Collation = CollationMember.Type;
     private static readonly PropertyInfo? Lcid = Collation?.GetProperty("LCID", Internal | BindingFlags.Public);
     private static readonly PropertyInfo? Options = Collation?.GetProperty("SqlCompareOptions", Internal | BindingFlags.Public);
     private static readonly PropertyInfo? Utf8 = Collation?.GetProperty("IsUTF8", Internal | BindingFlags.Public);
     private static readonly FieldInfo? SortId = Collation?.GetField("_sortId", Internal);
 
     /// <summary>Whether this SqlClient has the internals <see cref="Of"/> reads, with the types it expects.</summary>
-    public static bool Available { get; } = Meta is not null && NameField?.FieldType == typeof(string)
+    public static bool Available { get; } = Meta is not null && NameMember.Type == typeof(string)
         && EncodingMember.Type == typeof(Encoding) && CodePageMember.Type == typeof(int)
         && Lcid?.PropertyType == typeof(int) && Options?.PropertyType == typeof(SqlCompareOptions) && Utf8?.PropertyType == typeof(bool) && SortId?.FieldType == typeof(byte);
 
@@ -63,8 +64,8 @@ internal static class SqlClientCollation
             if (set is null) return null;
             var meta = Item!.GetValue(set, [ordinal]);
             // Hidden key columns (FOR BROWSE) could shift the indexer from the reader's ordinals: the name must agree.
-            if (meta is null || NameField!.GetValue(meta) as string != reader.GetName(ordinal)) return null;
-            var collation = CollationField!.GetValue(meta);
+            if (meta is null || NameMember.Get!(meta) as string != reader.GetName(ordinal)) return null;
+            var collation = CollationMember.Get!(meta);
             if (collation is null) return null;
             var utf8 = (bool)Utf8!.GetValue(collation)!;
             var encoding = utf8 ? null : EncodingMember.Get!(meta) as Encoding;
