@@ -17,7 +17,7 @@ import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, 
 import { filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
-import { ResultsService } from '../src/renderer/src/results/ResultsService'
+import { distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { formatCount } from '../src/renderer/src/results/status'
@@ -63,7 +63,9 @@ function fixture(queryNames: readonly (string | undefined)[] = []) {
   const results = new ResultsService({ client, api, events, frame: callback => callback() })
   results.begin('t1', 'q1')
   void results.finish('t1', 'q1', { summary: summaryOf([1, 2, 3].map(id => descriptor(id, { index: id - 1, ...rows, ...queryNames[id - 1] ? { name: queryNames[id - 1] } : {} }))) })
-  const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])!
+  // Titled as PivotService titles it: by Result 3's name, with its number when another result has that name.
+  const made = results.getSnapshot().t1.sets
+  const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${distinctName(made[2], made)}`, ['1:3'])!
   const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])!
   const [one, two, three] = results.getSnapshot().t1.sets.map(set => set.key)
   const listeners = new Set<() => void>()
@@ -1019,6 +1021,11 @@ describe('named results as tabs', () => {
     expect(resultTabs().slice(0, 3).map(button => button.getAttribute('aria-label'))).toEqual(['Totals, Result 1', null, 'Totals, Result 3'])
     expect(closer('Totals, Result 1')).toBeTruthy()
     expect(closer('Totals, Result 3')).toBeTruthy()
+    // On screen, the selected result's facts lead with its number, as a Stacked caption's do; an unnamed one's do not.
+    expect(document.querySelector('.rt-facts')!.textContent).toMatch(/^Result 1 · /)
+    act(() => { resultTabs()[1].click() })
+    draw()
+    expect(document.querySelector('.rt-facts')!.textContent).not.toMatch(/Result/)
     act(() => { resultTabs()[2].click() })
     draw()
     expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals (Result 3)')
@@ -1030,9 +1037,9 @@ describe('named results as tabs', () => {
     const rows = pickerRows(tab)
     expect(rows.map(row => [row.name, row.number])).toEqual([['Totals', 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Pivot', undefined], ['Differences: Result 1 → Result 2', undefined]])
     // Two results of one name are told apart by their numbers, which their accessible names carry.
-    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals, Result 3', 'Differences: Result 1 → Result 2, Comparison'])
-    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals, Result 3'])
-    expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals, Result 3'])
+    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)', 'Differences: Result 1 → Result 2, Comparison'])
+    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
+    expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
     expect(filterRows(rows, 'totals 1').map(row => row.label)).toEqual(['Totals, Result 1, Table'])
     // Go to Result N counts the top row's places, whatever the results are called.
     expect(jumpResult(tab, 1)).toBe(one)

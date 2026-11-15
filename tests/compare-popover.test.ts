@@ -497,8 +497,15 @@ describe('Compare popover with named results', () => {
     expect(info && [info.leftName, info.rightName]).toEqual(['Open orders', 'Result 2'])
     view.unmount()
   })
+  it("says in the Compare button the title the comparison will have, numbered when another result shares a side's name", () => {
+    const view = fixture({ count: 3, open: 1, names: { 0: 'Totals', 1: 'Orders', 2: 'Totals' } })
+    expect(view.button('Compare')!.title).toBe('Opens “Differences: Totals (Result 1) → Orders”, a copy that stays when its inputs close')
+    view.unmount()
+  })
   it('titles a comparison of two results of one name with their numbers, so it says which way round it is', async () => {
     const view = fixture({ names: { 0: 'Totals', 1: 'Totals' } })
+    // The sides carry their numbers in full in their tooltips, as a long name cuts the text short.
+    expect([...view.popover()!.querySelectorAll('.compare-side b')].map(side => side.getAttribute('title'))).toEqual(['Totals · Result 1', 'Totals · Result 2'])
     // The heading says which of the two is compared.
     expect(view.popover()?.querySelector('h2')?.textContent).toMatch(/^Compare Totals \(Result [12]\)/)
     vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))

@@ -607,11 +607,16 @@ describe('named results in the stack', () => {
     expect(toggles.map(toggle => toggle.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Pivot of Totals'])
     expect(toggles[0].textContent).toBe(long)
     // The splitters are named by the result above them, by its name when it has one.
-    expect(splitters()).toEqual([`Resize ${long}`, 'Resize Result 2', 'Resize Totals'])
+    expect(splitters()).toEqual([`Resize ${long}, Result 1`, 'Resize Result 2', 'Resize Totals, Result 3'])
     // The caption's buttons name it in full.
     expect(all('.rs-caption-close').map(button => button.getAttribute('aria-label'))[0]).toBe(`Close ${long}, Result 1`)
     // The name reaches the DOM as text, never as markup.
     expect(all('.rs-caption-name')[0].children).toHaveLength(0)
+  })
+  it('name the splitters of two results of one name with their numbers', () => {
+    const { draw, splitters } = fixture(['Totals', undefined, 'Totals'])
+    draw()
+    expect(splitters()).toEqual(['Resize Totals, Result 1', 'Resize Result 2', 'Resize Totals, Result 3'])
   })
   it('read a markup-like name as text', () => {
     const { draw, names, all } = fixture(['<b>bold</b> & "quoted"'])

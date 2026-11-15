@@ -50,9 +50,10 @@ export const queryName = (entry: Named): string | undefined => entry.descriptor?
  *  Result 3"), else "Result N" by its number. */
 export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? entryNumber(entry)
 /** An original result's own title where its number named it before names existed (its splitter, its plans, its copy and
- *  save jobs, the Column Profile, a comparison's columns not compared): the query's name for it, else "Result N". Unlike
+ *  save jobs, the Column Profile): the query's name for it with its number ("Totals, Result 3"), so two of one name are
+ *  told apart, else "Result N". Unlike
  *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
-export const resultTitle = (entry: Named): string => queryName(entry) ?? entryNumber(entry)
+export const resultTitle = (entry: Named): string => { const name = queryName(entry); return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}` }
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)

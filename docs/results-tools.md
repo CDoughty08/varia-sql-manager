@@ -241,15 +241,15 @@ result never renumbers another.
 
 | Surface | A named result |
 | --- | --- |
-| Result tab (Tabs) | The name. Its tooltip has the whole name and the number ("Open orders · Result 2"); its accessible name and its close button's carry the number ("Open orders, Result 2", "Close Open orders, Result 2"). |
+| Result tab (Tabs) | The name, with "Result 2" first among the selected result's facts beside its view tabs. Its tooltip has the whole name and the number ("Open orders · Result 2"); its accessible name and its close button's carry the number ("Open orders, Result 2", "Close Open orders, Result 2"). |
 | Caption (Stacked) | The name, with "Result 2" first among its facts; the tooltip has the whole name and the number, and the caption's toggle, filters, Save and Close buttons are named with the number, as a tab is. |
-| View tabs | Table and Pivot, as before; their accessible names use the name ("Views of Open orders", "Pivot of Open orders"). |
+| View tabs | Table and Pivot, as before; their accessible names use the name ("Views of Open orders", and the Pivot's title, "Pivot of Open orders"). |
 | Pivot | "Pivot of Open orders", in its title, the builder's source, "Out of date" and Update's tooltip ("Build Pivot of Open orders again from Open orders as it is filtered now"). |
 | Comparison | "Differences: Open orders → Result 3", its strip's links and the columns not compared ("Price (Open orders)"); a closed source reads "Open orders (closed)". |
 | Compare popover | Each result by its name, with "Result 2" beside it; the two sides read "Open orders · Result 2". |
 | Go to Result and the overflow picker | The name with "Result 2" beside it in lighter text (accessible name "Open orders, Result 2, Table"); the filter matches either ("open", "result 2"). |
 | Grid | Its accessible name starts "Open orders, Result 2 of 5, …", so a screen reader still hears the number. |
-| Column Profile, splitter, plans, copy and save strips | The name in place of "Result 2" ("Resize Open orders", "Open orders, plan 1"). |
+| Column Profile, splitter, plans | The name with its number in place of "Result 2" ("Resize Open orders, Result 2", "Open orders, Result 2, plan 1"). |
 | Memory details | The query tab, then the name and number ("Query 3 · Open orders · Result 2"); a narrow panel cuts the query tab's part first. |
 
 - A long name ends in an ellipsis: a tab that shows a name the query gave (a named result's, or a Pivot's or

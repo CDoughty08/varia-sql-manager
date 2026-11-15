@@ -454,7 +454,7 @@ try {
   expect(await captionFits(resultToggle(page, `${longName}, Result 3`))).toEqual({ fits: true, ellipsis: true })
   expect(await nameCut(resultToggle(page, 'Open orders, Result 1'))).toBe(false)
   await expect(namedResultGrid(page, longName)).toHaveAttribute('aria-label', new RegExp(`^${longName}, Result 3 of 3, `))
-  await expect(resultSplitters(page).first()).toHaveAttribute('aria-label', 'Resize Open orders')
+  await expect(resultSplitters(page).first()).toHaveAttribute('aria-label', 'Resize Open orders, Result 1')
   console.log('Results checks: a named result\'s caption shows its name and number, an unnamed one reads as before, a long name gives way with the whole name in its tooltip and grid name.')
 
   // 4b. The results head and captions: one run summary; a small set sized to its rows and the rest to the large one,

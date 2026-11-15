@@ -395,7 +395,7 @@ describe('results service', () => {
     void service.saveAs('t1', keyAt(service, 't1', 1), 'SQLQuery1')
     expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ suggestedName: 'SQLQuery1-Result2' }))
     flush()
-    expect(tab().jobs).toEqual([expect.objectContaining({ kind: 'save', label: 'Open orders' })])
+    expect(tab().jobs).toEqual([expect.objectContaining({ kind: 'save', label: 'Open orders, Result 2' })])
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()

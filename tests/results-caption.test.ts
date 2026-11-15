@@ -33,7 +33,7 @@ describe("a result's name and its number", () => {
   const unnamed = { number: 2, descriptor: {} }
   const pivot = { number: 4, label: 'Pivot of Open orders', descriptor: {} }
   it('names a named result by its name and keeps its number apart', () => {
-    expect([entryName(named), entryNumber(named), entrySecondary(named), resultTitle(named), queryName(named)]).toEqual(['Open orders', 'Result 2', 'Result 2', 'Open orders', 'Open orders'])
+    expect([entryName(named), entryNumber(named), entrySecondary(named), resultTitle(named), queryName(named)]).toEqual(['Open orders', 'Result 2', 'Result 2', 'Open orders, Result 2', 'Open orders'])
   })
   it('names an unnamed result by its number, exactly as before names', () => {
     expect([entryName(unnamed), entryNumber(unnamed), entrySecondary(unnamed), resultTitle(unnamed), queryName(unnamed)]).toEqual(['Result 2', 'Result 2', undefined, 'Result 2', undefined])

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { distinctName, entryName, pivotOutOfDate, spokenName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entrySecondary, pivotOutOfDate, spokenName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
@@ -87,8 +87,9 @@ export function tabsFold(height: number, scrollbar: number = scrollbarSize()): '
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
 const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number }) {
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const columns = entry.descriptor.columns.length
-  const facts = [rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const columns = entry.descriptor.columns.length, number = entrySecondary(entry)
+  // A named result's number leads its facts, as in its Stacked caption, so two tabs of one name are told apart on screen.
+  const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (entry.descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(entry.descriptor.batchNumber, entry.descriptor.iteration, totalBatches)
   if (batch) facts.push(batch)
@@ -408,7 +409,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
           const on = view.key === selected.key, pivot = view.view === 'pivot', marked = pivot && stale
           return <div key={view.key} className="rt-view" data-tab-entry={view.key} data-selected={on || undefined}>
             <button type="button" role="tab" id={tabIdOf(view.key, 'view')} aria-selected={on} tabIndex={on ? 0 : -1} {...on ? { 'aria-controls': id + 'panel' } : {}}
-              aria-label={pivot ? `Pivot of ${distinctName(group.table.entry, tab.sets)}` : group.planSet ? 'Plan set' : 'Table'} {...marked ? { 'aria-description': 'Out of date', title: "Out of date: its Table's filters changed" } : {}} onClick={() => select(view.key)}>
+              aria-label={pivot ? entryName(view.entry) : group.planSet ? 'Plan set' : 'Table'} {...marked ? { 'aria-description': 'Out of date', title: "Out of date: its Table's filters changed" } : {}} onClick={() => select(view.key)}>
               {pivot ? 'Pivot' : group.planSet ? 'Plan set' : 'Table'}{marked && <span className="rt-dot" aria-hidden="true" />}
             </button>
             {pivot && !tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${entryName(view.entry)}`} title={closeTitle(entryName(view.entry))} disabled={running}
