@@ -100,6 +100,22 @@ export const commandCatalog = {
     title: 'New Query', category: 'File', icon: 'new-file', precondition: '!documentBusy',
     keybindings: [{ key: 'mod+n' }], menus: [{ menu: 'file', group: '1_file', order: 1, mnemonic: 'n' }]
   },
+  // SSMS's default query shortcuts (Alt+F1 sp_help, Ctrl+1 sp_who, Ctrl+2 sp_lock) as palette commands, without keys:
+  // Ctrl+1 to Ctrl+9 pick query tabs and results, and Alt+F1 is a desktop key on some Linux desktops (os-keys.ts). Each opens
+  // a New Query with the call, which the user runs. sp_lock is deprecated and, as with SSMS's Ctrl+2, absent from Azure SQL
+  // Database (sys.dm_tran_locks replaces it).
+  'query.newSpHelp': {
+    title: 'New Query with sp_help', category: 'File', icon: 'new-file', precondition: '!documentBusy',
+    keywords: ['ssms', 'shortcut', 'procedure', 'object', 'describe', 'help']
+  },
+  'query.newSpWho': {
+    title: 'New Query with sp_who', category: 'File', icon: 'new-file', precondition: '!documentBusy',
+    keywords: ['ssms', 'shortcut', 'procedure', 'sessions', 'processes', 'who']
+  },
+  'query.newSpLock': {
+    title: 'New Query with sp_lock', category: 'File', icon: 'new-file', precondition: '!documentBusy',
+    keywords: ['ssms', 'shortcut', 'procedure', 'locks', 'blocking', 'transactions']
+  },
   'file.open': {
     title: 'Open File…', category: 'File', icon: 'folder-opened', precondition: '!documentBusy',
     keybindings: [{ key: 'mod+o' }], menus: [{ menu: 'file', group: '1_file', order: 2, title: 'Open…', mnemonic: 'o' }]
@@ -524,7 +540,7 @@ export const commandCatalog = {
   },
   // A browser's Ctrl+1 to Ctrl+9 (⌘ on macOS): the query tab at that place in tab order, Ctrl+9 the last. In the Results pane,
   // while its query has two or more results, the same keys pick results (output.goToResult*). Browser tab keys took them from SSMS's query shortcuts (Ctrl+1 sp_who,
-  // Ctrl+2 sp_lock), whose procedures can come back as palette commands.
+  // Ctrl+2 sp_lock), whose procedures are palette commands instead (query.newSpWho and the others beside file.new).
   'document.goToQuery1': {
     title: 'Go to Query 1', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+1', when: '!resultsFocus || !multipleResults' }]
