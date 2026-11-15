@@ -173,8 +173,8 @@ internal static partial class ViewSorter
             }
 
             /// <summary>Asked by a started worker between two items: false when the lease holds more than its share, and
-            /// the worker's thread has been handed back. A worker still queued is handed back first: it has started no
-            /// item, so this one goes on.</summary>
+            /// the worker's thread has been handed back; the worker then leaves the step with <see cref="Gone"/> once its
+            /// state is disposed. A worker still queued is handed back first: it has started no item, so this one goes on.</summary>
             internal bool Keep()
             {
                 if (Volatile.Read(ref held) <= Volatile.Read(ref target)) return true;
@@ -184,8 +184,15 @@ internal static partial class ViewSorter
                 {
                     if (held <= target) return true;
                     keep = loop!.Queued > 0;
-                    if (keep) loop.Queued--;
-                    Leave();
+                    if (keep)
+                    {
+                        loop.Queued--;
+                        Leave();
+                    }
+                    // The thread goes back now, but the worker stays in the step's count until its state is disposed, as
+                    // one that runs out of items does (Exit): the owner returns only once no worker holds what the step's
+                    // state captured (a read's pages and rooms).
+                    else gate.Free(this, 1);
                     gate.Grant(started);
                 }
                 gate.Start(started);
@@ -208,6 +215,13 @@ internal static partial class ViewSorter
                     gate.Grant(started);
                 }
                 gate.Start(started);
+            }
+
+            /// <summary>A worker <see cref="Keep"/> handed back has disposed its state and leaves the step.</summary>
+            internal void Gone(Loop step)
+            {
+                lock (gate.sync)
+                    if (--step.Pending == 0 && !step.Open) step.Done?.Set();
             }
 
             internal void Leave()
@@ -242,10 +256,11 @@ internal static partial class ViewSorter
 
             /// <summary>Runs <paramref name="body"/> for each of <paramref name="items"/> items, on the lease's own thread
             /// and the workers the gate starts for it, each worker with a <paramref name="state"/> of its own; returns when
-            /// all have run, or rethrows the first exception (a cancellation, or one a body threw) once every worker has
-            /// stopped. A worker over the lease's share hands its thread back between items, so items should be short
-            /// enough to give threads back promptly. A state that is <see cref="IDisposable"/> is disposed when its worker
-            /// stops (a fused read's room goes back to its pool).</summary>
+            /// all have run, or rethrows the first exception (a cancellation, or one a body or a state factory threw; a
+            /// state's failing Dispose only when nothing else failed) once every worker has stopped. A worker over the
+            /// lease's share hands its thread back between items, so items should be short enough to give threads back
+            /// promptly. A state that is <see cref="IDisposable"/> is disposed when its worker stops (a fused read's room
+            /// goes back to its pool).</summary>
             public void For<TState>(int items, Func<TState> state, Action<int, TState> body, CancellationToken token)
             {
                 if (items <= 0) return;
@@ -266,6 +281,7 @@ internal static partial class ViewSorter
                     // Threads held past its own, or a demand still at what it asked for, go back: the others' shares grow.
                     if (Count > 1 || Volatile.Read(ref demand) > 1) Settle();
                     var own = state();
+                    ExceptionDispatchInfo? failure = null;
                     try
                     {
                         for (var index = 0; index < items; index++)
@@ -274,7 +290,11 @@ internal static partial class ViewSorter
                             body(index, own);
                         }
                     }
-                    finally { (own as IDisposable)?.Dispose(); }
+                    catch (Exception error) { failure = ExceptionDispatchInfo.Capture(error); }
+                    // As on the workers: a state that fails to dispose is rethrown only when nothing else failed.
+                    try { (own as IDisposable)?.Dispose(); }
+                    catch (Exception error) { failure ??= ExceptionDispatchInfo.Capture(error); }
+                    failure?.Throw();
                     return;
                 }
                 // Not disposed: the last worker may still be returning from Set as the owner wakes, and an event that never
@@ -282,10 +302,13 @@ internal static partial class ViewSorter
                 var done = new ManualResetEventSlim(false);
                 var step = new Step<TState>(this, items, state, body, token) { Done = done };
                 Open(step, Math.Min(wanted, items));
+                // Work lets nothing out (a failure is recorded on the step), so the step is always closed and waited for: no
+                // worker runs on after the step has returned.
                 step.Work(owner: true);
                 Close();
                 done.Wait();
-                step.Failure?.Throw();
+                step.Drop();
+                (step.Failure ?? step.DisposeFailure)?.Throw();
             }
 
             /// <summary>A step on the owner's thread alone: threads the lease was given past it go back.</summary>
@@ -323,11 +346,37 @@ internal static partial class ViewSorter
         private sealed class Step<TState>(Lease lease, int items, Func<TState> state, Action<int, TState> body, CancellationToken token) : Loop
         {
             private int next, failed;
+            /// <summary>The first failure of a body or state factory, or a cancellation: what the step rethrows.</summary>
             public ExceptionDispatchInfo? Failure;
+            /// <summary>The first state that failed to dispose, rethrown only when nothing else failed, whichever thread
+            /// failed first. It stops no other worker (a worker disposes its state only once it takes no more items), so
+            /// the others still meet a cancellation, which stays a cancellation.</summary>
+            public ExceptionDispatchInfo? DisposeFailure;
+            // Workers the owner's Close took back stay in the thread pool's queue until a thread reaches them, which on a
+            // busy machine is long after the step ended; they then do nothing (Begin). The step lets go of its body and
+            // state when it ends, so those queued items no longer hold what the body captured: a read's pages (whose raw
+            // bytes packing would free), its rooms, its keys.
+            private Func<TState>? state = state;
+            private Action<int, TState>? body = body;
+
+            /// <summary>Lets go of the body and state once every worker has stopped and disposed its state (the owner's Done).</summary>
+            public void Drop()
+            {
+                state = null;
+                body = null;
+            }
 
             public override void Execute()
             {
                 if (lease.Begin(this)) Work(owner: false);
+            }
+
+            private void Fail(Exception error)
+            {
+                Interlocked.CompareExchange(ref Failure, ExceptionDispatchInfo.Capture(error), null);
+                Volatile.Write(ref failed, 1);
+                // The other workers take no more items: none would be used.
+                Volatile.Write(ref next, items);
             }
 
             public void Work(bool owner)
@@ -349,24 +398,25 @@ internal static partial class ViewSorter
                         if (index >= items) return;
                         if (!made)
                         {
-                            own = state();
+                            own = state!();
                             made = true;
                         }
-                        body(index, own);
+                        body!(index, own);
                     }
                 }
-                catch (Exception error)
-                {
-                    Interlocked.CompareExchange(ref Failure, ExceptionDispatchInfo.Capture(error), null);
-                    Volatile.Write(ref failed, 1);
-                    // The other workers take no more items: none would be used.
-                    Volatile.Write(ref next, items);
-                }
+                catch (Exception error) { Fail(error); }
                 finally
                 {
-                    // The lease is let go even if a state's Dispose throws, or the owner would wait for this worker forever.
+                    // A state that fails to dispose fails the step too (rethrown when nothing else failed), by the owner once the
+                    // step is closed: never thrown out of a worker's thread, which would end the process, nor past the owner's
+                    // Close. The lease is let go whatever happens, or the owner would wait for this worker forever.
                     try { if (made) (own as IDisposable)?.Dispose(); }
-                    finally { if (!owner && !handedBack) lease.Exit(); }
+                    catch (Exception error) { Interlocked.CompareExchange(ref DisposeFailure, ExceptionDispatchInfo.Capture(error), null); }
+                    finally
+                    {
+                        if (handedBack) lease.Gone(this);
+                        else if (!owner) lease.Exit();
+                    }
                 }
             }
         }
