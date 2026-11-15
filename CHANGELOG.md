@@ -78,6 +78,8 @@
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
 - **Results:** the notice for a running query that has filled its result memory, or that stopped keeping rows because the computer is low on memory, now has a **Stop query** button (Cancel Executing Query for that tab), reachable by keyboard, until the query ends. The row limit you set yourself only says it was reached.
 - **Results on a computer low on memory:** sorting, filtering, listing a column's values, profiling, comparing and pivoting a result are now refused when the computer is nearly full, saying it is low on memory, instead of taking more from a computer with none to spare: a large request at once, and work that takes its memory in pieces (long values, many differing cells) for every 64 MiB it holds. A profile first tries again on one thread, which holds less; a pivot's Distinct Count falls back to a slower way rather than take more.
+- **Opening several files:** in File › Open, one selected file that could not be read (access denied, removed meanwhile) no longer stops the others from opening; they open, and the message names the file that could not be read.
+- **Security:** the workbench window's permission checks are now refused like its permission requests, except writing the clipboard, instead of being granted by default.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
 
 ## [0.8.0] - 2026-11-10

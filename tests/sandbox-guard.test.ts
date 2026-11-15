@@ -130,9 +130,13 @@ describe('Chromium sandbox guard', () => {
     expect(main).toContain('const launchFiles = new LaunchQueue(launchFilesRefused(smokeProfile))')
     expect(main.match(/deliverWaiting\(/g)).toHaveLength(1)
     expect(main).toContain('deliverWaiting(launchFiles, {')
-    // All four sources reach the page only through that queue: nothing else calls what reads them.
-    expect(main.match(/openPaths/g)).toHaveLength(2)
+    // All four sources reach the page only through that queue: nothing else calls what reads them, except File › Open
+    // with the paths its own dialog returned (which no launching program chooses).
+    expect(main.match(/openPaths/g)).toHaveLength(3)
     expect(main).toContain('open: openPaths,')
+    const fileOpen = main.slice(main.indexOf("handle('varia:files-open'"), main.indexOf("handle('varia:files-save'"))
+    expect(fileOpen).toContain('dialog.showOpenDialog(')
+    expect(fileOpen).toContain('return openPaths(selected.filePaths)')
     expect(main.match(/launchFiles\.add\(/g)).toHaveLength(4)
     const handler = (start: string) => { const from = main.indexOf(start); expect(from, start).toBeGreaterThan(-1); return main.slice(from, from + 400) }
     for (const start of ["app.on('second-instance'", "app.on('open-file'", "ipcMain.on('varia:files-dropped'"]) expect(handler(start), start).toContain('launchFiles.add(')
@@ -192,9 +196,9 @@ describe('Chromium sandbox guard', () => {
     expect(main).toContain("const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })")
     expect(main).toContain("const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })")
     for (const store of ['RecentFilesStore', 'RecoveryStore', 'SessionStore']) expect(main.match(new RegExp(`new ${store}\\(`, 'g')), store).toHaveLength(1)
-    // Every read or registration of a path in main: launch files and Recent Files (openPath), a restored session
-    // (reopenDocument, twice), the Open dialog, and a recovered query. A new one needs its source checked against this rule.
-    expect(main.match(/files\.(read|register)\(/g)).toHaveLength(5)
+    // Every read or registration of a path in main: launch files, Recent Files and the Open dialog (openPath), a restored
+    // session (reopenDocument, twice), and a recovered query. A new one needs its source checked against this rule.
+    expect(main.match(/files\.(read|register)\(/g)).toHaveLength(4)
     expect(main).toContain('const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined')
     expect(main.match(/(?<!shell\.)\bopenPath\(/g)).toHaveLength(2)
     expect(main).toContain('open: openPath, describe: openFailure,')

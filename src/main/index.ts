@@ -26,7 +26,7 @@ import { saveDefaultPath } from './file-names'
 import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
-import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
+import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, openEach, secondInstanceSchema, type SecondInstanceData } from './launch-files'
 import { recentFilesMenuModel } from '../shared/files/recent'
 import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
@@ -58,6 +58,7 @@ import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
+import { installPermissionHandlers } from './permissions'
 import { PopoutWindows } from './popout-windows'
 import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
@@ -355,17 +356,12 @@ function openError(error: unknown): string {
 
 /**
  * Reads and registers files main was handed, never ones the page named: absolute paths to regular files, folders
- * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason".
+ * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason",
+ * and the rest still open (File › Open's selection too).
  */
-async function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
-  const opened: OpenSqlFile[] = [], errors: string[] = [], targets = files.targets()
-  for (const path of paths.slice(0, maxLaunchFiles)) {
-    try {
-      const file = await openPath(path, targets)
-      if (file) opened.push(file)
-    } catch (error) { errors.push(openFailure(path, error)) }
-  }
-  return { files: opened, errors }
+function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
+  const targets = files.targets()
+  return openEach(paths, path => openPath(path, targets), openFailure)
 }
 /** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
 async function openPath(path: string, targets: TargetCache = files.targets()): Promise<OpenSqlFile | undefined> {
@@ -600,11 +596,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('will-navigate', event => event.preventDefault())
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))
-  // The page may write the clipboard but has no permission to read it: it reads only through the Paste role, which runs
-  // within a second of a click or key, and its copies go through main. Every other permission stays denied.
-  contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
-    callback(requester === mainWindow?.webContents && 'isMainFrame' in details && details.isMainFrame && permission === 'clipboard-sanitized-write')
-  })
+  installPermissionHandlers(contents.session, () => mainWindow?.webContents)
   // Production pages also carry this policy in a <meta> (electron.vite.config.ts).
   const policy = contentSecurityPolicy(developmentUrl)
   contents.session.webRequest.onHeadersReceived((details, callback) => {
@@ -1118,11 +1110,10 @@ app.whenReady().then(async () => {
   }))
   handle('varia:files-open', async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, ...fileKinds.sqlplan.filters, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
-    if (selected.canceled) return []
+    if (selected.canceled) return { files: [], errors: [] }
     if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
-    const targets = files.targets(), opened = await Promise.all(selected.filePaths.map(path => files.read(path, { targets })))
-    for (const file of opened) void recent.add(file.path).catch(() => {})
-    return opened
+    // One file that cannot be read is reported by name; the others still open.
+    return openPaths(selected.filePaths)
   })
   handle('varia:files-save', async value => {
     const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']

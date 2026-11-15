@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ApiResult, OpenSqlFile, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, OpenedFiles, OpenSqlFile, VariaApi } from '../src/shared/contracts'
 import { FileService } from '../src/renderer/src/services/files'
 import type { QueryService } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
@@ -16,7 +16,7 @@ function fixture() {
   const doc = documentFixture()
   const api = {
     ...doc.api,
-    openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
+    openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
@@ -122,7 +122,7 @@ describe('file commands', () => {
   })
   it.each(['Actual.SQLPLAN', 'Exported.xml'])('opens %s as a disconnected plan and keeps its file registration and line endings', async name => {
     const { documents, api, commands, model } = fixture()
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('plan', 'C:/' + name), kind: 'sqlplan', content: '<ShowPlanXML/>', eol: 'crlf' }] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [{ ...openedFile('plan', 'C:/' + name), kind: 'sqlplan', content: '<ShowPlanXML/>', eol: 'crlf' }], errors: [] } })
     await commands.run('file.open')
     expect(documents.active).toMatchObject({ kind: 'sqlplan', database: '', connectionId: undefined, file: { id: 'plan' }, dirty: false })
     expect(model(documents.active!.id).language).toBe('xml')
@@ -161,11 +161,11 @@ describe('file commands', () => {
   it('captures the open-dialog target and opens multiple clean documents', async () => {
     const { documents, api, commands } = fixture()
     documents.update(documents.active!.id, { database: 'analytics' })
-    const pending = deferred<ApiResult<OpenSqlFile[]>>()
+    const pending = deferred<ApiResult<OpenedFiles>>()
     api.openSqlFiles.mockReturnValueOnce(pending.promise)
     const opening = commands.run('file.open')
     documents.create('other.sql', '', 'other-database', 'server-b')
-    pending.resolve({ ok: true, value: [openedFile('first', 'C:/first.sql'), openedFile('second', 'C:/second.sql')] })
+    pending.resolve({ ok: true, value: { files: [openedFile('first', 'C:/first.sql'), openedFile('second', 'C:/second.sql')], errors: [] } })
     await opening
     const opened = documents.getSnapshot().documents.filter(document => document.file)
     expect(opened.map(document => [document.connectionId, document.database, document.dirty])).toEqual([['server-a', 'analytics', false], ['server-a', 'analytics', false]])
@@ -179,7 +179,7 @@ describe('file commands', () => {
     model(tab.id).edit('SELECT unsaved')
     const activate = vi.fn()
     events.subscribe(event => { if (event.type === 'documents.activated') activate(event.tabId) })
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [file] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [file], errors: [] } })
     await commands.run('file.open')
     expect(documents.getSnapshot().documents).toHaveLength(2)
     expect(model(tab.id).getValue()).toBe('SELECT unsaved')
@@ -192,7 +192,7 @@ describe('file commands', () => {
     const tab = documents.create('Orders.sql', 'SELECT 1', 'master', 'server-a', false, openedFile('orders', 'C:/Orders.sql'))
     const activate = vi.fn()
     events.subscribe(event => { if (event.type === 'documents.activated') activate(event.tabId) })
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [openedFile('orders', 'C:/ORDERS.SQL')] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [openedFile('orders', 'C:/ORDERS.SQL')], errors: [] } })
     await commands.run('file.open')
     expect(documents.getSnapshot().documents.filter(document => document.file?.id === 'orders')).toHaveLength(1)
     expect(activate).toHaveBeenCalledWith(tab.id)
@@ -582,11 +582,11 @@ describe('file commands', () => {
     const { api, files, documents, commands } = fixture()
     const owned = openedFile('owned')
     documents.create(owned.name, owned.content, 'master', undefined, false, owned)
-    const pending = deferred<ApiResult<OpenSqlFile[]>>()
+    const pending = deferred<ApiResult<OpenedFiles>>()
     api.openSqlFiles.mockReturnValueOnce(pending.promise)
     const opening = commands.run('file.open')
     files.dispose()
-    pending.resolve({ ok: true, value: [owned, openedFile('unclaimed', 'C:/late.sql')] }); await opening
+    pending.resolve({ ok: true, value: { files: [owned, openedFile('unclaimed', 'C:/late.sql')], errors: [] } }); await opening
     expect(api.releaseSqlFile).toHaveBeenCalledExactlyOnceWith('unclaimed')
     expect(documents.getSnapshot().documents).toHaveLength(2)
   })
@@ -635,7 +635,7 @@ describe('Save All, line endings and file metadata', () => {
     const { documents, api, commands, models } = fixture()
     const crlf = { ...openedFile('crlf', 'C:/crlf.sql'), content: 'SELECT 1\r\nGO\r\n', eol: 'crlf' as const, encoding: 'utf16be' as const, readOnly: true }
     const mixed = { ...openedFile('mixed', 'C:/mixed.sql'), content: 'SELECT 1\nGO\r\n', eol: 'lf' as const, mixedEol: true, encoding: 'legacy' as const, codePage: 'Windows-1252' }
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [crlf, mixed] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [crlf, mixed], errors: [] } })
     await commands.run('file.open')
     const [, first, second] = documents.getSnapshot().documents
     expect(first).toMatchObject({ dirty: false, file: { id: 'crlf', encoding: 'utf16be', readOnly: true } })
@@ -655,7 +655,7 @@ describe('Save All, line endings and file metadata', () => {
   })
   it('shows the mixed line endings notice as a warning the next file task clears', async () => {
     const { api, commands, files } = fixture()
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('mixed', 'C:/mixed.sql'), eol: 'crlf', mixedEol: true }] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [{ ...openedFile('mixed', 'C:/mixed.sql'), eol: 'crlf', mixedEol: true }], errors: [] } })
     await commands.run('file.open')
     expect(files.getSnapshot()).toEqual({ error: 'Line endings in mixed.sql were mixed; it will be saved with CRLF line endings.', kind: 'warning' })
     await commands.run('file.save')
@@ -696,6 +696,14 @@ describe('files main opened, Recent Files and changes made outside', () => {
     await files.adopt({ files: [openedFile('a', 'C:/a.sql')], errors: ['b.sql: The file does not exist.', 'c.sql: Access to the file was denied.'] })
     expect(documents.getSnapshot().documents.some(document => document.file?.id === 'a')).toBe(true)
     expect(files.getSnapshot()).toEqual({ error: 'b.sql: The file does not exist. c.sql: Access to the file was denied.', kind: 'error' })
+  })
+  it('opens the readable files of a File › Open selection and reports the one that could not be read', async () => {
+    const { documents, files, api, commands } = fixture()
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: { files: [openedFile('a', 'C:/a.sql'), openedFile('c', 'C:/c.sql')], errors: ['b.sql: Access to the file was denied.'] } })
+    await commands.run('file.open')
+    expect(documents.getSnapshot().documents.filter(document => document.file).map(document => document.file!.id)).toEqual(['a', 'c'])
+    expect(files.getSnapshot()).toEqual({ error: 'b.sql: Access to the file was denied.', kind: 'error' })
+    expect(api.releaseSqlFile).not.toHaveBeenCalled()
   })
   it('waits behind a file task, as a script saved to a file does, instead of dropping the files', async () => {
     const { documents, files } = fixture()
