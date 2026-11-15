@@ -114,8 +114,25 @@ internal static class SmoOptionsMapper
     {
         var edition = Edition(profile.EngineEdition);
         var type = profile.EngineEdition is 5 or 6 or 11 ? DatabaseEngineType.SqlAzureDatabase : DatabaseEngineType.Standalone;
-        return (Version(profile.Major, warnings), edition, type);
+        return (Version(Major(profile), warnings), edition, type);
     }
+
+    /// <summary>The major version Script As targets for a server. Azure SQL Database (5) and Managed Instance (8) report
+    /// ProductMajorVersion 12 while running a current engine, so a script would target SQL Server 2014: SMO would leave out
+    /// newer features and ledger objects would be refused. There the probe's catalog markers decide instead (CatalogBand,
+    /// and vector_dimensions for the 2025 catalog), as Object Explorer's band does, capped at SMO's newest version so a
+    /// cloud server never warns that it is newer than SMO. Other editions keep the version they report.</summary>
+    public static int Major(ServerProfile profile) => profile.EngineEdition is 5 or 8
+        ? Math.Max(profile.Major, Math.Min(profile.VectorDimensions ? 17 : profile.CatalogBand, Newest.Number / 10))
+        : profile.Major;
+
+    /// <summary>Whether a pass would script a ledger table or view for a version older than SQL Server 2022, where SMO 181
+    /// drops the LEDGER clause and keeps the ledger columns: a script no older server runs. A DROP is the same everywhere.</summary>
+    public static bool LedgerNeedsNewer(string subtype, ScriptVerb pass, SqlServerVersion target) =>
+        pass != ScriptVerb.Drop && LedgerSubtypes.Contains(subtype) && Known.First(item => item.Value == target).Number < 160;
+
+    /// <summary>Ledger tables and views' catalogue subtypes.</summary>
+    private static readonly HashSet<string> LedgerSubtypes = ["updatableLedger", "appendOnlyLedger", "ledgerHistory", "ledger"];
 
     public static SqlServerVersion Version(int major, List<string>? warnings = null)
     {

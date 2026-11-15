@@ -302,7 +302,29 @@ internal static class ScriptingChecks
         var chosen = SmoOptionsMapper.Map(dto with { MatchSourceSettings = false, TargetServerVersion = "170", TargetEngineEdition = "personal" }, ScriptVerb.Create, Box2022, true);
         check(chosen.Target == SqlServerVersion.Version170 && chosen.Edition == DatabaseEngineEdition.Personal && chosen.EngineType == DatabaseEngineType.Standalone,
             "with Match script settings to source off, the version rows decide");
-        check(ScriptingErrors.VersionName(SqlServerVersion.Version130) == "SQL Server 2016" && ScriptingErrors.VersionName(SqlServerVersion.Version170) == "SQL Server 2025",
+        // Azure SQL Database and Managed Instance report ProductMajorVersion 12; the probe's catalog markers decide their target.
+        SqlServerVersion Capped(SqlServerVersion wanted) => SmoOptionsMapper.Known.First(item => item.Value == wanted).Number > newest.Number ? newest.Value : wanted;
+        var azureDb = Box2022 with { Major = 12, EngineEdition = 5, CatalogBand = 16, VectorDimensions = true };
+        var managed = Box2022 with { Major = 12, EngineEdition = 8, CatalogBand = 16, VectorDimensions = false };
+        var oldManaged = managed with { CatalogBand = 13 };
+        var cloudTargets = new (ServerProfile Profile, SqlServerVersion Expected, string Name)[]
+        {
+            (azureDb, Capped(SqlServerVersion.Version170), "Azure SQL Database with the 2025 catalog"), (managed, SqlServerVersion.Version160, "Managed Instance with the ledger catalog"),
+            (oldManaged, SqlServerVersion.Version130, "Managed Instance with only the temporal catalog"), (azureDb with { CatalogBand = 12, VectorDimensions = false }, SqlServerVersion.Version120, "a cloud server with no newer catalog markers"),
+            (Box2022 with { Major = 12, EngineEdition = 3, CatalogBand = 16, VectorDimensions = true }, SqlServerVersion.Version120, "a box server reporting 12"),
+            (Box2022 with { Major = 12, EngineEdition = 6, CatalogBand = 16 }, SqlServerVersion.Version120, "Azure Synapse")
+        };
+        var cloudWrong = cloudTargets.Where(item => SmoOptionsMapper.Map(dto, ScriptVerb.Create, item.Profile, true) is var mapped && (mapped.Target != item.Expected || mapped.Warnings.Count != 0))
+            .Select(item => item.Name).ToList();
+        check(cloudWrong.Count == 0, "Azure SQL Database and Managed Instance target the version their catalog shows, without a warning; other editions the version they report: " + string.Join(", ", cloudWrong));
+        var chosenOnCloud = SmoOptionsMapper.Map(dto with { MatchSourceSettings = false, TargetServerVersion = "130", TargetEngineEdition = "personal" }, ScriptVerb.Create, azureDb, true);
+        check(chosenOnCloud.Target == SqlServerVersion.Version130 && chosenOnCloud.Warnings.Count == 0, "with Match script settings to source off, a cloud server's catalog does not change the version rows' target");
+        check(!SmoOptionsMapper.LedgerNeedsNewer("updatableLedger", ScriptVerb.Create, SmoOptionsMapper.Map(dto, ScriptVerb.Create, managed, true).Target)
+            && !SmoOptionsMapper.LedgerNeedsNewer("appendOnlyLedger", ScriptVerb.Create, SmoOptionsMapper.Map(dto, ScriptVerb.Create, azureDb, true).Target)
+            && SmoOptionsMapper.LedgerNeedsNewer("ledgerHistory", ScriptVerb.Alter, SqlServerVersion.Version150) && !SmoOptionsMapper.LedgerNeedsNewer("ledger", ScriptVerb.Drop, SqlServerVersion.Version120)
+            && !SmoOptionsMapper.LedgerNeedsNewer("table", ScriptVerb.Create, SqlServerVersion.Version120),
+            "ledger tables and views script on a cloud server with the ledger catalog, and are refused only for older targets outside DROP");
+        check(ScriptingErrors.VersionName(SqlServerVersion.Version130) == "SQL Server 2016" &&ScriptingErrors.VersionName(SqlServerVersion.Version170) == "SQL Server 2025",
             "versions are named as the options page names them");
     }
 
