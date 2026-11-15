@@ -1200,6 +1200,9 @@ const fixtures = {
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves, and for ssis.operations. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
+  // A CANCEL that came while the request was logged or held: SqlService registers the request before it reads the next
+  // frame and its source starts on a cancelled token, so the stream ends at once, having sent nothing.
+  if (cancelled.delete(id)) return respond(id, { ended: 'cancelled', ticks: 0, elapsedMs: 0 })
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
   const operations = params.source === 'ssis.operations'
   if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')

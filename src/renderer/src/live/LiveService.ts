@@ -133,7 +133,11 @@ export interface LiveTable {
   readonly restarted?: boolean
 }
 export interface AppliedTick { readonly subscriptionId: string; readonly tick: LiveTick }
-export interface LiveFrames { readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number }
+export interface LiveFrames {
+  readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number
+  /** The view's next subscription waits for the end of one it stopped (restart), which has not arrived. */
+  readonly awaitingEnd: boolean
+}
 
 export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   /** Stable for the view's life; each subscription it makes has its own id (LiveSnapshot.subscriptionId). */
@@ -1195,7 +1199,7 @@ class Handle implements LiveHandle {
 
   frames(): LiveFrames {
     const { lastPatch, ...counts } = this.counts
-    return { ...counts, ...lastPatch ? { lastPatch } : {} }
+    return { ...counts, awaitingEnd: this.pendingStart, ...lastPatch ? { lastPatch } : {} }
   }
 
   /** The rings this handle wants for the history setting and each probe's interval (before memory caps). */

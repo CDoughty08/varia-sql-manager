@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolve } from 'node:path'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
 import { ResultsPortHost, supervisorResults, type PortMainLike } from '../src/main/backend/results-port'
 import { ResultClient, type PortMessageEvent, type ResultHandle, type WorkerLike } from '../src/renderer/src/results/ResultClient'
@@ -45,8 +47,8 @@ const backendStart = { timeout: 15000 }
 
 /** The fake backend's workbench mode behind main's supervisor and results port; with `custom`, the port is the caller's and
  *  opening it is left to the caller (a ResultClient asks for it); with `ready: false` it returns while the backend starts. */
-async function workbench<P extends PortMainLike = WorkerPort>(custom?: P, o: { ready?: boolean } = {}) {
-  const supervisor = new BackendSupervisor({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), 'workbench'], cwd: process.cwd(), packaged: false })
+async function workbench<P extends PortMainLike = WorkerPort>(custom?: P, o: { ready?: boolean; control?: string } = {}) {
+  const supervisor = new BackendSupervisor({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), 'workbench'], cwd: process.cwd(), ...o.control ? { env: { ...process.env, VARIA_TEST_BACKEND_DIR: o.control } } : {}, packaged: false })
   supervisors.push(supervisor)
   const port = custom ?? new WorkerPort()
   const host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => ({ port1: port, port2: {} }), testSources: true })
@@ -100,6 +102,29 @@ describe('live subscriptions through main', () => {
     // Its results went with it.
     expect(host.owns(1, latestTable(port, 1).descriptor.resultId)).toBe(false)
     expect(host.liveCount).toBe(0)
+  })
+
+  it('ends a subscription cancelled before the fake backend registered it, as SqlService does', async () => {
+    // The fake backend logs each request and checks its hold file before it starts a subscription; a CANCEL that came
+    // meanwhile (a view rebound to its tab's new connection at once, as chart-smoke's does) was dropped, so the stream
+    // ran on with no end and the view's next subscription, which waits for that end, never started.
+    const control = await mkdtemp(join(tmpdir(), 'varia-live-cancel-'))
+    try {
+      await mkdir(join(control, 'hold'))
+      await writeFile(join(control, 'hold', 'live.subscribe'), '')
+      const { supervisor, port } = await workbench(undefined, { control })
+      port.send({ t: 'live', rid: 1, generation: 1, params: params({ tickMs: 20 }) })
+      await expect.poll(async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).includes('"live.subscribe"')).toBe(true)
+      port.send({ t: 'cancel', rid: 1 })
+      // The fake reads frames in order: once a later request is answered, the CANCEL has been seen.
+      await supervisor.request('system.health', {})
+      await rm(join(control, 'hold', 'live.subscribe'))
+      await expect.poll(() => port.end(1)).toMatchObject({ ok: true, result: { ended: 'cancelled', ticks: 0 } })
+      expect(port.ticks(1)).toEqual([])
+    } finally {
+      await Promise.all(supervisors.splice(0).map(value => value.stop()))
+      await rm(control, { recursive: true, force: true })
+    }
   })
 
   it('keeps the last table of a source that ended until the renderer closes it', async () => {

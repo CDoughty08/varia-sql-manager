@@ -782,6 +782,8 @@ describe('LiveService', () => {
     expect(old.cancelled).toBe(true)
     expect(client.streams).toHaveLength(16)
     expect(handles[0].getSnapshot()).toMatchObject({ status: 'connecting', connectionId: otherConnection })
+    // Test mode's frames say why it is still connecting (chart-smoke prints them when a view never opens).
+    expect(service.frames(handles[0].id)).toMatchObject({ subscriptions: 1, awaitingEnd: true })
     // Moving again while it waits subscribes once, on the latest connection.
     const third = '9d3c1f0a-5e2b-4c7d-8a6f-1b2c3d4e5f60'
     views[0].move(third)
@@ -793,6 +795,7 @@ describe('LiveService', () => {
     expect(client.last.ended).toBe(false)
     expect(client.last.params.connectionId).toBe(third)
     deliver(client.last, opened(client.last))
+    expect(service.frames(handles[0].id)).toMatchObject({ subscriptions: 2, awaitingEnd: false })
     expect(handles[0].getSnapshot()).toMatchObject({ status: 'live', connectionId: third })
     // Losing the connection while it waits ends the view, and nothing subscribes later.
     const next = client.streams[1]
