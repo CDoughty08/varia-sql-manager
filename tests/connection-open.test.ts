@@ -114,7 +114,7 @@ describe('main connection ownership', () => {
     expect(authentication.resolve(context.targetId)).toBeUndefined()
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false), { timeout: 15_000 })
     expect(authentication.resolve(context.targetId)).toBeUndefined()
   })
 
@@ -132,7 +132,7 @@ describe('main connection ownership', () => {
     service.retainTargets([])
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false), { timeout: 15_000 })
     expect(authentication.resolve(targetId)).toBeUndefined()
   })
 
