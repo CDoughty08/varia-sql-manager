@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent, resizeWindow } from './fixtures/window-resize.mjs'
-import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator } from './fixtures/ui.mjs'
+import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator, expectEditorShown } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'options-resize-profile-'))
@@ -46,7 +46,7 @@ try {
   stage = 'editor readiness'
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // The fake connection can be ready before React has mounted and bound Monaco's model.
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   stage = 'initial query input'
   await replaceQuery()
   // Both heights fit the CI display; establish a different size so every held transition has a native event.

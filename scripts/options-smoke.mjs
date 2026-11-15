@@ -30,7 +30,7 @@ async function launch(fresh = false) {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
 async function close() {
@@ -440,7 +440,7 @@ try {
   await expect(field('Execution time-out')).toHaveValue('30')
   await page.keyboard.press('Escape')
   await page.reload()
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   // The workbench asked main for its settings before this call, so its answer is in once this one is.
   await page.evaluate(async () => { await window.varia.getSettings(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
   await expect(banner).toHaveCount(0)

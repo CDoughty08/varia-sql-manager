@@ -2,7 +2,7 @@ import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -36,7 +36,7 @@ async function launch(extra = {}, profile = undefined) {
   page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   return profile
 }
 /** Quits without the unsaved-query prompts (they would wait for a hidden dialog), killing the app if it hangs. */
@@ -194,7 +194,7 @@ try {
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
   await page.reload()
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   const reloaded = await ready(2)
   expect(reloaded.pid).not.toBe(first.pid)
   await expect(backendReady(page)).toHaveText('Ready')

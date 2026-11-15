@@ -33,6 +33,10 @@ export const part = {
   backendBanner: '.backend-banner',
   themeNotice: '.theme-notice',
   workbench: '.workbench',
+  /** A workbench panel's content (Object Explorer, the Query editor, an output panel), `data-pane` its id, and the Dockview
+   *  panel slot it is placed in; until placed it waits in a hidden holder. */
+  dockPane: '.dock-pane',
+  dockSlot: '.dock-slot',
   explorerPane: '.explorer',
   editorPane: '.editor-container',
   // Status bar and query status
@@ -392,6 +396,42 @@ export const statusBar = page => page.getByRole('contentinfo', { name: 'Status b
  * The status bar's backend segment once the backend is ready: Ready, with the runtime in its tooltip ('fake' for the
  * fake backend; by default the real one's .NET).
  */
+/**
+ * Where each workbench panel's content is and why it might not show: in its Dockview slot or still in the hidden holder,
+ * the computed visibility and box of the content and of Dockview's render overlay around it, plus the page's visibility
+ * and size. Plain data, for a failure message.
+ */
+export function workbenchPanes(page) {
+  return page.evaluate(({ pane, slot }) => {
+    const box = element => { const { x, y, width, height } = element.getBoundingClientRect(); return [x, y, width, height].map(Math.round).join(',') }
+    const style = element => { const computed = getComputedStyle(element); return `${computed.display}/${computed.visibility}` }
+    return {
+      visibilityState: document.visibilityState, hasFocus: document.hasFocus(), viewport: `${innerWidth}x${innerHeight}`,
+      panes: [...document.querySelectorAll(pane)].map(host => {
+        const placed = host.parentElement?.matches(slot) ? host.parentElement : null
+        // Dockview renders always-rendered panels in an overlay layer positioned over their group.
+        const overlay = placed?.closest('.dv-render-overlay')
+        return {
+          id: host.dataset.pane, placed: !!placed, holder: placed ? undefined : host.parentElement ? `${host.parentElement.tagName.toLowerCase()}${host.parentElement.hidden ? '[hidden]' : ''}` : 'detached',
+          host: `${style(host)} ${box(host)}`, overlay: overlay ? `${style(overlay)} ${box(overlay)} ${overlay.style.cssText}` : undefined
+        }
+      })
+    }
+  }, { pane: part.dockPane, slot: part.dockSlot })
+}
+
+/**
+ * Waits for the query editor a new window shows. When it does not show, the error says where each workbench panel's
+ * content was (workbenchPanes), so a launch that never shows its panels names the cause instead of only "hidden".
+ */
+export async function expectEditorShown(page, { timeout = 30000 } = {}) {
+  try { await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout }) } catch (error) {
+    const panes = await workbenchPanes(page).catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
+    error.message += '\nWorkbench panels: ' + JSON.stringify(panes, null, 2)
+    throw error
+  }
+}
+
 export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).getByTitle(new RegExp('^SQL backend: ' + (typeof runtime === 'string' ? runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : runtime.source)))
 /** The header's search box (the command centre). */
 export const searchBox = page => titleBar(page).getByRole('button', { name: 'Search', exact: true })

@@ -34,7 +34,7 @@ async function launch() {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
   await pinStackedResults(page)
   // Unsaved queries make exit ask first; answer Don't Save.
