@@ -1159,8 +1159,10 @@ describe('the search pickers in a popout', () => {
       const source = readFileSync(new URL('../src/renderer/src/search/' + file, import.meta.url), 'utf8')
       // A popout's pane is portalled into the popout's document from this window: the global window and document are the
       // main window's, so a resize or scroll in the popout would never reach them.
-      expect(source, file).not.toMatch(/\bwindow\.(add|remove)EventListener|\bdocument\.(add|remove)EventListener|\bdocument\.(documentElement|activeElement)/)
+      // A ResizeObserver made by the main window never fires for an element in a popout (core/windows.ts observeResize).
+      expect(source, file).not.toMatch(/\bwindow\.(add|remove)EventListener|\bdocument\.(add|remove)EventListener|\bdocument\.(documentElement|activeElement)|\bnew ResizeObserver\(/)
       expect(source, file).toMatch(/ownerDocument/)
+      expect(source, file).toMatch(/observeResize\(/)
     }
   })
 })

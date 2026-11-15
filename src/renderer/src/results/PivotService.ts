@@ -451,8 +451,6 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   private fail(tabId: string, ordinal: number, error: string, draft = true): void {
-    // A build that ends after its tab's results went has no builder to say it in.
-    if (!this.results.getSnapshot()[tabId]) return
     let errors = this.errors.get(tabId)
     if (!errors) this.errors.set(tabId, errors = new Map())
     errors.set(ordinal, { text: error, draft })
@@ -527,9 +525,6 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         if (!group || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
       }
     }
-    // A tab whose results went keeps nothing here: what its builds said and which filters they read go with it.
-    for (const tabId of [...this.errors.keys()]) if (!snapshot[tabId]) this.errors.delete(tabId)
-    for (const tabId of [...this.tried.keys()]) if (!snapshot[tabId]) this.tried.delete(tabId)
     const current = this.getSnapshot()
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {

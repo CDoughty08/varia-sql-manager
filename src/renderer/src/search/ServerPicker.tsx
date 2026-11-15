@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { environmentTag } from '../../../shared/environments'
 import { useConnectionAccent } from '../core/WorkbenchContext'
+import { observeResize } from '../core/windows'
 import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
 import type { LiveConnection } from '../services/connections'
@@ -144,13 +145,13 @@ export default function ServerPicker({ id, labelledBy, options, value, onChange 
   useLayoutEffect(() => {
     if (!open) return
     place()
-    const observer = new ResizeObserver(place)
-    if (button.current) observer.observe(button.current)
+    // From the pane's own window: one made by the main window never fires for an element in a popout.
+    const observer = button.current ? observeResize(button.current, place) : undefined
     // The window the pane is in, which is a popout's once it is popped out.
     const own = button.current?.ownerDocument ?? document, view = own.defaultView ?? window
     view.addEventListener('resize', place)
     own.addEventListener('scroll', place, true)
-    return () => { observer.disconnect(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
+    return () => { observer?.dispose(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
   }, [open])
   useLayoutEffect(() => {
     if (active !== undefined) panel.current?.querySelector(`#${CSS.escape(optionId(active))}`)?.scrollIntoView({ block: 'nearest' })

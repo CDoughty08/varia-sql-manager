@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { IconId } from '../../../shared/icons'
+import { observeResize } from '../core/windows'
 import Icon from '../Icon'
 
 interface Props {
@@ -45,13 +46,13 @@ export default function SearchPopover({ label, title, icon, active, compact, chi
       const first = popover.querySelector<HTMLElement>('input:checked') ?? popover.querySelector<HTMLElement>('input') ?? popover.querySelector<HTMLElement>('button')
       first?.focus()
     }
-    const observer = new ResizeObserver(place)
     const query = button.current?.closest('.object-search-query')
-    if (query) observer.observe(query)
+    // From the pane's own window: one made by the main window never fires for an element in a popout.
+    const observer = query ? observeResize(query, place) : undefined
     // The window the pane is in, which is a popout's once it is popped out.
     view.addEventListener('resize', place)
     own.addEventListener('scroll', place, true)
-    return () => { observer.disconnect(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
+    return () => { observer?.dispose(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
   }, [open])
   return <>
     <button ref={button} type="button" className={compact ? 'icon-button object-search-popover-button' : 'object-search-filter-button object-search-type-button'}

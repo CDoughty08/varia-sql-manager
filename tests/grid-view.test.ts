@@ -222,7 +222,11 @@ describe('a disposed grid', () => {
     const retries = (grid.view as unknown as { retries: Set<unknown> }).retries
     expect(grid.handle.measure).toHaveBeenCalled()
     expect(retries.size).toBeGreaterThan(0)
+    // Dispose cancels each pending retry, rather than leaving it to fire into a disposed grid.
+    const pending = [...retries], clear = vi.spyOn(globalThis, 'clearTimeout')
     grid.view.dispose()
+    for (const timer of pending) expect(clear).toHaveBeenCalledWith(timer)
+    clear.mockRestore()
     expect(retries.size).toBe(0)
     grid.root.remove()
   })
