@@ -490,6 +490,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly stripChoices = new Map<string, boolean>()
   /** Mounted grids, by entry key. */
   private readonly controllers = new Map<EntryKey, GridController>()
+  /** The grids drawn now: from a mount's first viewShown until it unregisters. */
+  private readonly drawing = new Set<EntryKey>()
   private readonly dirty = new Set<string>()
   private readonly announcements = new Map<string, unknown>()
   /** The last selection each tab's live region read out: an arrow key that leaves its size unchanged says nothing. */
@@ -667,6 +669,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   release(tabId: string): void {
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
+    this.operations.forget(tabId, { closed: true })
     this.views.delete(tabId)
     this.stripChoices.delete(tabId)
     this.selectionAnnounced.delete(tabId)
@@ -850,7 +853,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   registerGrid(tabId: string, key: EntryKey, controller: GridController): Disposable {
     if (!this.entry(this.runs.get(tabId), key)) return { dispose: () => {} }
     this.controllers.set(key, controller)
-    return { dispose: () => { if (this.controllers.get(key) === controller) this.controllers.delete(key) } }
+    return {
+      dispose: () => {
+        if (this.controllers.get(key) !== controller) return
+        this.controllers.delete(key)
+        this.drawing.delete(key)
+        // No grid draws it now (collapsed, or its tab switched away): the views it held close but the current one
+        // (drawnView), so a cleared sort's view does not wait for the grid to be shown again.
+        const run = this.runs.get(tabId)
+        if (run) this.closeHeld(run, key)
+      }
+    }
   }
   /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
   canFitColumn(tabId: string, key: EntryKey, column: number): boolean {
@@ -928,7 +941,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.schedule(tabId)
     running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
     let result
-    const view = run.sorts.get(set.key)?.view
+    // The view the selection's rows are positions in (a sort just built is not it until the grid has swapped to it).
+    const view = this.drawnView(run, set.key)
     try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
@@ -1242,7 +1256,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The grid now shows `view` (undefined: its result's own order): the views it held before close. */
   viewShown(tabId: string, key: EntryKey, view: ResultHandle | undefined): void {
     const run = this.runs.get(tabId), set = this.entry(run, key), held = set && run?.held.get(set.key)
-    if (!set || !held) return
+    if (!set) return
+    this.drawing.add(set.key)
+    if (!held) return
     held.shown = view
     this.closeHeld(run!, set.key)
   }
@@ -1281,7 +1297,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * with the arrow keys (which screen readers announce themselves) adds nothing.
    */
   announceSelection(tabId: string, text: string): void {
-    if (this.selectionAnnounced.get(tabId) === text) return
+    // A grid disposing after its tab closed has nothing to read out, and must not leave its sentence behind.
+    if (!this.runs.has(tabId) || this.selectionAnnounced.get(tabId) === text) return
     this.selectionAnnounced.set(tabId, text)
     this.announce(tabId, text)
   }
@@ -1312,6 +1329,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.noticeTimers.clear()
     this.operations.dispose()
     this.controllers.clear()
+    this.drawing.clear()
     this.contextStore.clear()
     this.setsStore.clear()
     this.steppableStore.clear()
@@ -1480,6 +1498,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.sorts = sorts
     }
     this.controllers.delete(key)
+    this.drawing.delete(key)
     if (this.copying && this.runs.get(this.copying.tabId) === run && this.copying.job.entry === key) this.cancelRunning(this.copying)
     run.setKeys.delete(setKey(old.descriptor))
     if (run.settled.has(setKey(old.descriptor))) {
@@ -1743,13 +1762,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }, () => { /* Labels keep their words without values. */ })
   }
 
+  /** The view a grid draws, which its selection's rows are positions in: a mounted grid's is the one it reported
+   *  (viewShown), which trails a sort built until the grid has swapped to it; a grid not mounted draws the current view
+   *  from the start of its next mount. Undefined: the result's own order. */
+  private drawnView(run: Run, key: EntryKey): ResultView | undefined {
+    return this.drawing.has(key) ? run.held.get(key)?.shown as ResultView | undefined : run.sorts.get(key)?.view
+  }
+
   /** Closes the grid's views but its current one and the one it shows. */
   private closeHeld(run: Run, index: EntryKey): void {
     const held = run.held.get(index)
     if (!held) return
     const keep = run.sorts.get(index)?.view
     for (const view of [...held.views]) {
-      if (view === keep || view === held.shown || held.pins?.has(view)) continue
+      if (view === keep || view === this.drawnView(run, index) || held.pins?.has(view)) continue
       held.views.delete(view)
       void view.close()
     }
@@ -1804,6 +1830,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         sorts.delete(key)
       }
       this.controllers.delete(key)
+      this.drawing.delete(key)
       run.entries.delete(key)
       const slot = run.slots.get(key)
       run.slots.delete(key)

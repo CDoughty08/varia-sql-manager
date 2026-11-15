@@ -105,6 +105,26 @@ describe('result operations', () => {
     expect(tab()).toBeUndefined()
   })
 
+  it('leaves nothing behind for a closed tab when its operations end after the close', () => {
+    const { operations, tick, tab } = fixture()
+    const pivot = operations.begin('t1', { kind: 'pivot', target: 'Result 1', entry: e1, cancel: () => {} })
+    const compare = operations.begin('t1', { kind: 'compare', target: 'Result 1 → Result 2', cancel: () => {} })
+    const other = operations.begin('t2', { kind: 'profile', target: 'Result 1', cancel: () => {} })
+    tick(g.operationShowDelayMs)
+    operations.forget('t1', { closed: true })
+    expect(tab()).toBeUndefined()
+    expect(operations.anyBuilding()).toBe(false)
+    // A cancel and a done that settle after the close say nothing and leave no strip or notice timer.
+    pivot.end('cancelled')
+    compare.end('done')
+    expect(tab()).toBeUndefined()
+    tick(g.operationNoticeMs + g.operationMinShownMs)
+    expect(tab()).toBeUndefined()
+    // Another tab's operations go on.
+    expect(tab('t2')?.items).toHaveLength(1)
+    other.end()
+  })
+
   it('reads a repeated sentence out again, tells the tab a refused Sort Text By came from, and marks only shown work held', () => {
     const { operations, tick, tab } = fixture()
     operations.begin('t1', { kind: 'sort', target: 'Result 1', entry: e1, cancel: () => {} })

@@ -1187,6 +1187,82 @@ describe('results service sorting', () => {
     await service.copy('t1', keyAt(service, 't1', 0), false)
     expect(api.copyResults.mock.lastCall![0]).not.toHaveProperty('viewId')
   })
+  it('copies a mounted grid\'s selection from the view it shows, not a sort built a frame before the grid swapped to it', async () => {
+    const { service, handle, api } = sorted()
+    const key = keyAt(service, 't1', 0), controller = { selectAll: () => {}, repaint: () => {}, fitColumn: () => {} }
+    // Mounted as ResultGrid mounts: it says what it shows, then registers.
+    service.viewShown('t1', key, undefined)
+    service.registerGrid('t1', key, controller)
+    const view = fakeView(handle, 7, [{ column: 0, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    service.sortBy('t1', key, 0, 'descending')
+    await settle()
+    expect(service.sortOf('t1', key)).toMatchObject({ view, sorting: false })
+    service.setSelection('t1', key, selectAll(key))
+    api.copyResults.mockResolvedValue({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
+    // The grid still shows the rows in SQL Server's order: the selection is in those rows.
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0]).not.toHaveProperty('viewId')
+    service.viewShown('t1', key, view)
+    await service.copy('t1', key, false)
+    expect(api.copyResults).toHaveBeenLastCalledWith(expect.objectContaining({ viewId: 7 }))
+    // Clear Sort: until the grid swaps back, its selection is still in the view's rows.
+    service.clearSort('t1', key)
+    await service.copy('t1', key, false)
+    expect(api.copyResults).toHaveBeenLastCalledWith(expect.objectContaining({ viewId: 7 }))
+    service.viewShown('t1', key, undefined)
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0]).not.toHaveProperty('viewId')
+  })
+  it('closes a cleared sort\'s view once no grid draws it, without waiting for the grid to be shown again', async () => {
+    const { service, handle } = sorted()
+    const key = keyAt(service, 't1', 0), controller = { selectAll: () => {}, repaint: () => {}, fitColumn: () => {} }
+    const view = fakeView(handle, 7, [{ column: 0, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    const mount = () => { service.viewShown('t1', key, service.sortOf('t1', key)?.view); return service.registerGrid('t1', key, controller) }
+    const registration = mount()
+    service.sortBy('t1', key, 0, 'descending')
+    await settle()
+    service.viewShown('t1', key, view)
+    // Clear Sort while the grid swaps back, then the grid is collapsed before it has.
+    service.clearSort('t1', key)
+    expect(view.close).not.toHaveBeenCalled()
+    registration.dispose()
+    expect(view.close).toHaveBeenCalledTimes(1)
+    // A grid unmounted with a sort keeps its view: its next mount shows it.
+    const kept = fakeView(handle, 8, [{ column: 0, descending: false, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(kept)
+    const again = mount()
+    service.sortBy('t1', key, 0, 'ascending')
+    await settle()
+    service.viewShown('t1', key, kept)
+    again.dispose()
+    expect(kept.close).not.toHaveBeenCalled()
+    // Sorted again while no grid draws it (a rebuild once the rows are in, a sort from the palette): the view the grid last
+    // drew closes as soon as the new one is built, since the next mount shows the new one.
+    const newer = fakeView(handle, 9, [{ column: 0, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(newer)
+    service.sortBy('t1', key, 0, 'descending')
+    await settle()
+    expect(kept.close).toHaveBeenCalledTimes(1)
+    expect(newer.close).not.toHaveBeenCalled()
+    // Cleared while no grid draws it: nothing is held for a grid that will mount on SQL Server's order.
+    service.clearSort('t1', key)
+    expect(newer.close).toHaveBeenCalledTimes(1)
+  })
+  it('reads out no selection of a closed tab and leaves no operation behind for it', async () => {
+    const { service } = sorted()
+    // A Pivot's or comparison's ticket, which its owner ends only once its answer settles, after the close.
+    const ticket = service.operations.begin('t1', { kind: 'compare', target: 'Result 1 → Result 2', cancel: () => {} })
+    expect(service.operations.getSnapshot().t1).toBeDefined()
+    service.release('t1')
+    expect(service.operations.getSnapshot().t1).toBeUndefined()
+    service.announceSelection('t1', '2 rows selected')
+    ticket.end('cancelled')
+    await settle()
+    expect(service.operations.getSnapshot().t1).toBeUndefined()
+    expect((service as unknown as { selectionAnnounced: Map<string, string> }).selectionAnnounced.has('t1')).toBe(false)
+  })
   it('copies and saves a grid drawn transposed as drawn: its orientation, header column and the selection it shows', async () => {
     const { service, handle, api, tab, flush, timers } = sorted()
     const key = keyAt(service, 't1', 0), state = service.gridState('t1', key), cap = limits.transpose.maxRows
