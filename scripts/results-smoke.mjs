@@ -2258,9 +2258,10 @@ try {
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
 
-  // 14c2. A sort in progress: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
+  // 14c2. A sort in progress, in a 1024-wide window as on CI's displays: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
   // as a ring with the percentage on the sorted column's button and a bar along the grid. Sorting and filtering wait: a
   // second click is refused, not queued. Cancel keeps the order the grid had and says so; the controls are live again.
+  await resize(1024, 740)
   const holdSort = join(control, 'hold', 'results.view')
   await writeFile(holdSort, '')
   await header('clipped').hover()
@@ -2279,8 +2280,10 @@ try {
   await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
   await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
   await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
-  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by' }).getByRole('button', { name: 'Chars' })).toHaveAttribute('aria-disabled', 'true')
+  // A pane too narrow for the strip and every tool folds Sort text by into ⋯; held, its buttons say so either way.
+  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by', includeHidden: true }).getByRole('button', { name: 'Chars', includeHidden: true })).toHaveAttribute('aria-disabled', 'true')
   await operationCancel(page, 'Cancel sort, Result 1').click()
+  await resize(...fullSize)
   await expect(sorting).toHaveCount(0)
   await expect(operationNotice(page)).toHaveText('Sort cancelled. The grid kept its previous order.')
   await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
