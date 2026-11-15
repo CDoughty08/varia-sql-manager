@@ -195,9 +195,12 @@ describe('the stacked results', () => {
     expect(grids()).toEqual([one, three, pivot])
     expect(splitters()).toEqual(['Resize Result 1', 'Resize Result 3'])
     expect([...results.viewState('t1').collapsed]).toEqual([])
-    // Collapsing the entry now second collapses Result 3.
+    // Collapsing the entry now second collapses Result 3, and the results publish it (a Pivot expanded again is shown,
+    // and follows its Table's filters).
+    const published = results.getSnapshot().t1
     toggle(1)
     expect([...results.viewState('t1').collapsed]).toEqual([three])
+    expect(results.getSnapshot().t1).not.toBe(published)
     // The focused entry going takes its group with it (the Pivot too) and leaves the entry before to take the focus.
     results.removeEntry('t1', three)
     draw()

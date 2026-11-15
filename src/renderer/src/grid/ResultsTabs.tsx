@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, entryOf, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, pivotOutOfDate, selectedEntry, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize } from '../core/windows'
 import { gridLimits as g } from './constants'
@@ -9,11 +9,7 @@ import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
 import { minGridHeight } from './stack'
 
-/** The view the Tabs layout shows: the entry whose grid last had the focus, else the run's first. While a run streams the
- *  first stays selected, since results arrive after it; a tab the user picks is focused, so it stays picked. */
-export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'>): ResultSetEntry | undefined {
-  return entryOf(tab.sets, tab.focused) ?? tab.sets[0]
-}
+export { selectedEntry }
 
 /** One item of the top row: a group (its Table and Pivot) or a comparison. */
 export interface TopItem { readonly key: EntryKey; readonly name: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
@@ -192,7 +188,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const seen = pivots.current
     pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot && setKey(item.pivot.entry.descriptor)]))
     if (!seen) return
-    const built = tab.groups.filter(item => item.pivot && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
+    // A Pivot that rebuilt by itself was shown when it started, and the user may have gone back to its Table since: it
+    // selects nothing.
+    const built = tab.groups.filter(item => item.pivot && !item.pivot.pivot?.followed && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
     const shown = group && !group.planSet ? built.find(item => item === group) : built[0]
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!shown?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return

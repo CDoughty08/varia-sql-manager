@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ResolvedViewFilter, ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
-import { pivotGroup, PivotService } from '../src/renderer/src/results/PivotService'
+import { followsByItself, pivotFollow, pivotGroup, PivotService, pivotShown, type PivotFollowHost, type ResultsLayout } from '../src/renderer/src/results/PivotService'
 import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNumericColumn, outOfDateText, pivotFacts, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
 import { carriedState, pivotOutOfDate, resultLimits, ResultsService, sameFilters, setKey, uniqueNames } from '../src/renderer/src/results/ResultsService'
 import { DerivedJobs, derivedLimits } from '../src/renderer/src/results/derived-jobs'
@@ -11,13 +11,14 @@ import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixt
 import { manualTimers } from './fixtures/workbench'
 import { keyAt } from './fixtures/entries'
 import { deferred } from './fixtures/documents'
+import { selectAll } from '../src/renderer/src/grid/selection'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 const column = (name: string, dataType: string, patch: Partial<ResultColumn> = {}): ResultColumn => ({ name, dataType, wire: 'text', nullable: true, ...patch }) as ResultColumn
 const columns = [column('Region', 'nvarchar(20)'), column('Year', 'int'), column('Amount', 'decimal(10,2)'), column('Flag', 'bit'), column('Blob', 'varbinary(max)', { wire: 'binary' })]
 
 /** `frames`: the results publish on frames the test runs (`flush`), not at once. */
-function fixture(o: { frames?: boolean; jobs?: DerivedJobs } = {}) {
+function fixture(o: { frames?: boolean; jobs?: DerivedJobs; follow?: PivotFollowHost; now?: () => number } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
@@ -26,7 +27,7 @@ function fixture(o: { frames?: boolean; jobs?: DerivedJobs } = {}) {
   }
   const queued: (() => void)[] = []
   const results = new ResultsService({ client, api, events, frame: o.frames ? callback => { queued.push(callback) } : callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const pivot = new PivotService(results, o.jobs ? { jobs: o.jobs } : {})
+  const pivot = new PivotService(results, { ...o.jobs ? { jobs: o.jobs } : {}, ...o.follow ? { follow: o.follow } : {}, ...o.now ? { now: o.now } : {} })
   const flush = () => { for (const frame of queued.splice(0)) frame() }
   let next = 1
   /** Runs a query of `count` complete sets of `columns`; `finish: false` leaves it running. */
@@ -200,7 +201,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: table, sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false, partial: false })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, pivot: sets[2].key })
     // The slot records what the build read: its recipe, no filters (it read the stored rows), its rows, and a whole source.
-    expect(tab.groups[1].pivot!.pivot).toEqual({ recipe: { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, filters: [], inputRows: 3, truncated: false, incomplete: false, approximate: false })
+    expect(tab.groups[1].pivot!.pivot).toEqual({ recipe: { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, filters: [], inputRows: 3, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
     // Edit Pivot: opened on the Pivot, the builder starts from its recipe, whatever the draft became since.
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
     pivot.open('t1', sets[2].key)
@@ -692,7 +693,7 @@ describe('PivotService', () => {
     await settle()
     expect(filtered.close).toHaveBeenCalledOnce()
     // The Pivot records the filters it applied.
-    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toEqual({ recipe: emptyDraft, filters: [{ op: 'in', column: 0, rows: [2], nulls: false }], inputRows: 1, truncated: false, incomplete: false, approximate: false })
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toEqual({ recipe: emptyDraft, filters: [{ op: 'in', column: 0, rows: [2], nulls: false }], inputRows: 1, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
     // The backend evicted the grid's view, which stays evicted: the build runs once more over the same order and filters
     // built again for it alone, and closes that view after.
     const evicted = new ResultError('VIEW_NOT_FOUND', 'This sorted view was closed. Sort the results again.')
@@ -1275,5 +1276,802 @@ describe('an out-of-date Pivot and Update', () => {
     await pivot.update('t1', old)
     expect(shown.pivot).not.toHaveBeenCalled()
     expect(pivot.getSnapshot().building).toEqual({})
+  })
+})
+
+describe("a Pivot following its Table's filters", () => {
+  const view = (first: FakeHandle, viewId: number, filters: ResultView['filters']) => ({ ...first, viewId, base: first, keys: [], filters, rows: 1, baseRows: 3, complete: true, approximate: false, close: vi.fn(async () => {}), pivot: vi.fn<ResultHandle['pivot']>() }) as unknown as ResultView & { close: ReturnType<typeof vi.fn>; pivot: ReturnType<typeof vi.fn> }
+  const pivoted = (resultId: number, rows = 1) => ({ descriptor: descriptor(resultId, { index: 0, kind: 'pivot' }), rows, rowGroups: 1, columnGroups: 0, approximate: false })
+  const wait = async () => { for (let i = 0; i < 40; i++) await Promise.resolve() }
+  /** A results pane laid out as `layout` (which a test changes, as the setting would), a clock a build's answer can move
+   *  (`clock.ms`), and a run of `count` sets whose first group has a Pivot built over its stored rows in `buildMs`. */
+  async function following(o: { layout?: ResultsLayout; count?: number; buildMs?: number } = {}) {
+    let layout: ResultsLayout = o.layout ?? 'stacked'
+    const listeners = new Set<() => void>(), clock = { ms: 0 }
+    // The Results panel shares one dock group with the other output panels unless a test docks them apart (`panel`):
+    // picking Messages then shows Messages in its place, as the dock would report.
+    const panel: { results?: boolean } = {}
+    const host: PivotFollowHost = {
+      layout: () => layout, resultsShowing: () => panel.results ?? base.results.getSnapshot().t1?.view === 'results',
+      onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+    }
+    const base = fixture({ follow: host, now: () => clock.ms })
+    const { results, pivot, run } = base
+    const handles = run(o.count ?? 1)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    vi.mocked(handles[0].pivot).mockImplementationOnce(async () => { clock.ms += o.buildMs ?? 40; return pivoted(801, 3) })
+    await pivot.run('t1')
+    await wait()
+    const setLayout = (next: ResultsLayout) => { layout = next; for (const listener of listeners) listener() }
+    /** Docks the Results panel apart and says whether it shows (`undefined`: back in the shared group). */
+    const setPanel = (results: boolean | undefined) => { panel.results = results; for (const listener of listeners) listener() }
+    /** Shows `shown` in the Table's grid, as a filter (or sort, by `column`) the backend built would. */
+    const show = async (shown: ResultView, column = 0) => {
+      vi.mocked(handles[0].sort).mockResolvedValueOnce(shown)
+      results.sortBy('t1', one, column, 'ascending')
+      await settle()
+      results.viewShown('t1', one, shown)
+      await wait()
+    }
+    const group = () => results.getSnapshot().t1.groups[0]
+    const stale = () => pivotOutOfDate(results.getSnapshot().t1, group())
+    return { ...base, first: handles[0], handles, one, clock, setLayout, setPanel, show, group, stale }
+  }
+
+  it("rebuilds a shown Pivot by itself when its Table is filtered, from its own recipe, under the owner's figures", async () => {
+    const { results, pivot, first, show, group, stale, client } = await following()
+    expect(pivotFollow).toEqual({ maxSourceRows: 500_000, maxLastBuildMs: 250 })
+    const old = group().pivot!
+    expect(old.pivot).toMatchObject({ filters: [], buildMs: 40 })
+    // The draft is edited and not built: the rebuild does not take it.
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    const filtered = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    filtered.pivot.mockResolvedValueOnce(pivoted(901, 1))
+    await show(filtered)
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(filtered.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(group().pivot).toMatchObject({ key: old.key, revision: 2, entry: { descriptor: { resultId: 901 } }, pivot: { filters: [{ op: 'in', column: 0, rows: [2], nulls: false }] } })
+    expect(stale()).toBe(false)
+    expect(client.released()).toEqual([801])
+    expect(pivot.getSnapshot().building).toEqual({})
+    expect(results.getSnapshot().t1.jobNotice).toBe('')
+    // A sort alone changes no aggregate, so nothing is built.
+    const sorted = view(first, 2, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    await show(sorted, 1)
+    expect(sorted.pivot).not.toHaveBeenCalled()
+  })
+
+  it('stays marked with Update past 500,000 stored rows or a last build of 250 ms or more, and follows at the limits', async () => {
+    // Rows: the Table's stored rows, whatever its filters keep.
+    let f = await following()
+    f.first.snapshot = { ...f.first.snapshot, rowsStored: 500_001 }
+    let filtered = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    expect(followsByItself(f.group())).toBe(false)
+    // Update still builds it on request.
+    filtered.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.pivot.update('t1', f.one)
+    expect(f.stale()).toBe(false)
+    // At 500,000 it follows.
+    f.first.snapshot = { ...f.first.snapshot, rowsStored: 500_000 }
+    filtered = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    filtered.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(filtered)
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    // Time: the last build's, from taking its place to its answer. 250 ms is not under 250.
+    f = await following({ buildMs: 250 })
+    expect(f.group().pivot!.pivot!.buildMs).toBe(250)
+    filtered = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // An Update that takes 249 ms makes the next change follow by itself.
+    filtered.pivot.mockImplementationOnce(async () => { f.clock.ms += 249; return pivoted(903) })
+    await f.pivot.update('t1', f.one)
+    expect(f.group().pivot!.pivot!.buildMs).toBe(249)
+    filtered = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    filtered.pivot.mockResolvedValueOnce(pivoted(904))
+    await f.show(filtered)
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+  })
+
+  it('measures a build from when it takes its place, leaving out its wait for one', async () => {
+    const jobs = new DerivedJobs()
+    const clock = { ms: 0 }
+    const { results, pivot, run } = fixture({ jobs, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    // Every place is taken by other work for 5 s; the build itself then takes 30 ms.
+    const others = Array.from({ length: derivedLimits.parallel }, () => deferred<void>())
+    const held = others.map(other => jobs.run(() => other.promise))
+    pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => { clock.ms += 30; return pivoted(801) })
+    const building = pivot.run('t1')
+    clock.ms += 5000
+    others[0].resolve()
+    await building
+    for (const other of others) other.resolve()
+    await Promise.all(held)
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot!.buildMs).toBe(30)
+  })
+
+  it('leaves a hidden Pivot marked and rebuilds it when it is shown: a collapsed item expanded, its view tab selected, Results shown again', async () => {
+    // Stacked: collapsed is its caption alone.
+    const f = await following({ count: 2 })
+    const pivotKey = f.group().pivot!.key
+    f.results.setCollapsed('t1', new Set([pivotKey]))
+    let filtered = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    filtered.pivot.mockResolvedValue(pivoted(901))
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // Collapsing another item changes nothing; expanding the Pivot rebuilds it.
+    f.results.setCollapsed('t1', new Set([pivotKey, keyAt(f.results, 't1', 2)]))
+    await wait()
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    // Tabs: the Table's view tab is selected while it is filtered, so the Pivot is hidden until its own tab is.
+    f.setLayout('tabs')
+    f.results.focusEntry('t1', f.one)
+    filtered = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    filtered.pivot.mockResolvedValue(pivoted(902))
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    // Another group's tab selected: still hidden.
+    f.results.focusEntry('t1', keyAt(f.results, 't1', 2))
+    await wait()
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    f.results.focusEntry('t1', pivotKey)
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    // Messages shown in place of Results: hidden; Results again: shown.
+    f.results.setView('t1', 'messages')
+    filtered = view(f.first, 3, [{ op: 'in', column: 0, rows: [4], nulls: false }])
+    filtered.pivot.mockResolvedValue(pivoted(903))
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    f.results.setView('t1', 'results')
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    // Switching the layout shows it too: in Tabs with its Table selected it is hidden; stacked and expanded it is shown.
+    f.results.focusEntry('t1', f.one)
+    filtered = view(f.first, 4, [{ op: 'in', column: 0, rows: [5], nulls: false }])
+    filtered.pivot.mockResolvedValue(pivoted(904))
+    await f.show(filtered)
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    f.setLayout('stacked')
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    // What shown means, as a function of the run, the layout and the collapsed items.
+    const tab = f.results.getSnapshot().t1
+    expect(pivotShown(tab, f.group(), 'stacked', new Set(), true)).toBe(true)
+    expect(pivotShown(tab, f.group(), 'stacked', new Set(), false)).toBe(false)
+    expect(pivotShown(tab, f.group(), 'stacked', new Set([pivotKey]), true)).toBe(false)
+    expect(pivotShown(tab, f.group(), 'tabs', new Set(), true)).toBe(false)
+    expect(pivotShown({ ...tab, focused: pivotKey }, f.group(), 'tabs', new Set([pivotKey]), true)).toBe(true)
+    expect(pivotShown({ ...tab, bare: true }, f.group(), 'stacked', new Set(), true)).toBe(false)
+    expect(pivotShown(tab, { pivot: undefined }, 'stacked', new Set(), true)).toBe(false)
+  })
+
+  it('gives up the build in flight when the filters change again, publishing only the last; a build the user started is not overtaken', async () => {
+    const f = await following()
+    const old = f.group().pivot!
+    const a = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const slow = deferred<ReturnType<typeof pivoted>>()
+    let signal: AbortSignal | undefined
+    a.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { signal = o?.signal; return slow.promise })
+    await f.show(a)
+    expect(f.pivot.building('t1', 1)).toBe(true)
+    const b = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    const second = deferred<ReturnType<typeof pivoted>>()
+    b.pivot.mockImplementationOnce(() => second.promise)
+    await f.show(b)
+    expect(signal?.aborted).toBe(true)
+    expect(b.pivot).toHaveBeenCalledOnce()
+    // The first answers late: released, nothing published; the old Pivot is still the group's.
+    slow.resolve(pivoted(901))
+    await wait()
+    expect(f.client.released()).toContain(901)
+    expect(f.group().pivot).toBe(old)
+    second.resolve(pivoted(902))
+    await wait()
+    expect(f.group().pivot).toMatchObject({ key: old.key, revision: 2, entry: { descriptor: { resultId: 902 } }, pivot: { filters: b.filters } })
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    // Undoing the change while a rebuild is in flight gives it up too: the Pivot already matches.
+    const c = view(f.first, 3, [{ op: 'in', column: 0, rows: [4], nulls: false }])
+    const third = deferred<ReturnType<typeof pivoted>>()
+    let thirdSignal: AbortSignal | undefined
+    c.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { thirdSignal = o?.signal; return third.promise })
+    await f.show(c)
+    const back = view(f.first, 4, b.filters)
+    await f.show(back)
+    expect(thirdSignal?.aborted).toBe(true)
+    expect(back.pivot).not.toHaveBeenCalled()
+    third.resolve(pivoted(903))
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+    // An Update the user started reads the filters it was asked over; a change meanwhile does not give it up, and once it
+    // publishes, the Pivot (out of date again) follows the newer filters.
+    const d = view(f.first, 5, [{ op: 'in', column: 0, rows: [5], nulls: false }])
+    f.results.setCollapsed('t1', new Set([old.key]))
+    await f.show(d)
+    const updating = deferred<ReturnType<typeof pivoted>>()
+    let updateSignal: AbortSignal | undefined
+    d.pivot.mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => { updateSignal = o?.signal; return updating.promise })
+    const update = f.pivot.update('t1', f.one)
+    f.results.setCollapsed('t1', new Set())
+    const e = view(f.first, 6, [{ op: 'in', column: 0, rows: [6], nulls: false }])
+    e.pivot.mockResolvedValueOnce(pivoted(905))
+    await f.show(e)
+    expect(updateSignal?.aborted).toBe(false)
+    expect(e.pivot).not.toHaveBeenCalled()
+    updating.resolve(pivoted(904))
+    await update
+    await wait()
+    expect(e.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot).toMatchObject({ entry: { descriptor: { resultId: 905 } }, pivot: { filters: e.filters } })
+  })
+
+  it('keeps the old Pivot and its mark when a rebuild fails, is refused or cancelled, and does not ask again for the same filters', async () => {
+    const f = await following()
+    const kept = f.group().pivot!
+    const filtered = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    filtered.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await f.show(filtered)
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot).toBe(kept)
+    expect(f.stale()).toBe(true)
+    // The toolbar says why: nobody asked for this build, and the builder may be closed or on another group.
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('There is not enough result memory to pivot these rows. Close other results and try again, or close Pivot of Result 1 and build it again.')
+    // Publishes that change nothing it reads (a sort over the same filters, hiding and showing it) ask nothing more.
+    const sorted = view(f.first, 2, filtered.filters)
+    await f.show(sorted, 1)
+    f.results.setCollapsed('t1', new Set([kept.key]))
+    await wait()
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(sorted.pivot).not.toHaveBeenCalled()
+    // Other filters try again; this time the user cancels it from the caption: the old Pivot stays, marked, and the same
+    // filters are not tried again.
+    const other = view(f.first, 3, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    const slow = deferred<ReturnType<typeof pivoted>>()
+    other.pivot.mockImplementationOnce(() => slow.promise)
+    await f.show(other)
+    expect(f.pivot.building('t1', 1)).toBe(true)
+    f.pivot.cancel('t1', 1)
+    slow.resolve(pivoted(911))
+    await wait()
+    expect(f.group().pivot).toBe(kept)
+    expect(f.stale()).toBe(true)
+    expect(f.client.released()).toContain(911)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('Building was cancelled, so Pivot of Result 1 still shows its last build.')
+    f.results.setCollapsed('t1', new Set([kept.key]))
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(other.pivot).toHaveBeenCalledOnce()
+    // Update stays offered and builds it on request.
+    other.pivot.mockResolvedValueOnce(pivoted(912))
+    await f.pivot.update('t1', f.one)
+    expect(f.stale()).toBe(false)
+  })
+
+  it("rebuilds once when a rebuild changes nothing it is compared by, and once for filters of the same rows told apart (PR 11's false positives)", async () => {
+    const f = await following()
+    // The backend closed the view: the rebuild runs over the same filters built again, which resolve in another form
+    // (as a snapshot that froze another way would). The Pivot stays marked; nothing loops.
+    const filtered = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    filtered.pivot.mockRejectedValueOnce(new ResultError('VIEW_NOT_FOUND', 'The view was closed.'))
+    const rebuilt = view(f.first, 9, [{ op: 'notIn', column: 0, rows: [1, 3], nulls: true }])
+    rebuilt.pivot.mockResolvedValueOnce(pivoted(901))
+    vi.mocked(f.first.sort).mockResolvedValueOnce(filtered).mockResolvedValueOnce(rebuilt)
+    f.results.sortBy('t1', f.one, 0, 'ascending')
+    await settle()
+    f.results.viewShown('t1', f.one, filtered)
+    await wait()
+    expect(rebuilt.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.stale()).toBe(true)
+    // Other publishes (the focus moving, a collapse round trip) build nothing more.
+    f.results.focusEntry('t1', f.group().pivot!.key)
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(filtered.pivot).toHaveBeenCalledOnce()
+    expect(rebuilt.pivot).toHaveBeenCalledOnce()
+    // A header checklist, then the same values ticked over other rows (another digest): told apart, so one rebuild each,
+    // and none after it.
+    const checklist = view(f.first, 2, [{ op: 'groups', column: 1, snapshotId: 4, keep: true, values: 2, nulls: false, digest: '1'.repeat(32) }])
+    checklist.pivot.mockResolvedValue(pivoted(902))
+    await f.show(checklist)
+    expect(checklist.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    const again = view(f.first, 3, [{ op: 'groups', column: 1, snapshotId: 5, keep: true, values: 2, nulls: false, digest: '2'.repeat(32) }])
+    again.pivot.mockResolvedValue(pivoted(903))
+    await f.show(again)
+    await f.show(view(f.first, 4, again.filters), 1)
+    expect(again.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    // The same values ticked again (the same digest): nothing at all.
+    const same = view(f.first, 5, [{ ...again.filters[0], snapshotId: 6 } as ResolvedViewFilter])
+    await f.show(same)
+    expect(same.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(false)
+  })
+
+  it('tries filters again after giving up their rebuild itself, follows at once when a user build fails, and leaves a user cancel alone', async () => {
+    const f = await following()
+    // F1, its rebuild in flight; the change undone (given up); F1 made again: rebuilt, since F1 was never built over.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const slow = deferred<ReturnType<typeof pivoted>>()
+    f1.pivot.mockImplementationOnce(() => slow.promise)
+    await f.show(f1)
+    await f.show(view(f.first, 2, []))
+    const again = view(f.first, 3, f1.filters)
+    again.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(again)
+    expect(again.pivot).toHaveBeenCalledOnce()
+    expect(f.stale()).toBe(false)
+    slow.resolve(pivoted(900))
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    // Build Pivot (the user's) over F2, the filters changed to F3 while it runs, and it fails: F3 is followed at once,
+    // with no other publish needed.
+    const f2 = view(f.first, 4, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f2)
+    let reject: (error: unknown) => void = () => {}
+    const failing = { promise: new Promise<ReturnType<typeof pivoted>>((_, no) => { reject = no }), reject: (error: unknown) => reject(error) }
+    f2.pivot.mockImplementationOnce(() => failing.promise)
+    f.pivot.open('t1', f.one)
+    const building = f.pivot.run('t1')
+    f.results.setCollapsed('t1', new Set())
+    const f3 = view(f.first, 5, [{ op: 'in', column: 0, rows: [4], nulls: false }])
+    f3.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f3)
+    expect(f3.pivot).not.toHaveBeenCalled()
+    failing.reject(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await building
+    await wait()
+    expect(f3.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot).toMatchObject({ entry: { descriptor: { resultId: 902 } }, pivot: { filters: f3.filters } })
+    // An Update over F4, the filters changed to F5 while it runs, cancelled from the caption: nothing starts by itself.
+    const f4 = view(f.first, 6, [{ op: 'in', column: 0, rows: [5], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f4)
+    const updating = deferred<ReturnType<typeof pivoted>>()
+    f4.pivot.mockImplementationOnce(() => updating.promise)
+    const update = f.pivot.update('t1', f.one)
+    f.results.setCollapsed('t1', new Set())
+    const f5 = view(f.first, 7, [{ op: 'in', column: 0, rows: [6], nulls: false }])
+    await f.show(f5)
+    f.pivot.cancel('t1', 1)
+    updating.resolve(pivoted(903))
+    await update
+    await wait()
+    expect(f5.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('Building was cancelled, so Pivot of Result 1 still shows its last build.')
+  })
+
+  it("keeps a failed Build Pivot's reason when the Pivot then follows the filters from its own recipe, and marks a followed build", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // Another recipe in the draft, built over F1; the filters change to F2 while it runs, and it is refused.
+    f.pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    let reject: (error: unknown) => void = () => {}
+    f1.pivot.mockImplementationOnce(() => new Promise((_, no) => { reject = no }))
+    const building = f.pivot.run('t1')
+    f.results.setCollapsed('t1', new Set())
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    reject(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await building
+    await wait()
+    // The Pivot follows F2 from its own recipe, not the draft, and the builder still says why the Build Pivot failed.
+    expect(f2.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.anything())
+    expect(f.group().pivot).toMatchObject({ entry: { descriptor: { resultId: 902 } }, pivot: { filters: f2.filters, followed: true } })
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('There is not enough result memory to pivot these rows. Close other results and try again, or close Pivot of Result 1 and build it again.')
+    // A build the user asks for clears it and is not marked as followed.
+    f2.pivot.mockResolvedValueOnce(pivoted(903))
+    await f.pivot.run('t1')
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(f.group().pivot!.pivot!.followed).toBeUndefined()
+  })
+
+  it('releases an automatic answer that lands after a copy of the Pivot started, before the copy is published', async () => {
+    const clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    const pivotKey = f.results.getSnapshot().t1.groups[0].pivot!.key
+    // F1's rebuild runs.
+    const f1 = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const answer = deferred<ReturnType<typeof pivoted>>()
+    f1.pivot.mockImplementationOnce(() => answer.promise)
+    vi.mocked(first.sort).mockResolvedValueOnce(f1)
+    f.results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    f.flush()
+    f.results.viewShown('t1', one, f1)
+    f.flush()
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    // The user copies the Pivot, and the rebuild's answer lands before the next frame publishes the copy.
+    const copying = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(copying.promise)
+    f.results.setSelection('t1', pivotKey, selectAll(pivotKey))
+    const copied = f.results.copy('t1', pivotKey, false)
+    answer.resolve(pivoted(901))
+    await wait()
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(f.client.released()).toContain(901)
+    expect(f.results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(801)
+    // The copy ends: the same filters are built again.
+    f1.pivot.mockResolvedValueOnce(pivoted(902))
+    copying.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await copied
+    f.flush()
+    await wait()
+    f.flush()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(902)
+  })
+
+  it("holds a rebuild by itself back while the user's copy of the Pivot runs, giving up one in flight, and follows once it ends", async () => {
+    const f = await following()
+    const pivotKey = f.group().pivot!.key
+    // A copy of the Pivot runs when the Table is filtered: nothing is built, so the copy goes on.
+    const copying = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(copying.promise)
+    f.results.setSelection('t1', pivotKey, selectAll(pivotKey))
+    const copied = f.results.copy('t1', pivotKey, false)
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f1)
+    expect(f1.pivot).not.toHaveBeenCalled()
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // The copy ends: the Pivot follows.
+    copying.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await copied
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    // A rebuild already running when a copy of the Pivot starts is given up, and runs again once the copy ends.
+    const newKey = f.group().pivot!.key
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    let signal: AbortSignal | undefined
+    f2.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { signal = options?.signal; signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+    await f.show(f2)
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    const again = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(again.promise)
+    f.results.setSelection('t1', newKey, selectAll(newKey))
+    const second = f.results.copy('t1', newKey, false)
+    await wait()
+    expect(signal?.aborted).toBe(true)
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    again.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await second
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('asks the dock whether Results shows, not the output view last picked: Messages docked apart, or Results hidden', async () => {
+    const f = await following()
+    // Messages docked beside Results and picked: Results still shows, so the Pivot follows.
+    f.setPanel(true)
+    f.results.setView('t1', 'messages')
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f1)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    // The Results panel hidden (closed, or Ctrl+R), the output view still Results: the Pivot is hidden and keeps its mark.
+    f.results.setView('t1', 'results')
+    f.setPanel(false)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    expect(f2.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // Shown again: the dock's report alone wakes it.
+    f.setPanel(true)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('gives up an automatic build when its item is collapsed, or another view selected in Tabs, while it runs', async () => {
+    const f = await following({ count: 2 })
+    const pivotKey = f.group().pivot!.key
+    const pending = (target: ReturnType<typeof view>) => {
+      const state: { signal?: AbortSignal } = {}
+      target.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { state.signal = options?.signal; state.signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+      return state
+    }
+    // Stacked: collapsed while it builds.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const first = pending(f1)
+    await f.show(f1)
+    f.results.setCollapsed('t1', new Set([pivotKey]))
+    await wait()
+    expect(first.signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    expect(f.stale()).toBe(true)
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    // Tabs: the Pivot selected while it builds, then another group's view.
+    f.setLayout('tabs')
+    f.results.focusEntry('t1', pivotKey)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    const second = pending(f2)
+    // The filter is applied from the Table, then the Pivot's tab selected again before it builds.
+    f.results.focusEntry('t1', f.one)
+    await f.show(f2)
+    expect(f2.pivot).not.toHaveBeenCalled()
+    f.results.focusEntry('t1', pivotKey)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    f.results.focusEntry('t1', keyAt(f.results, 't1', 2))
+    await wait()
+    expect(second.signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    f.results.focusEntry('t1', pivotKey)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('gives up an automatic build whose Pivot is hidden while it runs, leaves the pane the user picked, and rebuilds once shown', async () => {
+    const f = await following()
+    // F1's rebuild starts while the Pivot is shown, then the user shows Messages before it answers.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    let signal: AbortSignal | undefined
+    f1.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { signal = options?.signal; signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+    await f.show(f1)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    f.results.setView('t1', 'messages')
+    await wait()
+    expect(signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(801)
+    expect(f.stale()).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    // Results shown again: the same filters are built over, since the given-up build never answered for them.
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    f.results.setView('t1', 'results')
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('leaves the pane the user picked when a followed rebuild is added, and shows Results for one the user asked for', async () => {
+    const f = await following()
+    f.results.setView('t1', 'messages')
+    const provenance = { ...f.group().pivot!.pivot!, followed: true as const }
+    f.results.addSet('t1', pivoted(905).descriptor, 'Pivot of Result 1', [setKey(f.group().table.entry.descriptor)], { pivot: provenance })
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(905)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    const { followed: _followed, ...asked } = provenance
+    f.results.addSet('t1', pivoted(906).descriptor, 'Pivot of Result 1', [setKey(f.group().table.entry.descriptor)], { pivot: asked })
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(906)
+    expect(f.results.getSnapshot().t1.view).toBe('results')
+  })
+
+  it("keeps a failed Build Pivot's reason when an automatic rebuild then fails too, which only the toolbar says", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // A Build Pivot of another draft fails over F1.
+    f.pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    f1.pivot.mockRejectedValueOnce(new Error('The draft could not be pivoted.'))
+    await f.pivot.run('t1')
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('The draft could not be pivoted.')
+    // Expanded over F2, the Pivot follows from its recipe and fails: the builder keeps the draft's reason.
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockRejectedValueOnce(new Error('The automatic rebuild failed.'))
+    await f.show(f2)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.anything())
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('The draft could not be pivoted.')
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('The automatic rebuild failed.')
+    expect(f.stale()).toBe(true)
+  })
+
+  it("clears a cancelled Build Pivot's message once the Pivot follows newer filters", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // The user cancels a Build Pivot over F1: the builder says it was cancelled.
+    f1.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => options?.signal?.addEventListener('abort', () => no(new Error('aborted')))))
+    const building = f.pivot.run('t1')
+    await wait()
+    f.pivot.cancel('t1')
+    await building
+    await wait()
+    expect(f.pivot.getSnapshot().tabs.t1.error).toMatch(/cancel/i)
+    // Expanded over F2, the Pivot follows by itself, and the cancel's message goes with the build it was about.
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it('decides nothing over a view the grid shows that the results have yet to publish, and follows it once published', async () => {
+    let layout: ResultsLayout = 'tabs'
+    const listeners = new Set<() => void>(), clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => layout, resultsShowing: () => true, onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    // Tabs, the Table selected: filter A shows and publishes, so the hidden Pivot is marked.
+    f.results.focusEntry('t1', one)
+    const showView = async (shown: ResultView, publish: boolean) => {
+      vi.mocked(first.sort).mockResolvedValueOnce(shown)
+      f.results.sortBy('t1', one, 0, 'ascending')
+      await settle()
+      if (publish) f.flush()
+      f.results.viewShown('t1', one, shown)
+      if (publish) f.flush()
+      await wait()
+    }
+    const a = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    await showView(a, true)
+    expect(pivotOutOfDate(f.results.getSnapshot().t1, f.results.getSnapshot().t1.groups[0])).toBe(true)
+    // Filter B's view shows in the grid, its publish still a frame away, when the layout turns stacked (the Pivot shown):
+    // nothing starts over A or B until B publishes.
+    const b = view(first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    b.pivot.mockResolvedValueOnce(pivoted(902))
+    await showView(b, false)
+    expect(f.results.sortOf('t1', one)!.view).toBe(b)
+    expect(f.results.getSnapshot().t1.sorts.get(one)!.view).toBe(a)
+    layout = 'stacked'
+    for (const listener of listeners) listener()
+    await wait()
+    expect(a.pivot).not.toHaveBeenCalled()
+    expect(b.pivot).not.toHaveBeenCalled()
+    f.flush()
+    await wait()
+    expect(b.pivot).toHaveBeenCalledOnce()
+    f.flush()
+    const tab = f.results.getSnapshot().t1
+    expect(tab.groups[0].pivot).toMatchObject({ entry: { descriptor: { resultId: 902 } }, pivot: { filters: b.filters } })
+    expect(pivotOutOfDate(tab, tab.groups[0])).toBe(false)
+  })
+
+  it("clears an automatic rebuild's or an Update's failure once the Pivot follows its filters, keeping only a failed Build Pivot's", async () => {
+    const f = await following()
+    const failure = 'There is not enough result memory to pivot these rows. Close other results and try again.'
+    const said = `${failure.replace(/\.$/, '')}, or close Pivot of Result 1 and build it again.`
+    // An automatic rebuild over F1 fails; the one over F2 builds: what F1's said goes.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', failure))
+    await f.show(f1)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe(said)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    // An Update over F3 fails (the Pivot collapsed, so it waited for the user); expanded over F4, it follows, and the
+    // Update's failure goes.
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    const f3 = view(f.first, 3, [{ op: 'in', column: 0, rows: [4], nulls: false }])
+    await f.show(f3)
+    f3.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', failure))
+    await f.pivot.update('t1', f.one)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe(said)
+    const f4 = view(f.first, 4, [{ op: 'in', column: 0, rows: [5], nulls: false }])
+    f4.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f4)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it("counts the grid's newest view as tried on a Cancel, even before the results publish it", async () => {
+    const clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    const showView = async (shown: ResultView, publish: boolean) => {
+      vi.mocked(first.sort).mockResolvedValueOnce(shown)
+      f.results.sortBy('t1', one, 0, 'ascending')
+      await settle()
+      if (publish) f.flush()
+      f.results.viewShown('t1', one, shown)
+      if (publish) f.flush()
+      await wait()
+    }
+    // F1 published: its rebuild runs. F2 shows in the grid, a frame before it publishes, and the user cancels then.
+    const f1 = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockImplementationOnce(() => new Promise(() => {}))
+    await showView(f1, true)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    const f2 = view(first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValue(pivoted(902))
+    await showView(f2, false)
+    f.pivot.cancel('t1', 1)
+    f.flush()
+    await wait()
+    f.flush()
+    await wait()
+    expect(f2.pivot).not.toHaveBeenCalled()
+    expect(pivotOutOfDate(f.results.getSnapshot().t1, f.results.getSnapshot().t1.groups[0])).toBe(true)
+  })
+
+  it('follows nothing without a layout host, nor in a run that has no Pivot yet', async () => {
+    // The checks that build no host: nothing follows.
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    const filtered = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    vi.mocked(first.sort).mockResolvedValueOnce(filtered)
+    results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    results.viewShown('t1', one, filtered)
+    await wait()
+    expect(filtered.pivot).not.toHaveBeenCalled()
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    // A re-run releases the Pivot; its group has none to follow until one is built.
+    const f = await following()
+    f.run(1, { queryId: 'q2', finish: false })
+    await wait()
+    expect(f.results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
+    expect(f.pivot.getSnapshot().building).toEqual({})
   })
 })
