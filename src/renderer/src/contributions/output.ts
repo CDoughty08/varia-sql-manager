@@ -1,4 +1,5 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import { outputPaneIds } from '../../../shared/layouts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
@@ -150,12 +151,15 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
   const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
-  /** Shows the Results view and its panel: its tab when Messages or another output panel has its group, and the panel
-   *  itself, opened again, when the user closed it. */
+  /** Shows the Results view and its panel without moving the focus: in a popout, its tab; with every output panel closed
+   *  (Ctrl+R), the output panels Ctrl+R hid, back as they were, with Results' tab selected; otherwise the dock's reveal,
+   *  which opens it again when closed, shows its hidden group, ends another group's maximize and selects its tab. */
   const showResults = (tabId: string) => {
     results.setView(tabId, 'results')
-    if (panes.location('results') === 'closed') void commands.execute('window.results', undefined, 'toolbar')
-    else panes.select('results')
+    if (panes.getSnapshot().results) return
+    if (panes.location('results') === 'window') { panes.select('results'); return }
+    if (outputPaneIds.every(id => panes.location(id) === 'closed')) { void commands.execute('view.toggleResultsPane', undefined, 'toolbar'); panes.select('results'); return }
+    void commands.execute('window.results', undefined, 'toolbar')
   }
   /** Selects the view `pick` names, showing the Results view if Messages or another output panel had its place; Stacked
    *  scrolls it into view (and the focus with it, from a grid), Tabs shows it. The view commands are Tabs' only: Stacked

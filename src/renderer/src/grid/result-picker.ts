@@ -142,11 +142,19 @@ export const pickerRequests = new PickerRequests()
 /**
  * Next Result, Previous Result and Go to Result N in the Stacked layout: the stack drawn for the query scrolls the
  * selected view into view (opening it when collapsed), so its grid mounts, and moves the focus there when the focus was in
- * the stack. A stack not drawn (Messages had the Results view's place) reveals the focused view when it mounts anyway.
+ * the stack. A stack not drawn yet (the Results view hidden behind Messages, or its pane closed and opened again for the
+ * command) takes the request when it mounts, as Go to Result…'s picker does; one no stack took in time lapses.
  */
 class StackReveals {
-  private readonly emitter = new Emitter<{ readonly tabId: string; readonly key: EntryKey }>()
-  request(tabId: string, key: EntryKey): void { this.emitter.emit({ tabId, key }) }
-  subscribe(listener: (request: { readonly tabId: string; readonly key: EntryKey }) => void): Disposable { return this.emitter.subscribe(listener) }
+  private readonly pending = new Map<string, { readonly key: EntryKey; readonly at: number }>()
+  private readonly emitter = new Emitter<string>()
+  request(tabId: string, key: EntryKey, now = performance.now()): void { this.pending.set(tabId, { key, at: now }); this.emitter.emit(tabId) }
+  /** The view a request for the tab asked for, if one waits and is still fresh; it is taken either way. */
+  take(tabId: string, now = performance.now()): EntryKey | undefined {
+    const request = this.pending.get(tabId)
+    this.pending.delete(tabId)
+    return request && now - request.at <= pickerRequestMs ? request.key : undefined
+  }
+  subscribe(listener: (tabId: string) => void): Disposable { return this.emitter.subscribe(listener) }
 }
 export const stackReveals = new StackReveals()

@@ -96,7 +96,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     const target = anchor()
     const moved = target && observeResize(target, () => {
       const rect = target.getBoundingClientRect()
-      if (!target.isConnected || (rect.width === 0 && rect.height === 0)) onClose(false)
+      // Closed with the focus in it, the focus goes back (to where it was opened from, else the layout), not to the page.
+      if (!target.isConnected || (rect.width === 0 && rect.height === 0)) onClose(!!card.current?.contains(card.current.ownerDocument.activeElement))
       else again()
     })
     view.addEventListener('resize', again)

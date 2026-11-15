@@ -370,7 +370,23 @@ describe('the stacked results', () => {
       // Another query's request is not this stack's.
       act(() => { stackReveals.request('t2', three) })
       expect(view.stackScrollTop).toBe(0)
+      expect(stackReveals.take('t2')).toBe(three)
       editor.remove()
+      // A stack drawn after the request (its pane closed and opened again for the command) takes it when it mounts.
+      act(() => { root?.unmount() })
+      container?.remove()
+      container = document.createElement('div')
+      document.body.append(container)
+      root = createRoot(container)
+      act(() => { results.focusEntry('t1', pivot); stackReveals.request('t1', pivot) })
+      view.collapsed = new Set([pivot])
+      draw()
+      act(() => { container!.querySelector('.rs-stack')!.dispatchEvent(new Event('scroll')) })
+      expect(view.collapsed.has(pivot)).toBe(false)
+      expect(view.stackScrollTop).toBeGreaterThan(0)
+      // A request no stack took in time lapses.
+      stackReveals.request('t3', one, 0)
+      expect(stackReveals.take('t3', 2001)).toBeUndefined()
     } finally {
       if (scrollTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTop)
       else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop

@@ -560,13 +560,13 @@ describe('the Tabs layout in a short pane', () => {
     expect(tabsFold(64, 10)).toBe('none')
   })
 
-  it('fold before the first paint, and in the shortest pane give the grid the focus from the picker, picked or closed', () => {
+  it('fold when first drawn, and in the shortest pane give the grid the focus from the picker, picked or closed', () => {
     const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
     Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rt-root') ? 64 : 0 } })
     try {
       const { results, two, draw, all } = fixture()
       draw()
-      // Folded already when first drawn: no frame with both rows.
+      // Folded already when first drawn (measured at mount, in a layout effect, so no frame shows both rows).
       expect(all('.rt-root')[0].getAttribute('data-fold')).toBe('none')
       const picker = () => document.querySelector<HTMLElement>('.rt-picker')
       const input = () => document.querySelector<HTMLInputElement>('.rt-picker input')!
@@ -765,6 +765,26 @@ describe('moving through the results as tabs', () => {
     expect(pickerRequests.take('t9', 1000)).toBe(true)
   })
 
+  it('close the picker when its anchor goes (its pane hidden), giving the focus back to where it was opened from', () => {
+    const observers: (() => void)[] = []
+    const original = window.ResizeObserver
+    window.ResizeObserver = class { constructor(callback: () => void) { observers.push(callback) } observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+    try {
+      const { draw } = fixture()
+      draw()
+      const editor = document.createElement('textarea')
+      document.body.append(editor)
+      editor.focus()
+      act(() => { pickerRequests.request('t1') })
+      expect(document.activeElement?.closest('.rt-picker')).not.toBeNull()
+      // Ctrl+R hides the pane: the anchor has no size left (jsdom gives every element none), so the picker closes.
+      act(() => { for (const callback of [...observers]) callback() })
+      expect(document.querySelector('.rt-picker')).toBeNull()
+      expect(document.activeElement).toBe(editor)
+      editor.remove()
+    } finally { window.ResizeObserver = original }
+  })
+
   it('keep the picker\'s active row while the run changes under it, and start again at the view shown on a new filter', () => {
     const { results, two, draw } = fixture()
     draw()
@@ -833,16 +853,32 @@ describe('the results tabs commands', () => {
       expect(shown()).toBe(one)
       // Two results and a comparison: the browser tab keys in the results pane are the results'.
       expect(f.results.steppable.getSnapshot()[tab.id]).toBe(true)
-      // The Results panel closed (the fixture's panels all start closed): a step opens it again; open, its tab is selected.
-      expect(f.host.reveal).not.toHaveBeenCalled()
-      await commands.execute('output.nextResult', undefined, 'keybinding')
-      expect(f.host.reveal).toHaveBeenLastCalledWith('results', { raise: true })
+      // Every output panel closed (the fixture's panels all start closed, as after Ctrl+R): a step brings back what Ctrl+R
+      // hid, with Results' tab selected, without moving the focus.
       const select = vi.spyOn(f.panes, 'select')
-      f.panes.set(f.panes.getSnapshot(), { ...Object.fromEntries(['explorer', 'editor', 'results', 'messages', 'plan', 'statistics'].map(id => [id, 'closed'])), results: 'grid' } as never)
-      vi.mocked(f.host.reveal).mockClear()
-      await commands.execute('output.previousResult', undefined, 'keybinding')
+      const locations = (results: 'grid' | 'closed' | 'window') => ({ ...Object.fromEntries(['explorer', 'editor', 'results', 'messages', 'plan', 'statistics'].map(id => [id, 'closed'])), results }) as never
+      const visible = (results: boolean) => ({ ...f.panes.getSnapshot(), results })
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(f.host.toggleOutput).toHaveBeenCalledTimes(1)
       expect(select).toHaveBeenLastCalledWith('results')
       expect(f.host.reveal).not.toHaveBeenCalled()
+      // Open but not showing (behind a maximized group, its group hidden, tabbed with the editor): the dock's reveal.
+      f.panes.set(visible(false), locations('grid'))
+      select.mockClear()
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(f.host.reveal).toHaveBeenLastCalledWith('results', { raise: true })
+      expect(select).not.toHaveBeenCalled()
+      // In a popout: its tab there. Showing already: nothing to do.
+      f.panes.set(visible(false), locations('window'))
+      vi.mocked(f.host.reveal).mockClear()
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(select).toHaveBeenLastCalledWith('results')
+      f.panes.set(visible(true), locations('grid'))
+      select.mockClear()
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(select).not.toHaveBeenCalled()
+      expect(f.host.reveal).not.toHaveBeenCalled()
+      expect(f.host.toggleOutput).toHaveBeenCalledTimes(1)
       expect(commands.isEnabled('output.nextResultView')).toBe(true)
       await commands.execute('output.nextResult', undefined, 'keybinding')
       expect(shown()).toBe(two)
@@ -879,7 +915,7 @@ describe('the results tabs commands', () => {
       await settings.choose('queryResults.grid.layout', 'stacked')
       for (const id of ['output.nextResultView', 'output.previousResultView', 'output.goToResult'] as const) expect(commands.isEnabled(id), id).toBe(false)
       const reveals: string[] = []
-      const listening = stackReveals.subscribe(request => reveals.push(request.key))
+      const listening = stackReveals.subscribe(requested => { const key = stackReveals.take(requested); if (key) reveals.push(key) })
       try {
         expect(await commands.execute('output.nextResult', undefined, 'palette')).toBe(true)
         expect(shown()).toBe(two)

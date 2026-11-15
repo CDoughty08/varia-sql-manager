@@ -865,7 +865,7 @@ Outcome, accepted by the owner:
         - **Go to Result…**: Ctrl/⌘+Shift+O (VS Code's Go to Symbol; Ctrl+Alt+letters are reserved for AltGr), Window
           menu after Results as Tabs, access key G; Tabs only.
         - All need `hasResultSets`. Next and Previous Result and Go to Result N work in Stacked too: they select through
-          `focusEntry`, open a closed Results pane again (`window.results`), and `stackReveals` asks the stack to open the view if collapsed and scroll to it, as Find Next does;
+          `focusEntry`, bring the Results pane forward (`view.toggleResultsPane` when Ctrl+R hid every output pane, `window.results` when it is closed or behind another, the popout's tab when it is in a window), and `stackReveals` (a pending request a stack mounting within 2 s takes) asks the stack to open the view if collapsed and scroll to it, as Find Next does;
           its grid takes the focus once mounted when the focus was in the stack. In Tabs they leave the focus where it
           was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused tab's moves to the tab
           now selected in its row, also when that tab unmounted (another result's view tabs, the drawn window moving).

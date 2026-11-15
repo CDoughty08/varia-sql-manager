@@ -372,7 +372,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const [revealTick, setRevealTick] = useState(0)
   const revealAsked = useRef<EntryKey | undefined>(undefined), commandFocus = useRef<EntryKey | undefined>(undefined)
   useEffect(() => {
-    const requests = stackReveals.subscribe(request => { if (request.tabId === tabId) { revealAsked.current = request.key; setRevealTick(tick => tick + 1) } })
+    const take = () => { const key = stackReveals.take(tabId); if (key !== undefined) { revealAsked.current = key; setRevealTick(tick => tick + 1) } }
+    take()
+    const requests = stackReveals.subscribe(requested => { if (requested === tabId) take() })
     return () => requests.dispose()
   }, [tabId])
   useLayoutEffect(() => {
