@@ -100,9 +100,10 @@ export const commandCatalog = {
     title: 'New Query', category: 'File', icon: 'new-file', precondition: '!documentBusy',
     keybindings: [{ key: 'mod+n' }], menus: [{ menu: 'file', group: '1_file', order: 1, mnemonic: 'n' }]
   },
-  // SSMS's default query shortcuts (Alt+F1 sp_help, Ctrl+1 sp_who, Ctrl+2 sp_lock), as palette commands: Ctrl+1 to Ctrl+9 pick
-  // query tabs and results instead. Each opens a New Query with the call, which the user runs. sp_lock is deprecated and
-  // absent from Azure SQL Database (sys.dm_tran_locks replaces it), as SSMS's Ctrl+2 is there.
+  // SSMS's default query shortcuts (Alt+F1 sp_help, Ctrl+1 sp_who, Ctrl+2 sp_lock) as palette commands, without keys:
+  // Ctrl+1 to Ctrl+9 pick query tabs and results, and Alt+F1 is a desktop key on some Linux desktops (os-keys.ts). Each opens
+  // a New Query with the call, which the user runs. sp_lock is deprecated and, as with SSMS's Ctrl+2, absent from Azure SQL
+  // Database (sys.dm_tran_locks replaces it).
   'query.newSpHelp': {
     title: 'New Query with sp_help', category: 'File', icon: 'new-file', precondition: '!documentBusy',
     keywords: ['ssms', 'shortcut', 'procedure', 'object', 'describe', 'help']
