@@ -48,6 +48,7 @@
 
 ### Fixed
 
+- **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.
 - **Pivot:** the Pivot builder could count its source result as 0 rows; it now shows the rows the result holds.
 - **Object Explorer:** pinned server shortcuts above and below the tree, including entries in More servers, offer the same full context menu as the server row in view.
