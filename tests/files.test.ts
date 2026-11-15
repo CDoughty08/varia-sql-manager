@@ -83,6 +83,26 @@ describe('file commands', () => {
     await commands.run('file.new', { editorGroup: 'gone' })
     expect(documents.getSnapshot().documents).toHaveLength(before)
   })
+  it('opens the SSMS query-shortcut commands with their call wherever New Query would open', async () => {
+    const { documents, commands, groups, explorer, model } = fixture()
+    const shown = documents.create('group.sql', 'SELECT 1', 'Orders', 'server-b')
+    documents.create('elsewhere.sql', '', 'master', 'server-a')
+    groups.groups = [{ id: 'g2', active: shown.id, documents: [shown.id], floating: false }]
+    // An editor group's +: that group's shown query.
+    await commands.run('query.newSpWho', { editorGroup: 'g2' })
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'Orders', dirty: false })
+    expect(model(documents.active!.id).getValue()).toBe('EXEC sp_who;')
+    // Object Explorer focused: its selected node's server and database, or the server's database.
+    explorer.panel = 'explorer'
+    explorer.target = { connectionId: 'server-b', database: 'AppData' }
+    await commands.run('query.newSpLock')
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'AppData', dirty: false })
+    expect(model(documents.active!.id).getValue()).toBe('EXEC sp_lock;')
+    explorer.target = { connectionId: 'server-b' }
+    await commands.run('query.newSpHelp')
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'sales' })
+    expect(model(documents.active!.id).getValue()).toBe('EXEC sp_help;')
+  })
   it('reopens only a successful close as a detached copy, releases its file and keeps close guards', async () => {
     const { documents, commands, model, api } = fixture()
     const file = openedFile('closed-file')

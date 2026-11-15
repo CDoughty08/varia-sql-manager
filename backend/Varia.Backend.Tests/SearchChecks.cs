@@ -28,6 +28,7 @@ internal static class SearchChecks
         Budget(check);
         SystemObjects(check);
         Kinds(check);
+        Packing(check);
         Reader(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
@@ -393,6 +394,49 @@ internal static class SearchChecks
             "a view's trigger names its view and the view's folder");
     }
 
+    /// <summary>The packed layout (<see cref="ObjectTable"/>): each object is charged its entry's real size, a child's parent and
+    /// a history table's table are indexes renumbered when entries are left out, dates keep what a hit shows, and a table of records
+    /// refuses a child whose parent it does not hold.</summary>
+    private static void Packing(Action<bool, string> check)
+    {
+        check(IndexMemory.RecordBytes == System.Runtime.CompilerServices.Unsafe.SizeOf<ObjectEntry>(), "each object is charged its packed entry's size");
+
+        // Entries left out before the ones that stay (a child whose parent the login cannot see) renumber the owners after them.
+        var builder = new ObjectTable.Builder();
+        foreach (var text in new[] { "dbo", "Gone", "Orders", "id", "Orders_History", "valid_from", "SELECT 1" }) builder.Text(text);
+        var gone = builder.Add("table", "tables", null, "dbo", "Gone", null, false);
+        var orphan = builder.Add("column", "columns", null, null, "id", null, false);
+        builder.Attach(orphan, gone, false);
+        var orders = builder.Add("table", "tables", null, "dbo", "Orders", new DateTime(2024, 5, 6, 7, 8, 9, 450), true);
+        var history = builder.Add("table", "tables", "history", "dbo", "Orders_History", new DateTime(1960, 1, 2), false);
+        builder.SetVia(history, orders);
+        var column = builder.Add("column", "columns", null, null, "valid_from", null, false);
+        builder.Attach(column, history, false);
+        builder.SetDefinition(orders, "SELECT 1", cut: true);
+        builder.Remove(gone);
+        var table = builder.Build();
+        check(table.Count == 3 && table.Rows().Select(row => row.Name).SequenceEqual(["Orders", "Orders_History", "valid_from"]),
+            "a removed entry takes the children attached to it along, and the rest keep their order");
+        check(table.Row(2) is { Kind: "column", Schema: null, ParentKind: "table", ParentSchema: "dbo", ParentName: "Orders_History", ParentFolder: "tables", System: false, Via.Name: "Orders" }
+            && table.Label(2) == "dbo.Orders_History.valid_from" && table.LabelLength(2) == table.Label(2).Length && table.Row(1).Via?.Name == "Orders" && table.Via(0) == -1,
+            "a child's parent and a history table's table survive the renumbering, and a child's Via is its parent's");
+        check(table.Row(0) is { System: true, Definition: "SELECT 1", DefinitionCut: true, Modified: var modified } && modified == new DateTime(2024, 5, 6, 7, 8, 9)
+            && table.Modified(1) == new DateTime(1960, 1, 2) && table.Modified(2) is null,
+            "dates keep the second a hit shows, before 1970 too, and an object with none has none");
+        var index = new ConnectionIndex(new IndexBudget(1 << 20));
+        index.Put(new DatabaseIndex("Sales", table, 0, 1, 1));
+        check(Search(index, "valid_from", definitions: false).Hits is [{ Label: "dbo.Orders_History.valid_from", Via: { Name: "Orders", Folder: "tables" }, ParentFolder: "tables", Object.Parent.Name: "Orders_History" }]
+            && Search(index, "Orders", definitions: false).Hits.Single(hit => hit.Object.Name == "Orders").Modified == "2024-05-06T07:08:09",
+            "a packed hit carries its parent, its Via and its date as a record's did");
+        try
+        {
+            ObjectTable.Of([new IndexedObject("column", "columns", null, "id", "table", "dbo", "Missing")]);
+            check(false, "a table of records refuses a child without its parent");
+        }
+        catch (ArgumentException) { check(true, "a table of records refuses a child without its parent"); }
+        index.Dispose();
+    }
+
     private static void SystemObjects(Action<bool, string> check)
     {
         IndexedObject? Map(string type, bool system, string? parentType = null) => parentType is null ? DatabaseReader.Map(type, "dbo", "x", DateTime.UnixEpoch, system)
@@ -457,7 +501,7 @@ internal static class SearchChecks
         // The server's own objects name no database, and a search of one database leaves them out.
         var index = new ConnectionIndex(new IndexBudget(1 << 20));
         index.PutServer(new DatabaseIndex(ObjectSearchService.ServerScope, [new("login", "logins", null, "Sales_reader", Subtype: "sql"), new("database", "databases", null, "Sales")], 0, 0, 0));
-        index.Put(new DatabaseIndex("Sales", [new("user", "users", null, "Sales_reader"), new("schema", "schemas", null, "sales"),
+        index.Put(new DatabaseIndex("Sales", [new("user", "users", null, "Sales_reader"), new("schema", "schemas", null, "sales"), table,
             DatabaseReader.Child(table, "column", "columns", "sales_id")!], 0, 0, 0));
         var hits = Search(index, "sales", definitions: false).Hits;
         check(hits.Any(hit => hit.Object is { Kind: "login", Database: null, Name: "Sales_reader" } && hit.Folder == "logins" && hit.Subtype == "sql")
@@ -466,7 +510,7 @@ internal static class SearchChecks
             && hits.Any(hit => hit.Object is { Kind: "column", Database: "Sales", Parent: { Kind: "table", Name: "Orders" } } && hit.ParentFolder == "graphTables"),
             "logins, databases, users, schemas and columns are found, each with Object Explorer's ref: " + string.Join(", ", hits.Select(hit => hit.Object.Kind + ":" + hit.Label)));
         check(Search(index, "sales", definitions: false, database: "Sales").Hits.All(hit => hit.Object.Database == "Sales"), "a search of one database leaves out the server's objects");
-        check(index.Objects == 5, "the server's objects count toward the connection's");
+        check(index.Objects == 6, "the server's objects count toward the connection's");
         var budget = new IndexBudget(100);
         var held = new ConnectionIndex(budget);
         budget.TryTake(30);
@@ -533,7 +577,7 @@ internal static class SearchChecks
         var pool = new StringPool(budget);
         static long Costs(IEnumerable<string> values) => values.Sum(StringPool.Cost);
         var index = await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
-        IndexedObject? Find(string name) => index?.Objects.SingleOrDefault(item => item.Name == name);
+        IndexedObject? Find(string name) => index?.Table.Rows().SingleOrDefault(item => item.Name == name);
         check(Find("trg_orders") is { Kind: "trigger", ParentName: "Orders", ParentFolder: "tables", Schema: null }, "a child that comes before its parent in id order is placed under it");
         check(Find("Prices_History") is { Kind: "table", Subtype: "history", Via: { Name: "Prices", Folder: "tables" } }, "a history table names the table whose history row shows it");
         check(Find("valid_from") is { Kind: "column", ParentName: "Prices_History", Via.Name: "Prices" }, "a history table's column names the table that shows its parent");
@@ -548,14 +592,14 @@ internal static class SearchChecks
             "named database objects, plan guides and types are read; an unknown code is left out");
         check(index is { Bytes: > 0 } && budget.Used == index.Bytes + Costs(index.Pooled) && index.Credited == 0 && pool.Count == index.Pooled.Length
             && index.Pooled.Distinct().Count() == index.Pooled.Length, "a read charges the budget its records and one pool entry per distinct text");
-        check(index!.Objects.All(item => item.Schema is null || index.Pooled.Contains(item.Schema)) && index.Objects.All(item => index.Pooled.Contains(item.Name)),
+        check(index!.Table.Rows().All(item => item.Schema is null || index.Pooled.Contains(item.Schema)) && index.Table.Rows().All(item => index.Pooled.Contains(item.Name)),
             "every name a read keeps is the pool's");
 
         // Another connection reading the same objects shares every text: it is charged only its records and slots.
         var before = budget.Used;
         var again = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None))!;
         check(budget.Used - before == again.Bytes && pool.Count == index.Pooled.Length
-            && ReferenceEquals(again.Objects.Single(item => item.Name == "Orders").Name, index.Objects.Single(item => item.Name == "Orders").Name),
+            && ReferenceEquals(again.Table.Rows().Single(item => item.Name == "Orders").Name, index.Table.Rows().Single(item => item.Name == "Orders").Name),
             "a second connection's read of the same objects holds each name once, with the first");
         var one = new ConnectionIndex(budget, pool: pool);
         var two = new ConnectionIndex(budget, pool: pool);
@@ -574,7 +618,7 @@ internal static class SearchChecks
         var tooSmall = await new DatabaseReader("Sales", new ObjectIndexLimits(), smallPool).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
         check(tooSmall is null && small.Used == 0 && smallPool.Count == 0, "a read past the memory budget answers null and gives back what it took, its texts included");
         var withoutChildren = await new DatabaseReader("Sales", new ObjectIndexLimits(), smallPool).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
-        check(withoutChildren is { } kept && kept.Objects.Any(item => item.Name == "Orders") && kept.Objects.All(item => item.Kind is not ("column" or "index" or "statistic" or "parameter"))
+        check(withoutChildren is { } kept && kept.Table.Rows().Any(item => item.Name == "Orders") && kept.Table.Rows().All(item => item.Kind is not ("column" or "index" or "statistic" or "parameter"))
             && small.Used == small.Limit, "the batch without children fits where the one with them did not");
 
         // A rebuild may use the share of the read it replaces, so it fits where the build before it did, even with the budget full.
@@ -608,12 +652,21 @@ internal static class SearchChecks
         // A read that failed part way is held only when nothing was held before.
         var spare = new IndexBudget(1 << 20);
         DatabaseIndex? put = null;
-        var partial = new DatabaseReader("Sales", new ObjectIndexLimits(), new StringPool(spare));
-        await partial.ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
-        ObjectSearchService.KeepPartial(partial, held: true, value => put = value);
-        check(put is null, "a failed rebuild keeps the earlier read whole");
-        ObjectSearchService.KeepPartial(partial, held: false, value => put = value);
-        check(put is { Database: "Sales" } && put.Objects.Length > 0, "a first read that failed part way keeps what it read");
+        // The objects read, then a types result set whose columns fail to read (as a statement failing part way does).
+        async Task<DatabaseReader> Failed()
+        {
+            var reader = new DatabaseReader("Sales", new ObjectIndexLimits(), new StringPool(spare));
+            var broken = Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("table", typeof(string)), ("assembly", typeof(string)), ("object", typeof(int))],
+                [257, "dbo", "List", "no", "no", 900]);
+            try { await reader.ReadAsync(new DataTableReader([Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)),
+                ("modified", typeof(DateTime)), ("parent", typeof(int)), ("system", typeof(bool)), ("variant", typeof(byte)), ("current", typeof(int))], objects), broken]), false, CancellationToken.None, children: false); }
+            catch (InvalidCastException) { }
+            return reader;
+        }
+        ObjectSearchService.KeepPartial(await Failed(), held: true, value => put = value);
+        check(put is null && spare.Used == 0, "a failed rebuild keeps the earlier read whole, and gives back what the failed read took");
+        ObjectSearchService.KeepPartial(await Failed(), held: false, value => put = value);
+        check(put is { Database: "Sales" } && put.Table.Count > 0 && put.Table.Rows().Any(item => item.Name == "Orders"), "a first read that failed part way keeps what it read");
 
         // Every folder a hit names, its own or its parent's, is one Object Explorer lists rows in, so Reveal can reach it (system
         // functions aside: their System Functions folder is planned).
@@ -623,7 +676,7 @@ internal static class SearchChecks
             foreach (var system in new[] { false, true })
                 for (var variant = 0; variant <= 8; variant++)
                     if (DatabaseReader.Map(type, "dbo", "x", at, system, variant) is { } item && !(item.Kind == "function" && item.System)) produced.Add(item);
-        produced.AddRange(index!.Objects);
+        produced.AddRange(index!.Table.Rows());
         var folders = produced.Select(item => item.Folder).Concat(produced.Select(item => item.ParentFolder).OfType<string>()).Concat(produced.Select(item => item.Via?.Folder).OfType<string>())
             .Concat(new[] { "US", "RL", "AR", "SC", "AS", "AK", "CE", "SK", "CM", "CK", "DS", "FF", "DA", "FC", "FL", "PS", "PF", "PL", "XS" }.Select(code => DatabaseReader.Named(code)!.Value.Folder))
             .Concat(new[] { "CR", "CP", "AU", "SA", "BD", "LS" }.Select(code => DatabaseReader.ServerNamed(code)!.Value.Folder))
@@ -642,8 +695,8 @@ internal static class SearchChecks
         var catalog = new ResourceCatalog(pool);
         static long Costs(params string[] values) => values.Distinct().Sum(StringPool.Cost);
         var reads = 0;
-        IndexedObject[] Objects(params string[] definitions) => [.. definitions.Select((text, at) => new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_" + at, Definition: text, System: true))];
-        Func<CancellationToken, Task<IndexedObject[]>> Read(params string[] definitions) => _ => { reads++; return Task.FromResult(Objects(definitions)); };
+        ObjectTable Objects(params string[] definitions) => ObjectTable.Of(definitions.Select((text, at) => new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_" + at, Definition: text, System: true)));
+        Func<CancellationToken, Task<ObjectTable>> Read(params string[] definitions) => _ => { reads++; return Task.FromResult(Objects(definitions)); };
         var key = new ResourceKey("16.0.4135.4", 3, 2, DateTime.UnixEpoch, 42, true);
         var first = await catalog.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
         var second = await catalog.AcquireAsync(key with { }, Read("never read"));
@@ -653,8 +706,8 @@ internal static class SearchChecks
             "a shared set's names and definitions are the pool's, each distinct text once");
         // Another build (a cumulative update) changes one module: the other's text is held once for both sets.
         var other = await catalog.AcquireAsync(key with { Version = "16.0.4140.3", Checksum = 7 }, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 3"));
-        check(reads == 2 && catalog.Sets == 2 && pool.Count == 6 && ReferenceEquals(other.Objects[0].Definition, first.Objects[0].Definition)
-            && ReferenceEquals(other.Objects[1].Name, first.Objects[1].Name), "two builds' sets hold the names and definitions they share once");
+        check(reads == 2 && catalog.Sets == 2 && pool.Count == 6 && ReferenceEquals(other.Table.Definition(0), first.Table.Definition(0))
+            && ReferenceEquals(other.Table.Name(1), first.Table.Name(1)), "two builds' sets hold the names and definitions they share once");
         check(budget.Used == first.Bytes + other.Bytes + Costs("sp_0", "sp_1", "sys", "CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2", "CREATE PROCEDURE sys.sp_1 AS 3"),
             "the budget is charged for distinct texts only");
         try { await catalog.AcquireAsync(key with { Checksum = 9 }, _ => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
@@ -679,7 +732,7 @@ internal static class SearchChecks
             catch (OperationCanceledException) { check(!readStopped && catalog.Sets == 3, "stopping the build that started a shared read leaves the read running for the others"); }
             release.SetResult();
             var shared = await waiter;
-            check(shared.Objects.Length == 1 && !readStopped && catalog.Sets == 3, "a connection waiting on a shared read the first connection stopped still gets the set");
+            check(shared.Table.Count == 1 && !readStopped && catalog.Sets == 3, "a connection waiting on a shared read the first connection stopped still gets the set");
             catalog.Release(shared);
             check(catalog.Sets == 2, "the waiter's reference is the set's only one");
         }

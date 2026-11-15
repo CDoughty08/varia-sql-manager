@@ -23,7 +23,7 @@ internal sealed class DistinctSnapshot
 {
     private readonly object gate = new();
     private readonly object searching = new();
-    private readonly ViewSorter.PageSource source;
+    private readonly KeptPages source;
     private readonly int[] reps, counts, byCount;
     private readonly bool[] ticks;
     private int ticked;
@@ -31,8 +31,11 @@ internal sealed class DistinctSnapshot
     private (FilterOp Op, int[] Rows, bool Nulls)? frozen;
     private string? digest;
     private (string Text, int[] ByValue, int[] ByCount)? lastSearch;
+    // The groups by their representative row, made by the first search while the result is packed (under the search lock),
+    // so a search reads each packed page once.
+    private int[]? byRow;
 
-    internal DistinctSnapshot(ResultSetBuffer set, int column, ViewSorter.PageSource source, int[] reps, int[] counts, int[] byCount, bool[] ticks, long rows, long nulls, bool nullTicked, bool complete, bool approximate)
+    internal DistinctSnapshot(ResultSetBuffer set, int column, KeptPages source, int[] reps, int[] counts, int[] byCount, bool[] ticks, long rows, long nulls, bool nullTicked, bool complete, bool approximate)
     {
         Set = set;
         Column = column;
@@ -77,13 +80,16 @@ internal sealed class DistinctSnapshot
         var take = Math.Max(0, Math.Min(count, total - offset));
         var values = new DistinctValue[take];
         var wire = Set.Wires[Column];
+        var texts = new string[take];
+        int GroupAt(int i) => list?[offset + i] ?? offset + i;
         // The display texts read the pages, which only the search lock's holders also read.
         lock (searching)
-            for (var i = 0; i < take; i++)
-            {
-                var group = list?[offset + i] ?? offset + i;
-                values[i] = new DistinctValue(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], false);
-            }
+            source.Each(take, i => reps[GroupAt(i)], (i, view, local) => texts[i] = ViewSorter.Display(view, local, Column, wire), token);
+        for (var i = 0; i < take; i++)
+        {
+            var group = GroupAt(i);
+            values[i] = new DistinctValue(group, reps[group], texts[i], counts[group], false);
+        }
         lock (gate)
         {
             for (var i = 0; i < take; i++) values[i] = values[i] with { Checked = ticks[values[i].Group] };
@@ -180,11 +186,13 @@ internal sealed class DistinctSnapshot
             var scratch = new ResultSearcher.Scratch();
             var hit = new bool[reps.Length];
             var found = 0;
-            for (var group = 0; group < reps.Length; group++)
-            {
-                if ((group & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                if (matcher is not null && matcher.Matches(source.Cell(reps[group], Column), scratch)) { hit[group] = true; found++; }
-            }
+            if (matcher is not null)
+                source.Each(reps.Length, group => reps[group], (group, view, local) =>
+                {
+                    if (!matcher.Matches(view.Span(Column, local), scratch)) return;
+                    hit[group] = true;
+                    found++;
+                }, token, () => byRow ??= KeptPages.ByRow(reps));
             var byValue = new int[found];
             var ranked = new int[found];
             for (int group = 0, at = 0; group < reps.Length; group++) if (hit[group]) byValue[at++] = group;
@@ -220,9 +228,14 @@ internal static partial class ViewSorter
     public static long DistinctWorkingBytes(long rows) => WorkingBytes(rows, 1) + 11L * rows + DistinctSnapshotBytes(rows);
 
     /// <summary>What a snapshot of <paramref name="groups"/> values keeps: its representative rows, counts and count order
-    /// (4 bytes each a group), its ticks (1), a search's matches in both orders and their marks (9), and a frozen filter's
-    /// rows (4): 26 bytes a group, and its bookkeeping.</summary>
-    public static long DistinctSnapshotBytes(long groups) => 26L * groups + 4096;
+    /// (4 bytes each a group), its ticks (1), a search's matches in both orders and their marks (9), a frozen filter's
+    /// rows (4), and, once a search reads a packed result, the groups in row order (4): 30 bytes a group, and its
+    /// bookkeeping.</summary>
+    public static long DistinctSnapshotBytes(long groups) => 30L * groups + 4096;
+
+    /// <summary>What a distinct list answers (TOO_LARGE) when the budget has no room for its working memory, or for the rooms
+    /// or a column extract a packed result is read through.</summary>
+    public const string DistinctTooLarge = "There is not enough result memory to list this column's values. Close other results and try again.";
 
     /// <summary>
     /// A column's distinct values over a view's rows (or the sealed rows), each with its count and representative base row:
@@ -254,9 +267,10 @@ internal static partial class ViewSorter
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to list its values.");
         var rows = (int)total;
-        // The snapshot keeps its source for later reads of its values, so it holds no rooms: SqlService unpacks a packed
-        // result first, and a packed page is otherwise read whole here, as before fused reads.
-        var source = new PageSource(pages, set.Wires.Count, eager: true);
+        // A packed result is read fused, as a sort reads it (its rooms and any column extract held only while this runs);
+        // the snapshot reads its values' pages again through the set when asked (KeptPages), keeping none of them.
+        using var source = new PageSource(pages, set.Wires.Count, DistinctTooLarge);
+        var keptPages = new KeptPages(set, pages, set.Wires.Count);
         var approximate = false;
         var progress = OperationProgress.Current;
         progress?.Phase("keys", 0.5);
@@ -305,7 +319,7 @@ internal static partial class ViewSorter
             if (stages is not null) stages.Grouping += Lap();
             var codedRanks = ByCount(grouped.Counts);
             if (stages is not null) stages.Ranking += Lap();
-            return new DistinctSnapshot(set, column, source, grouped.Reps, grouped.Counts, codedRanks, grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
+            return new DistinctSnapshot(set, column, keptPages, grouped.Reps, grouped.Counts, codedRanks, grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
         }
         if (stages is not null) stages.Grouping += Lap();
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
@@ -317,7 +331,7 @@ internal static partial class ViewSorter
         if (stages is not null) stages.Runs += Lap();
         var ranks = ByCount(counts);
         if (stages is not null) stages.Ranking += Lap();
-        return new DistinctSnapshot(set, column, source, reps, counts, ranks, ticks, looked, nulls, nullTicked, complete, approximate);
+        return new DistinctSnapshot(set, column, keptPages, reps, counts, ranks, ticks, looked, nulls, nullTicked, complete, approximate);
     }
 
     /// <summary>The groups, most frequent first: a group's place in value order breaks count ties, so equal counts stay in it.
@@ -421,9 +435,8 @@ internal static partial class ViewSorter
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and
     /// a truncated stored value marked too.</summary>
-    internal static string Display(PageSource source, int row, int column, WireKind wire)
+    internal static string Display(PageView view, int local, int column, WireKind wire)
     {
-        var view = source.ViewOf(row, out var local);
         var cell = view.Span(column, local);
         var cut = view.IsTruncated(column, local);
         string text;
@@ -447,5 +460,105 @@ internal static partial class ViewSorter
             }
         }
         return cut ? text + "…" : text;
+    }
+}
+
+/// <summary>The pages a distinct snapshot reads its values from after it is built (results.distinctRead's texts, a search's
+/// matches): the result's own pages, read through the set each time and never kept, so a result packed after the snapshot
+/// was built holds only its packed bytes. Each read pins the set. While no page is packed, rows are read in the order asked,
+/// in place, each page's header parsed once; otherwise in row order, each packed page unpacked once into one room
+/// (<see cref="ReadRoom"/>, reserved as working memory while the read runs, and read through the set's cache when there is
+/// no room, so a read is never refused). Read by one thread at a time (the snapshot's search lock).</summary>
+internal sealed class KeptPages
+{
+    private readonly ResultSetBuffer set;
+    private readonly StoredPage[] pages;
+    private readonly long[] starts;
+    private readonly int columns;
+    private readonly int[]?[] layouts;
+    private readonly int[] blobStarts;
+
+    internal delegate void Visit(int item, PageView view, int local);
+
+    public KeptPages(ResultSetBuffer set, StoredPage[] pages, int columns)
+    {
+        this.set = set;
+        this.pages = pages;
+        this.columns = columns;
+        starts = new long[pages.Length];
+        for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
+        layouts = new int[pages.Length][];
+        blobStarts = new int[pages.Length];
+    }
+
+    /// <summary>The items in the order of their rows (ties by item), for <see cref="Each"/>'s order.</summary>
+    public static int[] ByRow(int[] rows)
+    {
+        var order = new int[rows.Length];
+        for (var i = 0; i < order.Length; i++) order[i] = i;
+        Array.Sort(order, (a, b) => rows[a] != rows[b] ? rows[a].CompareTo(rows[b]) : a.CompareTo(b));
+        return order;
+    }
+
+    private int IndexOf(int row)
+    {
+        var index = Array.BinarySearch(starts, (long)row);
+        return index < 0 ? ~index - 1 : index;
+    }
+
+    /// <summary>Reads item 0 to <paramref name="count"/> - 1's rows (<paramref name="rowOf"/>), each with its page. With a
+    /// packed page among them they go in row order: <paramref name="order"/>'s when given (the items sorted by row), else
+    /// sorted here.</summary>
+    public void Each(int count, Func<int, int> rowOf, Visit visit, CancellationToken token, Func<int[]>? order = null)
+    {
+        using var pin = set.Pin();
+        if (!set.HasPacked)
+        {
+            for (var item = 0; item < count; item++)
+            {
+                if ((item & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var row = rowOf(item);
+                var index = IndexOf(row);
+                var page = pages[index];
+                // Nothing packs a pinned set, so its pages stay as sealed while it is read.
+                var body = set.Raw(page) ?? page.Body();
+                if (layouts[index] is not { } layout)
+                {
+                    var parsed = PageView.Parse(body, columns);
+                    layouts[index] = layout = parsed.Layout;
+                    blobStarts[index] = parsed.BlobStart;
+                }
+                visit(item, PageView.At(body, blobStarts[index], layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow));
+            }
+            return;
+        }
+        int[] items;
+        if (order is not null) items = order();
+        else
+        {
+            var rows = new int[count];
+            for (var item = 0; item < count; item++) rows[item] = rowOf(item);
+            items = ByRow(rows);
+        }
+        using var room = new ReadRoom(set);
+        var scratch = new int[PageView.ScratchLength(columns)];
+        var current = -1;
+        var blobStart = 0;
+        ReadOnlySpan<byte> bytes = default;
+        for (var at = 0; at < items.Length; at++)
+        {
+            if ((at & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var item = items[at];
+            var row = rowOf(item);
+            var index = IndexOf(row);
+            var page = pages[index];
+            if (index != current)
+            {
+                bytes = room.Body(page);
+                blobStart = PageView.Parse(bytes, columns, scratch).BlobStart;
+                current = index;
+            }
+            visit(item, PageView.At(bytes, blobStart, scratch, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow));
+        }
     }
 }

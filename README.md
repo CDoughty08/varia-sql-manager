@@ -103,6 +103,11 @@ The [result grid tools](docs/results-tools.md) include **Copy Column Name**, key
 Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
 
 Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palette. See the [command reference](docs/commands.md) for shortcuts and available commands.
+SSMS's default query shortcuts (Alt+F1 `sp_help`, Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`) are palette commands instead:
+**New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock** open a new query on the connection
+and database New Query would use, holding the `EXEC` call, ready to run with **F5**. `sp_lock` is deprecated and does
+not exist in Azure SQL Database; query `sys.dm_tran_locks` there. The commands have no keys: Ctrl+1 to Ctrl+9 (⌘ on
+macOS) pick query tabs and results, and Alt+F1 opens the desktop menu on some Linux desktops.
 
 Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
 app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).

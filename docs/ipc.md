@@ -1321,9 +1321,10 @@ Results stay in backend memory, never on disk (`ResultStore`).
   again, held, released or the backend shuts down, keeping what it packed. It runs beside the results' workers, never
   through their gate, so sorts, reads and new queries never wait for it. Showing a packed result again needs no wait:
   `results.read` unpacks the pages it sends (0.3 ms a read through a six-page cache), and a view read unpacks the pages
-  behind its rows on the workers. A sort, filter, profile or pivot reads a packed result fused and leaves it packed
-  (docs/architecture.md); an operation that needs every row at once (distinct values, row identity, search, diff, and a
-  fused read refused its rooms) first unpacks it in place after reserving its raw size as working memory, and answers
+  behind its rows on the workers. A sort, filter, profile, pivot, distinct values, row identity, a search and a diff read a
+  packed result fused and leave it packed (docs/architecture.md); a search through a view far from its pages' order (a
+  sort), a diff's first result read far from its pages' order, and a pivot or extract refused its rooms first unpack it in
+  place after reserving its raw size as working memory, and answer
   `TOO_LARGE` with its own sentence, changing nothing, when the budget refuses; the policy packs it again once the
   operation has ended and the result has gone unused for the same 5 seconds (an operation's unpack counts as a use). A plain Copy or Save reads page by page through the cache and is never refused
   for it; a transposed one unpacks the pages its rows lie on. A visible result is never packed (that is stage 2 of
@@ -1830,7 +1831,9 @@ The results toolbar's search box searches every grid of a run in the backend, ov
   are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
   empty, those before `fromRow`). `complete`: those rows were all of a finished set; `approximate`: a truncated value was
   searched by its stored prefix and did not match. A search holds its run, one row's matches and at most 1 MiB of parsed
-  page layouts (one page's in base order), so it reserves no budget. It checks at points spaced by the work done (cells
+  page layouts (one page's in base order), so it reserves no budget for them; a packed result is read through rooms of a
+  page or two a run reserved from the result's budget (`TOO_LARGE` without them), and through a view far from its pages'
+  order (a sort) it is unpacked first. It checks at points spaced by the work done (cells
   and bytes compared, so a wide or long-valued row is a checkpoint of its own): CANCEL (a newer search) stops it there,
   and so does the result's release (`RESULT_RELEASED`) or the view's close (`VIEW_NOT_FOUND`), so it never reads pages
   whose budget was returned for longer than one checkpoint.
@@ -1946,9 +1949,9 @@ receives at most 512 values a window, never rows.
   at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way) whose
   runs of equal values are found in even parts on several threads, each part reading only its own rows (a value on most
   rows is read by every thread, and counted once), and ranked by
-  count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
+  count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 65 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
-  `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
+  `DistinctSnapshotBytes` (30 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
   `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,
   `checked` at most `distinct`, `distinct` and `nulls` at most `rows`, a window at the offset asked with exactly
   `min(count, total − offset)` values. A snapshot built after its port went is closed.

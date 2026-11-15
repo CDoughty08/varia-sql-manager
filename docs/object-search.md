@@ -91,8 +91,13 @@ The same search runs in two places, with the same options and results, and the h
 - **A read that fails part way.** If a statement fails (a catalog view the login may not read, or one an edition lacks),
   the status lists the server or the database as skipped. A first build keeps what was read before the failure (the
   databases, or a database's tables and procedures); a rebuild keeps the earlier build's objects whole instead.
-- **Memory.** Every connection's index shares one memory budget (512 MiB). Each object is charged an estimate of its
-  record. Names and definitions live in one pool shared by every connection, each distinct text once, reference counted:
+- **Memory.** Every connection's index shares one memory budget (512 MiB). Each object is held packed, as a 24-byte
+  entry in its database's table (`ObjectTable`): ids into the database's texts for its name, schema and definition, the
+  index of its parent (or of the table a history table is shown below) in place of the parent's kind, schema, name and
+  folder, its date, flags, and one id for its kind, folder and subtype together; it is charged those 24 bytes. (Each
+  object was a record of string references, 136 bytes, until the packed layout: on a synthetic database of 143,721
+  objects that holds 4,707 module definitions the index went from 66.9 to 51.6 MiB, and without definitions from
+  26.1 to 10.8 MiB.) Names and definitions live in one pool shared by every connection, each distinct text once, reference counted:
   a text is charged when it first comes in and given back when the last database or system set holding it is dropped.
   So msdb's procedures and their definitions, master's `spt_` objects, schemas and common column names are held once
   however many servers are connected. Definitions stop being kept once less than 128 MiB is free, so names always have
