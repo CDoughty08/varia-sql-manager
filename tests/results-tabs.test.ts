@@ -13,8 +13,8 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { scrollbarSize } from '../src/renderer/src/grid/ResultsStack'
-import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
-import { filterRows, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
+import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
+import { filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
@@ -548,6 +548,19 @@ describe('the results layout toggle', () => {
   })
 })
 
+describe('the Tabs layout in a short pane', () => {
+  it('keep both rows of tabs while the grid has room for its header and two rows, then one row, then none', () => {
+    const need = g.headerHeight + 2 * g.rowHeight + 10 + g.stackBorder
+    expect(tabsFold(0, 10)).toBeUndefined()
+    expect(tabsFold(g.resultTabsHeight + g.viewTabsHeight + need, 10)).toBeUndefined()
+    expect(tabsFold(g.resultTabsHeight + g.viewTabsHeight + need - 1, 10)).toBe('one')
+    expect(tabsFold(g.resultTabsHeight + need, 10)).toBe('one')
+    expect(tabsFold(g.resultTabsHeight + need - 1, 10)).toBe('none')
+    // The results pane at its 100 px minimum, under its toolbar: the grid alone.
+    expect(tabsFold(64, 10)).toBe('none')
+  })
+})
+
 describe('moving through the results as tabs', () => {
   it('step through the results and comparisons, and through a result\'s views, wrapping round', () => {
     const { results, one, two, three, pivot, diff } = fixture()
@@ -567,6 +580,12 @@ describe('moving through the results as tabs', () => {
     // A result's tab returns to the view it showed last: Result 3's Pivot.
     expect(stepResult(tab(), -1)).toBe(pivot)
     expect(stepResult(tab(), 1)).toBe(one)
+     // Go to Result N picks the item at that place, a group's view being the one it showed last; the last is the last item.
+    expect(jumpResult(tab(), 1)).toBe(one)
+    expect(jumpResult(tab(), 3)).toBe(pivot)
+    expect(jumpResult(tab(), 4)).toBe(diff)
+    expect(jumpResult(tab(), 5)).toBeUndefined()
+    expect(jumpResult(tab(), 'last')).toBe(diff)
   })
 
   it('list every view for the picker, filter it by words and draw only a window of its rows', () => {
@@ -777,11 +796,29 @@ describe('the results tabs commands', () => {
       // Go to Result… asks the layout for its picker, which takes the request when it is drawn.
       expect(await commands.execute('output.goToResult', undefined, 'palette')).toBe(true)
       expect(pickerRequests.take(tab.id)).toBe(true)
-      // Stacked: none of them.
-      await settings.choose('queryResults.grid.layout', 'stacked')
-      for (const id of ['output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView', 'output.goToResult'] as const) expect(commands.isEnabled(id), id).toBe(false)
-      expect(await commands.execute('output.nextResult', undefined, 'palette')).toBe(false)
+      // Go to Result N, as a browser's Ctrl+N: the item at that place (Result 2, the comparison third), the last for Ctrl+9;
+      // none past the end.
+      await commands.execute('output.goToResult2', undefined, 'keybinding')
+      expect(shown()).toBe(two)
+      await commands.execute('output.goToLastResult', undefined, 'keybinding')
+      expect(shown()).toBe(diff)
+      await commands.execute('output.goToResult1', undefined, 'keybinding')
       expect(shown()).toBe(pivot)
+      expect(commands.isEnabled('output.goToResult3')).toBe(true)
+      expect(commands.isEnabled('output.goToResult4')).toBe(false)
+      // Stacked: Next and Previous Result and Go to Result N select the view and ask the stack to scroll it into view; the
+      // view commands (a Table and its Pivot show together) and the picker are Tabs' only.
+      await settings.choose('queryResults.grid.layout', 'stacked')
+      for (const id of ['output.nextResultView', 'output.previousResultView', 'output.goToResult'] as const) expect(commands.isEnabled(id), id).toBe(false)
+      const reveals: string[] = []
+      const listening = stackReveals.subscribe(request => reveals.push(request.key))
+      try {
+        expect(await commands.execute('output.nextResult', undefined, 'palette')).toBe(true)
+        expect(shown()).toBe(two)
+        expect(await commands.execute('output.goToLastResult', undefined, 'keybinding')).toBe(true)
+        expect(shown()).toBe(diff)
+        expect(reveals).toEqual([two, diff])
+      } finally { listening.dispose() }
     } finally { f.dispose() }
   })
 })

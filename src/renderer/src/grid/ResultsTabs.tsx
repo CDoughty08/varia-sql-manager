@@ -70,6 +70,20 @@ export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> &
   return g.resultTabsHeight + g.viewTabsHeight + Math.min(minHeight, content ?? minHeight)
 }
 
+/**
+ * How the Tabs layout folds its two rows of tabs in a short pane, so the grid keeps room for its header and two rows (the
+ * results pane can be dragged to 100 px, and a window made smaller takes its room first): undefined, both rows; `one`, the
+ * result tabs and the selected view's row side by side in one row, without the facts (the status line has them); `none`,
+ * the grid alone, as Stacked's one set gives up its caption. Next Result, Go to Result N and Go to Result… still reach
+ * every view then. Undefined before the layout has a height.
+ */
+export function tabsFold(height: number, scrollbar: number = scrollbarSize()): 'one' | 'none' | undefined {
+  if (height <= 0) return undefined
+  const need = g.headerHeight + 2 * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
+  if (height - g.resultTabsHeight - g.viewTabsHeight >= need) return undefined
+  return height - g.resultTabsHeight >= need ? 'one' : 'none'
+}
+
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
 const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number }) {
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
@@ -279,6 +293,22 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     return () => observer.dispose()
   }, [!selected])
 
+  // A short pane folds the rows of tabs (`tabsFold`); a tab that had the focus when its row went gives it to the grid.
+  const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
+  const foldRef = useRef(fold)
+  foldRef.current = fold
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight)))
+    return () => observer.dispose()
+  }, [!selected])
+  useLayoutEffect(() => {
+    const root = rootRef.current, active = root?.ownerDocument.activeElement
+    if (fold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
+    root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
+  }, [fold])
+
   // The overflow picker: from the button, or Go to Result… (a request made before this layout was drawn waits for it).
   const [picking, setPicking] = useState(false)
   const pickerFrom = useRef<HTMLElement | undefined>(undefined)
@@ -290,7 +320,8 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     return () => requests.dispose()
   }, [tabId])
   const overflowRef = useRef<HTMLButtonElement>(null)
-  const pickerAnchor = () => overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('.rt-results')
+  // With no rows of tabs (a very short pane) the picker is placed under the top of the layout.
+  const pickerAnchor = () => foldRef.current === 'none' ? rootRef.current : overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('.rt-results')
   const closePicker = (restore: boolean) => {
     setPicking(false)
     const from = pickerFrom.current
@@ -321,7 +352,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   // The selected group's Pivot is out of date: a dot on its view tab, and its mark with Update while it is shown.
   const stale = !!group && pivotOutOfDate(tab, group)
   const labelledBy = group ? tabIdOf(selected.key, 'view') : tabIdOf(selected.key, 'result')
-  return <div ref={rootRef} className="rt-root" onFocus={trackFocus} onBlur={trackBlur}>
+  return <div ref={rootRef} className="rt-root" data-fold={fold} onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>
       <div className="rt-strip" ref={stripRef} role="tablist" aria-label="Results and comparisons" onScroll={() => measureStrip(false)} onWheel={wheel}>
       {shown.map((item, place) => {

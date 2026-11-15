@@ -45,6 +45,15 @@ export function stepResult(tab: Run, delta: number): EntryKey | undefined {
   const item = items[(((Math.max(0, selectedItem(tab, items)) + delta) % items.length) + items.length) % items.length]
   return item.group ? groupView(item.group) : item.key
 }
+/** Go to Result 1 to 8 (`place` 1 to 8) and Go to Last Result (`place` 'last'), as a browser's Ctrl+1 to Ctrl+9 pick its
+ *  tabs: the view to select in that item of the top row, a group's being the view it last showed. Undefined when the run
+ *  has no such item. */
+export function jumpResult(tab: Run, place: number | 'last'): EntryKey | undefined {
+  const items = topItems(tab), at = place === 'last' ? items.length - 1 : place - 1
+  const item = items[at]
+  if (!item) return undefined
+  return item.group ? groupView(item.group) : item.key
+}
 /** Next and Previous Result View: the selected group's other view (its Table and its Pivot), wrapping round as the view
  *  tabs' arrow keys do. Undefined while a comparison is selected or the group has one view. */
 export function stepView(tab: Run, delta: number): EntryKey | undefined {
@@ -129,3 +138,15 @@ class PickerRequests {
   subscribe(listener: (tabId: string) => void): Disposable { return this.emitter.subscribe(listener) }
 }
 export const pickerRequests = new PickerRequests()
+
+/**
+ * Next Result, Previous Result and Go to Result N in the Stacked layout: the stack drawn for the query scrolls the
+ * selected view into view (opening it when collapsed), so its grid mounts, and moves the focus there when the focus was in
+ * the stack. A stack not drawn (Messages had the Results view's place) reveals the focused view when it mounts anyway.
+ */
+class StackReveals {
+  private readonly emitter = new Emitter<{ readonly tabId: string; readonly key: EntryKey }>()
+  request(tabId: string, key: EntryKey): void { this.emitter.emit({ tabId, key }) }
+  subscribe(listener: (request: { readonly tabId: string; readonly key: EntryKey }) => void): Disposable { return this.emitter.subscribe(listener) }
+}
+export const stackReveals = new StackReveals()

@@ -11,6 +11,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import ResultsStack, { collapsedPlaces, settledContent, stackNeed, turnedEntries, weightsOf } from '../src/renderer/src/grid/ResultsStack'
+import { stackReveals } from '../src/renderer/src/grid/result-picker'
 import { ResultsService, setKey, type GridSort, type GridViewState, type ResultSetEntry } from '../src/renderer/src/results/ResultsService'
 import type { ResultView } from '../src/renderer/src/results/ResultClient'
 import { PivotService } from '../src/renderer/src/results/PivotService'
@@ -29,7 +30,7 @@ vi.mock('../src/renderer/src/grid/ResultGrid', async () => {
       const instance = useRef(0)
       if (instance.current === 0) instance.current = ++made
       return createElement('div', {
-        'data-grid': props.entry.key, 'data-instance': instance.current, 'data-focused': String(props.focused), 'data-count': props.count, 'data-sorted': String(!!props.sort),
+        'data-grid': props.entry.key, 'data-result-entry': props.entry.key, 'data-instance': instance.current, 'data-focused': String(props.focused), 'data-count': props.count, 'data-sorted': String(!!props.sort),
         'data-view': props.view, 'data-group': props.group, 'data-bare': String(!!props.bare), 'data-pane-focus': 'grid', tabIndex: 0,
         onClick: () => props.onFocus(props.entry.key)
       })
@@ -331,6 +332,45 @@ describe('the stacked results', () => {
         root = undefined
         container?.remove()
       }
+    } finally {
+      if (scrollTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTop)
+      else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop
+    }
+  })
+
+  it('scroll to and open the view Next Result or Go to Result N selects, taking the focus along from a grid only', () => {
+    const scrolled = new WeakMap<Element, number>()
+    const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', { configurable: true, get(this: HTMLElement) { return scrolled.get(this) ?? 0 }, set(this: HTMLElement, value: number) { scrolled.set(this, value) } })
+    try {
+      paneHeight = 150
+      const { results, keys, draw } = fixture()
+      const [one, , three, pivot] = keys
+      const view = results.viewState('t1')
+      view.collapsed = new Set([pivot])
+      draw()
+      const stack = container!.querySelector<HTMLElement>('.rs-stack')!
+      act(() => { container!.querySelector<HTMLElement>(`[data-grid="${one}"]`)!.focus() })
+      // From Result 1's grid to the Pivot of Result 3: it opens, the stack scrolls down to it, and its grid takes the focus.
+      act(() => { results.focusEntry('t1', pivot); stackReveals.request('t1', pivot) })
+      act(() => { stack.dispatchEvent(new Event('scroll')) })
+      for (let frame = 0; frame < 4; frame++) act(() => { vi.runOnlyPendingTimers() })
+      expect(view.collapsed.has(pivot)).toBe(false)
+      expect(view.stackScrollTop).toBeGreaterThan(0)
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(pivot)
+      // From outside the stack (the editor): it scrolls, and the focus stays where it was.
+      const editor = document.createElement('textarea')
+      document.body.append(editor)
+      editor.focus()
+      act(() => { results.focusEntry('t1', one); stackReveals.request('t1', one) })
+      act(() => { stack.dispatchEvent(new Event('scroll')) })
+      for (let frame = 0; frame < 4; frame++) act(() => { vi.runOnlyPendingTimers() })
+      expect(view.stackScrollTop).toBe(0)
+      expect(document.activeElement).toBe(editor)
+      // Another query's request is not this stack's.
+      act(() => { stackReveals.request('t2', three) })
+      expect(view.stackScrollTop).toBe(0)
+      editor.remove()
     } finally {
       if (scrollTop) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTop)
       else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop

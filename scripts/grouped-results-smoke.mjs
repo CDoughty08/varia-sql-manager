@@ -245,7 +245,29 @@ try {
   await expect(resultTab(page, 'Result 30')).toHaveAttribute('aria-selected', 'true')
   await expect(resultTab(page, 'Result 30')).toBeInViewport({ ratio: 1 })
   await expect(textbox()).toBeFocused()
-  console.log('Grouped results checks: Next and Previous Result step through the tabs from a grid and from the editor, wrapping round.')
+  // Browser tab keys in the results: Ctrl/⌘+1 to 8 pick a result and 9 the last, Ctrl+Page Down and Up step (not on
+  // macOS); in the editor the same digits pick query tabs, so Ctrl/⌘+1 leaves the results alone there. Ctrl/⌘+Shift+O
+  // opens Go to Result.
+  await gridCell(resultGrid(page, 'Result 30'), 1, 0).click()
+  await page.keyboard.press('ControlOrMeta+5')
+  await expect(resultTab(page, 'Result 5')).toHaveAttribute('aria-selected', 'true')
+  await expect(resultGrid(page, 'Result 5')).toBeFocused()
+  await page.keyboard.press('ControlOrMeta+9')
+  await expect(resultTab(page, 'Result 30')).toHaveAttribute('aria-selected', 'true')
+  if (process.platform !== 'darwin') {
+    await page.keyboard.press('Control+PageDown')
+    await expect(resultTab(page, 'Result 1')).toHaveAttribute('aria-selected', 'true')
+    await expect(resultGrid(page, 'Result 1')).toBeFocused()
+  }
+  await textbox().focus()
+  await page.keyboard.press('ControlOrMeta+1')
+  await expect(textbox()).toBeFocused()
+  await expect(resultTab(page, process.platform === 'darwin' ? 'Result 30' : 'Result 1')).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ControlOrMeta+Shift+O')
+  await expect(resultsPickerFilter(page)).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(textbox()).toBeFocused()
+  console.log('Grouped results checks: Next and Previous Result step through the tabs from a grid and from the editor, wrapping round; Ctrl+1 to 9 and Ctrl+Page Down act on results in the results pane and on queries elsewhere.')
   // Stacked from the last result's grid: the stack opens at that result, so its grid takes the focus back; and Tabs again.
   await resultTab(page, 'Result 1').press('End')
   await gridCell(resultGrid(page, 'Result 30'), 1, 0).click()
@@ -253,10 +275,17 @@ try {
   await toggleFromPalette()
   await expect(page.locator(part.resultStack)).toHaveCount(1)
   await expect(resultGrid(page, 'Result 30')).toBeFocused()
+  // Stacked takes the same keys: the stack scrolls to the result picked and its grid takes the focus.
+  await page.keyboard.press('Control+Alt+PageDown')
+  await expect(resultGrid(page, 'Result 1')).toBeFocused()
+  await expect(resultGrid(page, 'Result 1')).toBeInViewport()
+  await page.keyboard.press('ControlOrMeta+9')
+  await expect(resultGrid(page, 'Result 30')).toBeFocused()
+  await expect(resultGrid(page, 'Result 30')).toBeInViewport()
   await toggleFromPalette()
   await expect(resultTabs(page)).toHaveCount(1)
   await expect(resultGrid(page, 'Result 30')).toBeFocused()
-  console.log('Grouped results checks: switching the layout from a result far down the stack keeps its grid focused.')
+  console.log('Grouped results checks: switching the layout from a result far down the stack keeps its grid focused; Next Result and Ctrl+9 scroll the stack to the result and focus its grid.')
 
   // 7. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1')

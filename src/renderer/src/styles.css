@@ -986,6 +986,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-close:hover:not(:disabled) { opacity: 1; }
 .rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+/* A short pane folds the rows of tabs (tabsFold): side by side in one row, without the facts; or none, the grid alone. */
+.rt-root[data-fold="one"] { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); grid-template-rows: auto minmax(0, 1fr); }
+.rt-root[data-fold="one"] > .rt-results { grid-column: 1; grid-row: 1; }
+.rt-root[data-fold="one"] > .rt-views { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; border-bottom-color: var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.rt-root[data-fold="one"] > .rt-panel { grid-column: 1 / -1; grid-row: 2; }
+.rt-root[data-fold="one"] .rt-facts { display: none; }
+.rt-root[data-fold="none"] > .rt-results, .rt-root[data-fold="none"] > .rt-views { display: none; }
 @media (forced-colors: active) {
   .rt-tab[data-selected], .rt-view[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
   .rt-picker-row[data-active] { forced-color-adjust: none; background: Highlight; color: HighlightText; }

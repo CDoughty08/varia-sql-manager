@@ -848,33 +848,47 @@ Outcome, accepted by the owner:
       - The row still draws at most `gridLimits.resultTabsDrawn` (64) tabs around the selected one, so the DOM stays
         bounded at 1,000 results; the picker, the arrow keys, Home, End, Find Next and the commands reach the rest. The
         result row's `role="tablist"` moved from `.rt-results` onto `.rt-strip`, so the button is not inside a tablist.
-      - Commands (`output.*`, catalogue and generated pages regenerated): **Next Result** and **Previous Result**
-        (Ctrl+Alt+Page Down and Up, no `when`, so they work from the editor too, as Ctrl+Page Down and Up step through
-        queries), **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up with
-        `!textInputFocus`: Monaco binds those keys to column selection on Windows, recorded in the Monaco allowlist), and
-        **Go to Result…** (no key; Window menu, after Results as Tabs, access key G). Each needs `resultsTabs &&
-        hasResultSets`, so in Stacked they are unavailable. A focused tab that unmounts as the selection moves (another
-        result's view tabs, the drawn window moving) hands the focus to the tab now selected in its row. Next and Previous Result wrap round, and a result shows the
-        view it showed last; the view commands cycle the selected result's Table and Pivot and are unavailable on a
-        comparison or a result without a Pivot. They select through `focusEntry`, show the Results view and its panel, and
-        leave the focus where it was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused
-        tab's moves to the tab now selected in its row. The four step commands have no menu placement (`menus.test.ts`
-        lists them with the keyboard-only commands). Go to Result… waits up to two seconds for a layout not drawn yet (`pickerRequests`), then lapses, so a layout
-        drawn much later never opens the picker by surprise.
+      - Commands (catalogue and generated pages regenerated). Owner review on PR 494 chose browser tab keys over SSMS's
+        query shortcuts (Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`; those can come back as palette commands that open a query):
+        - **Next Result** and **Previous Result**: Ctrl+Alt+Page Down and Up from anywhere (the editor too), and Ctrl+Page
+          Down and Up while the focus is in an output pane (`activePanel == 'output'`; Windows and Linux, as Next and
+          Previous Query have them). Next and Previous Query keep Ctrl+Tab everywhere and Ctrl+Page Down and Up elsewhere.
+        - **Go to Result 1** to **8** and **Go to Last Result** (`output.goToResult1`…, `output.goToLastResult`): Ctrl/⌘+1
+          to 9 in an output pane; elsewhere the same keys run **Go to Query 1** to **8** and **Go to Last Query**
+          (`document.goToQuery1`…, in tab order across editor groups), as a browser's do. The id rule allows a trailing
+          place number.
+        - **Next Result View** and **Previous Result View**: Ctrl+Alt+Shift+Page Down and Up with `!textInputFocus` (Monaco
+          binds those keys to column selection on Windows, recorded in the Monaco allowlist); Tabs only, and unavailable
+          on a comparison or a result without a Pivot.
+        - **Go to Result…**: Ctrl/⌘+Shift+O (VS Code's Go to Symbol; Ctrl+Alt+letters are reserved for AltGr), Window
+          menu after Results as Tabs, access key G; Tabs only.
+        - All need `hasResultSets`. Next and Previous Result and Go to Result N work in Stacked too: they select through
+          `focusEntry` and `stackReveals` asks the stack to open the view if collapsed and scroll to it, as Find Next does;
+          its grid takes the focus once mounted when the focus was in the stack. In Tabs they leave the focus where it
+          was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused tab's moves to the tab
+          now selected in its row, also when that tab unmounted (another result's view tabs, the drawn window moving).
+          Next and Previous Result wrap round, and a result shows the view it showed last. None has a menu placement but
+          Go to Result… (`menus.test.ts` lists them with the keyboard-only commands); all are in the palette. Go to
+          Result… waits up to two seconds for a layout not drawn yet (`pickerRequests`), then lapses, so a layout drawn
+          much later never opens the picker by surprise.
+      - Short panes (owner review): the results pane can be dragged to its 100 px minimum, and a window made smaller
+        takes the results pane's room first, which left the grid 8 px under the two rows of tabs at 1024×700 with a
+        banner. `tabsFold` keeps the grid's header and two rows: the rows of tabs share one row (`data-fold="one"`, the
+        facts left to the status line), then go (`data-fold="none"`, the grid alone, as Stacked's one set gives up its
+        caption; a tab that had the focus hands it to the grid). `backend-smoke` runs its short-pane step on Tabs (no Stacked pin).
       - Getting Started: the results guide has a new section, Move between results, on the tabs, the picker, the commands
         and the layout setting, with live references.
       - Inherited from PR 13: the grouped-results suite's CI seconds were already measured (4 s Linux, 6 s Windows), and the
         Pivot view tab's out-of-date dot was already drawn (`rt-dot`), so neither needed work here.
       - Departures from the mock: the picker's button reads "+N" and a chevron, without the mock's count of every item;
-        the Pivot row reads "Pivot" under its result rather than repeating the result's name; no keyboard shortcut opens the
-        picker (the button is a Tab stop in the result row, after the tabs).
-      - Left: Stacked has no Next or Previous Result (they would need the stack to reveal and focus the next item, which
-        `revealFocused` only does at mount); the 1,440 px Tabs button cutoff, narrow and short panes, Save names and
-        popouts stay PR 15's.
-15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13 and one from PR 14: the Tabs toolbar
+        the Pivot row reads "Pivot" under its result rather than repeating the result's name; the mock's short pane hides
+        the facts and strips at 330 px, where this folds the rows of tabs only when the grid would lose its rows.
+      - Left: the SSMS query shortcuts' procedures as palette commands; the 1,440 px Tabs button cutoff, narrow panes,
+        Save names and popouts stay PR 15's.
+15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
     button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and
-    the results toolbar's search box is squeezed in a narrow window. From PR 14: Tabs in a short pane (the two tab rows
-    leave no room at 700 px), which is why `backend-smoke` pins Stacked.
+    the results toolbar's search box is squeezed in a narrow window. PR 14 folds Tabs' rows of tabs in a short pane
+    (`tabsFold`); what else a short pane hides (the mock's 330 px rules) is still this PR's.
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
     **Merged as #466.** Changed since: #489 fixed Compare failing on results matched by whole rows (the answer has no
     `key` member then), and #490 turned the picker into a popover beside what opened it, from the options mocked in

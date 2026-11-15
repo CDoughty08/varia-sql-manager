@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (321)
+## Commands (339)
 
 ### File
 
@@ -84,8 +84,17 @@ keys it uses are listed below.
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
-| Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
-| Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
+| Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown (`activePanel != 'output'`) | Ctrl+Tab, Ctrl+PageDown (`activePanel != 'output'`) | ⌃⇥ | `multipleDocuments` | Window › Next Query |
+| Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp (`activePanel != 'output'`) | Ctrl+Shift+Tab, Ctrl+PageUp (`activePanel != 'output'`) | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
+| Go to Query 1 | `document.goToQuery1` | Ctrl+1 (`activePanel != 'output'`) | Ctrl+1 (`activePanel != 'output'`) | ⌘1 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 2 | `document.goToQuery2` | Ctrl+2 (`activePanel != 'output'`) | Ctrl+2 (`activePanel != 'output'`) | ⌘2 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 3 | `document.goToQuery3` | Ctrl+3 (`activePanel != 'output'`) | Ctrl+3 (`activePanel != 'output'`) | ⌘3 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 4 | `document.goToQuery4` | Ctrl+4 (`activePanel != 'output'`) | Ctrl+4 (`activePanel != 'output'`) | ⌘4 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 5 | `document.goToQuery5` | Ctrl+5 (`activePanel != 'output'`) | Ctrl+5 (`activePanel != 'output'`) | ⌘5 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 6 | `document.goToQuery6` | Ctrl+6 (`activePanel != 'output'`) | Ctrl+6 (`activePanel != 'output'`) | ⌘6 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 7 | `document.goToQuery7` | Ctrl+7 (`activePanel != 'output'`) | Ctrl+7 (`activePanel != 'output'`) | ⌘7 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Query 8 | `document.goToQuery8` | Ctrl+8 (`activePanel != 'output'`) | Ctrl+8 (`activePanel != 'output'`) | ⌘8 (`activePanel != 'output'`) | `hasActiveDocument` | — |
+| Go to Last Query | `document.goToLastQuery` | Ctrl+9 (`activePanel != 'output'`) | Ctrl+9 (`activePanel != 'output'`) | ⌘9 (`activePanel != 'output'`) | `hasActiveDocument` | — |
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
@@ -191,11 +200,20 @@ keys it uses are listed below.
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs |
-| Next Result | `output.nextResult` | Ctrl+Alt+PageDown | Ctrl+Alt+PageDown | ⌃⌥⇟ | `resultsTabs && hasResultSets` | — |
-| Previous Result | `output.previousResult` | Ctrl+Alt+PageUp | Ctrl+Alt+PageUp | ⌃⌥⇞ | `resultsTabs && hasResultSets` | — |
+| Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`activePanel == 'output'`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`activePanel == 'output'`) | ⌃⌥⇟ | `hasResultSets` | — |
+| Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`activePanel == 'output'`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`activePanel == 'output'`) | ⌃⌥⇞ | `hasResultSets` | — |
+| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`activePanel == 'output'`) | Ctrl+1 (`activePanel == 'output'`) | ⌘1 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 2 | `output.goToResult2` | Ctrl+2 (`activePanel == 'output'`) | Ctrl+2 (`activePanel == 'output'`) | ⌘2 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 3 | `output.goToResult3` | Ctrl+3 (`activePanel == 'output'`) | Ctrl+3 (`activePanel == 'output'`) | ⌘3 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 4 | `output.goToResult4` | Ctrl+4 (`activePanel == 'output'`) | Ctrl+4 (`activePanel == 'output'`) | ⌘4 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 5 | `output.goToResult5` | Ctrl+5 (`activePanel == 'output'`) | Ctrl+5 (`activePanel == 'output'`) | ⌘5 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 6 | `output.goToResult6` | Ctrl+6 (`activePanel == 'output'`) | Ctrl+6 (`activePanel == 'output'`) | ⌘6 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 7 | `output.goToResult7` | Ctrl+7 (`activePanel == 'output'`) | Ctrl+7 (`activePanel == 'output'`) | ⌘7 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Result 8 | `output.goToResult8` | Ctrl+8 (`activePanel == 'output'`) | Ctrl+8 (`activePanel == 'output'`) | ⌘8 (`activePanel == 'output'`) | `hasResultSets` | — |
+| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`activePanel == 'output'`) | Ctrl+9 (`activePanel == 'output'`) | ⌘9 (`activePanel == 'output'`) | `hasResultSets` | — |
 | Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
-| Go to Result… | `output.goToResult` | — | — | — | `resultsTabs && hasResultSets` | Window › Go to Result… |
+| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result… |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 

@@ -159,14 +159,22 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   the button, or to where Go to Result… was run from; a press outside or the focus leaving closes it. Results arriving
   or closing while it is open keep the row you moved to. It opens at the view shown, which it marks, and a Pivot
   that is out of date says so. The list draws only the rows in view, so a run of 1,000 results costs a screenful of rows
-  (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (command palette, Window menu)
-  opens it from anywhere, even when every tab fits.
-- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up) select the next or previous result or comparison,
-  wrapping round; a result shows the view it showed last. **Next Result View** and **Previous Result View**
-  (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other text boxes, where Monaco's column selection keeps
-  them) switch between the selected result's Table and Pivot. They work from a grid, whose focus moves to the grid
-  shown, from a focused tab, whose focus follows, and from the editor, which keeps it. They are for Tabs; in Stacked
-  they are unavailable.
+  (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (Ctrl+Shift+O, ⇧⌘O on macOS;
+  command palette, Window menu) opens it from anywhere, even when every tab fits.
+- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up from anywhere; also Ctrl+Page Down and Up while
+  the focus is in the results pane, on Windows and Linux) select the next or previous result or comparison, wrapping
+  round; a result shows the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9,
+  ⌘ on macOS, while the focus is in the results pane) pick one as a browser's keys pick a tab; outside the results pane
+  the same keys pick query tabs (Go to Query 1 to 8, Go to Last Query), and Ctrl+Page Down and Up step through queries.
+  **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other
+  text boxes, where Monaco's column selection keeps them) switch between the selected result's Table and Pivot. They work
+  from a grid, whose focus moves to the grid shown, from a focused tab, whose focus follows, and from the editor, which
+  keeps it. In Stacked, Next and Previous Result and Go to Result N scroll the stack to the result (opening it when
+  collapsed) and, from a grid, focus its grid; the view commands and the picker are for Tabs.
+- In a short results pane the Tabs layout folds its rows so the grid keeps room for its header and two rows: first the
+  result tabs and the selected view's tabs, chips and buttons share one row (the row and column counts are left to the
+  status line), then, in the shortest pane (the results pane dragged to its minimum, say), the grid shows alone, as
+  Stacked's one result gives up its caption. The keys above and Go to Result… still reach every view.
 
 ![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
 

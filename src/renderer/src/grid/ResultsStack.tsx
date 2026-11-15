@@ -8,6 +8,7 @@ import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type 
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
+import { stackReveals } from './result-picker'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
 let scrollbar: number | undefined
@@ -365,6 +366,36 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     if (collapsedEntries.has(key)) toggle(key)
     stackReveal.current = key
   }, [])
+  // Next Result, Previous Result and Go to Result N select a view through the service and ask the stack to show it: it
+  // opens and scrolls into view as a match does, and the focus follows to its grid once mounted when it was in the stack
+  // (a grid, a caption); from the editor it stays there. The request only marks the place: the work waits for a render.
+  const [revealTick, setRevealTick] = useState(0)
+  const revealAsked = useRef<EntryKey | undefined>(undefined), commandFocus = useRef<EntryKey | undefined>(undefined)
+  useEffect(() => {
+    const requests = stackReveals.subscribe(request => { if (request.tabId === tabId) { revealAsked.current = request.key; setRevealTick(tick => tick + 1) } })
+    return () => requests.dispose()
+  }, [tabId])
+  useLayoutEffect(() => {
+    const key = revealAsked.current
+    revealAsked.current = undefined
+    if (key === undefined || !sets.some(entry => entry.key === key)) return
+    if (collapsedEntries.has(key)) toggle(key)
+    setFocused(key)
+    stackReveal.current = key
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    commandFocus.current = stack && active && stack.contains(active) ? key : undefined
+  }, [revealTick])
+  useLayoutEffect(() => {
+    const key = commandFocus.current, stack = stackRef.current
+    if (key === undefined || !stack) return
+    const active = stack.ownerDocument.activeElement
+    // The view went, or the user moved the focus elsewhere meanwhile: the focus is theirs.
+    if (!sets.some(entry => entry.key === key) || (active && active !== stack.ownerDocument.body && !stack.contains(active))) { commandFocus.current = undefined; return }
+    const grid = stack.querySelector<HTMLElement>(`[data-result-entry="${CSS.escape(key)}"]`)
+    if (!grid) return
+    commandFocus.current = undefined
+    grid.focus({ preventScroll: true })
+  })
   useLayoutEffect(() => {
     const element = stackRef.current, key = stackReveal.current
     if (key === undefined) return
@@ -379,7 +410,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     element.scrollTop = top
     // The scroll event comes later: the saved position follows now, so a restore before it does not undo the reveal.
     view.stackScrollTop = element.scrollTop
-  }, [revealSeq, revealEntry, layout, collapsed, paneHeight, sets])
+  }, [revealSeq, revealEntry, revealTick, layout, collapsed, paneHeight, sets])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()

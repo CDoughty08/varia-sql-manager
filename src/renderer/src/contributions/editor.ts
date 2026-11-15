@@ -21,6 +21,14 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     documents.activate(next)
     if (fromTab) editorGroups.focusTab(next)
   }
+  // Go to Query N, as a browser's Ctrl+1 to Ctrl+9: the query at that place in tab order (each group's tabs in turn).
+  const jump = (index: number) => {
+    const target = documents.getSnapshot().documents[index]?.id
+    if (target === undefined) return
+    const fromTab = editorGroups.focusedDocument() !== undefined
+    documents.activate(target)
+    if (fromTab) editorGroups.focusTab(target)
+  }
   // The query tab menu, or a key pressed on a focused tab, names its tab (`tabId`); otherwise the active document. The moved
   // tab stays the one shown, in its own group.
   const tab = (tabId: string | undefined) => tabId ?? documents.getSnapshot().activeId
@@ -35,6 +43,8 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     commands.register('editor.toggleOvertype', { when: () => inputMode.getSnapshot().available, run: () => inputMode.toggle() }),
     commands.register('document.next', { run: () => step(1) }),
     commands.register('document.previous', { run: () => step(-1) }),
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`document.goToQuery${place}`, { when: () => documents.getSnapshot().documents.length >= place, run: () => jump(place - 1) })),
+    commands.register('document.goToLastQuery', { run: () => jump(documents.getSnapshot().documents.length - 1) }),
     commands.register('document.moveLeft', { when: context => canMove(context?.tabId, -1), run: context => move(context?.tabId, -1) }),
     commands.register('document.moveRight', { when: context => canMove(context?.tabId, 1), run: context => move(context?.tabId, 1) }),
     commands.register('editor.splitRight', { when: context => editorGroups.canSplit(tab(context?.tabId)), unavailable: context => unsplittable(tab(context?.tabId)), run: context => editorGroups.split(tab(context?.tabId), 'right') }),

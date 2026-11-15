@@ -2,7 +2,6 @@ import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
@@ -295,9 +294,6 @@ try {
   expect(history.indexOf('restarting:1')).toBeLessThan(history.indexOf('starting:2'))
   expect(await app.evaluate(() => globalThis.__variaTest.states.find(state => state.status === 'restarting')?.lost)).toEqual({ generation: 1, reason: 'crash', connections: 1, queries: 1 })
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
-  // The short pane's step below reads the stacked layout, whose one set gives up its caption; Tabs' short panes are
-  // grouped results PR 15's.
-  await pinStackedResults(page)
   // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
   const lostRow = lostServerRows(page)
   await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (Disconnected · Backend restarted)')
@@ -367,8 +363,8 @@ try {
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
-  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
-  // whole inside the pane.
+  // At 1024x700 under the banner the results pane is at its 100 px minimum: the Tabs layout folds its rows of tabs away
+  // (tabsFold), and the grid's header and row show whole inside the pane.
   const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
   await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
   await expect.poll(() => shown(gridCell(0, 1))).toBe(true)

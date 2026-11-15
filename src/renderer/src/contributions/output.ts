@@ -5,7 +5,7 @@ import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
 import { entryOf, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
-import { pickerRequests, stepResult, stepView } from '../grid/result-picker'
+import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -142,21 +142,26 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const key = target?.entry ?? tab?.focused
     return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
-  /** The query whose Tabs layout Next Result, its view commands and Go to Result act on: the focused output's, else the
-   *  active query's; while results show as tabs and it has a result to show. */
-  const tabsRun = (args?: CommandArgs) => {
+  /** The query whose results Next Result, Go to Result N, the view commands and Go to Result… act on: the focused output's,
+   *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. */
+  const tabs = () => settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs'
+  const resultsRun = (args?: CommandArgs, onlyTabs = false) => {
     const tabId = searchTab(args), tab = tabId ? results.getSnapshot()[tabId] : undefined
-    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs' ? { tabId, tab } : undefined
+    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
-  /** Selects the view `step` names in the Tabs layout, showing the Results view if Messages or another output panel had its place. */
-  const stepTabs = (step: typeof stepResult, delta: number) => ({
-    when: (args?: CommandArgs) => { const run = tabsRun(args); return !!run && step(run.tab, delta) !== undefined },
+  const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
+  /** Selects the view `pick` names, showing the Results view if Messages or another output panel had its place; Stacked
+   *  scrolls it into view (and the focus with it, from a grid), Tabs shows it. The view commands are Tabs' only: Stacked
+   *  shows a Table and its Pivot together. */
+  const selectResult = (pick: (tab: NonNullable<ReturnType<typeof resultsRun>>['tab']) => string | undefined, onlyTabs = false) => ({
+    when: (args?: CommandArgs) => { const run = resultsRun(args, onlyTabs); return !!run && pick(run.tab) !== undefined },
     run: (args?: CommandArgs) => {
-      const run = tabsRun(args), key = run && step(run.tab, delta)
+      const run = resultsRun(args, onlyTabs), key = run && pick(run.tab)
       if (!run || key === undefined) return
       results.setView(run.tabId, 'results')
       panes.select('results')
       results.focusEntry(run.tabId, key)
+      if (!tabs()) stackReveals.request(run.tabId, key)
     }
   })
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
@@ -343,10 +348,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
     commands.register('output.toggleResultsTabs', { run: toggleLayout }),
-    commands.register('output.nextResult', stepTabs(stepResult, 1)),
-    commands.register('output.previousResult', stepTabs(stepResult, -1)),
-    commands.register('output.nextResultView', stepTabs(stepView, 1)),
-    commands.register('output.previousResultView', stepTabs(stepView, -1)),
+    commands.register('output.nextResult', selectResult(tab => stepResult(tab, 1))),
+    commands.register('output.previousResult', selectResult(tab => stepResult(tab, -1))),
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`output.goToResult${place}`, selectResult(tab => jumpResult(tab, place)))),
+    commands.register('output.goToLastResult', selectResult(tab => jumpResult(tab, 'last'))),
+    commands.register('output.nextResultView', selectResult(tab => stepView(tab, 1), true)),
+    commands.register('output.previousResultView', selectResult(tab => stepView(tab, -1), true)),
     commands.register('output.goToResult', {
       when: args => !!tabsRun(args),
       run: args => {
