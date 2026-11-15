@@ -1551,9 +1551,14 @@ itself by view position.
     in order and held per run (a profile's working memory is reserved per run), so each hands a thread back only when
     one of its runs ends, which for a profile that started first is about when it ends.
   - A failure or cancellation stops the step's workers at their next item and is rethrown, as itself, once they have
-    all stopped; every thread is back when the step returns. Workers still queued to the thread pool when a step closes
-    are given back at once (the owner never waits for a starved pool to run them), a lease over its share hands back a
-    queued worker before a running one, and a worker the thread pool refuses is taken back as if never granted.
+    all stopped; every thread is back and every worker has disposed its state when the step returns. A state whose
+    Dispose throws fails the step too, rethrown by the owner only when no body or state factory failed and no worker
+    met a cancellation; it stops no other worker and is never thrown on a worker's thread. Workers still queued to the
+    thread pool when a step closes are given back at once (the owner never waits for a starved pool to run them), a
+    lease over its share hands back a queued worker before a running one, and a worker the thread pool refuses is taken
+    back as if never granted.
+  - A step lets go of its body and state when it returns, so workers still queued after it hold nothing the body
+    captured: a read's raw pages stay freeable by packing while the thread pool is busy.
   - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
     lowering it takes effect at the workers' next items, raising it at the next such event.
   - Measured (`--fairness-bench`, 2,000,000 W1 rows, 24 cores and 16 workers, then `DOTNET_PROCESSOR_COUNT=4`, 3
