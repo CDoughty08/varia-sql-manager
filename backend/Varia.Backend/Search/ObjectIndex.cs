@@ -3,7 +3,8 @@ using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Search;
 
-/// <summary>One indexed object: its Object Explorer identity (kind, subtype, schema, name and, for a child such as a column or a
+/// <summary>One indexed object as a record, the form a read composes and checks compare; the index itself holds objects packed in an
+/// <see cref="ObjectTable"/>. Its Object Explorer identity (kind, subtype, schema, name and, for a child such as a column or a
 /// DML trigger, its parent and the folder that lists the parent), the folder that lists it, its definition when it has one the
 /// login may read (a module's, a constraint's or computed column's expression, a plan guide's statement), cut at the index's
 /// per-module limit, and whether it is a system object (Microsoft-shipped, a database diagrams support object, a fixed role or a
@@ -20,16 +21,19 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 }
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
-internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null,
-    string[]? pooled = null)
+internal sealed class DatabaseIndex(string database, ObjectTable table, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null,
+    bool pooled = false)
 {
+    /// <summary>An index of <paramref name="objects"/> as they are, holding no pool references (checks and benchmarks).</summary>
+    public DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut) : this(database, ObjectTable.Of(objects), bytes, modules, cut) { }
+
     public string Database { get; } = database;
-    public IndexedObject[] Objects { get; } = objects;
+    public ObjectTable Table { get; } = table;
     /// <summary>The memory its records hold (<see cref="IndexMemory"/>), charged against the index's budget until the database is
     /// replaced or dropped. Its names and definitions are the pool's (<see cref="Pooled"/>).</summary>
     public long Bytes { get; } = bytes;
-    /// <summary>The distinct texts it holds a <see cref="StringPool"/> reference to, given back with it.</summary>
-    public string[] Pooled { get; } = pooled ?? [];
+    /// <summary>The distinct texts it holds a <see cref="StringPool"/> reference to, given back with it: a read's table's texts.</summary>
+    public string[] Pooled { get; } = pooled ? [.. table.Texts.OfType<string>()] : [];
     /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
     /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
     public long Credited { get; } = credited;
@@ -44,9 +48,9 @@ internal sealed class DatabaseIndex(string database, IndexedObject[] objects, lo
 /// databases and connections that share it), and of each database's slot for a text it holds a reference to.</summary>
 internal static class IndexMemory
 {
-    /// <summary>An <see cref="IndexedObject"/> on 64-bit .NET: header and method table, eleven references, a nullable DateTime and
-    /// two flags, plus the array slot.</summary>
-    public const long RecordBytes = 136;
+    /// <summary>An <see cref="ObjectEntry"/> in its table's array: four text or object ids, a date, a shape id and flags. (An
+    /// <see cref="IndexedObject"/> record with its array slot took 136.)</summary>
+    public const long RecordBytes = 24;
 
     /// <summary>A database's reference to one pooled text (<see cref="DatabaseIndex.Pooled"/>).</summary>
     public const long SlotBytes = 8;
@@ -122,7 +126,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     public ResourceSet? Resource { get { lock (gate) return resource; } }
     /// <summary>The server's own objects, whose refs name no database.</summary>
     public DatabaseIndex? Server { get { lock (gate) return server; } }
-    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length) + (resource?.Objects.Length ?? 0) + (server?.Objects.Length ?? 0); } }
+    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Table.Count) + (resource?.Table.Count ?? 0) + (server?.Table.Count ?? 0); } }
 
     /// <summary>Holds the server's objects in place of those held before, whose share goes back (or over to the new read).</summary>
     public void PutServer(DatabaseIndex value)
@@ -278,8 +282,8 @@ internal sealed class SearchMatcher
 
     /// <summary>Whether a plain search's longest literal run is in the object's qualified name or its database (always, for a
     /// regular expression). The run has no dot, so it lies within one part: the parts are tested without building the name.</summary>
-    public bool Might(IndexedObject item, string? database) =>
-        hint.Length == 0 || Has(item.Name) || Has(item.Schema) || Has(item.ParentSchema) || Has(item.ParentName) || Has(database);
+    public bool Might(ObjectTable table, int at, string? database) =>
+        hint.Length == 0 || Has(table.Name(at)) || Has(table.Schema(at)) || Has(table.ParentSchema(at)) || Has(table.ParentName(at)) || Has(database);
 
     private bool Has(string? value) => value is not null && value.Contains(hint, comparison);
 
@@ -328,7 +332,7 @@ internal static class IndexSearch
     /// <summary>A hit as the scan finds it, before its result is built: its rank, the object and where its name matched (From is
     /// -1 when only its definition did, whose first match it then carries). The scan keeps at most the candidate cap of these;
     /// labels are built only for the kept ones, and results (match counts, previews, dates) only for the best `limit`.</summary>
-    private readonly record struct Candidate(int Rank, int Score, string? Database, IndexedObject Item, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength);
+    private readonly record struct Candidate(int Rank, int Score, string? Database, ObjectTable Table, int At, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength);
 
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
@@ -342,15 +346,17 @@ internal static class IndexSearch
         var partial = false;
         var dotted = query.Text.Contains('.');
         var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
-        var sources = new List<(string? Database, IndexedObject[] Objects)>();
-        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Objects));
+        var sources = new List<(string? Database, ObjectTable Table)>();
+        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table));
         sources.AddRange(databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
-            .Select(value => ((string?)value.Database, value.Objects)));
+            .Select(value => ((string?)value.Database, value.Table)));
         if (index.Resource is { } resource)
-            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Objects));
-        foreach (var (name, objects) in sources)
+            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Table));
+        foreach (var (name, table) in sources)
         {
-            foreach (var item in objects)
+            // Which of the table's shapes the search's kinds keep, worked out once per table rather than once per object.
+            var kept = query.Kinds is null ? null : table.Shapes.Select(shape => query.Kinds.Contains(shape.Kind)).ToArray();
+            for (var at = 0; at < table.Count; at++)
             {
                 // The budget and Stop are checked by objects scanned, not hits found: a search with few hits still reads every
                 // definition, and a superseded search must not keep scanning on the thread pool.
@@ -359,10 +365,10 @@ internal static class IndexSearch
                     token.ThrowIfCancellationRequested();
                     if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 }
-                if (query.Kinds is not null && !query.Kinds.Contains(item.Kind)) continue;
-                if (!Match(name, item, query, matcher, fuzzy, dotted, out var candidate)) continue;
+                if (kept is not null && !kept[table.ShapeOf(at)]) continue;
+                if (!Match(name, table, at, query, matcher, fuzzy, dotted, out var candidate)) continue;
                 total++;
-                var key = (candidate.Rank, candidate.Score, item.System);
+                var key = (candidate.Rank, candidate.Score, table.System(at));
                 if (found.Count < limits.Candidates) found.Enqueue(candidate, key);
                 else
                 {
@@ -372,8 +378,8 @@ internal static class IndexSearch
             }
         }
     done:
-        var best = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
-            .OrderBy(value => value.Candidate.Rank).ThenBy(value => value.Candidate.Score).ThenBy(value => value.Candidate.Item.System)
+        var best = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Table.Label(value.Element.At)))
+            .OrderBy(value => value.Candidate.Rank).ThenBy(value => value.Candidate.Score).ThenBy(value => value.Candidate.Table.System(value.Candidate.At))
             .ThenBy(value => value.Candidate.Database ?? "", StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Label, StringComparer.Ordinal)
             .Take(query.Limit);
@@ -398,7 +404,7 @@ internal static class IndexSearch
     /// <summary>Whether <paramref name="item"/> is a hit, with its rank and name range. Builds nothing for a name that matches
     /// without a dot; a definition is searched here only when the name did not match (the rank needs it), and a name hit's
     /// definition match waits for <see cref="Build"/>.</summary>
-    private static bool Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, bool dotted, out Candidate candidate)
+    private static bool Match(string? database, ObjectTable table, int at, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, bool dotted, out Candidate candidate)
     {
         var rank = DefinitionRank;
         var score = 0;
@@ -407,32 +413,33 @@ internal static class IndexSearch
         var span = 0;
         if (query.Names)
         {
-            var offset = item.LabelLength - item.Name.Length;
-            if (matcher.Find(item.Name, 0, out var at, out var length))
+            var name = table.Name(at);
+            var offset = table.LabelLength(at) - name.Length;
+            if (matcher.Find(name, 0, out var index, out var length))
             {
-                (from, span) = (offset + at, length);
-                rank = length == item.Name.Length ? 0 : at == 0 ? 1 : 2;
+                (from, span) = (offset + index, length);
+                rank = length == name.Length ? 0 : index == 0 ? 1 : 2;
             }
             else if (dotted && query.Regex)
             {
-                if (matcher.Find(item.Label, 0, out at, out length)) (from, span, rank) = (at, length, 2);
+                if (matcher.Find(table.Label(at), 0, out index, out length)) (from, span, rank) = (index, length, 2);
             }
-            else if (dotted && matcher.Might(item, database))
+            else if (dotted && matcher.Might(table, at, database))
             {
                 // A plain search with a dot matches the qualified name between dots, so a dot marks where a part starts or
                 // ends: .Sales finds the schema Sales and everything in it, Sales. too, and AppData.dbo.Orders the table in
                 // that database. Only the label's part of the match is marked.
-                var label = item.Label;
+                var label = table.Label(at);
                 var prefix = database is null ? 1 : database.Length + 2;
-                if (matcher.Find(database is null ? "." + label + "." : "." + database + "." + label + ".", 0, out at, out length))
+                if (matcher.Find(database is null ? "." + label + "." : "." + database + "." + label + ".", 0, out index, out length))
                 {
-                    var start = Math.Clamp(at - prefix, 0, label.Length);
-                    var end = Math.Clamp(at + length - prefix, 0, label.Length);
+                    var start = Math.Clamp(index - prefix, 0, label.Length);
+                    var end = Math.Clamp(index + length - prefix, 0, label.Length);
                     (from, span) = (start, end - start);
                     rank = end == start ? 2 : start == 0 && end == label.Length ? 0 : start == 0 ? 1 : 2;
                 }
             }
-            if (from < 0 && fuzzy is not null && fuzzy.Match(item.Name, item.Schema ?? item.ParentSchema, item.ParentName, out var tier, out var cost, out var word, out var width))
+            if (from < 0 && fuzzy is not null && fuzzy.Match(name, table.Schema(at) ?? table.ParentSchema(at), table.ParentName(at), out var tier, out var cost, out var word, out var width))
             {
                 (from, span) = (offset + word, width);
                 (rank, score, approximate) = (3 + (int)tier, cost, true);
@@ -440,12 +447,12 @@ internal static class IndexSearch
         }
         var definitionAt = -1;
         var definitionLength = 0;
-        if (from < 0 && !(query.Definitions && item.Definition is { } text && matcher.Find(text, 0, out definitionAt, out definitionLength)))
+        if (from < 0 && !(query.Definitions && table.Definition(at) is { } text && matcher.Find(text, 0, out definitionAt, out definitionLength)))
         {
             candidate = default;
             return false;
         }
-        candidate = new(rank, score, database, item, from, span, approximate, definitionAt, definitionLength);
+        candidate = new(rank, score, database, table, at, from, span, approximate, definitionAt, definitionLength);
         return true;
     }
 
@@ -456,11 +463,12 @@ internal static class IndexSearch
     private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, Stopwatch watch, CancellationToken token,
         ref bool late, ref bool stopped)
     {
-        var item = hit.Item;
+        var (table, at) = (hit.Table, hit.At);
         DefinitionMatch? definition = null;
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
-        if (query.Definitions && item.Definition is not null && first < 0 && late) stopped = true;
-        else if (query.Definitions && item.Definition is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        var stored = table.Definition(at);
+        if (query.Definitions && stored is not null && first < 0 && late) stopped = true;
+        else if (query.Definitions && stored is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
         {
             var count = 1;
             var next = first + Math.Max(1, size);
@@ -474,11 +482,13 @@ internal static class IndexSearch
             // the definition's very end only an empty regular expression match could follow, which is not worth a partial answer.)
             var uncounted = late && count < limits.MatchesCounted && next < text.Length;
             stopped |= uncounted;
-            definition = Preview(text, first, size, count, limits.PreviewChars, item.DefinitionCut) with { Uncounted = uncounted ? true : null };
+            definition = Preview(text, first, size, count, limits.PreviewChars, table.DefinitionCut(at)) with { Uncounted = uncounted ? true : null };
         }
-        var value = new ObjectRefDto(item.Kind, hit.Database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
-        return new(value, item.Folder, label, hit.From < 0 ? null : [hit.From, hit.Length], item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
-            definition, item.Subtype, item.ParentFolder, item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null, hit.Approximate ? true : null);
+        var parent = table.Parent(at);
+        var via = table.Via(at);
+        var value = new ObjectRefDto(table.Kind(at), hit.Database, table.Schema(at), table.Name(at), parent < 0 ? null : new ParentRefDto(table.Kind(parent), table.Schema(parent)!, table.Name(parent)));
+        return new(value, table.Folder(at), label, hit.From < 0 ? null : [hit.From, hit.Length], table.Modified(at)?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+            definition, table.Subtype(at), parent < 0 ? null : table.Folder(parent), via >= 0 ? new ViaRefDto(table.Schema(via)!, table.Name(via), table.Folder(via)) : null, hit.Approximate ? true : null);
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>

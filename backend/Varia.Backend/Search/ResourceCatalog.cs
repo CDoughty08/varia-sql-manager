@@ -6,13 +6,13 @@ internal sealed record ResourceKey(string Version, int Edition, long Count, Date
 
 /// <summary>The resource database's objects for one key: the sys and INFORMATION_SCHEMA views, procedures and functions that
 /// every database of every server with that key shows. Search lists them once per connection, not once per database.</summary>
-internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int modules, int cut, long bytes = 0)
+internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int modules, int cut, long bytes = 0)
 {
     public ResourceKey Key { get; } = key;
     /// <summary>The memory its records hold, charged once whatever the connections that share it; its names and definitions are
     /// the pool's.</summary>
     public long Bytes { get; } = bytes;
-    public IndexedObject[] Objects { get; } = objects;
+    public ObjectTable Table { get; } = table;
     public int Modules { get; } = modules;
     public int Cut { get; } = cut;
 }
@@ -50,7 +50,7 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
     /// cancelled only when every caller waiting for it has stopped (<paramref name="token"/>); a read past its limit throws
     /// <see cref="TimeoutException"/>. Each successful call takes a reference that <see cref="Release"/> gives back.</summary>
-    public async Task<ResourceSet> AcquireAsync(ResourceKey key, Func<CancellationToken, Task<IndexedObject[]>> read, TimeSpan? limit = null, CancellationToken token = default)
+    public async Task<ResourceSet> AcquireAsync(ResourceKey key, Func<CancellationToken, Task<ObjectTable>> read, TimeSpan? limit = null, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         Entry entry;
@@ -93,7 +93,7 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     }
 
     /// <summary>Runs the shared read and completes <see cref="Entry.Load"/>; it never throws.</summary>
-    private async Task RunAsync(ResourceKey key, Entry entry, Func<CancellationToken, Task<IndexedObject[]>> read)
+    private async Task RunAsync(ResourceKey key, Entry entry, Func<CancellationToken, Task<ObjectTable>> read)
     {
         try
         {
@@ -134,33 +134,28 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     private void Drop(ResourceSet set)
     {
         pool.Budget.Release(set.Bytes);
-        pool.Release(set.Objects.SelectMany(Texts));
+        pool.Release(set.Table.Texts);
     }
 
-    /// <summary>The texts of an object a set holds one pool reference to each.</summary>
-    private static IEnumerable<string?> Texts(IndexedObject item) => [item.Name, item.Schema, item.ParentSchema, item.ParentName, item.Definition];
-
-    /// <summary>The set with each text swapped for the pool's copy, one reference per use; a definition the budget refuses is left
-    /// out and counted as cut.</summary>
-    private ResourceSet Share(ResourceKey key, IndexedObject[] objects)
+    /// <summary>The set with each distinct text swapped for the pool's copy, one reference per set: names are taken whatever the
+    /// budget holds, and a definition the budget refuses is left out and counted as cut.</summary>
+    private ResourceSet Share(ResourceKey key, ObjectTable table)
     {
+        var bytes = table.Count * IndexMemory.RecordBytes;
+        pool.Budget.Force(bytes);
+        var names = table.NameTexts();
+        var texts = table.Texts;
+        var copies = new string?[texts.Count];
+        for (var at = 0; at < copies.Length; at++)
+            if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, keepFree);
+        var shared = table.WithTexts(copies);
         var modules = 0;
         var cut = 0;
-        var bytes = objects.Length * IndexMemory.RecordBytes;
-        pool.Budget.Force(bytes);
-        string? Name(string? value) => value is null ? null : pool.TryAcquire(value, force: true);
-        for (var at = 0; at < objects.Length; at++)
+        for (var at = 0; at < shared.Count; at++)
         {
-            var item = objects[at];
-            var definition = item.Definition is { } text ? pool.TryAcquire(text, keepFree) : null;
-            if (item.Definition is not null && definition is null) cut++;
-            else if (definition is not null) { modules++; if (item.DefinitionCut) cut++; }
-            objects[at] = item with
-            {
-                Name = Name(item.Name)!, Schema = Name(item.Schema), ParentSchema = Name(item.ParentSchema), ParentName = Name(item.ParentName),
-                Definition = definition, DefinitionCut = definition is not null && item.DefinitionCut
-            };
+            if (shared.Definition(at) is not null) { modules++; if (shared.DefinitionCut(at)) cut++; }
+            else if (table.Definition(at) is not null) cut++;
         }
-        return new ResourceSet(key, objects, modules, cut, bytes);
+        return new ResourceSet(key, shared, modules, cut, bytes);
     }
 }
