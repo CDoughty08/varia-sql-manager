@@ -4,9 +4,9 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 10 (2026-11-15), the closing revision: the work is delivered. All eighteen PRs and the spike are merged: PR 0
+Revision 10 (2026-11-15), the closing revision. The spike and PRs 1 to 17 are merged: PR 0
 (the spike), #411, #413 and #429, #441, #442, #430 and #443, #448, #449, #452, #450, #465, #476, #474, #467, #494, #509,
-#466, #493 and #520 (PR 18, Integration). Beside them landed named result sets (#502, #504, #503, which PR 15
+#466 and #493. PR 18 (Integration) is #520, which this revision belongs to. Beside them landed named result sets (#502, #504, #503, which PR 15
 builds on), the Compare popover (#490), Pivot filters compared by value (#487) and the result memory work below. It
 follows the owner's decisions, three independent reviews against the code, the orientation spike's findings, what each
 PR found when it merged, and the [pivot performance findings](pivot-performance-findings.md). Each merged PR's entry
@@ -926,7 +926,7 @@ Outcome, accepted by the owner:
       - Narrow panes: the results toolbar folds by its own measured width (`toolbarFolds`, `fitFold`, `data-fold` words),
         not by window media queries, so a docked or popped-out pane folds as a narrow window does, whatever the fonts:
         Tabs, then tightening (the old 1,180 px rules), then Transposed, Headers and Compare, Sort text by, White space and
-        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). The 1,440 px and 1,180 px media queries are gone.
+        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). PR 18 replaced this: the field never narrows past its placeholder. The 1,440 px and 1,180 px media queries are gone.
       - A new context menu, `output.tools` (**More results tools**, the toolbar's ⋯ after Close Results, target kind
         `resultsTools`, whose items run with the toolbar's `tabId` and no target), holds every tool: Results as Tabs, Go to
         Result…, Pivot…, Compare…, Transposed, Choose Headers…, Column Profile, Row Size, the White space and Sort text by
@@ -1093,16 +1093,16 @@ Outcome, accepted by the owner:
         latter, for the backend's packing).
 18. **Integration. Delivered as #520.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
-    - **What PR 18 settled or left** (`tests/results-caption.test.ts`' naming lint holds its one new check):
+    - **What PR 18 settled or left** (`tests/results-caption.test.ts`' naming checks and `grouped-results-smoke` steps 1, 9 and 10 hold its checks):
       - Removed: the smoke locators `comparisonGrids` and `transposedGrid` (`scripts/fixtures/ui.mjs`), which no suite
         used. A sweep of exports, CSS classes, theme keys, metrics, icons, settings, context keys, commands and smoke
         helpers found nothing else the grouped results work left without a user: PR 8 had removed the stored transpose
         in every place, and PR 15 the 1,440 px and 1,180 px media queries. Nothing reachable by a user was removed, and
         no backend method or contract field went.
-      - Names: the four places that still built "Result N", "Pivot of …" or "Differences: … → …" by hand (the stack's
-        Pivot mark, the builder's followed source, the comparison's side names and title, a Pivot's label, strip and
-        refusal sentence) now go through `entryNumber`, `pivotName` and `comparisonName` in `ResultsService.ts`. Nothing
-        reads differently. The lint fails on such a template anywhere in the results, grid, plans, contributions and
+      - Names: the places that still built "Result N", "Pivot of …" or "Differences: … → …" by hand (the stack's Pivot
+        mark, `slotNamed`, the builder's source and title, the comparison's side names, label and popover title, a
+        Pivot's label and strip; PivotService's own helper became `groupPivotName`) now go through `entryNumber`, `pivotName` and `comparisonName` in `ResultsService.ts`. Nothing
+        reads differently. The lint fails on such a template, wherever in it the name stands, anywhere in the results, grid, plans, contributions and
         menus sources but `ResultsService.ts` and GridView's accessible "Result N of M" (the grid sits under the
         results layer).
       - CI seconds: PR #509's run measured the grouped-results suite at 7 s on Linux and 9 s on Windows, now in
@@ -1119,7 +1119,16 @@ Outcome, accepted by the owner:
         transposed grid, a comparison, the Compare popover, 120 results with the overflow picker at normal, narrow and
         short sizes. No defect needing a code change was found: nothing overlapped or spilled out of the pane, tabs past
         the strip scroll as built, the picker stays inside the window, and the popout folds to its width. Two judgement
-        calls went to the owner (the search input's width, and the Pivot builder's footer in a short pane; see the PR).
+        calls went to the owner, who chose both on review:
+        - The search field: PR 15's box kept 160 px, but its count, arrows and Data or Columns took most of it, leaving
+          the input about 32 px ("Se" at 1500 px) and about 12 px once Transposed and Compare folded. The field's least
+          width is now its whole placeholder, set by the placeholder drawn unseen beside the input, so it follows fonts
+          and popouts; the box no longer gives up its width at any fold, and the groups fold sooner instead (at a
+          1,024 px window, Sort text by, White space and Show may now be in ⋯). `grouped-results-smoke` checks the
+          placeholder fits in both modes, at 900 px and in the popout at 640 and 360 px.
+        - The Pivot builder in a short pane: below about 180 px its footer note and Build Pivot were cut off. A container
+          query on the builder (`pivot-panel`, at most 200 px tall) hides its explanations (`pivot-aside`), never its
+          errors or waiting notes, so Build Pivot stays whole; `grouped-results-smoke` checks it at 120 px.
         Not looked at: macOS and Linux fonts, high-contrast (forced colours), a screen reader, and a live SQL Server.
       - Departure found: Column Profile and the Pivot builder sit side by side whenever both are open; the selector the
         plan named for narrow panes was never built (now in Follow-ups).

@@ -72,7 +72,8 @@ describe("a SQL-returned plan's name in the plan viewer", () => {
 describe('result names come from the naming helpers', () => {
   it('builds "Result N", "Pivot of" and "Differences:" only in ResultsService', () => {
     const roots = ['src/renderer/src/results', 'src/renderer/src/grid', 'src/renderer/src/plans', 'src/renderer/src/contributions', 'src/renderer/src/menus']
-    const built = /`(?:Result \$\{|Pivot of \$\{|Differences: \$\{)/
+    // Anywhere in a template, not only at its start ("Close Result ${n}", "${a}, Result ${n}").
+    const built = /\bResult \$\{|\bPivot of \$\{|\bDifferences: \$\{/
     const offenders = roots.flatMap(root => readdirSync(root).filter(name => /\.tsx?$/.test(name)).map(name => `${root}/${name}`))
       .filter(file => !file.endsWith('/ResultsService.ts'))
       .flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))

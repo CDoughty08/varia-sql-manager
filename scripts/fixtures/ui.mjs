@@ -576,6 +576,13 @@ export const resultsToolbarFit = page => resultsToolbar(page).evaluate((tools, s
   const box = tools.getBoundingClientRect(), head = tools.parentElement.getBoundingClientRect(), last = [...tools.querySelectorAll('button')].filter(button => button.getClientRects().length > 0).at(-1)
   return { fits: tools.scrollWidth <= tools.clientWidth + 0.5 && box.right <= head.right + 0.5 && (!last || last.getBoundingClientRect().right <= box.right + 0.5), search: tools.querySelector(selector).getBoundingClientRect().width, fold: tools.dataset.fold ?? '', rows: Math.round(head.height) }
 }, part.resultsSearch)
+/** The results search field's placeholder and the room it has: `fits` when the whole placeholder shows in the input. */
+export const searchPlaceholderFit = page => resultsToolbar(page).locator(`${part.resultsSearch} input`).evaluate(input => {
+  const context = input.ownerDocument.createElement('canvas').getContext('2d')
+  context.font = getComputedStyle(input).font
+  const text = context.measureText(input.placeholder).width, room = input.clientWidth
+  return { fits: text <= room + 0.5, text, room, placeholder: input.placeholder }
+})
 /** Whether an element's contents fit it across, nothing pushed past its right edge (a row of tabs, a caption, a picker row). */
 export const fitsAcross = locator => locator.evaluate(element => element.scrollWidth <= element.clientWidth + 1)
 export const resultsSearchAnnouncer = page => resultsToolbar(page).getByRole('status')

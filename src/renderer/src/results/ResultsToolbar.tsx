@@ -60,11 +60,16 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   }
   const count = searchCount(search, formatCount)
   const columns = search.mode === 'columns'
+  const placeholder = columns ? 'Search column names' : 'Search all results'
   return <div className="results-search" data-mode={search.mode}>
     <Icon name="search" className="results-search-icon" />
-    <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
-      value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
-      onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    {/* The field is at least as wide as its placeholder, drawn unseen beside the input (data-placeholder), so the whole
+        placeholder shows at every width and in every font; the toolbar folds its groups rather than narrow it. */}
+    <span className="results-search-field" data-placeholder={placeholder}>
+      <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={placeholder}
+        value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
+        onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    </span>
     {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
     <span className="results-search-count" title={search.error}>{count}</span>
     <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
@@ -81,8 +86,8 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
 /**
  * How the results toolbar gives way in a narrow pane, in order: Tabs goes (it is in the ⋯ menu and the Window menu), the
  * groups tighten (no icons beside them, the search box's magnifier and Previous and Next go: Enter, Shift+Enter and F3 still
- * step), then Transposed, Headers and Compare go and the search box gives up its width, then Sort text by, White space, and
- * the Show group. Search, Close Results
+ * step), then Transposed, Headers and Compare, then Sort text by, White space, and the Show group. The search field never
+ * narrows past its placeholder. Search, Close Results
  * and ⋯ (which holds every tool) stay. The toolbar measures its own width, not the window's, so a pane docked beside the
  * editor or popped out into a window of its own folds as a narrow window does, whatever the fonts.
  */

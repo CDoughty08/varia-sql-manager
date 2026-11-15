@@ -852,21 +852,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) { .results-segments button[aria-disabled="true"] { color: GrayText; opacity: 1; } }
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
-/* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
-   pane, down to what keeps a few words of text readable; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
+/* Search in results: the box, its count, Previous and Next, and Data or Columns. Its field gives way first in a narrow
+   pane, down to the width of its whole placeholder and no further; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
    toolbar's own width, so a narrow docked or popped-out pane folds as a narrow window does): Tabs goes, the groups tighten
    (their icons, the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
    Transposed, Headers and Compare, Sort text by, White space and the Show group go. The ⋯ menu holds them all. */
 .results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
 .results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
-.results-search input { flex: 1 1 0; width: 0; min-width: 32px; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
+.results-search-field { display: grid; flex: 1 1 0; }
+/* The placeholder drawn unseen in the field's one cell sets its least width (a flex item's automatic minimum), so the
+   placeholder always shows whole; the input itself has no width of its own. */
+.results-search-field::after { content: attr(data-placeholder); grid-area: 1 / 1; height: 0; visibility: hidden; white-space: pre; font-size: var(--varia-size-xs); }
+.results-search input { grid-area: 1 / 1; width: 100%; min-width: 0; padding: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
 .results-search-count { flex-shrink: 0; font-size: var(--varia-size-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
-/* The box keeps room for a few words while Tabs folds and the groups tighten; past that it gives up its width before any
-   group goes, as a 1024-wide window (CI's displays) needs to show Sort text by, White space and Show with Linux's fonts. */
-.results-toolbar:not([data-fold~="view"]) .results-search { min-width: 160px; }
 .results-toolbar[data-fold~="layout"] .results-layout { display: none; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) .output-views button { padding: 0 6px; }
@@ -874,7 +875,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-toolbar[data-fold~="tight"] .results-toolbar-label, .results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
 .results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle { padding: 0 3px; }
 .results-toolbar[data-fold~="tight"] .results-search { padding-left: 4px; }
-.results-toolbar[data-fold~="tight"] .results-search input { min-width: 12px; }
 .results-toolbar[data-fold~="view"] .results-transpose, .results-toolbar[data-fold~="view"] .results-compare,
 .results-toolbar[data-fold~="sort"] .results-sort, .results-toolbar[data-fold~="space"] .results-space, .results-toolbar[data-fold~="show"] .results-show { display: none; }
 .job-strip, .op-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
@@ -2878,6 +2878,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pivot-section > button { display: inline-flex; align-items: center; gap: 4px; }
 .pivot-foot { display: flex; flex-shrink: 0; flex-direction: column; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--varia-panel-border); }
 .pivot-foot > button { align-self: flex-end; }
+/* A short results pane (dragged towards its minimum) has no room for the builder's explanations beside its rows: they go
+   so Build Pivot or Cancel stays whole. Its errors and waiting notes stay. */
+.pivot-panel { container: pivot-panel / size; }
+@container pivot-panel (max-height: 200px) { .pivot-aside { display: none; } }
 
 /* Bundled guides: normal document chrome and bounded, synthetic teaching illustrations. */
 .help-home { max-width: 72em; margin: 0 auto; padding: var(--varia-space-5); }

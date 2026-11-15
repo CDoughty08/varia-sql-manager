@@ -124,8 +124,9 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
       {/* Mounted while the builder is, so a note added to it is announced. */}
       <div role="status">{waiting && <div className="profile-note">{waiting}</div>}</div>
-      {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
-      {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `${built} stays as it is until the new one is built.` : `Building again replaces ${built} once the new one is built.`}</div>}
+      {/* pivot-aside: explanations a short panel drops (styles.css), so Build Pivot stays whole; errors and states stay. */}
+      {viewed && <div className="profile-note pivot-aside">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
+      {entry && state.pivot !== undefined && <div className="profile-note pivot-aside">{state.running ? `${built} stays as it is until the new one is built.` : `Building again replaces ${built} once the new one is built.`}</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>
         : <button type="button" className="primary" disabled={!can} onClick={() => void pivot.run(tabId)}>Build Pivot</button>}

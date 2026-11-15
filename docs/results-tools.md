@@ -296,8 +296,9 @@ The results toolbar fits its own pane, so the Results panel docked beside the ed
 own folds as a narrow window does. When its tools do not fit, they give way in order: **Tabs**; then the groups
 tighten (their icons go, and the search box's magnifier and its Previous and Next, while Enter, Shift+Enter, F3 and
 Shift+F3 still step); then **Transposed**, **Headers** and **Compare**; **Sort text by**; **White space**; and last the
-Profile, Row size and Pivot group. The search box keeps room for a few words until Transposed and Compare go, then gives
-up its width before any other group does. **⋯** (More results tools) at the
+Profile, Row size and Pivot group. The search box never narrows past its whole placeholder ("Search all results", or
+"Search column names" while it searches column names): the groups fold instead. In a short pane the Pivot builder drops
+its explanations (such as "Building again replaces…") so **Build Pivot** stays whole. **⋯** (More results tools) at the
 toolbar's end, with **Close Results**, always shows and holds every tool: Results as Tabs, Go to Result…, Pivot…,
 Compare…, Transposed, Choose Headers… (while the grid is transposed), Column Profile, Row Size, Show Spaces and Tabs,
 Show All White Space, Sort Text by Characters or Bytes, and Close Results.
