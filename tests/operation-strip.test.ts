@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The toolbar's strip for result operations: its live region reads only what a tab says while it is shown (switching
 // query tabs repeats nothing), and a Cancel that goes while it has the focus gives it to the tab's grid, not the page.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
@@ -68,6 +68,16 @@ describe('operation strip', () => {
     act(() => { next.end('dropped') })
     expect(again.isConnected).toBe(false)
     expect(document.activeElement).not.toBe(grid)
+    // Switching to another app blurs it too, but the user did not leave it: the grid takes the focus when it goes.
+    const third = operations.begin('a', { kind: 'filter', target: 'Result 1', entry: 'e1' as EntryKey, cancel: () => {} })
+    tick(g.operationShowDelayMs)
+    const last = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel filter, Result 1"]')!
+    act(() => { last.focus() })
+    const away = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    act(() => { last.blur() })
+    away.mockRestore()
+    act(() => { third.end('dropped') })
+    expect(document.activeElement).toBe(grid)
     act(() => root.unmount())
     grid.remove()
   })

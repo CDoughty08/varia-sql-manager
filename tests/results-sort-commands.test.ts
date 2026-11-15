@@ -18,6 +18,13 @@ describe('results sort text commands', () => {
     expect(settings.getSnapshot().values['queryResults.grid.sortText']).toBe('value')
     expect(api.updateSettings.mock.calls).toEqual([[{ 'queryResults.grid.sortText': 'chars' }], [{ 'queryResults.grid.sortText': 'bytes' }], [{ 'queryResults.grid.sortText': 'value' }]])
   })
+  it('refuse while a sort is built, telling the tab the toolbar click came from why', async () => {
+    const { commands, results, settings } = setup()
+    results.operations.begin('t1', { kind: 'sort', target: 'Result 1', entry: 'e1' as never, cancel: () => {} })
+    await commands.execute('output.sortTextByChars', { tabId: 't2' }, 'toolbar')
+    expect(settings.getSnapshot().values['queryResults.grid.sortText']).toBe('value')
+    expect(results.operations.getSnapshot().t2?.announcement).toBe('Sorting Result 1. Sort Text By waits until it finishes.')
+  })
   it('offer the grid\'s sort commands only where there is a column to sort', () => {
     const { commands } = setup()
     // No results tab, no active cell: nothing to sort or clear.

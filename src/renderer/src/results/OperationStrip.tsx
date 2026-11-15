@@ -21,7 +21,7 @@ export default function OperationStrip({ tabId }: { tabId: string }) {
   const now = useTicker(shown.some(item => !item.ending))
   // A Cancel that goes while it has the keyboard focus (pressed, or its operation ended) gives the focus to the grid that
   // last had it, as Escape in the search box does, not to the page; one the user left first (a blur while it is still in
-  // the page) gives nothing. Chromium may not blur an element it removes, so each
+  // the page and the window keeps the focus; switching apps also blurs it) gives nothing. Chromium may not blur an element it removes, so each
   // commit looks for the button.
   const anchor = useRef<HTMLSpanElement>(null), focused = useRef<HTMLButtonElement | null>(null)
   useLayoutEffect(() => {
@@ -35,7 +35,7 @@ export default function OperationStrip({ tabId }: { tabId: string }) {
   })
   return <>
     {shown.map(item => <Strip key={item.id} item={item} now={now} cancel={() => results.operations.cancel(tabId, item.id)}
-      onFocus={button => { focused.current = button }} onBlur={button => { if (focused.current === button && button.isConnected) focused.current = null }} />)}
+      onFocus={button => { focused.current = button }} onBlur={button => { if (focused.current === button && button.isConnected && button.ownerDocument.hasFocus()) focused.current = null }} />)}
     {state?.notice && <div className="op-strip op-notice">{state.notice}</div>}
     <Announcer key={tabId} anchor={anchor} text={state?.announcement ?? ''} announced={state?.announced ?? 0} />
   </>
