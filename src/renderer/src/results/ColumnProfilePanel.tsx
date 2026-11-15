@@ -4,7 +4,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
-import { ResultError, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
+import { ResultError, type OperationProgressListener, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
 import { entryOf, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
@@ -134,7 +134,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
       try {
         for (const [at, part] of parts.entries()) {
           // Each request reports its own 0 – 100: the strip shows the share of every chunk.
-          const onProgress = (phase: string, percent: number | undefined) => ticket.progress(phase, percent === undefined ? undefined : Math.floor((at * 100 + percent) / parts.length))
+          const onProgress: OperationProgressListener = (phase, percent) => ticket.progress(phase, percent === undefined ? undefined : Math.floor((at * 100 + percent) / parts.length))
           let result
           try { result = await reader.profile(part, abort.signal, onProgress) }
           catch (error) {
