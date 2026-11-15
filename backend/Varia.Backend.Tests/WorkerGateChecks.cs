@@ -30,7 +30,8 @@ internal static class WorkerGateChecks
         HandedBackDisposes(check, fail: false);
         HandedBackDisposes(check, fail: true);
         DisposeThrows(check);
-        BodyBeatsDispose(check);
+        BodyBeatsDispose(check, cancel: false);
+        BodyBeatsDispose(check, cancel: true);
         QueuedFirst(check);
         Refused(check);
         Crowded(check);
@@ -125,8 +126,6 @@ internal static class WorkerGateChecks
             "workers still queued when their step ends hold nothing its body or state captured, so a read's pages are freed while the thread pool is busy: " + queued.Count + " queued, freed " + freed);
     }
 
-    /// <summary>A worker's state that records, as it is disposed on a worker's thread, how many workers its step still
-    /// counts.</summary>
     /// <summary>A worker's state that records, as it is disposed on a worker's thread, what its step and lease count then
     /// (the workers still in the step, the threads the lease holds), and may then fail.</summary>
     private sealed class CountedState(Func<string> counts, int owner, Action<string> seen, bool fail) : IDisposable
@@ -195,8 +194,8 @@ internal static class WorkerGateChecks
         check(thrown == "dispose" && held == 1 && freed && gate.Busy == 0,
             "an owner's state that fails to dispose still closes its step before the failure is rethrown, giving back the queued workers and what the body captured: " + thrown + ", " + held + " held, freed " + freed);
 
-        // A failure before it wins, with workers and on the owner's thread alone; a dispose's failure alone is rethrown on
-        // the owner's thread alone too.
+        // A body's failure wins over the state's failing dispose after it, with workers queued (the step's own path) and on
+        // the owner's thread alone; a dispose's failure alone is rethrown on the owner's thread alone too.
         static string? Thrown(int workers, int failAt)
         {
             var recording = new Gate(() => workers, _ => { });
@@ -210,13 +209,14 @@ internal static class WorkerGateChecks
         }
         var first = (Thrown(4, 3), Thrown(1, 3), Thrown(1, -1));
         check(first == ("item", "item", "dispose"),
-            "a step rethrows its first failure, a body's before its state's failing dispose, on the gate's workers and on the owner's thread alone: " + first);
+            "a step rethrows a body's failure over its state's failing dispose, with workers queued and on the owner's thread alone, and the dispose's failure alone: " + first);
     }
 
-    private static void BodyBeatsDispose(Action<bool, string> check)
+    private static void BodyBeatsDispose(Action<bool, string> check, bool cancel)
     {
-        // A worker's state fails to dispose first, then the owner's body fails: the step rethrows the body's failure (a
-        // cancellation stays a cancellation), whichever thread failed first. The worker's item waits until the owner has
+        // A worker's state fails to dispose first, then the owner's body fails or the operation is cancelled: the step
+        // rethrows the body's failure or the cancellation, whichever thread failed first. A failing dispose stops no other
+        // worker, so the owner still meets the cancellation at its next item. The worker's item waits until the owner has
         // taken the other, so the owner's body runs; the owner's waits until the worker's state has failed.
         var gate = new Gate(() => 2, item => new Thread(item.Execute) { IsBackground = true }.Start());
         var owner = Environment.CurrentManagedThreadId;
@@ -224,6 +224,7 @@ internal static class WorkerGateChecks
         var disposeFailed = 0;
         var waited = true;
         string? thrown = null;
+        using var cancellation = new CancellationTokenSource();
         using (var lease = gate.Take(2))
         {
             try
@@ -237,13 +238,15 @@ internal static class WorkerGateChecks
                         return;
                     }
                     if (!SpinWait.SpinUntil(() => Volatile.Read(ref disposeFailed) == 1, TimeSpan.FromSeconds(60))) waited = false;
-                    throw new InvalidOperationException("item");
-                }, CancellationToken.None);
+                    if (!cancel) throw new InvalidOperationException("item");
+                    cancellation.Cancel();
+                }, cancellation.Token);
             }
             catch (InvalidOperationException error) { thrown = error.Message; }
+            catch (OperationCanceledException) { thrown = "canceled"; }
         }
-        check(waited && thrown == "item" && gate.Busy == 0,
-            "a body's failure is rethrown over a worker's state that failed to dispose before it: " + thrown + ", waited " + waited);
+        check(waited && thrown == (cancel ? "canceled" : "item") && gate.Busy == 0,
+            "a " + (cancel ? "cancellation" : "body's failure") + " is rethrown over a worker's state that failed to dispose before it: " + thrown + ", waited " + waited);
     }
 
     /// <summary>A state that fails to dispose on a worker's thread, after saying so.</summary>

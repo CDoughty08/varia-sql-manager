@@ -257,9 +257,10 @@ internal static partial class ViewSorter
             /// <summary>Runs <paramref name="body"/> for each of <paramref name="items"/> items, on the lease's own thread
             /// and the workers the gate starts for it, each worker with a <paramref name="state"/> of its own; returns when
             /// all have run, or rethrows the first exception (a cancellation, or one a body or a state factory threw; a
-            /// state's failing Dispose only when nothing else failed) once every worker has stopped. A worker over the lease's share hands its thread back between
-            /// items, so items should be short enough to give threads back promptly. A state that is <see cref="IDisposable"/>
-            /// is disposed when its worker stops (a fused read's room goes back to its pool).</summary>
+            /// state's failing Dispose only when nothing else failed) once every worker has stopped. A worker over the
+            /// lease's share hands its thread back between items, so items should be short enough to give threads back
+            /// promptly. A state that is <see cref="IDisposable"/> is disposed when its worker stops (a fused read's room
+            /// goes back to its pool).</summary>
             public void For<TState>(int items, Func<TState> state, Action<int, TState> body, CancellationToken token)
             {
                 if (items <= 0) return;
@@ -348,7 +349,8 @@ internal static partial class ViewSorter
             /// <summary>The first failure of a body or state factory, or a cancellation: what the step rethrows.</summary>
             public ExceptionDispatchInfo? Failure;
             /// <summary>The first state that failed to dispose, rethrown only when nothing else failed, whichever thread
-            /// failed first: a cancellation stays a cancellation.</summary>
+            /// failed first. It stops no other worker (a worker disposes its state only once it takes no more items), so
+            /// the others still meet a cancellation, which stays a cancellation.</summary>
             public ExceptionDispatchInfo? DisposeFailure;
             // Workers the owner's Close took back stay in the thread pool's queue until a thread reaches them, which on a
             // busy machine is long after the step ended; they then do nothing (Begin). The step lets go of its body and
@@ -369,9 +371,9 @@ internal static partial class ViewSorter
                 if (lease.Begin(this)) Work(owner: false);
             }
 
-            private void Fail(Exception error, bool disposing = false)
+            private void Fail(Exception error)
             {
-                Interlocked.CompareExchange(ref (disposing ? ref DisposeFailure : ref Failure), ExceptionDispatchInfo.Capture(error), null);
+                Interlocked.CompareExchange(ref Failure, ExceptionDispatchInfo.Capture(error), null);
                 Volatile.Write(ref failed, 1);
                 // The other workers take no more items: none would be used.
                 Volatile.Write(ref next, items);
@@ -409,7 +411,7 @@ internal static partial class ViewSorter
                     // step is closed: never thrown out of a worker's thread, which would end the process, nor past the owner's
                     // Close. The lease is let go whatever happens, or the owner would wait for this worker forever.
                     try { if (made) (own as IDisposable)?.Dispose(); }
-                    catch (Exception error) { Fail(error, disposing: true); }
+                    catch (Exception error) { Interlocked.CompareExchange(ref DisposeFailure, ExceptionDispatchInfo.Capture(error), null); }
                     finally
                     {
                         if (handedBack) lease.Gone(this);
