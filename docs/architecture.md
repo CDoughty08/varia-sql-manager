@@ -295,6 +295,16 @@ being true.
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- A Pivot follows its Table's filters only through `PivotService.followGroup`, looked at in a microtask after a results
+  publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer. It decides over the published run only
+  (it waits while the grid shows a view not yet published), rebuilds through Update's path, and does not build again over the filters it last built over (`tried`, the last set
+  only: filters whose automatic build it gave up itself, superseded or hidden, may be tried again), so a failure, a
+  refusal or a cancel never loops; each retry needs the filters to change. An automatic build whose Pivot is hidden
+  while it runs is given up, and a followed rebuild (`followed` provenance) never switches the output pane. Whether a Pivot is shown is
+  `pivotShown`, a function of the run, the layout, the stack's collapsed entries and whether the Results panel shows
+  (`PaneService`, not `TabResults.view`), so every collapse change goes through
+  `ResultsService.setCollapsed`, which publishes; a toggle never mutates `TabViewState.collapsed` directly. The threshold is
+  `pivotFollow`, in one place.
 - A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
   any other kind). The Compare popover's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
   pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both

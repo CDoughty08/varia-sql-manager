@@ -225,7 +225,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const seen = pivots.current
     pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot && setKey(item.pivot.entry.descriptor)]))
     if (!seen) return
-    const built = tab.groups.filter(item => item.pivot && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
+    // A Pivot that rebuilt by itself was shown when it started, and the user may have gone back to its Table since: it
+    // selects nothing.
+    const built = tab.groups.filter(item => item.pivot && !item.pivot.pivot?.followed && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
     const shown = group && !group.planSet ? built.find(item => item === group) : built[0]
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!shown?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return

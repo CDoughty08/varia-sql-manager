@@ -257,6 +257,16 @@ describe('results as tabs', () => {
     expect(grids()).toEqual([one])
     expect((document.activeElement as HTMLElement).dataset.grid).toBe(one)
     expect(later).toBeDefined()
+    // A Pivot that rebuilt by itself (following its Table's filters) selects nothing: it was shown when it started, and
+    // the user has gone back to its Table since, focus or not.
+    ;(document.activeElement as HTMLElement).blur()
+    results.addSet('t1', descriptor(807, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'], {
+      pivot: { recipe: { rows: [0], values: [{ aggregate: 'count' }] }, filters: [], inputRows: 1, truncated: false, incomplete: false, approximate: false, followed: true }
+    })
+    draw()
+    draw()
+    expect(grids()).toEqual([one])
+    expect(results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(807)
   })
 
   it('show a rebuilt Pivot, which keeps its key, at once, and draw its grid again over the new result', () => {

@@ -1,18 +1,14 @@
 import { Emitter } from '../core/events'
 import type { Disposable } from '../core/types'
 import { formatCount } from '../results/status'
-import { entryName, entryOf, pivotOutOfDate, type EntryKey, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
 
 // The Tabs layout's navigation, without React: the top row's items, the view a group's tab selects, the next and previous
 // item and view (Next Result, Previous Result and their view commands), and the overflow picker's rows, filter and window
 // of drawn rows. The picker lists every view of a run, so a run of 1,000 results is a list of 1,000 or more rows of which
 // it draws a screenful (tests/results-tabs.test.ts and tests/bench/grid.bench.ts measure that case).
 
-/** The view the Tabs layout shows: the entry whose grid last had the focus, else the run's first. While a run streams the
- *  first stays selected, since results arrive after it; a tab the user picks is focused, so it stays picked. */
-export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'>): ResultSetEntry | undefined {
-  return entryOf(tab.sets, tab.focused) ?? tab.sets[0]
-}
+export { selectedEntry }
 
 /** One item of the top row: a group (its Table and Pivot) or a comparison. */
 export interface TopItem { readonly key: EntryKey; readonly name: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
