@@ -114,12 +114,12 @@ describe('live subscriptions through main', () => {
       await writeFile(join(control, 'hold', 'live.subscribe'), '')
       const { supervisor, port } = await workbench<WorkerPort>(undefined, { control })
       port.send({ t: 'live', rid: 1, generation: 1, params: params({ tickMs: 20 }) })
-      await expect.poll(async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).includes('"live.subscribe"')).toBe(true)
+      await expect.poll(async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).includes('"live.subscribe"'), backendStart).toBe(true)
       port.send({ t: 'cancel', rid: 1 })
       // The fake reads frames in order: once a later request is answered, the CANCEL has been seen.
       await supervisor.request('system.health', {})
       await rm(join(control, 'hold', 'live.subscribe'))
-      await expect.poll(() => port.end(1)).toMatchObject({ ok: true, result: { ended: 'cancelled', ticks: 0 } })
+      await expect.poll(() => port.end(1), backendStart).toMatchObject({ ok: true, result: { ended: 'cancelled', ticks: 0 } })
       expect(port.ticks(1)).toEqual([])
     } finally {
       await Promise.all(supervisors.splice(0).map(value => value.stop()))

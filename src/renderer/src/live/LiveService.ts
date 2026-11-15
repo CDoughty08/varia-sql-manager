@@ -135,7 +135,8 @@ export interface LiveTable {
 export interface AppliedTick { readonly subscriptionId: string; readonly tick: LiveTick }
 export interface LiveFrames {
   readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number
-  /** The view's next subscription waits for the end of one it stopped (restart), which has not arrived. */
+  /** The view's next subscription waits for the end of a stream that has not arrived: one it stopped (a Reconnect), or the
+   *  one whose slot it takes (restart, through startAfter, claimSlot or a BUSY retry). */
   readonly awaitingEnd: boolean
 }
 
