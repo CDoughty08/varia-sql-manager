@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Varia mock · Result operation progress</title>
+<!-- Design mock for progress and held-off controls while a whole-result operation runs. Self-contained: no network, no build step. Not production code. -->
+<style>
+/* Palette: src/shared/theme/palette.ts (Varia Dark, Varia Light). Metrics: src/shared/theme/metrics.ts (Compact). */
+:root {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+  --size-xs: 11px; --size-sm: 12px; --size-md: 13px; --size-lg: 15px;
+  --bar: 36px; --control: 26px; --row: 22px; --status: 24px;
+  --radius-sm: 4px; --radius-lg: 8px; --radius-pill: 999px;
+  --grid-row: 20px; --grid-head: 22px;
+  --held: .42;
+}
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #16181d; --panel: #16181d; --chrome: #111317; --raised: #1c1f25; --overlay: #1d2026; --input: #101216;
+  --accentSurface: #232842; --hover: #262a32; --active: #30343e; --selection: #21273b; --selectionStrong: #29314f;
+  --text: #d9dce3; --textStrong: #f5f6f8; --textSecondary: #bcc1cb; --textTertiary: #a3a9b5; --textMuted: #9298a4; --textAccent: #bcc5ff;
+  --border: #262a31; --borderSubtle: #1f2228; --borderStrong: #2e323a; --separator: #30343c; --controlBorder: #6b7286; --inputBorder: #6a7184;
+  --accent: #8f9cff; --accentHover: #a8b2ff; --onAccent: #0e1230; --track: #2a2f3a;
+  --error: #f39a9a; --warning: #e4bb6a; --success: #74d19c;
+  --errorSurface: #3a1d22; --errorSurfaceText: #f6bcc1; --warningSurface: #33291a; --warningSurfaceText: #f0d49e;
+  --icon: #a3a9b5; --iconMuted: #7f8694;
+  --red: #e66767; --green: #6fbf8a; --addedRow: #18301f; --removedRow: #3a1d22;
+  --shadow: #00000085; --scrim: #0000008a;
+}
+html[data-theme='light'] {
+  color-scheme: light;
+  --canvas: #ffffff; --panel: #ffffff; --chrome: #f7f8fa; --raised: #f1f3f6; --overlay: #ffffff; --input: #ffffff;
+  --accentSurface: #dde1f9; --hover: #dfe2e7; --active: #d6dae0; --selection: #e7ebfc; --selectionStrong: #d9e0fb;
+  --text: #1c1f26; --textStrong: #0a0c10; --textSecondary: #3a404b; --textTertiary: #4d5461; --textMuted: #5c6370; --textAccent: #3240b0;
+  --border: #e3e6eb; --borderSubtle: #eceef2; --borderStrong: #d4d8df; --separator: #dcdfe5; --controlBorder: #878e9b; --inputBorder: #878e9b;
+  --accent: #4453d0; --accentHover: #3744b8; --onAccent: #ffffff; --track: #dfe3ea;
+  --error: #b42229; --warning: #875800; --success: #146f3b;
+  --errorSurface: #fdecec; --errorSurfaceText: #8f1d24; --warningSurface: #fff5dc; --warningSurfaceText: #6b4400;
+  --icon: #4d5461; --iconMuted: #6b7280;
+  --red: #c42b3c; --green: #2e7d4f; --addedRow: #e6f4ea; --removedRow: #fdecec;
+  --shadow: #10182830; --scrim: #10182850;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--chrome); color: var(--text); font: var(--size-md)/20px var(--font-ui); font-synthesis: none; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 0; cursor: default; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.sm { width: 12px; height: 12px; }
+
+/* ---- Mock controls: not part of the app ---- */
+.mock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; border-bottom: 1px dashed var(--controlBorder); background: var(--raised); font-size: var(--size-sm); line-height: 16px; }
+.mock-bar h1 { margin: 0; font-size: var(--size-md); font-weight: 600; color: var(--textStrong); }
+.mock-bar .tag { padding: 0 6px; border: 1px dashed var(--controlBorder); border-radius: var(--radius-pill); color: var(--textMuted); font-size: var(--size-xs); }
+.mock-bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--textMuted); }
+.mock-bar select { height: 24px; padding: 0 6px; font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--inputBorder); border-radius: var(--radius-sm); }
+.seg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-sm); flex: none; }
+.seg button { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; color: var(--textMuted); font-size: var(--size-xs); white-space: nowrap; }
+.seg button[aria-pressed='true'] { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.mock-note { margin: 0; padding: 6px 12px; color: var(--textMuted); font-size: var(--size-xs); line-height: 16px; border-bottom: 1px dashed var(--border); background: var(--raised); }
+.mock-note b { color: var(--textSecondary); font-weight: 600; }
+.stage { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.frame { width: 100%; max-width: 1100px; flex: none; border: 1px solid var(--borderStrong); background: var(--panel); display: flex; flex-direction: column; }
+.pane { position: relative; display: flex; flex-direction: column; height: 420px; overflow: hidden; font-size: var(--size-sm); line-height: 16px; }
+.callout { position: absolute; z-index: 60; padding: 1px 6px; border: 1px dashed var(--warning); border-radius: var(--radius-pill); background: var(--warningSurface); color: var(--warningSurfaceText); font-size: 10px; line-height: 14px; white-space: nowrap; pointer-events: none; }
+
+/* ---- Controls ---- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 22px; padding: 0 8px; white-space: nowrap; color: var(--textSecondary); font-size: var(--size-sm); flex: none; }
+.btn.outline { border-color: var(--controlBorder); }
+.btn.link { color: var(--textAccent); padding: 0 4px; }
+.ib { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; color: var(--icon); }
+.ib[aria-pressed='true'] { background: var(--selection); color: var(--textAccent); }
+.badge { min-width: 16px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--active); color: var(--textSecondary); font: 600 var(--size-xs)/16px var(--font-ui); text-align: center; }
+kbd { font: var(--size-xs)/14px var(--font-ui); padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--textMuted); }
+/* Held off: aria-disabled, dimmed like :disabled, the not-allowed cursor; still focusable and described. */
+.held { opacity: var(--held); cursor: not-allowed !important; }
+.held * { cursor: not-allowed !important; }
+
+/* ---- Output toolbar ---- */
+.otb { display: flex; flex: none; align-items: center; gap: 8px; min-height: var(--bar); padding: 0 6px 0 8px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.oviews { display: inline-flex; flex: none; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.oviews button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; color: var(--textMuted); font-size: var(--size-sm); }
+.oviews button[aria-selected='true'] { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.rtb { display: flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid var(--border); }
+.rtb .search { display: inline-flex; align-items: center; gap: 4px; width: 92px; height: 22px; padding: 0 6px; border: 1px solid var(--inputBorder); border-radius: var(--radius-sm); color: var(--textMuted); background: var(--input); }
+.tseg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.tseg button { height: 20px; padding: 0 7px; color: var(--textMuted); font-size: var(--size-xs); }
+.tseg button[aria-pressed='true'] { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.ostatus { flex: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; font-size: var(--size-xs); color: var(--textMuted); font-variant-numeric: tabular-nums; }
+.ostatus .done { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.ostatus .done svg { vertical-align: -3px; margin-right: 3px; color: var(--success); }
+.ostatus .done b { color: var(--textSecondary); font-weight: 600; }
+
+/* The job strip (today: Copy and Save). Option B puts every result operation here. */
+.job { flex: none; display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 24px; padding: 0 2px 0 8px; border-radius: var(--radius-sm); font-size: var(--size-xs); color: var(--textSecondary); }
+.job .what { font-weight: 600; color: var(--textStrong); }
+.job .phase { color: var(--textMuted); }
+.job .pct { min-width: 30px; text-align: right; font-weight: 600; color: var(--textAccent); font-variant-numeric: tabular-nums; }
+.job .meter { position: relative; width: 64px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; flex: none; }
+.job .meter i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+.job .meter.ind i { width: 35%; animation: slide 1.4s cubic-bezier(.4,0,.6,1) infinite; }
+.job.pulse { box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accentSurface); background: var(--accentSurface); }
+.notice { display: inline-flex; align-items: center; gap: 6px; font-size: var(--size-xs); color: var(--textSecondary); }
+.notice svg { color: var(--textMuted); }
+
+/* ---- Result tabs and view caption ---- */
+.rtabs { display: flex; align-items: flex-end; gap: 2px; height: 28px; flex: none; padding: 0 6px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.rtab { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; color: var(--textMuted); border-bottom: 2px solid transparent; }
+.rtab.on { color: var(--textStrong); font-weight: 600; border-bottom-color: var(--accent); background: var(--canvas); }
+.rtab .x { color: var(--iconMuted); }
+.cap { display: flex; align-items: center; gap: 8px; height: 26px; flex: none; padding: 0 6px 0 8px; border-bottom: 1px solid var(--border); background: var(--panel); font-size: var(--size-xs); }
+.vtabs { display: inline-flex; gap: 2px; }
+.vtabs span { padding: 0 8px; height: 20px; line-height: 20px; border-radius: var(--radius-sm); color: var(--textMuted); }
+.vtabs span.on { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.cap .meta { color: var(--textMuted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cap .state { color: var(--textSecondary); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.cap .grow { flex: 1; }
+.fchip { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 4px 0 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--textSecondary); white-space: nowrap; }
+.fchip.busy { border-color: var(--accent); color: var(--textAccent); }
+
+/* ---- Grid (stand-in for GridView) ---- */
+.body { position: relative; display: flex; flex: 1; min-height: 0; }
+.gwrap { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--canvas); }
+.gwrap.busy { cursor: progress; }
+.topbar { position: absolute; z-index: 5; left: 0; right: 0; top: 0; height: 2px; background: transparent; overflow: hidden; }
+.topbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.topbar.ind i { width: 30%; animation: slide 1.4s cubic-bezier(.4,0,.6,1) infinite; }
+.topbar.pulse { height: 3px; box-shadow: 0 0 6px var(--accent); }
+@keyframes slide { from { left: -35%; } to { left: 100%; } }
+table.g { border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+table.g th, table.g td { height: var(--grid-row); padding: 0 8px; border-right: 1px solid var(--borderSubtle); border-bottom: 1px solid var(--borderSubtle); white-space: nowrap; text-align: left; }
+table.g th { position: relative; height: var(--grid-head); padding-right: 44px; font-weight: 600; color: var(--textSecondary); background: var(--raised); }
+table.g th small { font-weight: 400; color: var(--textMuted); margin-left: 4px; }
+table.g th .ctl { position: absolute; right: 3px; top: 3px; display: inline-flex; align-items: center; gap: 1px; color: var(--iconMuted); }
+table.g th .ctl .arrow { color: var(--textAccent); }
+table.g th .ctl .hp { font: 600 10px/14px var(--font-ui); color: var(--textAccent); margin: 0 2px 0 3px; font-variant-numeric: tabular-nums; }
+table.g th .ctl svg { width: 14px; height: 14px; }
+table.g th.sorted { color: var(--textStrong); }
+table.g th.busyh { padding-right: 82px; }
+table.g th.held .lbl { opacity: 1; }
+table.g th.heldctl .ctl { opacity: var(--held); }
+table.g th.heldctl { cursor: not-allowed; }
+table.g td.n { width: 44px; color: var(--textMuted); text-align: right; background: var(--raised); }
+table.g td.num { text-align: right; }
+table.g tr.sel td:not(.n) { background: var(--selection); }
+.ring { width: 14px; height: 14px; flex: none; }
+.ring .t { stroke: var(--track); }
+.ring .f { stroke: var(--accent); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
+.ring.ind { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tip { position: absolute; z-index: 30; max-width: 300px; padding: 6px 8px; border: 1px solid var(--borderStrong); border-radius: var(--radius-sm); background: var(--overlay); box-shadow: 0 6px 18px var(--shadow); font-size: var(--size-xs); line-height: 16px; color: var(--textSecondary); }
+.tip b { color: var(--textStrong); }
+.cursor { position: absolute; z-index: 31; width: 18px; height: 18px; pointer-events: none; }
+
+/* Option C: overlay card */
+.veil { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; background: var(--scrim); }
+.card { width: 300px; padding: 14px 16px; border: 1px solid var(--borderStrong); border-radius: var(--radius-lg); background: var(--overlay); box-shadow: 0 12px 36px var(--shadow); font-size: var(--size-sm); }
+.card h4 { margin: 0 0 2px; font-size: var(--size-md); color: var(--textStrong); }
+.card p { margin: 0 0 10px; color: var(--textMuted); font-size: var(--size-xs); }
+.card .meter { position: relative; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; margin-bottom: 10px; }
+.card .meter i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.card .meter.ind i { width: 35%; animation: slide 1.4s cubic-bezier(.4,0,.6,1) infinite; }
+.card .row { display: flex; align-items: center; gap: 8px; }
+.card .row .grow { flex: 1; color: var(--textMuted); font-size: var(--size-xs); }
+
+/* Profile panel */
+.prof { width: 248px; flex: none; border-left: 1px solid var(--border); background: var(--chrome); display: flex; flex-direction: column; }
+.prof-head { position: relative; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); font-size: var(--size-xs); }
+.prof-head .t { flex: 1; white-space: nowrap; text-transform: uppercase; letter-spacing: .04em; color: var(--textTertiary); font-weight: 600; }
+.prof-head .s { color: var(--textMuted); font-variant-numeric: tabular-nums; }
+.prof-cards { padding: 8px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.pcard { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); font-size: var(--size-xs); }
+.pcard b { color: var(--textStrong); }
+.pcard .fig { display: flex; justify-content: space-between; color: var(--textMuted); }
+.pcard .bars { display: flex; align-items: flex-end; gap: 2px; height: 22px; margin-top: 4px; }
+.pcard .bars i { flex: 1; background: var(--accent); opacity: .55; border-radius: 1px 1px 0 0; }
+.pcard.wait { color: var(--textMuted); }
+.pcard.wait .sk { height: 8px; margin-top: 5px; border-radius: 2px; background: var(--track); }
+
+/* Pivot builder (side) and compare popover */
+.pivb { width: 220px; flex: none; border-left: 1px solid var(--border); background: var(--chrome); display: flex; flex-direction: column; font-size: var(--size-xs); }
+.pivb .sec { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.pivb .lbl { text-transform: uppercase; letter-spacing: .04em; color: var(--textMuted); font-weight: 600; margin-bottom: 4px; }
+.pivb .fld { display: flex; align-items: center; height: 22px; padding: 0 6px; margin-bottom: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--textSecondary); }
+.pivb .foot { margin-top: auto; padding: 8px 10px; display: flex; justify-content: flex-end; gap: 6px; border-top: 1px solid var(--border); }
+.pop { position: absolute; z-index: 30; width: 286px; border: 1px solid var(--borderStrong); border-radius: var(--radius-lg); background: var(--overlay); box-shadow: 0 10px 32px var(--shadow); font-size: var(--size-xs); }
+.pop .h { padding: 8px 10px 4px; font-weight: 600; font-size: var(--size-sm); color: var(--textStrong); }
+.pop .b { padding: 4px 10px 8px; color: var(--textSecondary); display: flex; flex-direction: column; gap: 6px; }
+.pop .side { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); }
+.pop .f { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.pop .f .grow { flex: 1; color: var(--textMuted); }
+.empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--textMuted); font-size: var(--size-sm); }
+.empty .big { width: 220px; }
+.empty .meter { position: relative; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; width: 220px; }
+.empty .meter i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.empty .meter.ind i { width: 35%; animation: slide 1.4s cubic-bezier(.4,0,.6,1) infinite; }
+
+/* Window status bar (stand-in) */
+.sbar { display: flex; align-items: center; gap: 14px; height: var(--status); padding: 0 10px; border-top: 1px solid var(--border); background: var(--chrome); font-size: var(--size-xs); color: var(--textMuted); white-space: nowrap; }
+.sbar .grow { flex: 1; }
+.sbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 5px; }
+.sbar .op { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--accentSurface); color: var(--textAccent); }
+.sbar .op b { font-weight: 600; }
+.sbar .op.pulse { box-shadow: 0 0 0 1px var(--accent); }
+.sbar .op .x { color: var(--textAccent); text-decoration: underline; }
+
+/* Timeline (fast operations) */
+.tl { width: 100%; max-width: 1100px; display: grid; grid-template-columns: 150px 1fr; gap: 6px 10px; font-size: var(--size-xs); color: var(--textMuted); }
+.tl .lane { position: relative; height: 20px; border-radius: var(--radius-sm); background: var(--raised); border: 1px solid var(--border); }
+.tl .lane i { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; }
+.tl .lane i.work { background: var(--track); }
+.tl .lane i.show { background: var(--accent); opacity: .75; }
+.tl .lane i.hold { background: repeating-linear-gradient(45deg, var(--controlBorder) 0 3px, transparent 3px 6px); opacity: .6; }
+.tl .lane .mark { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--warning); }
+.tl .lane span { position: absolute; top: 2px; font-size: 10px; color: var(--textSecondary); white-space: nowrap; }
+
+/* Write-up */
+.doc { width: 100%; max-width: 1100px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 22px; font-size: var(--size-sm); line-height: 18px; }
+.doc h2 { margin: 0 0 4px; font-size: var(--size-md); color: var(--textStrong); }
+.doc p { margin: 0 0 6px; color: var(--textSecondary); }
+.doc ul { margin: 0; padding-left: 16px; color: var(--textSecondary); }
+.doc li { margin-bottom: 2px; }
+.doc .wide { grid-column: 1 / -1; }
+.yes { color: var(--success); font-weight: 600; } .no { color: var(--warning); font-weight: 600; }
+body.capture .mock-bar, body.capture .mock-note, body.capture .doc, body.capture .tl-wrap { display: none; }
+body.capture .stage { padding: 0; }
+body.capture .frame { max-width: none; border: 0; }
+body.capture .ind i { animation: none; left: 32%; } body.capture .ring.ind { animation: none; }
+@media (prefers-reduced-motion: reduce) { .ring.ind, .topbar.ind i, .job .meter.ind i, .card .meter.ind i, .empty .meter.ind i { animation: none; } .topbar.ind i, .job .meter.ind i { left: 0; width: 100%; opacity: .45; } }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <h1>Result operation progress</h1><span class="tag">mock · not production code</span>
+  <div class="seg" role="group" aria-label="Theme"><button data-theme-set="dark" aria-pressed="true">Dark</button><button data-theme-set="light" aria-pressed="false">Light</button></div>
+  <label>Placement <span class="seg" role="group" aria-label="Placement"><button data-opt="A">A · Status bar</button><button data-opt="B" aria-pressed="true">B · Toolbar strip (recommended)</button><button data-opt="C">C · Overlay</button></span></label>
+  <label>State <select id="state"></select></label>
+</div>
+<p class="mock-note" id="note"></p>
+<div class="stage">
+  <div class="frame"><div class="pane" id="pane"></div><div class="sbar" id="sbar"></div></div>
+  <div class="tl-wrap" id="tl" style="width:100%;max-width:1100px"></div>
+  <div class="doc" id="doc"></div>
+</div>
+<script>
+const I = {
+  up: '<path d="M8 13V3M4 7l4-4 4 4"/>', down: '<path d="M8 3v10M4 9l4 4 4-4"/>',
+  funnel: '<path d="M2.5 3h11l-4.2 5v4.5l-2.6 1.3V8z"/>', x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  check: '<circle cx="8" cy="8" r="6"/><path d="M5.3 8.2l1.9 1.9 3.6-3.8"/>', search: '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L14 14"/>',
+  para: '<path d="M10 3v10M12.5 3v10M12.5 3H7.2a2.8 2.8 0 000 5.6H10"/>', chart: '<path d="M3 13V8M6.3 13V4M9.6 13V6.5M13 13V9.5M2 13.5h12"/>',
+  pivot: '<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11M6 2.5v11"/>', compare: '<path d="M5 2.5v11M11 2.5v11M2.5 5H7.5M8.5 11h5"/>',
+  save: '<path d="M3 2.5h8l2.5 2.5v8.5h-10.5z"/><path d="M5.5 2.5v3.5h5V2.5M5.5 13.5V9.5h5v4"/>', info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.3v4M8 5v.2"/>',
+  stop: '<rect x="4" y="4" width="8" height="8" rx="1"/>', notallowed: '<circle cx="9" cy="9" r="6.5" fill="var(--panel)"/><path d="M4.5 13.5l9-9"/>'
+}
+const svg = (n, cls = 'i') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${I[n]}</svg>`
+const ring = (pct) => pct == null
+  ? `<svg class="ring ind" viewBox="0 0 16 16" role="img" aria-label="In progress"><circle class="t" cx="8" cy="8" r="6" fill="none" stroke-width="2"/><circle class="f" cx="8" cy="8" r="6" fill="none" stroke-width="2" stroke-dasharray="10 40"/></svg>`
+  : `<svg class="ring" viewBox="0 0 16 16" role="img" aria-label="${pct}%"><circle class="t" cx="8" cy="8" r="6" fill="none" stroke-width="2"/><circle class="f" cx="8" cy="8" r="6" fill="none" stroke-width="2" stroke-dasharray="${(37.7 * pct / 100).toFixed(1)} 40"/></svg>`
+
+const COLS = [['#', ''], ['OrderId', 'int'], ['Customer', 'nvarchar(80)'], ['Status', 'varchar(16)'], ['Total', 'money'], ['Notes', 'nvarchar(max)']]
+const NAMES = ['Contoso Ltd', 'Fabrikam', 'Northwind', 'Adventure Works', 'Tailspin Toys', 'Wide World', 'Litware', 'Proseware', 'Alpine Ski', 'Coho Winery', 'Lucerne', 'Margie Travel', 'Blue Yonder', 'Trey Research', 'Woodgrove', 'Humongous']
+const STATUS = ['Shipped', 'Open', 'Backorder', 'Shipped', 'Cancelled', 'Open']
+const NOTES = ['Call before delivery', 'Gift wrap; card attached', 'Leave at reception', 'Split shipment approved by account manager', 'Fragile', 'Customer asked for invoice copy', 'Rush', 'Replacement for order 10411', 'Deliver after 2 pm', 'Pallet; dock 4', 'Hold for pickup', 'Price match applied', 'Second notice sent', 'Back-ordered item ships separately', 'Signature required', 'Address corrected']
+const ROWS = Array.from({ length: 18 }, (_, r) => [r + 1, 10248 + r * 37, NAMES[r % 16], STATUS[r % 6], (r * 917.31 % 9000 + 41.5).toFixed(2), NOTES[(r * 5) % 16]])
+
+const S = {}
+const order = []
+function st(id, label, cfg) { S[id] = { id, label, ...cfg }; order.push(id) }
+
+// cfg: op {what, phase, pct|null, extra, elapsed}, sortCol, filterCol, held [...], tabs, chip, caption, notice, pulse, tip, profile, pivot, compare, newResult, save
+st('sort', 'Sort: in progress with a percentage', {
+  op: { what: 'Sorting', target: 'Result 1', phase: 'Reading keys', pct: 42 }, sortCol: 5, held: ['headers', 'sorttext', 'filters', 'save', 'pivot'],
+  note: '<b>Header click on Notes.</b> The arrow turns at once; the old order stays on screen and scrolls and selects as usual. After 300 ms (<code>motion.delay</code>) a ring in the header, a 2 px bar at the top of the grid and the percentage with its phase and Cancel appear. Sort arrows, funnels, Sort Text By, Save and Pivot Update for this grid are held off.'
+})
+st('indeterminate', 'No knowable total (indeterminate)', {
+  op: { what: 'Comparing', target: 'Result 1 → Result 2', phase: 'Finding row keys…', pct: null }, newResult: 'Result 1 → Result 2', held: ['comparepair'],
+  note: '<b>A phase with no total.</b> Compare tries key candidates until one holds, so no fraction is honest yet: the bar slides, the ring spins and the strip shows no number. The percentage appears once matching starts (a known count). The two source grids stay fully live.'
+})
+st('sorttext', 'Sort Text By re-triggers sorts', {
+  op: { what: 'Sorting 2 results', target: '', phase: 'Text by bytes', pct: 35 }, sortCol: 5, held: ['headers', 'sorttext', 'filters', 'save', 'pivot'], sortText: 'Bytes', tabBusy: [0, 2],
+  note: '<b>Sort Text By → Bytes.</b> The setting changes at once; every grid sorted by a text column sorts again (here Result 1 and Result 3). Each tab with a running sort shows a small ring; the strip sums them ("Sorting 2 results"). The segment itself is held off until all of them finish, so a second click cannot start a second round.'
+})
+st('long', 'Long operation with Cancel', {
+  op: { what: 'Sorting', target: 'Result 1', phase: 'Merging', pct: 71, elapsed: '0:38' }, sortCol: 5, held: ['headers', 'sorttext', 'filters', 'save', 'pivot'],
+  note: '<b>A 4.6 GiB result.</b> After 10 s the elapsed time joins the strip. Cancel is a real button (Tab reaches it; Escape in the grid does the same, as it already does for Copy and Save). Cancel puts the previous order back at once: nothing new was ever drawn.'
+})
+st('heldoff', 'Click on a held-off control', {
+  op: { what: 'Sorting', target: 'Result 1', phase: 'Reading keys', pct: 46 }, sortCol: 5, held: ['headers', 'sorttext', 'filters', 'save', 'pivot'], pulse: true, tip: true,
+  note: '<b>The user clicks the Total header while the sort runs.</b> Nothing is queued: the click is ignored, the cursor is not-allowed, the progress pulses once and a tooltip says why. Clicking during the first 300 ms (before anything showed) brings the progress up at once instead of waiting.'
+})
+st('fast', 'Fast operation (no flash)', {
+  op: null, sortCol: 5, fast: true, held: [],
+  note: '<b>A sort that ends in 180 ms.</b> The arrow turns and the new order swaps in; no ring, bar or strip ever shows. Controls are held off for those 180 ms (the cursor is <code>progress</code> over the grid) but nothing dims. Once shown, progress stays at least 500 ms so it never blinks. See the timeline below.'
+})
+st('cancelled', 'After Cancel', {
+  op: null, sortCol: 4, notice: 'Sort cancelled. The grid kept its previous order.', held: [],
+  note: '<b>After Cancel (or a failure).</b> The arrows go back to the previous sort (Total ascending), the previous view never left, and every control is live again. A notice sits in the strip for 8 s (<code>jobNoticeMs</code>), as Copy and Save already do. A failure reads "Could not sort the results: …" in the same place.'
+})
+st('filter', 'Filter', {
+  op: { what: 'Filtering', target: 'Result 1', phase: 'Keeping rows', pct: 55 }, sortCol: 4, filterCol: 3, chip: 'Status: Open, Backorder', held: ['headers', 'sorttext', 'filters', 'save', 'pivot'],
+  note: '<b>Funnel OK on Status.</b> The chip reads "filtering 55%" and the Status funnel shows the ring; the rest is the same as a sort. The previous rows stay until the filtered view is ready.'
+})
+st('profile', 'Column profile', {
+  op: { what: 'Profiling', target: 'Result 1', phase: 'Pass 1 of 2', pct: 64 }, sortCol: 4, profile: true, held: [],
+  note: '<b>Profile panel open.</b> Profiling only reads, so nothing in the grid is held off; the panel head carries the bar and the percentage, cards already done stay, and the strip mirrors it with Cancel (closing the panel also cancels). The profile pass count is known after pass 1.'
+})
+st('pivot', 'Pivot (Build / Update)', {
+  op: { what: 'Building Pivot', target: 'Result 1', phase: 'Aggregating', pct: 71 }, pivot: true, held: ['pivotfields'],
+  note: '<b>Update on a Pivot.</b> The previous Pivot stays readable under the bar until the new one swaps in. The builder\'s fields and Build are held off (Build has become Cancel, as today). The Table view and other groups stay live; up to four pivots and comparisons run at once, others say "Waiting for other pivots…".'
+})
+st('compare', 'Compare', {
+  op: { what: 'Comparing', target: 'Result 1 → Result 2', phase: 'Aligning rows', pct: 40 }, newResult: 'Result 1 → Result 2', compare: true, held: ['comparepair'],
+  note: '<b>Compare from the popover.</b> A comparison is a new result, so there is no previous view: its tab shows the progress in place of rows, and the popover\'s Compare has become Cancel. Comparing the same pair again is held off; the sources stay live.'
+})
+st('save', 'Save Results As (and Copy)', {
+  op: { what: 'Saving file', target: 'orders.csv', phase: '6.3 M of 10 M rows', pct: 63 }, sortCol: 4, save: true, held: ['save'],
+  note: '<b>Save Results As.</b> Unchanged from today apart from the shared look: Save already reports rows done of a known total. The grid is not touched, so no bar on it and nothing held off except another Save in this window. Copy is the same with "Copying".'
+})
+
+let opt = 'B'
+const params = new URLSearchParams(location.search)
+if (params.get('option')) opt = params.get('option')
+let state = params.get('state') || 'sort'
+if (params.get('theme')) document.documentElement.dataset.theme = params.get('theme')
+if (params.has('capture')) document.body.classList.add('capture')
+
+const has = (s, k) => s.held.includes(k)
+const pctTxt = (o) => o.pct == null ? '' : `${o.pct}%`
+
+function jobStrip(s) {
+  if (s.notice) return `<span class="notice">${svg('info')}${s.notice}</span>`
+  const o = s.op
+  if (!o) return ''
+  if (opt !== 'B' && !s.save) return ''
+  return `<span class="job${s.pulse ? ' pulse' : ''}" role="group" aria-label="${o.what}">
+    <span class="what">${o.what}</span><span class="phase">${o.target ? o.target + ' · ' : ''}${o.phase}</span>
+    <span class="meter${o.pct == null ? ' ind' : ''}" role="progressbar" aria-label="${o.what}" ${o.pct == null ? '' : `aria-valuenow="${o.pct}"`}><i style="width:${o.pct ?? 35}%"></i></span>
+    ${o.pct == null ? '' : `<span class="pct">${o.pct}%</span>`}${o.elapsed ? `<span class="phase">${o.elapsed}</span>` : ''}
+    <button class="btn outline">${svg('stop', 'i sm')}Cancel</button></span>`
+}
+
+function render() {
+  const s = S[state]
+  const o = s.op
+  const busyGrid = o && !s.profile && !s.save && !s.pivot && !s.newResult
+  const sortText = s.sortText || 'Chars'
+  const tb = `<div class="otb">
+    <div class="oviews" role="tablist"><button role="tab" aria-selected="true">Results <span class="badge">3</span></button><button role="tab">Messages</button></div>
+    <div class="rtb">
+      <span class="search">${svg('search', 'i sm')}Search</span><button class="ib">${svg('para')}</button>
+      <span class="tseg"><button aria-pressed="true">Off</button><button>Spaces</button><button>All</button></span>
+      <span class="tseg${has(s, 'sorttext') ? ' held' : ''}" title="Sort text by"${has(s, 'sorttext') ? ' aria-disabled="true"' : ''}>${['Value', 'Chars', 'Bytes'].map(v => `<button aria-pressed="${v === sortText}">${v}</button>`).join('')}</span>
+      <button class="ib" aria-pressed="${!!s.profile}">${svg('chart')}</button><button class="ib" aria-pressed="${!!s.pivot}">${svg('pivot')}</button><button class="ib" aria-pressed="${!!s.compare}">${svg('compare')}</button>
+    </div>
+    <div class="ostatus">${jobStrip(s)}<span class="done">${svg('check', 'i sm')}<b>Completed</b> · 4,812,330 rows · 12.4 s</span></div>
+  </div>`
+  const tabName = (i) => ['Result 1', 'Result 2', 'Result 3'][i]
+  const tabs = `<div class="rtabs">${[0, 1, 2].map(i => {
+    const on = s.newResult ? false : i === 0
+    const busy = (s.tabBusy || []).includes(i) && opt !== 'C'
+    return `<span class="rtab${on ? ' on' : ''}">${busy ? ring(i === 0 ? o.pct : 22) : ''}${tabName(i)}<span class="x">${svg('x', 'i sm')}</span></span>`
+  }).join('')}${s.newResult ? `<span class="rtab on">${opt !== 'C' ? ring(o.pct) : ''}${s.newResult}<span class="x">${svg('x', 'i sm')}</span></span>` : ''}</div>`
+  let capState = ''
+  if (s.pivot) capState = `<span class="state">${opt !== 'C' ? ring(o.pct) : ''}Building again · ${o.pct}%<button class="btn outline">${svg('stop', 'i sm')}Cancel</button></span>`
+  const chip = s.chip ? `<span class="fchip${o ? ' busy' : ''}">${o ? ring(o.pct) : ''}${s.chip}${o ? ` · filtering ${o.pct}%` : ''}${svg('x', 'i sm')}</span>` : ''
+  const cap = `<div class="cap"><span class="vtabs"><span class="${s.pivot ? '' : 'on'}">Table</span><span class="${s.pivot ? 'on' : ''}">Pivot</span></span>
+    <span class="meta">${s.newResult ? 'Comparison · building' : s.pivot ? '312 rows · 9 columns' : s.chip ? '4,812,330 rows · filter pending' : '4,812,330 rows · 6 columns'}</span>${chip}${capState}<span class="grow"></span>
+    <button class="ib${has(s, 'save') ? ' held' : ''}"${has(s, 'save') ? ' aria-disabled="true"' : ''} title="Save Results As">${svg('save')}</button></div>`
+
+  let grid = ''
+  if (s.newResult) {
+    grid = `<div class="gwrap"><div class="topbar${o.pct == null ? ' ind' : ''}"><i style="width:${o.pct ?? 30}%"></i></div>
+      <div class="empty" role="status"><div>${o.what} Result 1 with Result 2</div><div class="meter${o.pct == null ? ' ind' : ''}"><i style="width:${o.pct ?? 35}%"></i></div><div>${o.phase}${o.pct == null ? '' : ' · ' + o.pct + '%'}</div><button class="btn outline">${svg('stop', 'i sm')}Cancel</button></div></div>`
+  } else if (s.pivot) {
+    const pr = Array.from({ length: 14 }, (_, r) => `<tr><td class="n">${r + 1}</td><td>${NAMES[r]}</td>${[0, 1, 2, 3].map(c => `<td class="num">${((r + 3) * (c + 7) * 131 % 9000).toLocaleString()}</td>`).join('')}</tr>`).join('')
+    grid = `<div class="gwrap"><div class="topbar"><i style="width:${o.pct}%"></i></div><table class="g"><thead><tr><th style="padding-right:8px"></th><th>Customer</th><th>Open</th><th>Shipped</th><th>Backorder</th><th>Cancelled</th></tr></thead><tbody>${pr}</tbody></table></div>`
+  } else {
+    const head = COLS.map(([n, t], c) => {
+      if (c === 0) return '<th style="padding-right:8px"></th>'
+      const sorted = c === s.sortCol
+      const filtered = c === s.filterCol
+      const heldCls = has(s, 'headers') ? ' heldctl' : ''
+      const dir = (s.sortCol === 4 && c === 4) ? 'up' : 'down'
+      let ind = ''
+      if (sorted && busyGrid && !s.chip && opt !== 'C') ind = ring(o.pct) + (o.pct == null ? '' : `<span class="hp">${o.pct}%</span>`)
+      if (filtered && busyGrid && opt !== 'C') ind = ring(o.pct)
+      const arrow = sorted ? `<span class="arrow">${svg(dir)}</span>` : ''
+      const funnel = filtered ? `<span class="arrow">${svg('funnel')}</span>` : svg('funnel')
+      return `<th class="${sorted ? 'sorted' : ''}${heldCls}${ind ? ' busyh' : ''}" ${has(s, 'headers') ? 'aria-disabled="true"' : ''}><span class="lbl">${n}<small>${t}</small></span><span class="ctl">${ind}${arrow}${funnel}</span></th>`
+    }).join('')
+    const rows = ROWS.map((r, i) => `<tr class="${i === 3 ? 'sel' : ''}">${r.map((v, c) => `<td class="${c === 0 ? 'n' : c === 4 || c === 1 ? 'num' : ''}">${v}</td>`).join('')}</tr>`).join('')
+    const bar = busyGrid && opt !== 'C' ? `<div class="topbar${o.pct == null ? ' ind' : ''}${s.pulse ? ' pulse' : ''}" role="progressbar" aria-label="${o.what}"><i style="width:${o.pct ?? 30}%"></i></div>` : ''
+    grid = `<div class="gwrap${busyGrid || s.fast ? ' busy' : ''}" aria-busy="${!!busyGrid}">${bar}<table class="g"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
+      ${s.tip ? `<svg class="cursor" style="left:500px;top:8px" viewBox="0 0 18 18" fill="none" stroke="var(--error)" stroke-width="1.6">${I.notallowed}</svg>
+        <div class="tip" style="left:452px;top:30px" role="tooltip"><b>Sorting Result 1 · 46%</b><br>Sorting and filtering wait until it finishes. Cancel it from the strip or with <kbd>Esc</kbd>.</div>` : ''}
+      ${busyGrid && opt === 'C' ? `<div class="veil"><div class="card" role="dialog" aria-label="${o.what}"><h4>${o.what} ${o.target}</h4><p>${o.phase}${o.elapsed ? ' · ' + o.elapsed : ''}</p><div class="meter${o.pct == null ? ' ind' : ''}"><i style="width:${o.pct ?? 35}%"></i></div><div class="row"><span class="grow">${pctTxt(o)}</span><button class="btn outline">Cancel</button></div></div></div>` : ''}
+    </div>`
+  }
+  let side = ''
+  if (s.profile) {
+    const cards = COLS.slice(1).map(([n, t], c) => c < 3
+      ? `<div class="pcard"><b>${n}</b> <span style="color:var(--textMuted)">${t}</span><div class="fig"><span>Distinct</span><span>${[4812330, 16, 6][c].toLocaleString()}</span></div><div class="fig"><span>Nulls</span><span>0</span></div><div class="bars">${[5, 9, 14, 11, 7, 12, 16, 8, 4, 10].map(h => `<i style="height:${h + 4}px"></i>`).join('')}</div></div>`
+      : `<div class="pcard wait"><b style="color:var(--textSecondary)">${n}</b> · waiting<div class="sk" style="width:${70 - c * 8}%"></div></div>`).join('')
+    side = `<aside class="prof" aria-busy="true"><div class="prof-head"><span class="t">Profile</span>${opt !== 'C' ? ring(o.pct) : ''}<span class="s">${o.phase} · ${o.pct}%</span><button class="ib small">${svg('x', 'i sm')}</button><div class="topbar" style="top:auto;bottom:-1px"><i style="width:${o.pct}%"></i></div></div><div class="prof-cards">${cards}</div></aside>`
+  }
+  if (s.pivot) {
+    side = `<aside class="pivb"><div class="sec held" aria-disabled="true"><div class="lbl">Rows</div><div class="fld">Customer</div></div><div class="sec held" aria-disabled="true"><div class="lbl">Columns</div><div class="fld">Status</div></div><div class="sec held" aria-disabled="true"><div class="lbl">Values</div><div class="fld">Sum of Total</div></div>
+      <div class="foot"><button class="btn outline">${svg('stop', 'i sm')}Cancel</button></div></aside>`
+  }
+  let pop = ''
+  if (s.compare) {
+    pop = `<div class="pop" style="right:150px;top:36px" aria-busy="true"><div class="h">Compare</div><div class="b"><div class="side"><b>− Result 1</b><span style="margin-left:auto;color:var(--textMuted)">4,812,330 rows</span></div><div class="side"><b>+ Result 2</b><span style="margin-left:auto;color:var(--textMuted)">4,790,118 rows</span></div></div>
+      <div class="f"><span class="grow">${ring(o.pct)} Comparing · ${o.pct}%</span><button class="btn outline">Cancel</button></div></div>`
+  }
+  document.getElementById('pane').innerHTML = tb + tabs + cap + `<div class="body">${grid}${side}</div>` + pop
+
+  const statusOp = o && (opt === 'A') ? `<span class="op${s.pulse ? ' pulse' : ''}" role="group" aria-label="${o.what}">${ring(o.pct)}<b>${o.what}</b> ${o.target ? o.target + ' · ' : ''}${o.phase}${o.pct == null ? '' : ' · ' + o.pct + '%'}${o.elapsed ? ' · ' + o.elapsed : ''} <span class="x">Cancel</span></span>` : ''
+  document.getElementById('sbar').innerHTML = `<span><span class="dot"></span>Ready</span><span>Connected. server-a (16.0)</span><span>master</span><span class="grow"></span>${statusOp}<span>Ln 2  Col 39</span><span>UTF-8</span><span>Memory</span>`
+
+  document.getElementById('note').innerHTML = s.note
+  document.getElementById('tl').innerHTML = s.fast ? timeline() : ''
+  document.querySelectorAll('[data-opt]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.opt === opt)))
+}
+
+function timeline() {
+  const lane = (label, parts) => `<div>${label}</div><div class="lane">${parts}</div>`
+  const at = (ms) => `${ms / 2000 * 100}%`
+  return `<div class="tl">
+    <div style="grid-column:1/-1;color:var(--textSecondary);font-weight:600">Timeline: 0 to 2 s</div>
+    ${lane('Fast sort (180 ms)', `<i class="work" style="left:0;width:${at(180)}"></i><i class="hold" style="left:0;width:${at(180)}"></i><div class="mark" style="left:${at(300)}"></div><span style="left:${at(190)}">done: swap, nothing shown</span>`)}
+    ${lane('Medium sort (900 ms)', `<i class="work" style="left:0;width:${at(900)}"></i><i class="show" style="left:${at(300)};width:${at(600)}"></i><div class="mark" style="left:${at(300)}"></div><span style="left:${at(910)}">swap; progress hides</span>`)}
+    ${lane('Ends at 420 ms', `<i class="work" style="left:0;width:${at(420)}"></i><i class="show" style="left:${at(300)};width:${at(500)}"></i><div class="mark" style="left:${at(300)}"></div><span style="left:${at(810)}">progress held to 500 ms, then hides</span>`)}
+    ${lane('Click at 120 ms', `<i class="work" style="left:0;width:${at(1400)}"></i><i class="show" style="left:${at(120)};width:${at(1280)}"></i><div class="mark" style="left:${at(300)}"></div><span style="left:${at(1410)}">held-off click shows it early</span>`)}
+    <div></div><div style="font-size:10px">Dashed line: 300 ms (<code>motion.delay</code>). Striped: controls held off without any dimming. Solid: progress visible.</div>
+  </div>`
+}
+
+function doc() {
+  document.getElementById('doc').innerHTML = `
+  <div><h2>Placements</h2><ul>
+    <li><b>A · Status bar.</b> Ring in the header, 2 px bar on the grid, the percentage, phase and Cancel in the window status bar. Far from the grid; the status bar is shared by every tab and editor.</li>
+    <li><b>B · Toolbar strip (recommended).</b> Ring in the header, 2 px bar on the grid, the percentage, phase and Cancel in the results toolbar's job strip, where Copy and Save already report and cancel. One place for every result job, next to the grid.</li>
+    <li><b>C · Overlay.</b> A card over a dimmed grid. Clear, but hides the rows the user is reading and feels modal; listed for contrast.</li></ul></div>
+  <div><h2>Held off vs. live while a sort or filter runs on a grid</h2><ul>
+    <li><span class="no">Held off</span> for that grid: sort arrows and header clicks, funnels and filter commands, Keep Selected Rows, Sort Text By (it would re-sort), Save Results As, Pivot Build and Update from it.</li>
+    <li><span class="yes">Live</span>: scrolling, selecting, Copy (copies what is shown), Find, column resize, Cancel, other result tabs and their grids, the editor, Execute (a re-run releases and cancels), Close Results, the Profile panel (updates after the swap).</li>
+    <li>Held-off controls are <code>aria-disabled</code> (still focusable, described), dimmed to the disabled opacity, with the not-allowed cursor. A click is ignored, never queued, and pulses the progress with a tooltip.</li></ul></div>
+  <div class="wide"><h2>Accessibility</h2><ul>
+    <li>The bar and the strip's meter are <code>role="progressbar"</code> with <code>aria-valuenow</code> and a value text ("Sorting, reading keys, 42%"); no value while indeterminate. The grid is <code>aria-busy</code> while a view is built.</li>
+    <li>A polite live region says the start ("Sorting Result 1") once the progress shows, and the end ("Sorted", "Sort cancelled", or the error); percentages are not announced. Focus never moves: Cancel is reachable by Tab, Escape in the grid cancels. Reduced motion stops the slide and spin; forced colours draw the fill in Highlight.</li></ul></div>`
+}
+
+const sel = document.getElementById('state')
+sel.innerHTML = order.map(id => `<option value="${id}">${S[id].label}</option>`).join('')
+sel.value = state
+sel.onchange = () => { state = sel.value; render() }
+document.querySelectorAll('[data-opt]').forEach(b => b.onclick = () => { opt = b.dataset.opt; render() })
+document.querySelectorAll('[data-theme-set]').forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.themeSet
+  document.querySelectorAll('[data-theme-set]').forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+})
+doc()
+render()
+</script>
+</body>
+</html>
