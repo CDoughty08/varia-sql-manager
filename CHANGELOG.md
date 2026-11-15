@@ -38,6 +38,7 @@
 
 ### Improved
 
+- **Search Objects uses less memory:** the index keeps each object in 24 bytes instead of 136, besides its names and definitions, so it holds about 2.4 times as many objects per megabyte without definitions and about 30% more with them. Large databases are indexed with their columns, keys, indexes and parameters more often, instead of without them. Searches find the same objects, in the same order, as fast as before.
 - **Hidden results take less memory:** a result of 1 MB or more that no window has shown for 5 seconds is compressed in the background, typically to a third or half of its size, and the room it frees goes back to result memory at once, so more results fit. Nothing is dropped or written to disk. Showing it again, scrolling, a plain Copy or Save, and sorting, filtering, profiling or pivoting it read it as it is; a search, a column's value list, a comparison or a transposed Copy or Save first unpacks what it reads, which needs room for its full size and says so when result memory is too full. Results still loading and live views are never compressed. The Memory panel's Nerd metrics show what was packed and saved.
 - **Lighter startup:** opening Varia no longer starts the SQL IntelliSense service for the untouched welcome query, which saves about 110 MB of memory for the first minute. Error checking begins with your first edit.
 - **Runtime:** the SQL backend now runs on .NET 11 (it was .NET 10). Nothing to install: Varia ships the runtime with the backend. Building from source needs the .NET 11 SDK.

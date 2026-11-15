@@ -200,7 +200,7 @@ internal static class SearchCostChecks
         // much of it is read as could show it is a short text the read holds.
         var starved = Procedures(3, text: new string('x', 100_000));
         index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 1 << 20 }, new StringPool(new IndexBudget(1 << 20))).ReadAsync(starved, true, CancellationToken.None, children: false);
-        check(index is { Modules: 0, Cut: 3 } && index.Objects.Length == 3 && index.Objects.All(item => item.Definition is null) && starved.CharsRead <= 3 * (DatabaseReader.RepeatChars + 1),
+        check(index is { Modules: 0, Cut: 3 } && index.Table.Count == 3 && index.Table.Rows().All(item => item.Definition is null) && starved.CharsRead <= 3 * (DatabaseReader.RepeatChars + 1),
             "below the names' reserve a definition is left out, counted as cut, after at most a short text's length: " + starved.CharsRead + " characters read");
 
         // A short definition the read already holds costs nothing, so it is kept even below the reserve: the first plan guide's
@@ -214,9 +214,9 @@ internal static class SearchCostChecks
         var tight = new IndexBudget(measure.Used + reserve - 2000);
         var repeats = Procedures(3, guides, repeat);
         index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = reserve }, new StringPool(tight)).ReadAsync(repeats, true, CancellationToken.None, children: false);
-        var first = index?.Objects.FirstOrDefault(item => item.Kind == "planGuide")?.Definition;
+        var first = index?.Table.Rows().FirstOrDefault(item => item.Kind == "planGuide")?.Definition;
         check(index is { Modules: 5, Cut: 0 } && tight.Limit - tight.Used < reserve && first == repeat
-            && index.Objects.All(item => ReferenceEquals(item.Definition, first)),
+            && index.Table.Rows().All(item => ReferenceEquals(item.Definition, first)),
             $"below the names' reserve a repeated short definition the read holds is still kept ({index?.Modules} kept, {index?.Cut} cut, {tight.Limit - tight.Used} bytes free)");
 
         // A provider that answers each GetChars short: a held repeat is still found across reads, and a longer text that starts
@@ -230,7 +230,7 @@ internal static class SearchCostChecks
         var prefixed = Procedures(3, guides, repeat + "+[a]");
         prefixed.Chunk = repeat.Length;
         index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = reserve }, new StringPool(tight)).ReadAsync(prefixed, true, CancellationToken.None, children: false);
-        check(index is { Modules: 2, Cut: 3 } && index.Objects.Where(item => item.Kind == "procedure").All(item => item.Definition is null),
+        check(index is { Modules: 2, Cut: 3 } && index.Table.Rows().Where(item => item.Kind == "procedure").All(item => item.Definition is null),
             $"a short read ending on a held repeat's length does not take a longer definition for it ({index?.Modules} kept, {index?.Cut} cut)");
     }
 
