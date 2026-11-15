@@ -29,7 +29,9 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   grid's sorting and filtering (its header buttons, funnels and menu commands), Save Results As and Sort Text By wait:
   they are dimmed and a click does nothing but point at the running operation. Copy still works and copies what the grid
   shows. Cancel, or Escape in the grid, stops it and keeps the order and rows the grid had, which the toolbar says. A
-  screen reader hears when it starts and ends, never each percentage.
+  grid sorted or filtered while its rows still arrived is built again from every row once they are in; cancelling that
+  keeps the view of the rows that had arrived, and Save Results As then asks to sort or filter again first. A screen
+  reader hears when it starts and ends and why a click waited, never each percentage.
 - When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
   grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
   Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or

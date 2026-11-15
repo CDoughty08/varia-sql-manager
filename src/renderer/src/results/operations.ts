@@ -55,7 +55,7 @@ export interface OperationTicket {
 
 export type OperationOutcome = 'done' | 'cancelled' | 'dropped'
 
-interface Entry { operation: ResultOperation; readonly cancel: () => void; show?: unknown; hide?: unknown; shownAt?: number }
+interface Entry { operation: ResultOperation; readonly cancel: () => void; readonly cancelled?: string; show?: unknown; hide?: unknown; shownAt?: number }
 
 const nouns: Readonly<Record<OperationKind, { readonly doing: string; readonly done: string; readonly cancelled: string }>> = {
   sort: { doing: 'Sorting', done: 'Sorted', cancelled: 'Sort cancelled. The grid kept its previous order.' },
@@ -97,12 +97,14 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
     this.now = o.now ?? (() => Date.now())
   }
 
-  /** Starts tracking an operation; `cancel` stops it (the strip's Cancel, Escape in the grid). */
-  begin(tabId: string, o: { kind: OperationKind; target: string; entry?: EntryKey; column?: number; cancel: () => void }): OperationTicket {
+  /** Starts tracking an operation; `cancel` stops it (the strip's Cancel, Escape in the grid). `cancelled` replaces the
+   *  kind's sentence for a cancel that keeps something other than the previous view. */
+  begin(tabId: string, o: { kind: OperationKind; target: string; entry?: EntryKey; column?: number; cancel: () => void; cancelled?: string }): OperationTicket {
     const id = ++this.next, at = this.now()
     const entry: Entry = {
       operation: { id, tabId, kind: o.kind, target: o.target, ...o.entry === undefined ? {} : { entry: o.entry }, ...o.column === undefined || o.column < 0 ? {} : { column: o.column }, shown: false, ending: false, startedAt: at, updatedAt: at, pulse: 0 },
-      cancel: o.cancel
+      cancel: o.cancel,
+      ...o.cancelled === undefined ? {} : { cancelled: o.cancelled }
     }
     entry.show = this.timers.setTimeout(() => this.show(entry), g.operationShowDelayMs)
     this.entries.set(id, entry)
@@ -135,15 +137,17 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
     return undefined
   }
 
-  /** Any sort or filter in flight, in any tab: Sort Text By, which sorts every text-sorted grid again, waits for them. */
-  anyBuilding(): boolean {
-    for (const item of this.entries.values()) if (!item.operation.ending && (item.operation.kind === 'sort' || item.operation.kind === 'filter')) return true
+  /** Any sort or filter in flight, in any tab: Sort Text By, which sorts every text-sorted grid again, waits for them.
+   *  `shown`: only one on screen, which is when the toolbar marks Sort Text By held off (a quick one never flashes it). */
+  anyBuilding(shown = false): boolean {
+    for (const item of this.entries.values()) if (!item.operation.ending && (!shown || item.operation.shown) && (item.operation.kind === 'sort' || item.operation.kind === 'filter')) return true
     return false
   }
 
   /** A click on a control a sort or filter holds off: nothing is queued; the operation shows at once if it had not yet,
-   *  pulses, and the live region says why. With no entry, every building operation (Sort Text By's). */
-  refused(tabId: string | undefined, entry?: EntryKey): void {
+   *  pulses, and the live region says why. With no tab, every building operation (Sort Text By's), and the live region of
+   *  `here`, the tab the click came from, says why too. */
+  refused(tabId: string | undefined, entry?: EntryKey, here?: string): void {
     const held = [...this.entries.values()].filter(item => !item.operation.ending && (item.operation.kind === 'sort' || item.operation.kind === 'filter')
       && (tabId === undefined || item.operation.tabId === tabId) && (entry === undefined || item.operation.entry === entry))
     for (const item of held) {
@@ -151,7 +155,10 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
       item.operation = { ...item.operation, pulse: item.operation.pulse + 1 }
       this.announce(item.operation.tabId, `${nouns[item.operation.kind].doing} ${item.operation.target}. Sorting and filtering wait until it finishes; Cancel stops it.`)
     }
-    for (const tab of new Set(held.map(item => item.operation.tabId))) this.publishTab(tab)
+    const tabs = new Set(held.map(item => item.operation.tabId))
+    const first = held[0]?.operation
+    if (here !== undefined && first && !tabs.has(here)) { this.announce(here, `${nouns[first.kind].doing} ${first.target}. Sort Text By waits until it finishes.`); tabs.add(here) }
+    for (const tab of tabs) this.publishTab(tab)
   }
 
   /** Cancels one operation (its strip's Cancel), or every one of the tab the toolbar shows (Escape in a grid): one still
@@ -201,7 +208,7 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
     const { tabId, kind } = entry.operation
     this.timers.clearTimeout(entry.show)
     // A cancel is said even before the operation showed: the user asked for it.
-    if (outcome === 'cancelled') { this.announce(tabId, nouns[kind].cancelled); this.notice(tabId, nouns[kind].cancelled) }
+    if (outcome === 'cancelled') { const said = entry.cancelled ?? nouns[kind].cancelled; this.announce(tabId, said); this.notice(tabId, said) }
     else if (outcome === 'done' && entry.operation.shown) this.announce(tabId, nouns[kind].done)
     const left = entry.shownAt === undefined ? 0 : g.operationMinShownMs - (this.now() - entry.shownAt)
     if (left <= 0 || outcome !== 'done') {
@@ -220,7 +227,9 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
   }
 
   private announce(tabId: string, text: string): void {
-    this.announcements.set(tabId, { text, at: ++this.counter })
+    // The same sentence again (a second refused click) must still be read out: a zero-width space makes it a change.
+    const last = this.announcements.get(tabId)?.text
+    this.announcements.set(tabId, { text: last === text ? text + '​' : text, at: ++this.counter })
   }
 
   private notice(tabId: string, text: string): void {

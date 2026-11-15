@@ -1,4 +1,5 @@
 using System.Globalization;
+using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
 namespace Varia.Backend.Tests;
@@ -16,6 +17,8 @@ internal static class OperationProgressChecks
         Meter(check);
         Operations(check);
         Cancelled(check);
+        SettleOrder(check);
+        FailedStep(check);
     }
 
     private sealed class Recorder
@@ -140,19 +143,29 @@ internal static class OperationProgressChecks
         check(OperationProgress.Current is null, "no progress is current outside an operation's own flow");
     }
 
-    /// <summary>A cancelled operation sends nothing once it has stopped: its last figure stays below 100.</summary>
+    /// <summary>A cancelled operation sends nothing after its answer: the request is answered CANCELLED (settled) from the
+    /// first figure on, as ProtocolHost answers a CANCEL on another thread while the sort's workers keep counting until they
+    /// see the token; no EVENT is queued after that answer, and the last figure stays below 100.</summary>
     private static void Cancelled(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
         var set = Fill(store, store.BeginQuery("progress" + Guid.NewGuid()), 0, 0);
         var pages = set.SealedSnapshot();
         using var cancel = new CancellationTokenSource();
-        var recorder = new Recorder();
-        var progress = new OperationProgress((phase, percent) =>
+        var frames = new List<string>();
+        RequestContext? request = null;
+        request = new RequestContext(9, "results.view", RequestLane.Results, 0, sendEvent: (_, value, _) =>
         {
-            lock (recorder.Events) recorder.Events.Add((phase, percent));
-            if (percent > 0) cancel.Cancel();
-        }, TimeSpan.Zero);
+            lock (frames) frames.Add("event");
+            var figure = (OperationProgressEvent)value;
+            if (figure.Percent > 0 && request!.TrySettle())
+            {
+                lock (frames) frames.Add("answer");
+                cancel.Cancel();
+            }
+        });
+        using var _ = request;
+        var progress = new OperationProgress((phase, percent) => request.SendEvent(new OperationProgressEvent("op.progress", phase, percent), droppable: true), TimeSpan.Zero);
         var stopped = false;
         try
         {
@@ -163,8 +176,45 @@ internal static class OperationProgressChecks
             }).GetAwaiter().GetResult();
         }
         catch (OperationCanceledException) { stopped = true; }
-        var sent = recorder.Events.Count;
-        check(stopped && progress.Percent < 100 && recorder.Events.Count == sent && sent > 0 && recorder.Monotonic(),
-            "a cancelled sort stops counting, sends nothing more and never reads 100: " + recorder.Text);
+        var answer = frames.IndexOf("answer");
+        check(stopped && answer > 0 && answer == frames.Count - 1 && progress.Percent < 100,
+            "a cancelled sort queues no op.progress after its CANCELLED answer and never reads 100: " + string.Join(", ", frames));
+    }
+
+    /// <summary>An EVENT being queued and the answer exclude each other: a settle on another thread while an event is being
+    /// queued waits until it is queued, so the answer follows it (main counts an EVENT after the answer as a violation).
+    /// The settle is given a generous while to overtake; it returns early only when it can.</summary>
+    private static void SettleOrder(Action<bool, string> check)
+    {
+        var order = new List<string>();
+        RequestContext? request = null;
+        request = new RequestContext(10, "results.view", RequestLane.Results, 0, sendEvent: (_, _, _) =>
+        {
+            var settle = Task.Run(() => { if (request!.TrySettle()) lock (order) order.Add("answer"); });
+            settle.Wait(TimeSpan.FromMilliseconds(250));
+            lock (order) order.Add("event");
+        });
+        using var _ = request;
+        request.SendEvent(new OperationProgressEvent("op.progress", "sort", 10), droppable: true);
+        SpinWait.SpinUntil(() => { lock (order) return order.Count == 2; }, TimeSpan.FromSeconds(30));
+        request.SendEvent(new OperationProgressEvent("op.progress", "sort", 20), droppable: true);
+        check(string.Join(",", order) == "event,answer", "an op.progress being queued is never overtaken by the answer, and none follows it: " + string.Join(",", order));
+    }
+
+    /// <summary>A step that throws credits only the items that ran: a profile pass given up to run again on one thread
+    /// leaves the rest of its phase to the retry rather than standing still.</summary>
+    private static void FailedStep(Action<bool, string> check)
+    {
+        var progress = new Recorder().Progress;
+        progress.Phase("profile", 0.7);
+        using (var pass = progress.Count(10))
+            for (var item = 0; item < 3; item++) pass.Done();
+        var afterFailure = progress.Percent;
+        progress.Phase("profile", 0.7);
+        using (var retry = progress.Count(10))
+            for (var item = 0; item < 10; item++) retry.Done();
+        // 3 of the first step's 10 items is 10 % of the whole; crediting the whole step would read 35 %.
+        check(afterFailure <= 11 && progress.Percent > afterFailure && progress.Percent <= 70,
+            "a step that stopped early credits only its items, and the retry moves on from there: " + afterFailure + " then " + progress.Percent);
     }
 }

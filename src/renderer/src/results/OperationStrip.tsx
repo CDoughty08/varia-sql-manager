@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useTicker } from '../core/useTicker'
 import { gridLimits as g } from '../grid/constants'
@@ -18,14 +19,35 @@ export default function OperationStrip({ tabId }: { tabId: string }) {
   const shown = state?.items.filter(item => item.shown) ?? []
   // The display clock for the elapsed time, as the run summary's; progress itself comes only from the backend.
   const now = useTicker(shown.some(item => !item.ending))
+  // A Cancel that goes while it has the keyboard focus (pressed, or its operation ended) gives the focus to the grid that
+  // last had it, as Escape in the search box does, not to the page. Chromium may not blur an element it removes, so each
+  // commit looks for the button.
+  const anchor = useRef<HTMLSpanElement>(null), focused = useRef<HTMLButtonElement | null>(null)
+  useLayoutEffect(() => {
+    const button = focused.current
+    if (!button || button.isConnected) return
+    focused.current = null
+    const owner = anchor.current?.ownerDocument, active = owner?.activeElement
+    if (!owner || (active && active !== owner.body)) return
+    const grids = [...owner.querySelectorAll<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)]
+    ;(grids.find(grid => grid.dataset.paneFocus === 'selected') ?? grids[0])?.focus()
+  })
   return <>
-    {shown.map(item => <Strip key={item.id} item={item} now={now} cancel={() => results.operations.cancel(tabId, item.id)} />)}
+    {shown.map(item => <Strip key={item.id} item={item} now={now} cancel={() => results.operations.cancel(tabId, item.id)}
+      onFocus={button => { focused.current = button }} />)}
     {state?.notice && <div className="op-strip op-notice">{state.notice}</div>}
-    <span className="visually-hidden" aria-live="polite" data-announced={state?.announced ?? 0}>{state?.announcement ?? ''}</span>
+    <Announcer key={tabId} anchor={anchor} text={state?.announcement ?? ''} announced={state?.announced ?? 0} />
   </>
 }
 
-function Strip({ item, now, cancel }: { item: ResultOperation; now: number; cancel: () => void }) {
+/** The operations' live region for one query tab (keyed by it): a sentence from before the tab was shown stays unread, so
+ *  switching query tabs repeats nothing (as OutputPane's Announcer). */
+function Announcer({ anchor, text, announced }: { anchor: React.Ref<HTMLSpanElement>; text: string; announced: number }) {
+  const [shownAt] = useState(announced)
+  return <span ref={anchor} className="visually-hidden" aria-live="polite" data-announced={announced}>{announced > shownAt ? text : ''}</span>
+}
+
+function Strip({ item, now, cancel, onFocus }: { item: ResultOperation; now: number; cancel: () => void; onFocus: (button: HTMLButtonElement) => void }) {
   const name = `${operationNoun(item.kind)} ${item.target}`, phase = item.ending ? 'Done' : phaseText(item.phase)
   const elapsed = Math.max(now, item.updatedAt) - item.startedAt
   const percent = item.percent
@@ -38,6 +60,7 @@ function Strip({ item, now, cancel }: { item: ResultOperation; now: number; canc
     </span>
     {percent !== undefined && <span className="op-percent">{percent}%</span>}
     {!item.ending && elapsed >= g.operationElapsedMs && <span className="op-elapsed">{formatElapsed(elapsed)}</span>}
-    {!item.ending && <button type="button" aria-label={`${cancelNames[item.kind]}, ${item.target}`} title="Cancel (Esc in the grid)" onClick={cancel}>Cancel</button>}
+    {!item.ending && <button type="button" aria-label={`${cancelNames[item.kind]}, ${item.target}`} title="Cancel (Esc in the grid)" onClick={cancel}
+      onFocus={event => onFocus(event.currentTarget)}>Cancel</button>}
   </div>
 }

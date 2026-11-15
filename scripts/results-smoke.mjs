@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
@@ -2235,6 +2235,9 @@ try {
   await expect(grid()).toHaveAttribute('aria-busy', 'true')
   await header('maybe').hover()
   await sortButton('maybe').click()
+  // Only a refusal says why: a click wrongly taken would start a sort of its own, which says nothing of the kind.
+  await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
+  await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
   await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
   await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by' }).getByRole('button', { name: 'Chars' })).toHaveAttribute('aria-disabled', 'true')
   await operationCancel(page, 'Cancel sort, Result 1').click()

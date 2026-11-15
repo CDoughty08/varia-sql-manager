@@ -115,12 +115,13 @@ internal sealed class OperationProgress
         Tick();
     }
 
-    /// <summary>Closes the open step: its share is done.</summary>
+    /// <summary>Closes the open step: its share is done, or as much of it as its items that ran (a step that threw, such
+    /// as a profile pass given up to try again on one thread, leaves the rest of its share to what follows).</summary>
     internal void Close()
     {
         lock (sync)
         {
-            cursor = Math.Max(cursor, stepEnd);
+            cursor = Volatile.Read(ref done) >= items ? Math.Max(cursor, stepEnd) : Value();
             items = 0;
             done = 0;
         }

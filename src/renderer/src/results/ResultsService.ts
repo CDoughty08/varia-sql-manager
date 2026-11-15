@@ -357,6 +357,8 @@ const unavailable = 'These results are no longer available because the SQL backe
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
+// A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
+const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
 /** Main's and the backend's own sentences for a save; anything else is prefixed. */
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
@@ -878,6 +880,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
     if (this.heldOff(tabId, set.key)) return stillSorting
+    if (sort && !sort.sorting && sort.stale && sort.view) return partialView
     if (sort && (sort.sorting || sort.stale || !sort.view)) return stillSorting
     const jobId = this.newId()
     // A grid drawn transposed saves as drawn: a line per column, which its progress then counts.
@@ -1509,7 +1512,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       controller.abort()
       this.keepLastView(tabId, run, index, set)
     }
-    ticket = this.operations.begin(tabId, { kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
+    // Cancelling the rebuild of a view built from the rows that had arrived keeps that view, which nothing builds again.
+    const partial = !!current?.view && current.stale && set.handle.getSnapshot().state === 'complete'
+    ticket = this.operations.begin(tabId, {
+      kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel,
+      ...partial ? { cancelled: `${action === 'sort' ? 'Sort' : 'Filter'} cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.` } : {}
+    })
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.

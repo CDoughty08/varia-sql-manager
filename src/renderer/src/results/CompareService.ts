@@ -323,11 +323,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     let done = false
     try {
       const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal, onProgress: (phase, percent) => ticket.progress(phase, percent) }), { signal: abort.signal })
-      done = true
       const label = `Differences: ${entryName(from)} → ${entryName(to)}`
-      // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
+      // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
+      // says nothing was compared.
       const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
       if (key === undefined) return undefined
+      done = true
       const info: CompareInfo = {
         left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate

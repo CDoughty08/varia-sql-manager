@@ -155,6 +155,8 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, mountKey, gone, ring, ringPercent])
   // A popover opened before the sort or filter began closes: its condition would wait anyway.
   const heldNow = !!busy?.held
+  // Marked busy and dimmed only once the operation shows: one quicker than the delay holds clicks off without a flash.
+  const heldShown = heldNow && !!busy?.shown
   useEffect(() => { if (heldNow) setFunnel(undefined) }, [heldNow])
   // Closing the popover gives the focus back to the grid, as a menu does, unless a press elsewhere took it.
   const closeFunnel = useCallback((refocus = true) => {
@@ -185,7 +187,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   return <div {...frameProps} className={'rg-frame' + (frameProps?.className ? ' ' + frameProps.className : '')}>
     {busy?.shown && <div className={'rg-op-bar' + (busy.percent === undefined ? ' indeterminate' : '')} aria-hidden="true" title={busy.label}><span style={busy.percent === undefined ? undefined : { width: `${busy.percent}%` }} /></div>}
     <div {...rootProps} ref={setRoot} className={'results-grid rg' + (rootProps.className ? ' ' + rootProps.className : '')} role="grid" tabIndex={0}
-      aria-multiselectable="true" aria-readonly="true" aria-busy={busy?.held ? true : undefined} data-held={busy?.held ? '' : undefined} onKeyDown={keyDown}>
+      aria-multiselectable="true" aria-readonly="true" aria-busy={heldShown ? true : undefined} data-held={heldShown ? '' : undefined} onKeyDown={keyDown}>
       <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
     </div>
     {children}

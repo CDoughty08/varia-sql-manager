@@ -77,6 +77,8 @@ export const part = {
   jobNotice: '.job-notice',
   /** How the last operation over a whole result ended when it did not finish (Sort cancelled. …), beside the toolbar's strip. */
   operationNotice: '.op-notice',
+  /** The result operations' polite live region in the toolbar (start, end and why a click was refused). */
+  operationAnnouncer: '.output-toolbar [aria-live="polite"][data-announced]',
   outputEmpty: '.output-empty',
   // The states kit's empty view (src/renderer/src/kit/EmptyState.tsx) and the surfaces that place one.
   emptyState: '.empty-state',
@@ -579,6 +581,7 @@ export const jobNotice = page => outputPane(page).locator(part.jobNotice)
 export const operationProgress = (page, name) => outputPane(page).getByRole('progressbar', { name, exact: true })
 export const operationCancel = (page, name) => outputPane(page).getByRole('button', { name, exact: true })
 export const operationNotice = page => outputPane(page).locator(part.operationNotice)
+export const operationAnnouncer = page => outputPane(page).locator(part.operationAnnouncer)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)
 /** A surface's empty view, matched only when it is the states kit's (so a hand-made one fails), and its parts. */
 export const emptyState = surface => matching(surface, part.emptyState)

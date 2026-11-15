@@ -44,7 +44,7 @@ function fixture(o: { parallel?: number } = {}) {
   }
   const tab = (): TabResults => results.getSnapshot().t1
   const handle = (key: string) => tab().sets.find(set => set.key === key)!.handle as FakeHandle
-  return { client, results, compare, pivot, jobs, run, tab, handle }
+  return { client, results, compare, pivot, jobs, run, tab, handle, timers }
 }
 
 describe('the Compare popover', () => {
@@ -207,6 +207,24 @@ describe('the Compare popover', () => {
     answer.resolve({ descriptor: descriptor(5000, { index: 999, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await first
     expect(tab().sets).toHaveLength(resultLimits.sets)
+  })
+
+  it('reads not done when its diff came back to a run that no longer takes it', async () => {
+    const { compare, results, run, handle, timers } = fixture()
+    const keys = run(2)
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const first = compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    timers.advance(300)
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'compare', shown: true }])
+    // The run holding both sets went full before the answer came: the diff is released, and the strip does not read done.
+    const add = vi.spyOn(results, 'addSet').mockReturnValueOnce(undefined)
+    answer.resolve({ descriptor: descriptor(5000, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await first
+    expect(add).toHaveBeenCalled()
+    expect(results.operations.getSnapshot().t1?.items ?? []).toEqual([])
+    expect(results.operations.getSnapshot().t1?.announcement ?? '').not.toBe('Compared')
   })
 
   it('shares the four places of the window and the 1,000 rule with Pivot builds', async () => {

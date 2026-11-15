@@ -104,4 +104,27 @@ describe('result operations', () => {
     operations.forget('t1')
     expect(tab()).toBeUndefined()
   })
+
+  it('reads a repeated sentence out again, tells the tab a refused Sort Text By came from, and marks only shown work held', () => {
+    const { operations, tick, tab } = fixture()
+    operations.begin('t1', { kind: 'sort', target: 'Result 1', entry: e1, cancel: () => {} })
+    // Not on screen yet: it holds clicks off, but the toolbar does not mark Sort Text By held (a quick one never flashes).
+    expect([operations.anyBuilding(), operations.anyBuilding(true)]).toEqual([true, false])
+    tick(g.operationShowDelayMs)
+    expect(operations.anyBuilding(true)).toBe(true)
+    operations.refused('t1', e1)
+    const first = tab('t1')?.announcement
+    operations.refused('t1', e1)
+    expect(tab('t1')?.announcement).not.toBe(first)
+    expect(tab('t1')?.announcement?.replace('​', '')).toBe(first)
+    operations.refused(undefined, undefined, 't2')
+    expect(tab('t2')?.announcement).toBe('Sorting Result 1. Sort Text By waits until it finishes.')
+  })
+
+  it('says what a cancel kept when it was not the previous view', () => {
+    const { operations, tab } = fixture()
+    const ticket = operations.begin('t1', { kind: 'filter', target: 'Result 1', entry: e1, cancel: () => ticket.end('cancelled'), cancelled: 'Kept the rows that had arrived.' })
+    operations.cancel('t1', ticket.id)
+    expect(tab()?.notice).toBe('Kept the rows that had arrived.')
+  })
 })

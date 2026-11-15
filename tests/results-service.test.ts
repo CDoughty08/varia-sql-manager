@@ -1934,6 +1934,28 @@ describe('results service busy state', () => {
     expect(ops()?.items ?? []).toHaveLength(0)
   })
 
+  it('says a cancelled rebuild from every row kept the view of the rows that had arrived, and why Save waits', async () => {
+    const { service, client, flush, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsAvailable: 1 }) })
+    flush()
+    const handle = client.handle(1)!, key = keyAt(service, 't1', 0)
+    const partial = fakeView(handle, 1, [{ column: 1, descending: false, mode: 'value' }], false)
+    handle.sort.mockResolvedValueOnce(partial)
+    service.sortBy('t1', key, 1, 'ascending')
+    await settle()
+    // The set completes: the view is built again from every row, and that rebuild is cancelled from its strip.
+    handle.sort.mockReturnValueOnce(deferred<ResultView>().promise)
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1) })
+    handle.snapshot = { ...handle.snapshot, state: 'complete' }
+    timers.advance(300)
+    const ops = service.operations.getSnapshot().t1
+    service.operations.cancel('t1', ops!.items[0]!.id)
+    expect(service.sortOf('t1', key)).toMatchObject({ view: partial, stale: true, sorting: false })
+    expect(service.operations.getSnapshot().t1?.notice).toBe('Sort cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.')
+    expect(await service.saveAs('t1', key, 'SQLQuery1')).toBe('The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.')
+  })
+
   it('cancels with the strip or Escape, keeping the previous view and saying so; a failure drops the operation silently', async () => {
     const { service, handle, key, ops, flush, tab, timers } = busy()
     const first = fakeView(handle, 1, [{ column: 0, descending: false, mode: 'value' }])

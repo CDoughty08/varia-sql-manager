@@ -98,8 +98,9 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const headerColumn = turned?.headerColumn === undefined ? undefined : entryOf(results.getSnapshot()[tabId]?.sets, turned.entry)?.descriptor.columns[turned.headerColumn]
   const headers = headerColumn ? columnTitle(headerColumn.name) : 'Row number'
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
-  // A sort or filter being built in any tab holds Sort text by off (it would sort every text-sorted grid again).
-  const sortHeld = useSyncExternalStore(results.operations.subscribe, () => results.operations.anyBuilding())
+  // A sort or filter being built in any tab holds Sort text by off (it would sort every text-sorted grid again); it is
+  // marked so once that operation shows, so a quick one never flashes it.
+  const sortHeld = useSyncExternalStore(results.operations.subscribe, () => results.operations.anyBuilding(true))
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize'], tabs = values['queryResults.grid.layout'] === 'tabs'
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {

@@ -445,7 +445,9 @@ internal static partial class ViewSorter
             if (!keys.Any(sort => sort.Mode == SortMode.Value && sort.Column == column)) key.Drop();
         values.Clear();
         var keysEnd = filtersEnd + (0.98 - filtersEnd) * 0.45;
-        progress?.Phase("keys", keysEnd, steps: built.Count(key => key is null));
+        // Two shares a key: its page read, and the re-pass or extract most keys run after it (a step past them takes half of
+        // what is left), so a first key's second pass does not use up the shares of the keys after it.
+        progress?.Phase("keys", keysEnd, steps: 2 * built.Count(key => key is null));
         for (var k = 0; k < keys.Count; k++)
             built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate, memory);
         progress?.Phase("sort", 0.98);

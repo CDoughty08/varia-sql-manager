@@ -1031,7 +1031,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch:hover .rg-cs, .rg-cs.on { visibility: visible; }
 /* A narrow header (gridLimits.sortButtonMinWidth) keeps every click for selecting its column: only a sorted column's arrow shows. */
 .rg-ch.narrow .rg-cs { pointer-events: none; }
-.rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
+.rg-ch.narrow:hover .rg-cs:not(.on):not(.busy) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
 .rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
 /* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and
