@@ -516,12 +516,14 @@ const available = result => result.complete ? result.read : Math.floor(result.re
 const describe = result => ({
   resultId: result.resultId, index: result.index, batchNumber: result.batchNumber, iteration: result.iteration, kind: result.kind, columns: result.columns,
   rowsRead: result.truncated ? result.read * 2 : result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, truncatedCells: 0,
-  state: result.complete ? 'complete' : 'open', incomplete: result.incomplete ?? false, ...result.truncated ? { truncated: result.truncated } : {}
+  state: result.complete ? 'complete' : 'open', incomplete: result.incomplete ?? false, ...result.truncated ? { truncated: result.truncated } : {},
+  ...result.name ? { name: result.name } : {}
 })
 function storeResult(set, index) {
   const result = {
     resultId: nextResultId++, index, batchNumber: set.batchNumber ?? 1, iteration: set.iteration ?? 1, kind: set.kind ?? 'rows', columns: set.columns,
-    rowAt: set.rowAt ?? (row => set.rows[row]), pageRows: set.pageRows ?? 64, read: set.read ?? set.rows.length, complete: set.complete ?? true, pages: new Map()
+    rowAt: set.rowAt ?? (row => set.rows[row]), pageRows: set.pageRows ?? 64, read: set.read ?? set.rows.length, complete: set.complete ?? true, pages: new Map(),
+    ...set.name ? { name: set.name } : {}
   }
   stored.set(result.resultId, result)
   return result

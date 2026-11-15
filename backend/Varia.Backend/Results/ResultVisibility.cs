@@ -2,8 +2,8 @@ namespace Varia.Backend.Results;
 
 /// <summary>
 /// Which query results' grids the renderer shows in any window, popouts included (results.visibility), and since when
-/// each other stored result has been hidden: the input of a memory policy for results nobody can see (stage 1 of the page
-/// compression plan). The renderer reports query results only (result sets, pivots, comparisons, Peek's rows), not live
+/// each other stored result has been hidden (and each shown one shown): the input of the packing policy, which packs
+/// results nobody can see after a few seconds (stage 1 of the page compression plan) and shown ones once idle (stage 2). The renderer reports query results only (result sets, pivots, comparisons, Peek's rows), not live
 /// tables, which are replaced every tick: a stored live table always counts as hidden here, so a policy must exclude
 /// results whose budget is live. It is a hint: the renderer sends the whole visible set each time it
 /// changes, and again to a new backend, so a lost or late message only delays such a policy, never loses rows.
@@ -31,6 +31,8 @@ internal sealed class ResultVisibility(Func<uint, bool> exists, Func<long>? now 
     private readonly Func<long> clock = now ?? (() => Environment.TickCount64);
     private HashSet<uint> visible = [];
     private readonly Dictionary<uint, long> hiddenSince = [];
+    /// <summary>When each id of the visible set entered it: bounded by the set (<see cref="MaxResults"/>).</summary>
+    private readonly Dictionary<uint, long> shownSince = [];
     private int sweepAt = SweepFloor;
     private Guid source;
     private long lastSeq;
@@ -60,8 +62,17 @@ internal sealed class ResultVisibility(Func<uint, bool> exists, Func<long>? now 
             HashSet<uint> next = [];
             foreach (var id in ids) if (next.Count < MaxResults && exists(id)) next.Add(id);
             // A released id that leaves gets an entry the next sweep drops; asking the store about each would only cost locks.
-            foreach (var id in visible) if (!next.Contains(id)) hiddenSince[id] = at;
-            foreach (var id in next) hiddenSince.Remove(id);
+            foreach (var id in visible)
+                if (!next.Contains(id))
+                {
+                    hiddenSince[id] = at;
+                    shownSince.Remove(id);
+                }
+            foreach (var id in next)
+            {
+                hiddenSince.Remove(id);
+                shownSince.TryAdd(id, at);
+            }
             visible = next;
             Sweep();
             kept = visible.Count;
@@ -74,16 +85,34 @@ internal sealed class ResultVisibility(Func<uint, bool> exists, Func<long>? now 
     /// it holding the store's locks (see the remarks).</summary>
     public bool IsHidden(uint resultId, out long since)
     {
+        var hidden = State(resultId, out var isHidden, out var at) && isHidden;
+        since = hidden ? at : 0;
+        return hidden;
+    }
+
+    /// <summary>Whether a query result is stored and, if so, whether its grid is shown in no window, and since when it has
+    /// been hidden or shown (on <see cref="Now"/>'s clock): what both packing stages ask, hidden results after a few seconds
+    /// and shown ones once idle. A stored result never shown counts as hidden from the first time it is asked about. Never
+    /// call it holding the store's locks (see the remarks).</summary>
+    public bool State(uint resultId, out bool hidden, out long since)
+    {
         lock (gate)
         {
             since = 0;
+            hidden = false;
             if (!exists(resultId))
             {
                 hiddenSince.Remove(resultId);
+                shownSince.Remove(resultId);
                 visible.Remove(resultId);
                 return false;
             }
-            if (visible.Contains(resultId)) return false;
+            if (visible.Contains(resultId))
+            {
+                since = shownSince.GetValueOrDefault(resultId);
+                return true;
+            }
+            hidden = true;
             if (!hiddenSince.TryGetValue(resultId, out since))
             {
                 hiddenSince[resultId] = since = clock();
@@ -101,6 +130,7 @@ internal sealed class ResultVisibility(Func<uint, bool> exists, Func<long>? now 
             {
                 visible.Remove(id);
                 hiddenSince.Remove(id);
+                shownSince.Remove(id);
             }
     }
 
@@ -111,6 +141,7 @@ internal sealed class ResultVisibility(Func<uint, bool> exists, Func<long>? now 
         {
             visible = [];
             hiddenSince.Clear();
+            shownSince.Clear();
             sweepAt = SweepFloor;
         }
     }

@@ -92,6 +92,12 @@ if (args is ["--sql-definition-checks"])
     Console.WriteLine("Passed " + passed + " SQL definition checks.");
     return;
 }
+if (args is ["--result-name-checks"])
+{
+    await ResultNameChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " result name checks.");
+    return;
+}
 if (args is ["--sql-language-live"])
 {
     await SqlLanguageLiveChecks.RunAsync(Check);
@@ -384,6 +390,7 @@ if (liveGroup is null)
         ("Session", Sync(() => SessionChecks.Run(Check))),
         ("Plan", Sync(() => { PlanChecks.Run(Check); ActualPlanRecoveryChecks.Run(Check); })),
         ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
+        ("ResultName", () => ResultNameChecks.RunAsync(Check)),
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("ConnectionPrincipal", () => ConnectionPrincipalChecks.RunAsync(Check)),
@@ -403,6 +410,7 @@ if (liveGroup is null)
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
+        ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
@@ -923,6 +931,7 @@ try
     await Suite("LiveTableData", () => LiveTableDataChecks.RunAsync(Check, service, Live, json));
     await Suite("ExplorerStatus", () => ExplorerStatusLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Execution", () => ExecutionLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("ResultName", () => ResultNameLiveChecks.RunAsync(Check, service, info, json));
     await Suite("EstimatedPlans", async () =>
     {
         await EstimatedPlanChecks.RunAsync(Check, service, info, json);

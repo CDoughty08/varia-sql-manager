@@ -54,9 +54,10 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
 /// bits (IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16, BinarySort2 16384, BinarySort 32768).</summary>
 internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool Utf8, int Options);
 /// <summary>A stored result set. rowsAvailable counts rows in sealed pages (what results.read can serve); main adds the
-/// backend generation before the renderer sees it.</summary>
+/// backend generation before the renderer sees it. Name is the query's own name for the set, from a #Name="…" marker comment
+/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
-    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete);
+    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
@@ -77,7 +78,7 @@ internal sealed record ResultsMemoryEvent(long UsedBytes, long GlobalBytes, long
 /// as read first.</summary>
 internal sealed record ResultMemoryDetail(long LogicalBytes, long StoredBytes, long CompressedBytes, long PackedLogicalBytes, long CacheBytes,
     IReadOnlyList<ResultMemoryEntry> Largest, ResultCodecCounters Codec, ManagedHeap Heap);
-/// <summary>State is "raw", "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
+/// <summary>State is "raw", "partial" (a pass stopped part way), "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
 /// view's table, which no Results tab names; left out otherwise.</summary>
 internal sealed record ResultMemoryEntry(uint ResultId, long LogicalBytes, long StoredBytes, string State, int? Progress = null, bool? Live = null);
 /// <summary>The page codec's counters since the backend started. Name and Level are left out while compression is off.

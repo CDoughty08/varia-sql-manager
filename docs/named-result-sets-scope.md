@@ -166,7 +166,7 @@ The cases:
 | Selection execute that leaves the marker out | No name. Selecting from the comment's line includes it. |
 | Estimated plan | Not result sets; nothing changes. |
 | Actual plan from the toolbar | Captured on another connection; no extra sets, nothing changes. |
-| `SET STATISTICS XML ON` in the script | The plan sets are recognised and left out of the count, so the rows keep their names. Plan sets are not named. |
+| `SET STATISTICS XML ON` in the script | The plan sets are recognised and left out of the count, so the rows keep their names. Plan sets are not named. A plan that arrives where a `SELECT *` stood stops naming for the rest of the batch (a table's column could be named like the plan column). |
 | The batch does not parse | No names for that batch; one Messages line says so. The server reports the syntax error itself. |
 
 ```sql
@@ -177,8 +177,9 @@ EXEC dbo.GetOrder @OrderId = 42;
 ```
 
 ```sql
-EXEC dbo.RefreshStaging;      -- returns an unknown number of sets
--- #Name="Staged rows"        -- not applied; Messages says why
+-- Not applied: EXEC returns an unknown number of sets, and Messages says why.
+EXEC dbo.RefreshStaging;
+-- #Name="Staged rows"
 SELECT * FROM dbo.Staging;
 ```
 

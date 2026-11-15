@@ -225,6 +225,81 @@ internal sealed partial class ResultStore
 
     internal void Settle() => Settled?.Invoke();
 
+    /// <summary>The clock the sets note their last use on (<see cref="ResultSetBuffer.Activity"/>), in milliseconds: monotonic,
+    /// <see cref="Environment.TickCount64"/> as <see cref="ResultVisibility"/>'s is, which the policy compares it with. The
+    /// checks set both to their own.</summary>
+    internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
+
+    internal long Now => Clock();
+
+    /// <summary>Asked while a query's refused row waits (<see cref="WaitForRoomAsync"/>): whether packing complete results could
+    /// make room for that query, either in the global budget (<c>true</c>) or in its own half only (its own complete sets),
+    /// and if so starts packing them at once. The policy (<see cref="ResultPacker"/>) sets it; it must return at once and take
+    /// no lock of the waiting set's (it is never a candidate: it is open).</summary>
+    internal Func<QueryBudget, bool, bool>? RoomMaker { get; set; }
+
+    /// <summary>The longest a row waits for packing to make room (<see cref="WaitForRoomAsync"/>) before the query stops as
+    /// it would have: packing on the workers takes about 0.2 s of 16 workers a GiB (docs/page-compression-findings.md), a few
+    /// times that on a few cores, so
+    /// this only bounds a pass that a held result or a starved machine keeps from finishing.</summary>
+    internal const int RoomWaitMs = 10_000;
+    /// <summary>How long one wait for a page's saving lasts before the room is looked at again.</summary>
+    private const int RoomPollMs = 250;
+    private int roomWaiters;
+
+    /// <summary>Whether a query's row is waiting for room now (<see cref="WaitForRoomAsync"/>).</summary>
+    internal bool RoomWaiting => Volatile.Read(ref roomWaiters) > 0;
+    private TaskCompletionSource roomChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Whether a policy runs that could pack results to make room for a query's refused row: asked inside the refused
+    /// set's lock, so it takes none (<see cref="WaitForRoomAsync"/> asks the policy, outside every lock).</summary>
+    internal bool CanMakeRoom(QueryBudget query) => query.Live is null && RoomMaker is not null;
+
+    /// <summary>Whether packing could make room for a refused row, in the global budget (<paramref name="global"/>) or the
+    /// query's own half, starting it if so (<see cref="RoomMaker"/>). Never called holding a set's lock: the policy takes
+    /// the store's and its candidates' locks.</summary>
+    private bool MayMakeRoom(QueryBudget query, bool global) => query.Live is null && RoomMaker is { } maker && maker(query, global);
+
+    /// <summary>Waits, outside every lock, until <paramref name="bytes"/> fit the query's half and the global budget or packing
+    /// has nothing more to give: true when they fit (the caller reserves them then, and may find them taken again), false
+    /// when they do not and nothing more is packing for this query, or after <see cref="RoomWaitMs"/>. Each page packed
+    /// returns its saving at once (<see cref="Return"/>), which wakes the wait. A cancelled query throws.</summary>
+    public async Task<bool> WaitForRoomAsync(QueryBudget query, long bytes, CancellationToken token = default, int? waitMs = null)
+    {
+        var deadline = Environment.TickCount64 + (waitMs ?? RoomWaitMs);
+        Interlocked.Increment(ref roomWaiters);
+        try
+        {
+            while (true)
+            {
+                var signal = Volatile.Read(ref roomChanged).Task;
+                var fitsQuery = FitsQuery(query, bytes);
+                if (fitsQuery && FitsGlobal(bytes)) return true;
+                // Its own half full: only its own results can make room there (packing them helps the global budget too).
+                var global = fitsQuery;
+                if (!MayMakeRoom(query, global)) return false;
+                var left = deadline - Environment.TickCount64;
+                if (left <= 0) return false;
+                try { await signal.WaitAsync(TimeSpan.FromMilliseconds(Math.Min(left, RoomPollMs)), token).ConfigureAwait(false); }
+                catch (TimeoutException) { }
+            }
+        }
+        finally { Interlocked.Decrement(ref roomWaiters); }
+    }
+
+    private bool FitsGlobal(long bytes) => UsedBytes + bytes <= GlobalBytes;
+
+    private bool FitsQuery(QueryBudget query, long bytes) => query.UsedBytes + bytes <= Math.Min(QueryBytes, query.MaxBytes);
+
+    /// <summary>Wakes the waits for room (<see cref="WaitForRoomAsync"/>): bytes went back to the budget, or a packing pass
+    /// for room ended (the policy's), which may mean there is nothing more to wait for.</summary>
+    internal void RoomChanged()
+    {
+        if (Volatile.Read(ref roomWaiters) == 0) return;
+        var next = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.Exchange(ref roomChanged, next).TrySetResult();
+    }
+
     /// <summary>Every stored set now, for the policy and the Memory panel, which read each outside the store's lock.</summary>
     internal ResultSetBuffer[] Sets()
     {
@@ -298,7 +373,7 @@ internal sealed partial class ResultStore
     /// <param name="derived">A set made from stored results (<see cref="ResultSetBuffer.Derived"/>): a refusal returns null
     /// without stopping the query.</param>
     public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
-        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false)
+        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false, string? name = null)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
@@ -317,7 +392,7 @@ internal sealed partial class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived };
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived, ResultName = name };
             sets[set.ResultId] = set;
             return set;
         }
@@ -434,6 +509,7 @@ internal sealed partial class ResultStore
             Interlocked.Add(ref liveUsed, -bytes);
             Interlocked.Add(ref live.used, -bytes);
         }
+        else if (bytes > 0) RoomChanged();
     }
 
     public bool IsSystemMemoryLow()
@@ -483,6 +559,9 @@ internal sealed partial class ResultStore
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
+        // A shown result that was packed before its grid was sorted or filtered is unpacked again for the view's screens
+        // (ResultPacker).
+        if (set.HasPacked) Settle();
         return view;
     }
 
@@ -500,6 +579,13 @@ internal sealed partial class ResultStore
 
     public int ViewCount { get { lock (gate) return views.Count; } }
 
+    /// <summary>Whether a view of the set is open (a sorted or filtered grid): stage 2 leaves a shown result raw while it has
+    /// one, since each screen of a view reads hundreds of its pages (<see cref="ResultPacker"/>).</summary>
+    public bool HasViews(ResultSetBuffer set)
+    {
+        lock (gate) return views.Values.Any(view => view.Set == set);
+    }
+
     /// <summary>Closes views of <paramref name="resultId"/> (others' ids, unknown and repeated ones are skipped); returns how
     /// many were closed.</summary>
     public int CloseViews(uint resultId, IEnumerable<uint> viewIds)
@@ -511,6 +597,8 @@ internal sealed partial class ResultStore
                 if (views.TryGetValue(id, out var view) && view.Set.ResultId == resultId && views.Remove(id)) closed.Add(view);
         }
         foreach (var view in closed) Return(view.Set.Budget, view.Charged);
+        // A shown result whose last view closed may be packed now (stage 2).
+        if (closed.Count > 0) Settle();
         return closed.Count;
     }
 

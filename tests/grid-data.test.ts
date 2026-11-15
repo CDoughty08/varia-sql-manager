@@ -221,6 +221,52 @@ describe('grid data', () => {
     await settle()
     expect(data.peek(key)).toBe(cache.get('0:128:0:8:512:false'))
   })
+  it('keeps the joins of multi-part tiles only while frames want them, so evicted parts are not held outside the cache', async () => {
+    const { data, reads, cache, settle, advance } = fixture(8)
+    const joined = (data as unknown as { joined: Map<number, { readonly windows: readonly RowWindow[]; readonly window: RowWindow }> }).joined
+    const tiles = 6
+    for (let tile = 0; tile < tiles; tile++) {
+      const first = tile * 128, view = range(first, first + 40, 0, 7)
+      if (tile % 2 === 0) {
+        // The worker could not hold the tile's pages together: it answers with 60 rows, and the rest is read at once.
+        data.ensure(view, 100_000, 0, 30)
+        reads.at(-1)!.resolve(60)
+        await settle()
+      } else {
+        // The tile's rows were still arriving: 60 at first, the rest read on once they are there.
+        data.ensure(view, first + 60, 0, 30)
+        reads.at(-1)!.resolve(60)
+        await settle()
+        advance(1000)
+      }
+      data.ensure(view, 100_000, 0, 30)
+      expect(reads.at(-1)).toMatchObject({ first: first + 60, count: 68 })
+      reads.at(-1)!.resolve()
+      await settle()
+      data.ensure(view, 100_000, 0, 30)
+      const window = data.peek(tileKey(tile, 0))!
+      expect([window.first, window.count, window.text[0], window.text[127 * 8]]).toEqual([first, 128, String(first), String(first + 127)])
+      expect(joined.has(tileKey(tile, 0))).toBe(true)
+      // Only the joins of the tiles this frame wants (its own, a view above and below) are held.
+      expect([...joined.keys()].every(key => tileRowOf(key) >= tile - 1 && tileRowOf(key) <= tile + 1)).toBe(true)
+    }
+    // Browsing on, far from them, holds none; the cache evicting their parts then leaves nothing of theirs held.
+    data.ensure(range(50_000, 50_040, 0, 7), 100_000, 0, 30)
+    expect(joined.size).toBe(0)
+    // A tile wanted again whose parts the cache still has is joined again.
+    data.ensure(range(0, 40, 0, 7), 100_000, 0, 30)
+    const again = data.peek(tileKey(0, 0))!
+    expect([again.count, again.text[127 * 8]]).toEqual([128, '127'])
+    expect(joined.size).toBe(1)
+    data.ensure(range(50_000, 50_040, 0, 7), 100_000, 0, 30)
+    expect(joined.size).toBe(0)
+    // A tile whose parts the cache evicted is read from its start again.
+    for (const key of [...cache.keys()]) if (key.startsWith('0:') || key.startsWith('60:')) cache.delete(key)
+    const before = reads.length
+    data.ensure(range(0, 40, 0, 7), 100_000, 0, 30)
+    expect(data.peek(tileKey(0, 0))).toBeUndefined()
+    expect(reads.slice(before).map(read => [read.first, read.count])).toContainEqual([0, 128])
+  })
   it('marks a tile whose read failed until Retry, and reads a tile once more after the worker restarts', async () => {
     const { data, reads, settle } = fixture(8)
     data.ensure(range(0, 40, 0, 7), 100, 0, 30)

@@ -1,0 +1,345 @@
+{
+  "about": "The #Name marker scan (docs/named-result-sets-scope.md, Syntax). Each case is a script; markers lists every marker SqlScript.Parse finds, in order, with its line (counted from startLine, default 1) and its name, or malformed: true for a malformed marker, which names nothing. An ordinary comment is not listed. ResultNameChecks.cs reads these; the editor's scanner (PR 4) is to read the same.",
+  "cases": [
+    {
+      "name": "block comment",
+      "sql": "/* #Name=\"Sample Query\" */\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Sample Query"
+        }
+      ]
+    },
+    {
+      "name": "line comment",
+      "sql": "-- #Name=\"Open orders\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Open orders"
+        }
+      ]
+    },
+    {
+      "name": "keyword in any case, white space around =, doubled quotes",
+      "sql": "-- #name = \"Says \"\"hello\"\"\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Says \"hello\""
+        }
+      ]
+    },
+    {
+      "name": "upper case keyword, no space after --",
+      "sql": "--#NAME=\"Upper\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Upper"
+        }
+      ]
+    },
+    {
+      "name": "marker on a line of its own in a block comment",
+      "sql": "SELECT 0 AS z;\n/*\n   #Name=\"Own line\"\n*/\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 3,
+          "name": "Own line"
+        }
+      ]
+    },
+    {
+      "name": "trimmed, runs of white space become one space",
+      "sql": "-- #Name=\"   Open    orders  \"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Open orders"
+        }
+      ]
+    },
+    {
+      "name": "Unicode name",
+      "sql": "-- #Name=\"\u00dcn\u00efc\u00f8d\u00e9 \u540d\u524d \ud83d\ude00\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "\u00dcn\u00efc\u00f8d\u00e9 \u540d\u524d \ud83d\ude00"
+        }
+      ]
+    },
+    {
+      "name": "128 characters",
+      "sql": "-- #Name=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ]
+    },
+    {
+      "name": "129 characters is malformed",
+      "sql": "-- #Name=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "empty is malformed",
+      "sql": "-- #Name=\"\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "only white space is malformed",
+      "sql": "-- #Name=\"    \"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "no closing quote is malformed",
+      "sql": "-- #Name=\"Open orders\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "text after the closing quote is malformed",
+      "sql": "-- #Name=\"Open orders\" please\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "two markers in one comment are malformed",
+      "sql": "/* #Name=\"a\" #Name=\"b\" */\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "single quotes are malformed",
+      "sql": "-- #Name='Open orders'\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "no equals sign is malformed",
+      "sql": "-- #Name \"Open orders\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "a commented-out temporary table definition is malformed, not a name",
+      "sql": "-- #Name (Id int, Label nvarchar(50))\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "a tab is white space, collapsed with the spaces around it",
+      "sql": "-- #Name=\"Open\t \torders\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Open orders"
+        }
+      ]
+    },
+    {
+      "name": "a line break inside a block comment's name is malformed",
+      "sql": "/* #Name=\"a\nb\" */\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "a bidirectional override is malformed",
+      "sql": "-- #Name=\"a\u202eb\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "a C1 control is malformed",
+      "sql": "-- #Name=\"a\u0085b\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "a temporary table name is not a marker",
+      "sql": "-- #Names=\"x\"\n-- #name_list=\"y\"\nSELECT 1 AS a;",
+      "markers": []
+    },
+    {
+      "name": "@Name is not a marker",
+      "sql": "-- @Name=\"Smith\"\n-- @Name NVARCHAR(100) = NULL,\nSELECT 1 AS a;",
+      "markers": []
+    },
+    {
+      "name": "a comment with other text is not a marker",
+      "sql": "-- see #Name=\"x\"\n/* note: #Name=\"y\" */\nSELECT 1 AS a;",
+      "markers": []
+    },
+    {
+      "name": "a marker in a string is not a marker",
+      "sql": "SELECT '-- #Name=\"x\"' AS a, '/* #Name=\"y\" */' AS b;",
+      "markers": []
+    },
+    {
+      "name": "a marker in a quoted name is not a marker",
+      "sql": "SELECT 1 AS [-- #Name=\"x\"];",
+      "markers": []
+    },
+    {
+      "name": "a marker in a comment nested in another is not a marker",
+      "sql": "/* commented out:\n/* #Name=\"Inner\" */\nSELECT 1 AS a;\n*/\nSELECT 2 AS b;",
+      "markers": []
+    },
+    {
+      "name": "a line comment inside a block comment is not a marker",
+      "sql": "/* -- #Name=\"x\" */\nSELECT 1 AS a;",
+      "markers": []
+    },
+    {
+      "name": "a marker after a statement on its line",
+      "sql": "SELECT 1 AS a; -- #Name=\"Next\"\nSELECT 2 AS b;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "Next"
+        }
+      ]
+    },
+    {
+      "name": "lines count from a selection's first line",
+      "startLine": 40,
+      "sql": "SELECT 0 AS z;\n\n-- #Name=\"Third\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 42,
+          "name": "Third"
+        }
+      ]
+    },
+    {
+      "name": "markers on both sides of GO",
+      "sql": "-- #Name=\"One\"\nSELECT 1 AS a;\nGO -- #Name=\"Two\"\nSELECT 2 AS b;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "One"
+        },
+        {
+          "line": 3,
+          "name": "Two"
+        }
+      ]
+    },
+    {
+      "name": "a marker in a batch of comments only",
+      "sql": "SELECT 1 AS a;\nGO\n-- #Name=\"Alone\"\nGO\nSELECT 2 AS b;",
+      "markers": [
+        {
+          "line": 3,
+          "name": "Alone"
+        }
+      ]
+    },
+    {
+      "name": "CRLF line breaks",
+      "sql": "SELECT 0 AS z;\r\n/*\r\n #Name=\"Crlf\"\r\n*/\r\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 3,
+          "name": "Crlf"
+        }
+      ]
+    },
+    {
+      "name": "lone CR line breaks",
+      "sql": "SELECT 0 AS z;\r/*\r #Name=\"Cr\"\r*/\rSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 3,
+          "name": "Cr"
+        }
+      ]
+    },
+    {
+      "name": "the bound is the collapsed name's length, however much white space the quotes hold",
+      "sql": "-- #Name=\"a                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        b\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "a b"
+        }
+      ]
+    },
+    {
+      "name": "129 characters after collapsing is malformed",
+      "sql": "-- #Name=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "malformed": true
+        }
+      ]
+    },
+    {
+      "name": "128 characters after collapsing and trimming",
+      "sql": "-- #Name=\"   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy   \"\nSELECT 1 AS a;",
+      "markers": [
+        {
+          "line": 1,
+          "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+        }
+      ]
+    }
+  ]
+}

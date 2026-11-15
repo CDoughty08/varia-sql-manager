@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -65,6 +65,16 @@ describe('results service', () => {
     flush()
     expect(tab().sets).toHaveLength(2)
     expect(client.open).toHaveBeenCalledTimes(2)
+  })
+  it("names an original result by its descriptor's name, and an unnamed one by its number", () => {
+    const { client, service, flush, tab } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { index: 0, name: 'Sample Query' }) })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 1 }) })
+    flush()
+    // Naming one result never renumbers another: the second stays "Result 2".
+    expect(tab().sets.map(entryName)).toEqual(['Sample Query', 'Result 2'])
+    expect(tab().sets.map(set => [set.ordinal, set.number])).toEqual([[1, 1], [2, 2]])
   })
   it('keeps a thousand sets in the backend\'s order, never changing an array a snapshot already holds', () => {
     const { client, service, flush, tab } = fixture()
