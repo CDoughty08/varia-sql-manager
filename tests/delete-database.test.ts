@@ -60,7 +60,7 @@ describe('Delete Object on a database (D3d)', () => {
     expect(actionExecuteRequestSchema.safeParse({ ...request, target: orders }).success).toBe(false)
     expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 0, created: identity.created } }).success).toBe(false)
     // Main refuses what the backend's parse refuses: a shaped but impossible date, which Date would roll over.
-    for (const created of ['2026-13-45T25:61:61.000', '2026-02-30T00:00:00.000', '2026-01-02T24:00:00.000']) {
+    for (const created of ['2026-13-45T25:61:61.000', '2026-02-30T00:00:00.000', '2026-01-02T24:00:00.000', '0000-01-01T00:00:00.000']) {
       expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 7, created } }).success).toBe(false)
     }
     expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 7, created: '2024-02-29T23:59:59.997' } }).success).toBe(true)

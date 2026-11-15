@@ -294,7 +294,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.TableChanges is not null && args.Action != "tableProperties") throw Invalid(args.Action + " takes no tableChanges.");
         // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
         if (args.LoginIdentity is { } loginRead && (args.Action is not ("disable" or "enable" or "delete" or "unlock" or "loginProperties") || loginRead.Sid is null || !LoginSid().IsMatch(loginRead.Sid)
-            || loginRead.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(loginRead.Created))) throw Invalid("loginIdentity.");
+            || !DatabaseAlter.CreatedValid(loginRead.Created))) throw Invalid("loginIdentity.");
         if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
         if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
         if (args.Action != "detach" && (args.UpdateStatistics is not null || args.DetachOffline is not null)) throw Invalid("only detach takes updateStatistics and detachOffline.");

@@ -539,8 +539,8 @@ const exclusiveChange = (changes: DatabaseChanges) => Object.keys(changes.option
 /** How many statements a change set plans at most: one per option (incremental statistics shares one) and scoped configuration, and the owner. */
 export const plannedStatements = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).length + Object.keys(changes.scoped ?? {}).length + (changes.owner === undefined ? 0 : 1)
 
-// A real calendar date and time, as the backend's parse (ActionService.BoundOf) requires: Date rolls 2026-02-30 over, so compare it back.
-const realDate = (text: string) => { const date = new Date(text + 'Z'); return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 23) === text }
+// A real calendar date and time from year 1, as the backend's parse (DatabaseAlter.CreatedValid) requires: Date rolls 2026-02-30 over, so compare it back.
+const realDate = (text: string) => { const date = new Date(text + 'Z'); return !Number.isNaN(date.getTime()) && date.getUTCFullYear() >= 1 && date.toISOString().slice(0, 23) === text }
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/).refine(realDate, 'not a date') }).strict()
 // One schema per action, one per line, so later actions append cleanly.

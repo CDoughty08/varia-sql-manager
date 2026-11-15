@@ -175,6 +175,7 @@ internal static class LoginKindsChecks
         using var service = new ActionService(new LoginChecks.Host(3));
         static ActionArgs Change(LoginChangesDto changes) => new("loginProperties", Id(), Id(), new ObjectRefDto("login", Name: "app_login"), LoginChanges: changes);
         check(Refused(service, Change(new(CredentialsAdd: ["a"]))) == "INVALID_PARAMS" && Refused(service, Change(new(CredentialsAdd: ["a"])) with { LoginIdentity = new("01", "2026-01-01T00:00:00.000") }) == "accepted"
+            && Refused(service, Change(new(CredentialsAdd: ["a"])) with { LoginIdentity = new("01", "2026-02-30T00:00:00.000") }) == "INVALID_PARAMS"
             && Refused(service, Change(new(CredentialsAdd: ["a", "a"])) with { LoginIdentity = new("01", "2026-01-01T00:00:00.000") }) == "INVALID_PARAMS"
             && Refused(service, Change(new(CredentialsAdd: ["a"], CredentialsDrop: ["a"])) with { LoginIdentity = new("01", "2026-01-01T00:00:00.000") }) == "INVALID_PARAMS"
             && Refused(service, Change(new(CredentialsDrop: [.. Enumerable.Range(0, 17).Select(index => "c" + index)])) with { LoginIdentity = new("01", "2026-01-01T00:00:00.000") }) == "INVALID_PARAMS",

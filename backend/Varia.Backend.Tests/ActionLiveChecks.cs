@@ -302,7 +302,9 @@ internal static class ActionLiveChecks
                 + identity?.Created + "; " + staleCreated?.Error?.Code + ", " + staleId?.Error?.Code + ", " + staleBound?.Error?.Code + " " + staleBound?.Error?.Message + ")");
             check(Refused(staleClose) && staleClose!.Steps.Select(step => step.Status).SequenceEqual(["failed", "skipped"]) && staleCloseAccess == "MULTI_USER"
                 && staleRestore is { Error.Code: "NOT_FOUND" } && staleRestore.Steps.Select(step => (step.Status, step.Compensates)).SequenceEqual([("done", (bool?)null), ("failed", null), ("failed", true)])
-                && staleRestore.Error.Message.Contains("may still be single-user", StringComparison.Ordinal) && staleRestoreAccess == "SINGLE_USER",
+                && staleRestore.Error.Message.Contains("Then \"Restore multi-user access\" failed: The database with this name is not the one Delete Object read", StringComparison.Ordinal)
+                && staleRestore.Error.Message.Contains("may still be single-user", StringComparison.Ordinal) && staleRestore.Steps[2].Message!.Contains("may still be single-user", StringComparison.Ordinal)
+                && staleRestoreAccess == "SINGLE_USER",
                 "a stale check in SINGLE_USER's batch skips the DROP and restores nothing, and one in the compensation's batch leaves the access alone and says so ("
                 + string.Join(", ", staleClose?.Steps.Select(step => step.Status) ?? []) + "; " + staleCloseAccess + "; "
                 + string.Join(", ", staleRestore?.Steps.Select(step => step.Status + (step.Compensates == true ? "*" : "")) ?? []) + "; " + staleRestoreAccess + "; " + staleRestore?.Error?.Message + ")");
