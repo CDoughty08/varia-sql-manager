@@ -47,7 +47,7 @@ export class GridData {
   private readonly retried = new Set<number>()
   /** Where each tile read in parts has a part (its first row, the tile's own first); a tile read whole has none. */
   private readonly parts = new Map<number, number[]>()
-  /** The windows a multi-part tile's `peek` last joined, and the join. */
+  /** The windows a multi-part tile's `peek` last joined, and the join: only for tiles the last frame wanted. */
   private readonly joined = new Map<number, { readonly windows: readonly RowWindow[]; readonly window: RowWindow }>()
   /** Tiles whose last read brought rows but stopped short of rows already available: read on at once, not throttled. */
   private readonly shortened = new Set<number>()
@@ -131,6 +131,10 @@ export class GridData {
     }
     const ring = prefetchTiles(range, rows, this.columns, this.shape)
     const wanted = new Set([...plan, ...ring])
+    // A join holds its parts' rows apart from the client's window cache, which evicts only its own copies: keep only the
+    // joins of tiles this frame wants, so browsing on cannot hold more rows than the cache allows (a tile wanted again is
+    // joined again from the parts the cache still has).
+    for (const key of this.joined.keys()) if (!wanted.has(key)) this.joined.delete(key)
     for (const [key, tile] of this.inflight) {
       if (wanted.has(key)) tile.missed = 0
       else if (++tile.missed >= g.abortAfterFrames) { tile.controller.abort(); this.inflight.delete(key) }
