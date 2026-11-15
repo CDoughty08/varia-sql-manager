@@ -2038,7 +2038,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .table-designer-main { flex: 1; min-height: 0; display: flex; }
 .table-designer-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .table-designer-top { flex: 0 0 55%; min-height: 60px; display: flex; overflow: hidden; }
-.table-designer-splitter { flex: 0 0 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); }
+.table-designer-splitter { flex: 0 0 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); touch-action: none; }
 .table-designer-splitter:hover, .table-designer-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
 /* The property grids sit on the Options dialog's surface, so its rows keep the colours that pass the contrast checks there. */
 .table-designer-column-properties { flex: 1; min-height: 60px; display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); }
@@ -2619,7 +2619,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-panes { display: grid; flex: 1 1 260px; min-height: 260px; }
 .activity-panes[data-orientation="column"][data-split] { grid-template-columns: minmax(0, 1fr); }
 .activity-panes[data-orientation="row"][data-split] { grid-template-rows: minmax(0, 1fr); }
-.activity-splitter { background: transparent; outline: none; }
+.activity-splitter { background: transparent; outline: none; touch-action: none; }
 .activity-panes[data-orientation="row"] > .activity-splitter { width: 6px; cursor: col-resize; }
 .activity-panes[data-orientation="column"] > .activity-splitter { height: 6px; cursor: row-resize; }
 .activity-splitter:hover, .activity-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }

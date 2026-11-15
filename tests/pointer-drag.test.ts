@@ -32,4 +32,9 @@ describe('followPointerDrag', () => {
     expect(source).toContain('event.button !== 0) return')
     expect(source).not.toContain('setPointerCapture')
   })
+  it.each(['.table-designer-splitter', '.activity-splitter'])('keeps a touch drag on %s from turning into a pan, which would cancel it at once', selector => {
+    const styles = readFileSync('src/renderer/src/styles.css', 'utf8')
+    const rule = styles.split(/\r?\n/).find(line => line.startsWith(selector + ' {'))
+    expect(rule).toContain('touch-action: none')
+  })
 })
