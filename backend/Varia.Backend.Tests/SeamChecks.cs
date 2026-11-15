@@ -319,6 +319,14 @@ internal static class SeamChecks
 
     private static async Task RunnerAsync(Action<bool, string> check)
     {
+        // A failed undo step's reason ends the message, and a long failure is clipped before it rather than it being cut off.
+        var reason = "\"Restore multi-user access\" failed: " + new string('r', 300);
+        var longFailure = ActionService.WithOutcomes(new string('m', ActionErrors.MaxMessage), [reason]);
+        var shortFailure = ActionService.WithOutcomes("Failed.", ["\"Undo\" completed"]);
+        var longReason = ActionService.WithOutcomes("Failed.", [new string('o', ActionErrors.MaxMessage * 2)]);
+        check(longFailure.Length == ActionErrors.MaxMessage && longFailure.EndsWith(" Then " + reason + ".", StringComparison.Ordinal) && longFailure.Contains("m… Then ", StringComparison.Ordinal)
+            && shortFailure == "Failed. Then \"Undo\" completed." && longReason.Length == ActionErrors.MaxMessage && longReason.StartsWith("Failed. Then ooo", StringComparison.Ordinal),
+            "runner v2 keeps a failed undo step's reason in the message, clipping a long failure before it (" + longFailure.Length + ", " + longReason.Length + ")");
         using var service = new ActionService(new Host(3));
         await using var connection = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         var ran = new List<string>();

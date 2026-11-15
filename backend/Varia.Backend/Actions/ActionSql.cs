@@ -286,8 +286,9 @@ internal static partial class ActionSql
     internal const string NotTheDatabase = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, perhaps while Varia waited for its connections to close. Varia did not change it. Close Delete Object and open it again.'";
 
     /// <summary>Why the access a failed DROP restores was left alone: another database has the name now, so the one Varia set to single-user
-    /// may still be single-user under another name.</summary>
-    internal const string NotTheDatabaseRestored = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, so Varia did not restore its access. The database Varia set to single-user may still be single-user under another name. Close Delete Object and open it again.'";
+    /// may still be single-user under another name. The DROP's own refusal (<see cref="NotTheDatabase"/>) comes first in the message, so this
+    /// one does not repeat its advice.</summary>
+    internal const string NotTheDatabaseRestored = "N'The database with this name is not the one Delete Object read, so Varia did not restore its access. The database Varia set to single-user may still be single-user under another name.'";
 
     /// <summary>The templates a database's Delete binds to the database it read (<see cref="DatabaseBinding"/>): every statement its plan
     /// runs on the database by name.</summary>
