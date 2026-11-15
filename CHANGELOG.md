@@ -57,7 +57,7 @@
 
 ### Fixed
 
-- **Mouse wheel after Transpose:** on a result of about 750,000 rows or more, scrolled partway down, turning the grid transposed (or back) could stop the mouse wheel and trackpad from scrolling it, leaving only the scroll bar. The wheel now scrolls it, a live table that large keeps its wheel when it is redrawn, and grids redrawn this way are no longer kept in memory.
+- **Mouse wheel after Transpose:** on a result of about 750,000 rows or more, turning the grid transposed (or back) could stop the mouse wheel and trackpad from scrolling it, leaving only the scroll bar. The wheel now scrolls it, a live table that large keeps its wheel when it is redrawn, and grids redrawn this way are no longer kept in memory.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.

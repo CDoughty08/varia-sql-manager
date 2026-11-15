@@ -838,7 +838,7 @@ export class GridView {
     try {
       const model = this.model
       // Control+wheel (and a trackpad pinch) zooms the window, as Chromium does elsewhere.
-      if (this.disposed || !model || model.mode !== 'virtual' || this.gestures.matches('global.wheelZoom', event)) return
+      if (!model || model.mode !== 'virtual' || this.gestures.matches('global.wheelZoom', event)) return
       const dy = normalizeWheel(event.deltaY, event.deltaMode, this.viewportHeight)
       const step = applyWheel(model, this.pendingTop ?? this.offsets.virtualTop, dy)
       if (!step.handled) return
