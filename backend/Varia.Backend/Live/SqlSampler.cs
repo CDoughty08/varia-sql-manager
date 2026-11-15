@@ -134,6 +134,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         band = LiveConnections.Band(profile);
         permission = LiveConnections.ServerStatePermission(profile);
         bool? permitted = null;
+        // The session probe was sent: a cancel that comes after it may have cut a statement short.
+        var probing = false;
         // A view subscribed hidden runs no SQL until a probe resumes; its first sample connects and reads the session then.
         if (!probes.All(probe => probe.Paused))
         {
@@ -142,13 +144,13 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 await ConnectAsync(token).ConfigureAwait(false);
                 // The session probe is a live statement too; with the gates full, the first tick reads it instead.
                 using var lease = await gates.WaitAsync(connectionId, SessionBudgetMs, token).ConfigureAwait(false);
+                probing = lease is not null;
                 if (lease is not null) permitted = await SessionAsync(token).ConfigureAwait(false);
             }
             catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
             {
-                // The subscription ended while it opened: as in SampleAsync, a connection that still answers goes back to the pool
-                // when the sampler is disposed, and one that does not is never pooled again.
-                if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop();
+                // The subscription ended while it opened: as in SampleAsync, settled before the end goes on.
+                await SettleCancelledAsync(probing).ConfigureAwait(false);
                 throw new OperationCanceledException(token);
             }
             catch (SqlException) { Drop(); }
@@ -269,6 +271,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 continue;
             }
             var connected = false;
+            // A statement was sent (the session probe or the probe's own): a cancel after it may have cut one short.
+            var sent = false;
             LiveProbeError? failure = null;
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
             try
@@ -281,6 +285,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                     errors.Add(LiveErrors.Create(id, "BUSY", LiveErrors.BusyMessage));
                     continue;
                 }
+                sent = true;
                 if (!sessionRead) await SessionAsync(token).ConfigureAwait(false);
                 // A probe that needs server state the login lacks runs nothing, as it would have opened unavailable had the
                 // session probe run then (the source opened paused, the gates were full, the connect failed), or as a new
@@ -327,9 +332,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             }
             catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
             {
-                // The subscription ended mid-statement: SqlClient reports the cancel in its own words. A connection that still
-                // answers goes back to the pool when the sampler is disposed; one that does not is never pooled again.
-                if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop();
+                // The subscription ended (mid-statement, or while it connected or waited for a gate): SqlClient reports the cancel
+                // in its own words.
+                await SettleCancelledAsync(sent).ConfigureAwait(false);
                 throw new OperationCanceledException(token);
             }
             catch (Exception error) when (error is TimeoutException || budget.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
@@ -655,6 +660,16 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
 
     /// <summary>Whether the held connection survived a cancelled statement (LiveConnections.AnswersAsync); false with none held.</summary>
     private async Task<bool> HeldAnswersAsync() => connection is { } held && await LiveConnections.AnswersAsync(held).ConfigureAwait(false);
+
+    /// <summary>The subscription ended while this source opened or sampled. A connection that never opened (the connect was
+    /// cancelled) holds nothing pooled and goes without clearing the pool; an open one with no statement sent (a gate wait) is
+    /// clean and goes back to the pool when the sampler is disposed; one whose statement was cancelled does too only when it
+    /// still answers, and is otherwise never pooled again.</summary>
+    private async Task SettleCancelledAsync(bool sent)
+    {
+        if (connection is not { State: ConnectionState.Open }) Drop(healthy: true);
+        else if (sent && !await HeldAnswersAsync().ConfigureAwait(false)) Drop();
+    }
 
     public void Idle() => Drop(healthy: true);
 
