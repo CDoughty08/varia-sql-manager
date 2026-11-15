@@ -59,7 +59,7 @@ and column widths you set on columns whose names appear once in both; its filter
 the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
 window (the builder says when one waits for the others), and a busy SQL backend is asked again after
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. Like the Compare picker, the builder goes with the results themselves: **Close Results**, a run that
+is built again. Like the Compare popover, the builder goes with the results themselves: **Close Results**, a run that
 leaves no result, or closing its last result closes it, and the next run does not reopen it; each result's draft is kept
 for the next **Pivot…**. A Pivot's strip says when the result it was built from holds only part of its query's rows.
 
@@ -79,30 +79,40 @@ reach it.
 
 ## Comparisons
 
-**Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results
-toolbar's **Compare**, which a narrow window hides) opens the Compare picker in the pivot builder's place, on that result's own grid. The picker
-lists the run's other results that have all their rows and share at least one column with it; Pivots, comparisons and
-plan sets are never offered, and the backend refuses them too. The grid it was opened on is the new side (+) and the
-result picked is the old side (−); **Swap old and new** turns them round, and the comparison is always named old → new
-("Differences: Result 1 → Result 3"). It picks the nearest earlier result first, which is what **Compare with Previous
-Result** compares at once.
+**Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results toolbar's
+**Compare**, which a narrow window hides) opens the Compare popover: under the toolbar's Compare when that opened it, else
+at the top right of that result's grid. The grid it was opened on is the new side (+), and the result picked is the old
+side (−). **Swap old and new** turns them round, and the comparison is always named old → new ("Differences: Result 1 →
+Result 3"). The popover offers the run's other results that have all their rows and share at least one column with it;
+Pivots, comparisons and plan sets are never offered, and the backend refuses them too. With one such result there is no
+list, only the two sides; with several, each row gives the result's rows, and an amber "2 of 3 columns" when a column of
+either result does not pair (a pair counts once). It first picks what you last chose on that result in this query tab (the result compared with and which
+way round), in this run or an earlier one, while that result is offered; otherwise the nearest earlier result, which is
+what **Compare with Previous Result** compares at once. Exact text keeps your last choice in the tab. Only a choice is
+remembered (a pick, a swap, Exact text or Compare), not merely opening the popover; closing the tab forgets it.
 
-Columns pair by name, ignoring case, and by holding text or binary data, a repeated name in order; there is no manual
-mapping. The picker lists each side's columns left out (with both types when a column of the same name holds the other
-kind of data), and the comparison's strip names them too. **Exact text** compares case and trailing spaces. A comparison
-reads the stored results, so the inputs' sorts and filters are not applied: the picker says so, as a warning when either
-input is sorted or filtered, and so does the strip.
+Columns pair by name, ignoring case, and by both holding text or both binary data, a repeated name in order; there is no
+manual mapping. The popover lists the columns left out only when there are any, with both types when a column of the same
+name holds the other kind of data, and the comparison's strip names them too. **Exact text** compares case and trailing
+spaces. A comparison reads the stored results, so the inputs' sorts and filters are not applied: the popover warns while
+either input is sorted or filtered, and the strip says so.
 
-**Compare** starts it; while it runs the picker offers **Cancel**, and a failure is said there. When it is done the
-comparison takes the focus, unless you moved it meanwhile, and the picker stays open for the next one. Asking for a comparison the run
-already has (the same two results, the same way round, the same Exact text choice) shows that one (**Show It**), and
-asking again while it runs does nothing. Comparisons of other pairs run at the same time, at most four at once in a
-window together with Pivot builds (the rest wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails.
-A run keeps at most 1,000 results, comparisons and Pivots included (counting those still being built), so a comparison that would pass that is refused with a sentence
-saying so. Only you close the picker (**Close**, its close button, the toolbar's **Compare**, or **Pivot…**). It stays
-on its result when you use another grid. When the query runs again it waits, then returns to the results of the same
-numbers; while the run has no such result, or that result was closed, it says so and offers nothing to compare. It
-goes with the results themselves: closing the tab, **Close Results**, a run that leaves no result, or closing its last result closes it too.
+**Compare** (or Enter) starts it, and the popover closes once the comparison is there and the comparison takes the
+focus. If you close the popover meanwhile, or move it to another pair, the comparison is only added and the focus stays
+where it is; with the command palette open over it, it stays and offers Show It. While it runs the popover offers
+**Cancel**, and a failure is said there. Asking for a comparison the run already has (the same two results, the same way
+round, the same Exact text choice) shows that one (**Show It**), and asking again while it runs does nothing.
+Comparisons of other pairs run at the same time, at most four at once in a window together with Pivot builds (the rest
+wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails. A comparison
+still running when the popover closes goes on, and a failure is then said in the results toolbar. A run keeps at most
+1,000 results, comparisons and Pivots included (counting those still being built), so a comparison that would pass that
+is refused with a sentence saying so.
+
+Escape, **Close** or the popover's close button close it and give the focus back to what opened it; the toolbar's
+**Compare** closes it too, and so does a press outside it or in another window, or a key that moves the focus elsewhere
+(F6, F8). While the Results panel is hidden, Compare Results… is not offered. It also closes when the query runs again, when its result closes, with the results
+themselves, when the results pane is hidden or another document is shown, and when its pane pops out or docks back. A
+result picked that closes leaves it with nothing picked.
 
 A comparison's strip starts with its two inputs: each is a link to that result's grid while that exact result is open.
 Once one is closed it reads "Result 1 (closed)": the comparison copied what it compared, so it stays.

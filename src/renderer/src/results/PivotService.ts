@@ -57,7 +57,7 @@ export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
 /** A group a builder can belong to: one whose Table holds a query's rows (not a SQL-returned plan set). */
 const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && group.table.entry.descriptor.kind === 'rows'
 /** A tab's results are gone, with nothing to show the builder beside: Close Results, or a finished run with no result left
- *  (none returned, or the last one closed). The Compare picker closes by the same rule. A running run is not gone: a re-run
+ *  (none returned, or the last one closed). The Compare popover closes by the same rule. A running run is not gone: a re-run
  *  releases the old results before its first set arrives. */
 const resultsGone = (tab: TabResults): boolean => tab.status === 'closed' || (tab.status !== 'running' && tab.sets.length === 0)
 /**
@@ -412,7 +412,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
    *  follows the focus: when another grid takes it, the builder moves to that grid's group, or to the first group that can
    *  be pivoted when the grid is a comparison or a plan set. It keeps its group by ordinal across runs, and moves to the
    *  first that can be pivoted once a run has ended without it. Once the tab's results are gone (`resultsGone`) the builder
-   *  closes, as the Compare picker does; its drafts stay for the group's next Pivot… */
+   *  closes, as the Compare popover does; its drafts stay for the group's next Pivot… */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
     for (const [tabId, builds] of this.running) {

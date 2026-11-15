@@ -847,8 +847,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Headers, beside Transposed while the focused grid is drawn so: a long column name is cut short. */
 .results-segments button.results-headers { max-width: 180px; padding: 0 4px 0 6px; }
 .results-segments button.results-headers > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
-@media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
+.results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
+@media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
    panel, never below what the box holds, so its buttons never run under the groups after it; past that the toolbar clips
    its last groups. A narrow window (a 1024-wide display) drops the groups' icons, the box's magnifier and its Previous and
@@ -2838,27 +2838,40 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-details-dialog table { width: 100%; border-collapse: collapse; text-align: left; }
 .connection-details-dialog th, .connection-details-dialog td { padding: 8px; overflow-wrap: anywhere; }
 .connection-details-dialog .connection-footer { flex-wrap: wrap; justify-content: flex-end; }
-/* The Compare picker (ComparePanel), in the pivot builder's place and built from its classes. */
-.compare-sides { display: flex; align-items: stretch; gap: 4px; margin-bottom: 8px; }
-.compare-side { display: flex; flex: 1; min-width: 0; flex-direction: column; padding: 4px 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
-.compare-side small { color: var(--varia-descriptionForeground); }
-.compare-side b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.compare-sides .icon-button { align-self: center; width: 22px; height: 22px; padding: 3px; }
-.compare-targets { margin: 0 0 4px; padding: 0; border: 0; }
-.compare-targets legend { margin: 0 0 4px; padding: 0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
-.compare-target { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center; padding: 3px 4px; border-radius: var(--varia-radius-sm); }
+/* The Compare popover (ComparePopover): the column filter's card, beside the toolbar's Compare or the Table's grid. */
+.compare-popover { position: fixed; z-index: 13000; display: flex; flex-direction: column; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); min-height: 0; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.compare-head { display: flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-1) 0 var(--varia-space-3); }
+.compare-head h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.compare-head h2 span { color: var(--varia-descriptionForeground); font-weight: 400; }
+.compare-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--varia-space-2); min-height: 0; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-3); }
+.compare-targets { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.compare-target { display: flex; align-items: center; gap: var(--varia-space-2); height: var(--varia-row); padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); }
 .compare-target:hover { background: var(--varia-list-hoverBackground); }
-.compare-target small { grid-column: 2; color: var(--varia-descriptionForeground); }
-.compare-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.compare-unpaired li { flex-wrap: wrap; gap: 4px; }
-.compare-owner, .compare-why { color: var(--varia-descriptionForeground); }
-.compare-column { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--varia-font-mono); }
-.compare-exact { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.compare-exact small { color: var(--varia-descriptionForeground); }
-.compare-panel .profile-note { padding: 4px 0; }
-.compare-panel .pivot-foot .profile-note { padding: 0; }
-.profile-note.warning { color: var(--varia-warningForeground); }
-.compare-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+.compare-target.picked { background: var(--varia-list-inactiveSelectionBackground); }
+.compare-target input { margin: 0; }
+.compare-target-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.compare-target small { margin-left: auto; flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.compare-chip { flex-shrink: 0; padding: 0 6px; border-radius: var(--varia-radius-pill); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.compare-sides { display: flex; align-items: center; gap: var(--varia-space-1); }
+.compare-side { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+.compare-side b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.compare-side small { margin-left: auto; flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.compare-sign { display: inline-grid; flex-shrink: 0; place-content: center; width: 16px; height: 16px; border-radius: var(--varia-radius-sm); color: var(--varia-resultsGrid-foreground); font: 700 var(--varia-size-sm)/1 var(--varia-font-mono); }
+.compare-sign.removed { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.compare-sign.added { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
+.compare-sides .icon-button { width: 22px; height: 22px; padding: 3px; }
+.compare-unpaired h3 { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0 0 2px; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
+.compare-info { display: inline-flex; color: var(--varia-descriptionForeground); }
+.compare-unpaired ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.compare-unpaired li { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.compare-unpaired code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-editorWidget-foreground); font-family: var(--varia-font-mono); }
+.compare-note { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.compare-note.warning { padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.compare-note.error { color: var(--varia-errorForeground); }
+.compare-foot { display: flex; flex-shrink: 0; align-items: center; gap: 6px; padding: var(--varia-space-2) var(--varia-space-3); border-top: 1px solid var(--varia-editorWidget-border); }
+.compare-exact { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.compare-gap { flex: 1 1 auto; }
+.compare-foot button { display: inline-flex; align-items: center; gap: 4px; }
 /* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
    the whole button, so its focus ring stays at full strength. */
-.compare-buttons button[aria-disabled="true"], .compare-buttons button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }
+.compare-foot button[aria-disabled="true"], .compare-foot button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }

@@ -138,9 +138,9 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
       <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
         title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
-      <button type="button" className="results-icon-toggle results-compare" aria-label="Compare" aria-pressed={compareOpen} tabIndex={-1} disabled={!compareOpen && !canCompare}
-        title="Compare: pick another result of this run to compare the focused grid's result with, as a new comparison of their differences"
-        onClick={() => { if (compareOpen) compare.close(tabId); else void commands.execute('output.compare', { tabId }, 'toolbar') }}><Icon name="git-compare" /></button>
+      <button type="button" className="results-icon-toggle results-compare" aria-label="Compare" aria-haspopup="dialog" aria-expanded={compareOpen} tabIndex={-1} disabled={!compareOpen && !canCompare}
+        title="Compare: compare the focused grid's result with another result of this run"
+        onClick={event => { if (compareOpen) compare.close(tabId); else void commands.execute('output.compare', { tabId, anchor: event.currentTarget }, 'toolbar') }}><Icon name="git-compare" /></button>
       <button type="button" className="results-icon-toggle results-transpose" aria-label="Transposed" aria-pressed={!!turned} tabIndex={-1} disabled={!canTranspose}
         title="Transposed: draw the focused grid's columns as rows and its rows as columns. Nothing is copied; the grid follows its sort and filters"
         onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
