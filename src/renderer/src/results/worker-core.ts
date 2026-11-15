@@ -3,7 +3,7 @@
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
 import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
-import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
+import type { OperationPhase, PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
@@ -200,7 +200,16 @@ export class ResultsWorkerCore {
         return
       }
       case 'live': return this.liveEvent(message.rid, message.bytes, message.event)
+      case 'progress': return this.progress(message.rid, message.phase, message.percent)
     }
+  }
+
+  /** A long request's progress goes to the page request it serves, while that request still waits for its answer. */
+  private progress(rid: number, phase: OperationPhase, percent: number | undefined): void {
+    const sort = this.sorts.get(rid)
+    // A sort, pivot or diff the page gave up reports nothing more.
+    const id = sort ? (sort.cancelled ? undefined : sort.id) : this.diffs.get(rid)?.cancelled ? undefined : this.profiles.get(rid) ?? this.distincts.get(rid) ?? this.identities.get(rid)
+    if (id !== undefined) this.post({ type: 'progress', id, phase, ...percent === undefined ? {} : { percent } })
   }
 
   private send(request: PortRequest): void { this.port?.postMessage(request) }

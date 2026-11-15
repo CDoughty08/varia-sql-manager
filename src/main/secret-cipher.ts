@@ -40,7 +40,8 @@ export function safeStorageCipher(storage: SafeStorageApi, platform: NodeJS.Plat
       // keyring holds (v11; v12 through the secret portal) counts. The tags come from Chromium's os_crypt sources, not yet
       // seen on a Linux desktop: any other tag disables Remember password rather than trust the hard-coded key.
       const tag = (await storage.encryptStringAsync(probe)).subarray(0, 3).toString('latin1')
-      return keyringTags.has(tag) ? { available: true } : { available: false, reason: 'no-keyring' }
+      // A keyring that is configured but not reachable yet is 'unavailable', not 'no-keyring': it may answer later.
+      return keyringTags.has(tag) ? { available: true } : { available: false, reason: 'unavailable' }
     } catch { return { available: false, reason: 'unavailable' } }
   }
   const state = (): Promise<SecretStorageState> => {
@@ -58,6 +59,9 @@ export function safeStorageCipher(storage: SafeStorageApi, platform: NodeJS.Plat
     },
     async decrypt(data) {
       if (!(await state()).available) throw new Error(unreadable)
+      // Linux's decryptor also accepts Chromium's hard-coded fallback key (v10), which anyone can use to forge a blob. Only
+      // a key the keyring holds produced what Varia wrote, so any other tag is unreadable.
+      if (platform === 'linux' && !keyringTags.has(data.subarray(0, 3).toString('latin1'))) throw new Error(unreadable)
       try {
         const { result, shouldReEncrypt } = await storage.decryptStringAsync(data)
         return { text: result, reEncrypt: shouldReEncrypt }

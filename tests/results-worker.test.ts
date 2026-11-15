@@ -360,6 +360,26 @@ describe('results worker core', () => {
     expect(core.cachedPages).toBe(0)
   })
 
+  it('relays op.progress to the page request a sort, profile, pivot or diff answers, and none once it was given up', () => {
+    const { core, sent, posted } = fixture()
+    const progress = () => posted.filter(message => message.type === 'progress')
+    core.handle({ type: 'view', id: 80, key, sort: [{ column: 0, descending: true, mode: 'value' }] })
+    core.receive({ t: 'progress', rid: 1, phase: 'keys', percent: 20 })
+    core.handle({ type: 'profile', id: 81, key, columns: [0] })
+    core.receive({ t: 'progress', rid: 2, phase: 'profile' })
+    core.handle({ type: 'identity', id: 82, key, request: { method: 'diff', right: 6, exact: false, context: 3 } } as never)
+    core.receive({ t: 'progress', rid: 3, phase: 'identify' })
+    expect(progress()).toEqual([{ type: 'progress', id: 80, phase: 'keys', percent: 20 }, { type: 'progress', id: 81, phase: 'profile' }, { type: 'progress', id: 82, phase: 'identify' }])
+    core.handle({ type: 'cancel', id: 80 })
+    core.handle({ type: 'cancel', id: 82 })
+    expect(sent.filter(message => message.t === 'cancel').map(message => message.rid)).toEqual([1, 3])
+    core.receive({ t: 'progress', rid: 1, phase: 'sort', percent: 60 })
+    core.receive({ t: 'progress', rid: 3, phase: 'align', percent: 60 })
+    // A rid nothing waits on (an unknown one, or one that ended) is dropped too.
+    core.receive({ t: 'progress', rid: 99, phase: 'sort', percent: 60 })
+    expect(progress()).toHaveLength(3)
+  })
+
   it('closes views, relays sort failures, and closes a view built after the page gave up its sort', () => {
     const { core, sent, posted } = fixture()
     const sort = [{ column: 1, descending: false, mode: 'chars' as const }]

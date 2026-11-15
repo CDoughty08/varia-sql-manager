@@ -864,3 +864,7 @@ internal sealed class RequestException(string code, string message, ErrorDetails
     public string Code { get; } = code;
     public ErrorDetails? Details { get; } = details;
 }
+
+/// <summary>A droppable op.progress EVENT on a results request (view, profile, distinct, pivot, diff): its phase, and a
+/// percentage of the whole 0 – 99 that never goes back, absent while the phase has no total.</summary>
+internal sealed record OperationProgressEvent(string Type, string Phase, int? Percent);

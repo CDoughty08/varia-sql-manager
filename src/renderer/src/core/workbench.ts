@@ -328,7 +328,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const derivedJobs = new DerivedJobs()
   // Each counts the other's new results in flight against a run's 1,000.
   const compare: CompareService = new CompareService(results, { jobs: derivedJobs, adding: tabId => pivot.adding(tabId) })
-  const pivot: PivotService = new PivotService(results, { jobs: derivedJobs, adding: tabId => compare.adding(tabId) })
+  // A shown Pivot rebuilds by itself when its Table's filters change; what is shown depends on the results' layout.
+  const pivot: PivotService = new PivotService(results, {
+    jobs: derivedJobs, adding: tabId => compare.adding(tabId),
+    follow: {
+      layout: () => settings.get('queryResults.grid.layout'), resultsShowing: () => panes.getSnapshot().results,
+      onLayout: listener => { const a = settings.subscribe(listener), b = panes.subscribe(listener); return () => { a(); b() } }
+    }
+  })
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
@@ -351,11 +358,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // The strict workspace keeps target identity and intent, never passwords or runtime transport/session handles.
-    hotExit: () => {
+    hotExit: (final = true) => {
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
       if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned) || connectionTargets.getSnapshot().length)
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady() })
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady(final) })
     }
   })
   const recentFiles = new RecentFilesService(api)
@@ -484,6 +491,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorer: explorer.context,
     results: results.context,
     resultSets: results.resultSets,
+    resultsSteppable: results.steppable,
     resultsTurned: results.turned,
     scripting: scripting.running,
     bookmarks,

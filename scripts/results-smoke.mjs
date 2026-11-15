@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
@@ -1002,8 +1002,9 @@ try {
   // The strip's progress is visual only: the pane's live region says how the save ended, once.
   await expect(jobProgress(page).locator('[role="status"], [aria-live]')).toHaveCount(0)
   await expect(jobProgress(page)).not.toHaveAttribute('aria-live', /.*/)
-  // The toolbar's only live region is the search count, silent while it is empty.
-  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(1)
+  // The toolbar's live regions are the search count and the result operations' start and end, both silent here.
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(2)
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]').filter({ hasText: /\S/ })).toHaveCount(0)
   await expect(resultsToolbar(page).getByRole('status')).toHaveText('')
   await expect.poll(async () => (await files()).some(name => name.endsWith('.tmp'))).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
@@ -1721,10 +1722,11 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(pivoted).toHaveCount(1)
   expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
-  // Out of date and Update: filtering the Table (Keep Selected Rows on its first ten) marks its Pivot out of date on its
-  // caption and in its strip; Update builds it again from its own recipe over the filtered Table, in the same slot, and
-  // the mark goes.
+  // A Pivot follows its Table's filters: filtering the Table (Keep Selected Rows on its first ten) rebuilds its Pivot by
+  // itself, a small and quick build that is shown, from its own recipe over the filtered Table, in the same slot, with no
+  // mark in between that stays.
   const updatePivot = page.getByRole('button', { name: 'Update Pivot of Result 1', exact: true })
+  const pivotToggle = page.getByRole('button', { name: 'Pivot of Result 1', exact: true })
   await expect(updatePivot).toHaveCount(0)
   const pivotTable = resultGrid(page, 'Result 1', 'table')
   await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = 0 })
@@ -1733,26 +1735,26 @@ try {
   await cell(9, 0, pivotTable).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
   await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name: 'Keep Selected Rows', exact: true }).click()
-  await expect(strip('Pivot of Result 1')).toContainText("Out of date: Result 1's filters changed after this Pivot was built.")
-  await expect(updatePivot).toBeEnabled()
-  await updatePivot.click()
   await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1 (as sorted and filtered): 10 rows in 2 row groups.')
   await expect(strip('Pivot of Result 1')).not.toContainText('Out of date')
   await expect(updatePivot).toHaveCount(0)
   expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
-  // The filter removed, it is out of date again (nothing rebuilds by itself).
-  await outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true }).getByRole('button', { name: 'Remove filter 10 selected rows', exact: true }).click()
-  await expect(updatePivot).toBeVisible()
-  // Update Pivot on the Pivot's own grid menu: the rebuilt Pivot is a new grid in the same slot, and it keeps the focus,
-  // so the grid's keys still work.
-  await cell(0, 0, pivoted).click({ button: 'right' })
-  await outputMenu.getByRole('menuitem', { name: 'Update Pivot', exact: true }).click()
-  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  // Collapsed, the Pivot is hidden: removing the filter marks it out of date on its caption, and it waits. Update there
+  // builds it again from the Table as it is now.
+  await pivotToggle.click()
+  await expect(pivotToggle).toHaveAttribute('aria-expanded', 'false')
+  const pivotFilters = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
+  await pivotFilters.getByRole('button', { name: 'Remove filter 10 selected rows', exact: true }).click()
+  await expect(updatePivot).toBeEnabled()
+  await updatePivot.click()
   await expect(updatePivot).toHaveCount(0)
-  await expect(pivoted).toBeFocused()
-  // A filter made again of the same values is no change: W1's active is 1 for ids 0 and 3. Filtering by id 0's value and
-  // updating, then removing it (out of date again) and filtering by id 3's leaves the Pivot up to date, as the backend
-  // resolves a value to its lowest row whichever cell named it.
+  await pivotToggle.click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  // A filter made again of the same values is no change: W1's active is 1 for ids 0 and 3. With the Pivot collapsed
+  // (so nothing rebuilds by itself), filtering by id 0's value marks it and Update Pivot on the Table's grid menu builds
+  // it; removing the filter marks it again, and filtering by id 3's leaves it up to date, as the backend resolves a value
+  // to its lowest row whichever cell named it.
   // The grid draws only the columns in view, and a narrow window may leave active out: scroll to the last columns first.
   const activeCell = async row => {
     await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = element.scrollWidth })
@@ -1767,10 +1769,12 @@ try {
     await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
     await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name, exact: true }).click()
   }
-  const pivotFilters = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
+  await pivotToggle.click()
+  await expect(pivotToggle).toHaveAttribute('aria-expanded', 'false')
   await filterActive(0, 'Filter for Selected Values')
   await expect(updatePivot).toBeEnabled()
-  await updatePivot.click()
+  await (await activeCell(0)).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Update Pivot', exact: true }).click()
   await expect(updatePivot).toHaveCount(0)
   await pivotFilters.getByRole('button', { name: "Remove filter active = '1'", exact: true }).click()
   await expect(updatePivot).toBeVisible()
@@ -1799,9 +1803,15 @@ try {
   await tickActive('0 (66)', '1 (34)')
   await expect(pivotFilters).toContainText("active = '0'")
   await expect(updatePivot).toHaveCount(0)
+  // The filter removed while it is collapsed: marked, and expanding it shows it, so it rebuilds by itself.
   await pivotFilters.getByRole('button', { name: "Remove filter active = '0'", exact: true }).click()
   await expect(updatePivot).toBeVisible()
-  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update (caption or grid menu) builds it again in its slot from the filtered rows, keeping the focus; filtering again by the same values, from other cells or the header funnel, does not.')
+  await pivotToggle.click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(strip('Pivot of Result 1')).not.toContainText('Out of date')
+  await expect(updatePivot).toHaveCount(0)
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  console.log('Results checks: filtering a Table rebuilds its shown Pivot by itself in its slot; collapsed, the Pivot is marked out of date, Update (caption or grid menu) builds it again, and expanding it rebuilds it; filtering again by the same values, from other cells or the header funnel, does not mark it.')
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()
@@ -2216,6 +2226,41 @@ try {
   await expect(cell(0, 0)).toHaveText('0')
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
+
+  // 14c2. A sort in progress: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
+  // as a ring with the percentage on the sorted column's button and a bar along the grid. Sorting and filtering wait: a
+  // second click is refused, not queued. Cancel keeps the order the grid had and says so; the controls are live again.
+  const holdSort = join(control, 'hold', 'results.view')
+  await writeFile(holdSort, '')
+  await header('clipped').hover()
+  await sortButton('clipped').click()
+  const sorting = operationProgress(page, 'Sorting Result 1')
+  await expect(sorting).toBeVisible()
+  await expect.poll(async () => Number(await sorting.getAttribute('aria-valuenow'))).toBeGreaterThan(5)
+  await expect(sorting).toHaveAttribute('aria-valuetext', /^(Reading keys|Sorting), \d+%$/)
+  await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
+  await expect(sortButton('clipped').locator(gridPart.busyPercent)).toHaveText(/^\d+%$/)
+  await expect(grid().locator('xpath=..').locator(gridPart.operationBar)).toBeVisible()
+  await expect(grid()).toHaveAttribute('aria-busy', 'true')
+  await header('maybe').hover()
+  await sortButton('maybe').click()
+  // Only a refusal says why: a click wrongly taken would start a sort of its own, which says nothing of the kind.
+  await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
+  await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
+  await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
+  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by' }).getByRole('button', { name: 'Chars' })).toHaveAttribute('aria-disabled', 'true')
+  await operationCancel(page, 'Cancel sort, Result 1').click()
+  await expect(sorting).toHaveCount(0)
+  await expect(operationNotice(page)).toHaveText('Sort cancelled. The grid kept its previous order.')
+  await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
+  await expect(grid()).not.toHaveAttribute('aria-busy', /./)
+  await rm(holdSort)
+  await header('maybe').hover()
+  await sortButton('maybe').click()
+  await expect(header('maybe')).toHaveAttribute('aria-sort', 'ascending')
+  await menuSort(0, 'Clear Sort')
+  await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
+  console.log('Results checks: a sort in progress shows its phase and percentage in the toolbar, a ring on its column and a bar along the grid, holds further sorting off, and Cancel keeps the previous order.')
 
   // 14d. Highlights: Ctrl+Shift+H colours the selected rows (yellow at first) and the grid's Highlight submenu picks a
   // colour; each follows its row by the key the backend picked (id) through a sort and a re-run of the query, and the row

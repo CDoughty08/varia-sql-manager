@@ -1,10 +1,12 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import { outputPaneIds } from '../../../shared/layouts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
 import { entryOf, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
+import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -80,7 +82,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const column = live && (target!.column ?? live.activeColumn())
     return live && column !== undefined ? { live, column } : undefined
   }
-  const showSortText = (mode: 'chars' | 'bytes') =>
+  // Sort text by sorts every text-sorted grid again: while a sort or filter is built it is held off like the grid's own.
+  const showSortText = (mode: 'chars' | 'bytes', args?: CommandArgs) => results.operations.anyBuilding() ? results.operations.refused(undefined, undefined, targetOf(args)?.tabId ?? args?.tabId) :
     settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
   /** The column captured by the menu, else the focused grid's active cell. */
   const sortTarget = (args?: CommandArgs) => {
@@ -141,6 +144,39 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const key = target?.entry ?? tab?.focused
     return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
+  /** The query whose results Next Result, Go to Result N, the view commands and Go to Result… act on: the focused output's,
+   *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. A bare grid focused
+   *  (a Peek card's rows) is not a query's: from there they act on the active query, as from anywhere else. */
+  const tabs = () => settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs'
+  const resultsRun = (args?: CommandArgs, onlyTabs = false) => {
+    const target = targetOf(args), tabId = target && !target.bare ? target.tabId : documents.getSnapshot().activeId
+    const tab = tabId ? results.getSnapshot()[tabId] : undefined
+    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
+  }
+  const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
+  /** Shows the Results view and its panel without moving the focus: in a popout, its tab; with every output panel closed
+   *  (Ctrl+R), the output panels Ctrl+R hid, back as they were, with Results' tab selected; otherwise the dock's reveal,
+   *  which opens it again when closed, shows its hidden group, ends another group's maximize and selects its tab. */
+  const showResults = (tabId: string) => {
+    results.setView(tabId, 'results')
+    if (panes.getSnapshot().results) return
+    if (panes.location('results') === 'window') { panes.select('results'); return }
+    if (outputPaneIds.every(id => panes.location(id) === 'closed')) { void commands.execute('view.toggleResultsPane', undefined, 'toolbar'); panes.select('results'); return }
+    void commands.execute('window.results', undefined, 'toolbar')
+  }
+  /** Selects the view `pick` names, showing the Results view if Messages or another output panel had its place; Stacked
+   *  scrolls it into view (and the focus with it, from a grid), Tabs shows it. The view commands are Tabs' only: Stacked
+   *  shows a Table and its Pivot together. */
+  const selectResult = (pick: (tab: NonNullable<ReturnType<typeof resultsRun>>['tab']) => string | undefined, onlyTabs = false) => ({
+    when: (args?: CommandArgs) => { const run = resultsRun(args, onlyTabs); return !!run && pick(run.tab) !== undefined },
+    run: (args?: CommandArgs) => {
+      const run = resultsRun(args, onlyTabs), key = run && pick(run.tab)
+      if (!run || key === undefined) return
+      showResults(run.tabId)
+      results.focusEntry(run.tabId, key)
+      if (!tabs()) stackReveals.request(run.tabId, key)
+    }
+  })
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   const registrations = [
@@ -187,8 +223,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const shown = grid(targetOf(args)), live = liveOf(args); return live ? live.filtered() : !!shown && !!results.sortOf(shown.tabId, shown.key)?.filters.length },
       run: args => { const shown = grid(targetOf(args)), live = liveOf(args); if (live) live.clearFilters(); else if (shown) results.clearFilters(shown.tabId, shown.key) }
     }),
-    commands.register('output.sortTextByChars', { run: () => showSortText('chars') }),
-    commands.register('output.sortTextByBytes', { run: () => showSortText('bytes') }),
+    commands.register('output.sortTextByChars', { run: args => showSortText('chars', args) }),
+    commands.register('output.sortTextByBytes', { run: args => showSortText('bytes', args) }),
     commands.register('output.copy', {
       when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.hasSelection() : !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
@@ -325,6 +361,22 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
     commands.register('output.toggleResultsTabs', { run: toggleLayout }),
+    commands.register('output.nextResult', selectResult(tab => stepResult(tab, 1))),
+    commands.register('output.previousResult', selectResult(tab => stepResult(tab, -1))),
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`output.goToResult${place}`, selectResult(tab => jumpResult(tab, place)))),
+    commands.register('output.goToLastResult', selectResult(tab => jumpResult(tab, 'last'))),
+    commands.register('output.nextResultView', selectResult(tab => stepView(tab, 1), true)),
+    commands.register('output.previousResultView', selectResult(tab => stepView(tab, -1), true)),
+    commands.register('output.goToResult', {
+      when: args => !!tabsRun(args),
+      run: args => {
+        const run = tabsRun(args)
+        if (!run) return
+        // The picker is in the Results view's tab row; a layout drawn once the view shows takes the request then.
+        showResults(run.tabId)
+        pickerRequests.request(run.tabId)
+      }
+    }),
     commands.register('output.toggleRowSize', { run: () => settings.toggle('queryResults.grid.rowSize') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

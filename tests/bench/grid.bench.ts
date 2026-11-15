@@ -5,6 +5,7 @@ import { scrollCap, scrollModel, rebaseRow, rowsContainerY, toNative, topRowOf, 
 import { copyPlan, covered, select, windowRanges, type GridSelection } from '../../src/renderer/src/grid/selection'
 import { planTiles, prefetchTiles } from '../../src/renderer/src/grid/tiles'
 import { WindowCache, type RowWindow } from '../../src/renderer/src/results/ResultClient'
+import { filterRows, pickerRows, pickerWindow } from '../../src/renderer/src/grid/result-picker'
 import { rate, record, w1Row } from './harness'
 
 // The results grid's per-frame models on their own, in one thread: what GridView computes for every frame of a
@@ -84,4 +85,29 @@ it('peeks and stores tile windows in a full window cache', () => {
   expect(found).toBeGreaterThan(0)
   expect(cache.size).toBe(uiCacheWindows)
   record({ id: 'node.grid.cache.opsPerSecond', value: ops, unit: 'ops/s', detail: `3 lookups and 1 insert with eviction, ${uiCacheWindows} windows of ${tileRows} W1 rows` })
+})
+
+it('lists, filters and windows the results picker over 1,000 results', () => {
+  // The Tabs layout's overflow picker (grouped results PR 14) at a run's 1,000 results, a quarter with a Pivot, and a
+  // comparison: on each keystroke it lists every view, filters them by the words typed and picks the rows to draw.
+  const slot = (key: string, label: string, view: 'table' | 'pivot' | 'diff', filters: readonly unknown[] = []) =>
+    ({ key, view, entry: { key, label, number: 0 }, revision: 0, sources: [], ...view === 'pivot' ? { pivot: { filters } } : {} })
+  const groups = Array.from({ length: 1000 }, (_, index) => ({
+    ordinal: index + 1, batchNumber: 1, iteration: 0, planSet: false, selected: 'table' as const,
+    table: slot(`1:${index + 1}`, `Result ${index + 1}`, 'table'), ...index % 4 === 0 ? { pivot: slot(`p:${index + 1}`, `Pivot of Result ${index + 1}`, 'pivot') } : {}
+  }))
+  const tab = { groups, comparisons: [slot('d:1', 'Differences: Result 1 → Result 2', 'diff')], sorts: new Map() } as unknown as Parameters<typeof pickerRows>[0]
+  const queries = ['', 'r', 'result 9', 'piv 99']
+  let next = 0, drawn = 0
+  const keystroke = () => {
+    const rows = filterRows(pickerRows(tab), queries[next++ % queries.length])
+    const [first, end] = pickerWindow(0, 220, rows.length, 22)
+    drawn += end - first
+  }
+  keystroke()
+  expect(pickerRows(tab)).toHaveLength(1251)
+  expect(filterRows(pickerRows(tab), 'piv 99').map(row => row.label)).toEqual(['Pivot of Result 993', 'Pivot of Result 997'])
+  const ops = rate(keystroke, { batch: 10 })
+  expect(drawn).toBeGreaterThan(0)
+  record({ id: 'node.grid.resultPicker.opsPerSecond', value: ops, unit: 'ops/s', detail: '1,251 views of 1,000 results listed, filtered and windowed per keystroke' })
 })

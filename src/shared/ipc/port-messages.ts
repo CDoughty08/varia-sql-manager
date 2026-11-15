@@ -119,6 +119,8 @@ export type PortMessage =
   | { t: 'query'; queryId: string; event: QueryEvent }
   | ({ t: 'memory'; feature: MemoryFeature } & MemoryReport)
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
+  /** How far a view, profile, distinct, pivot or diff request has got (main relays the backend's op.progress). */
+  | { t: 'progress'; rid: number; phase: OperationPhase; percent?: number }
 /** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
 export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
 /** A results.view answer as the backend sends it. */
@@ -202,6 +204,13 @@ export const queryResultSchema = z.object({
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
 export type JobProgressEvent = z.infer<typeof jobProgressSchema>
+/** The phases an operation over a whole result reports (the backend's OperationProgress). */
+export const operationPhases = ['filter', 'keys', 'sort', 'unpack', 'group', 'aggregate', 'write', 'identify', 'match', 'align', 'profile', 'histogram'] as const
+export type OperationPhase = typeof operationPhases[number]
+/** EVENT bodies for results.view, results.profile, results.distinct, results.pivot and results.diff; droppable, the latest
+ *  wins. `percent` (0 – 99, never going back) is absent while the phase has no total. */
+export const operationProgressSchema = z.object({ type: z.literal('op.progress'), phase: z.enum(operationPhases), percent: z.number().int().min(0).max(99).optional() }).strict()
+export type OperationProgressEvent = z.infer<typeof operationProgressSchema>
 /** The most results a results.memory event names (the backend's ResultStore.MaxLargest). */
 export const maxLargestResults = 8
 const codecCounters = z.object({

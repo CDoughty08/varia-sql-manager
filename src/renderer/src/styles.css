@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -847,6 +847,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Headers, beside Transposed while the focused grid is drawn so: a long column name is cut short. */
 .results-segments button.results-headers { max-width: 180px; padding: 0 4px 0 6px; }
 .results-segments button.results-headers > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Held off while a sort or filter is built (ResultOperations): dimmed, and a click is refused, not queued. */
+.results-segments button[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+@media (forced-colors: active) { .results-segments button[aria-disabled="true"] { color: GrayText; opacity: 1; } }
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
@@ -877,13 +880,47 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    1280-wide window on Windows to the pixel and overflows it with Linux's wider fonts, putting its last group under the
    status. */
 @media (max-width: 1440px) { .results-toolbar .results-layout { display: none; } }
-.job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
+.job-strip, .op-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
-.output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
-.job-strip span, .job-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.job-strip.job-notice { display: block; }
-.job-strip button { flex-shrink: 0; }
-.output-toolbar .job-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+.output-toolbar > .job-strip, .output-toolbar > .op-strip { flex-shrink: 1; min-width: 72px; }
+.job-strip span, .job-notice, .op-strip > span:not(.op-meter), .op-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.job-strip.job-notice, .op-strip.op-notice { display: block; }
+.job-strip button, .op-strip button { flex-shrink: 0; }
+.output-toolbar .job-strip button, .output-toolbar .op-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+/* Operations over whole results (OperationStrip, ResultOperations): the toolbar's strip with its meter and Cancel, the
+   2 px bar along the top of the grid, the ring on the busy column's sort button, and held-off controls (dimmed, not-allowed). */
+.op-strip { gap: var(--varia-space-2); }
+.op-strip .op-what { color: var(--varia-foreground); }
+.op-strip .op-phase, .op-strip .op-elapsed { flex-shrink: 1; }
+.op-strip .op-percent { flex: none; font-variant-numeric: tabular-nums; }
+.op-meter { position: relative; flex: none; width: 64px; height: var(--varia-progress); border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); overflow: hidden; }
+.op-meter > span { display: block; height: 100%; background: var(--varia-focusBorder); }
+.op-meter.indeterminate > span { width: 30%; animation: op-sweep var(--varia-motion-spin) linear infinite; }
+.rg-op-bar.indeterminate > span { width: 30%; animation: op-sweep var(--varia-motion-spin) linear infinite; }
+.op-strip[data-pulse="a"] { animation: op-pulse-a calc(var(--varia-motion-base) * 5) var(--varia-motion-ease); }
+.op-strip[data-pulse="b"] { animation: op-pulse-b calc(var(--varia-motion-base) * 5) var(--varia-motion-ease); }
+@keyframes op-sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@keyframes op-pulse-a { 30% { color: var(--varia-foreground); background: var(--varia-list-hoverBackground); } }
+@keyframes op-pulse-b { 30% { color: var(--varia-foreground); background: var(--varia-list-hoverBackground); } }
+.rg-op-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 5; height: var(--varia-progressThin); background: var(--varia-badge-background); overflow: hidden; pointer-events: none; }
+.rg-op-bar > span { display: block; height: 100%; background: var(--varia-focusBorder); }
+.rg-cs.busy { visibility: visible; color: var(--varia-resultsGrid-headerForeground); }
+.rg-cs.busy > .codicon { border-radius: 50%; background: conic-gradient(var(--varia-focusBorder) var(--rg-busy, 0deg), var(--varia-badge-background) 0); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - var(--varia-progressThin)), currentColor 0); mask: radial-gradient(farthest-side, transparent calc(100% - var(--varia-progressThin)), currentColor 0); }
+.rg-cs.busy.indeterminate > .codicon { background: conic-gradient(var(--varia-focusBorder) 90deg, var(--varia-badge-background) 0); animation: oe-spin var(--varia-motion-spin) linear infinite; }
+.rg-cb { font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.rg-cb:empty { display: none; }
+.rg[data-held] .rg-cs, .rg[data-held] .rg-cf { opacity: 0.45; cursor: not-allowed; }
+.rg[data-held] .rg-cs.busy { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .op-meter.indeterminate > span, .rg-op-bar.indeterminate > span { width: 100%; animation: none; opacity: 0.5; }
+  .rg-cs.busy.indeterminate > .codicon, .op-strip[data-pulse] { animation: none; }
+}
+@media (forced-colors: active) {
+  .op-meter, .rg-op-bar { border: 1px solid CanvasText; background: Canvas; }
+  .op-meter > span, .rg-op-bar > span { background: Highlight; forced-color-adjust: none; }
+  .rg-cs.busy > .codicon { background: Highlight; forced-color-adjust: none; }
+  .rg[data-held] .rg-cs, .rg[data-held] .rg-cf { color: GrayText; opacity: 1; }
+}
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Stacked result sets: absolutely placed grids and splitters in a scrolling stack (ResultsStack). */
 .rs-stack { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
@@ -950,7 +987,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-tab[data-selected] { background: var(--varia-panel-background); border-color: var(--varia-panel-border); color: var(--varia-foreground); box-shadow: inset 0 2px 0 var(--varia-panelTitle-activeBorder); transition: none; }
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
 .rt-tab[data-selected] > [role="tab"] { font-weight: 600; }
-.rt-more { flex: none; align-self: center; padding: 0 4px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.rt-overflow { display: inline-flex; flex: none; align-items: center; gap: 2px; align-self: center; height: 20px; margin: 0 0 3px auto; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.rt-overflow:hover { background: var(--varia-toolbar-hoverBackground); }
+.rt-overflow[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); transition: none; }
+.rt-overflow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.rt-picker { position: fixed; z-index: 13000; display: flex; flex-direction: column; box-sizing: border-box; width: 320px; max-width: calc(100vw - 16px); min-height: 0; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.rt-picker-head { display: flex; flex: none; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border-bottom: 1px solid var(--varia-menu-separatorBackground); color: var(--varia-descriptionForeground); }
+.rt-picker-head input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--varia-input-foreground); font: inherit; }
+.rt-picker-head input::placeholder { color: var(--varia-input-placeholderForeground); }
+.rt-picker-head:focus-within { box-shadow: inset 0 -1px 0 var(--varia-focusBorder); }
+.rt-picker-list { position: relative; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-color: var(--varia-scrollbarSlider-background) transparent; }
+.rt-picker-space { position: relative; }
+.rt-picker-row { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 6px; height: var(--varia-row); box-sizing: border-box; padding: 0 10px; white-space: nowrap; cursor: default; }
+.rt-picker-row:hover { background: var(--varia-list-hoverBackground); }
+.rt-picker-row[aria-current="true"] { font-weight: 600; }
+.rt-picker-row[data-active] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.rt-picker-row[data-sub] { padding-left: 26px; }
+.rt-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rt-picker-row small { flex: none; margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 400; }
+.rt-picker-row[data-active] small { color: inherit; }
+.rt-picker-none { padding: 6px 10px; color: var(--varia-descriptionForeground); }
+.rt-picker-foot { flex: none; padding: 3px 10px; border-top: 1px solid var(--varia-menu-separatorBackground); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
 .rt-views { display: flex; flex: none; align-items: center; gap: 8px; height: 28px; box-sizing: border-box; padding: 0 4px; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
 .rt-view-tabs { display: flex; flex: none; gap: 2px; }
 .rt-view { display: flex; align-items: center; height: 22px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); }
@@ -966,8 +1023,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-close:hover:not(:disabled) { opacity: 1; }
 .rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+/* A short pane folds the rows of tabs (tabsFold): side by side in one row, without the facts; or none, the grid alone. */
+.rt-root[data-fold="one"] { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); grid-template-rows: auto minmax(0, 1fr); }
+.rt-root[data-fold="one"] > .rt-results { grid-column: 1; grid-row: 1; }
+.rt-root[data-fold="one"] > .rt-views { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; border-bottom-color: var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.rt-root[data-fold="one"] > .rt-panel { grid-column: 1 / -1; grid-row: 2; }
+.rt-root[data-fold="one"] .rt-facts { display: none; }
+.rt-root[data-fold="none"] > .rt-results, .rt-root[data-fold="none"] > .rt-views { display: none; }
 @media (forced-colors: active) {
   .rt-tab[data-selected], .rt-view[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .rt-picker-row[data-active] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .rt-picker-row[aria-current="true"]:not([data-active]) { outline: 1px solid CanvasText; outline-offset: -1px; }
   .rt-tab[data-selected] > [role="tab"]:focus-visible, .rt-view[data-selected] > [role="tab"]:focus-visible, .rt-tab[data-selected] .rt-close:focus-visible { outline-color: HighlightText; }
 }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
@@ -994,7 +1060,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch:hover .rg-cs, .rg-cs.on { visibility: visible; }
 /* A narrow header (gridLimits.sortButtonMinWidth) keeps every click for selecting its column: only a sorted column's arrow shows. */
 .rg-ch.narrow .rg-cs { pointer-events: none; }
-.rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
+.rg-ch.narrow:hover .rg-cs:not(.on):not(.busy) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
 .rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
 /* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and

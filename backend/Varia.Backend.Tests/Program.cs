@@ -397,6 +397,7 @@ if (liveGroup is null)
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
+        ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
         ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),

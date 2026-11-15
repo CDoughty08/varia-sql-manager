@@ -1,7 +1,7 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
 import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
-import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
+import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 
@@ -124,4 +124,6 @@ export type WorkerResponse =
   /** A live event as main validated it, with its EVENT body's length, which the page acknowledges with `liveAck`. */
   | { readonly type: 'live'; readonly id: number; readonly bytes: number; readonly event: LiveEvent }
   | { readonly type: 'liveEnd'; readonly id: number; readonly result: LiveEnd }
+  /** How far the long request `id` has got (op.progress, relayed by main). */
+  | { readonly type: 'progress'; readonly id: number; readonly phase: OperationPhase; readonly percent?: number }
   | { readonly type: 'liveUpdated'; readonly id: number; readonly result: LiveUpdateResult }

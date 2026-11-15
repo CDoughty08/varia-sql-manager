@@ -53,8 +53,12 @@ File operations can pause this work without discarding queued servers. Manual Co
 interrupted targets continue afterward. A failed Disconnect keeps the previous resume preference when the connection
 stays open. Temporary identity-probe transport failures retain their ordinary connection error and recovery behavior.
 Closing pauses automatic reconnects and settles their in-progress work before keeping the tabs and server associations.
-An unfinished manual Connect or details review must be finished or cancelled before closing or reloading. This keeps
-the saved server associations consistent with the tabs that will reopen.
+An unfinished manual Connect must be finished or cancelled before closing or reloading. A pending details review does
+not block: once a close passes its save prompts, the final check just before the session is written cancels the review
+as Cancel would, so a Windows shutdown never waits on that dialog. If that write then fails and the window stays open, the
+review stays cancelled; Connect again to choose the details. With hot exit on, Reload keeps its tabs before it asks to
+reload, so it cancels the review as soon as it is chosen, even if its confirmation is then cancelled. This keeps the saved server associations consistent with the tabs that will
+reopen.
 
 Saved credentials use the existing OS-protected vault. Connection snapshots contain nonsecret settings and opaque
 credential revision references. Server, database and account metadata remain readable in local session JSON under the

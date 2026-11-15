@@ -149,7 +149,10 @@ internal static class ResultPivoter
 
         // Each grouping keeps its groups' first rows only up to its bound, still counting past it for the refusal's message,
         // and is refused before the next grouping runs. The messages name no column or value (the renderer knows which).
+        var progress = OperationProgress.Current;
+        progress?.Phase("keys", 0.35);
         var rowKeys = spec.Rows.Select(KeyOf).ToArray();
+        progress?.Phase("group", 0.5);
         var grouping = Stopwatch.GetTimestamp();
         var (groupOf, rowReps, rowGroups) = Group(rowKeys, positions, rows, scratch, token, all: true, MaxRowGroups);
         if (stages is not null) stages.Grouping += Stopwatch.GetTimestamp() - grouping;
@@ -197,7 +200,10 @@ internal static class ResultPivoter
         }
         var extremes = figures.Where(item => item.Value.Aggregate is PivotAggregate.Min or PivotAggregate.Max).Select(item => (Figures: item, Key: KeyOf(item.Value.Column))).ToArray();
         var counter = 0;
+        progress?.Phase("aggregate", 0.85);
         var aggregating = Stopwatch.GetTimestamp();
+        // Counted a page at a time: the unpacking ahead is a step inside this one, so it is not counted again.
+        using var aggregated = progress?.Count(pages.Length) ?? default;
         // In order on this thread; a packed result's pages are unpacked ahead on the workers, a batch at a time.
         source.InOrder((index, page, view) =>
         {
@@ -241,6 +247,7 @@ internal static class ResultPivoter
                     Extreme(item.Best, totalCell, row, key, max);
                 }
             }
+            aggregated.Done();
         }, token);
         if (stages is not null) stages.Aggregation += Stopwatch.GetTimestamp() - aggregating;
         // Distinct counts place each cell's rows together first, which takes a bound per cell: without room for them, one

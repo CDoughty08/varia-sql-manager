@@ -1491,6 +1491,15 @@ itself by view position.
   ignoring trailing spaces; other types by their display text's code points. `chars` and `bytes` sort character, xml and
   json columns (and binary, for `bytes`) by each cell's length from [Cell lengths and row sizes](#cell-lengths-and-row-sizes);
   other columns ignore the mode and sort by value. Equal rows keep their base order.
+- **Progress (`op.progress`).** `results.view`, `results.profile`, `results.distinct` (open), `results.pivot` and
+  `results.diff` send droppable `{ type: 'op.progress', phase, percent? }` EVENTs on their request (`OperationProgress.cs`):
+  the phase (`filter`, `keys`, `sort`, `unpack`, `group`, `aggregate`, `write`, `identify`, `match`, `align`, `profile`,
+  `histogram`) and one percentage of the whole operation, 0 – 99, that never goes back; a phase with no total (a diff
+  looking for row keys) sends none. At most one every 250 ms, none in the first 250 ms (so a quick operation sends
+  nothing) and none once it has answered; the answer, not an EVENT, says it finished. The work is counted where it is
+  shared out (`WorkerGate.Lease.For` steps and the operations' own loops), and a step nested in a counted one counts
+  nothing, so the figure stays monotonic; with no operation current, nothing is counted (benchmarks and other callers).
+  Main checks each EVENT (`operationProgressSchema`, strict) and drops an invalid one without failing the request.
 - **Filters.** Applied in order before the sort, each over the rows the ones before it kept; `rows` counts the rows kept.
   `{ op: 'in' | 'notIn' | 'between', column, rows: 0 – 4,096 base rows, nulls? }` compares the column's values with those
   rows' values (`nulls`: NULL is among `in`'s and `notIn`'s values; `between` takes two rows, its lowest and highest
@@ -1867,7 +1876,7 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 
 - **`results.profile { resultId, columns: 0 – 32, viewId? }`** answers `{ rows, complete, rowBytes?, columns }`. Columns
   are distinct and within the result (`INVALID_PARAMS`); no columns answers only `rowBytes`. Through a view it describes
-  the view's rows (its sort now, its filter once views filter), else the rows sealed when it ran; `complete` says those
+  the view's rows (those its filters keep, in any order), else the rows sealed when it ran; `complete` says those
   were every row of a finished set. Main forwards an answer only when it names the columns asked, in order.
 - **Per column** `{ column, values, nulls, distinct, distinctExact, min?, max?, approximate, chars?, bytes?, histogram? }`.
   Values compare as a sort does ([Sorted views](#sorted-views)): NULL and unreadable cells count as `nulls` and are never
@@ -1880,6 +1889,12 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
   types by instant (`time`, .NET ticks), text by `chars`, binary by `bytes`; other types have none.
 - **`rowBytes`** is the rows' sizes, `{ min, max, average, exact }` from each page's row sums: the grid's row-size bar
   scales to its `max`.
+- **Rows, not order.** Every figure is order-free and compares by the column's type and collation, never by a sort key's
+  `mode`, so the panel (`ColumnProfilePanel.tsx`, `profiledRows`) keys a profile to its result, the view's resolved filters
+  (compared by what they keep, as `sameFilters` does) and the rows they were applied to, not to the view: a new view for a
+  sort alone (another key, direction or Sort Text By mode) sends no request and keeps the cards, and a view without filters
+  over every row counts as the result's own rows. A view it is reading stays open (`ResultsService.holdView`) until its
+  answer arrives, though the grid sorts again meanwhile.
 - **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
   view's rows. The pages are read in runs on several threads (a run of pages each, up to the threads the operations share), each with
   figures of its own, merged in page order: every figure is a count, a sum, a lowest or highest, or a set, so the profile
@@ -2692,7 +2707,9 @@ source (`INVALID_REQUEST`). `credit` acknowledges a live event and `cancel` ends
 
 **Main → worker:** `backend { generation, status }` on every change, `page { rid, seq, body: ArrayBuffer }`,
 `end { rid, ok, result | code, message }`, `query { queryId, event }`, `memory { usedBytes, globalBytes, generation, seq }`
-(the generation of the backend that sent the event, which may be one being replaced), and `live { rid, bytes, event }` (a
+(the generation of the backend that sent the event, which may be one being replaced), `progress { rid, phase, percent? }` (a
+view, profile, distinct, pivot or diff request's `op.progress`, posted only while that request is in flight on the same
+port; the worker hands it to the page request it answers, or drops it once the page gave that request up), and `live { rid, bytes, event }` (a
 validated live event with its EVENT body's length, which the worker grants back once the page has applied it). A live
 stream and an update end with `end` (`result`: the live end or the update answer).
 

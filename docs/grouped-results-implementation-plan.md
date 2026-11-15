@@ -4,9 +4,11 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 8 (2026-11-12). It follows the owner's decisions, three independent reviews against the code, the orientation
-spike's findings, what PRs 1 to 5b found when they merged, and the
-[pivot performance findings](pivot-performance-findings.md). PRs 6, 7 and 9 are in progress.
+Revision 9 (2026-11-14). It follows the owner's decisions, three independent reviews against the code, the orientation
+spike's findings, what PRs 1 to 13 and 16 found when they merged, and the
+[pivot performance findings](pivot-performance-findings.md). PRs 14 and 17 are in progress; 15 and 18 follow. Each
+merged PR's entry under Delivery says what it settled or left, and where the PR and an earlier section of this document
+disagree, the entry is the later word.
 
 The visual references are the three mocks in [prototypes/results-pane](../prototypes/results-pane/README.md): Tabs,
 Stacked and the transposed grid. The owner accepted their defaults on 2026-11-11, to be adjusted as the PRs land: the
@@ -69,7 +71,7 @@ always shows the source's current rows.
   Collapse, splitters and bounded mounting stay. Splitter weights are kept per entry: a new item takes the mean of the
   existing weights and a closed item's weight is removed, so the others keep their heights.
 - The choice is a setting (`queryResults.grid.layout`), a toolbar toggle and a command; switching keeps every view's state.
-  Default: Stacked until the overflow picker exists, then Tabs (PR 14).
+  Default: Tabs since PR 14 (Stacked until the overflow picker existed).
 - While a run streams in Tabs, the first group is selected and stays selected; a tab the user picks stays picked.
 - Find Next onto a match in another group or view selects that tab and view in Tabs, then reveals the match.
 - Tab overflow opens a picker listing every group, view and comparison: a virtualized themed list (a run can hold 1,000
@@ -244,11 +246,13 @@ There is no Undo for a close.
 
 Separate work is changing how much a result can hold, and this plan's limits were written against today's 2 GiB cap:
 
-- **A larger global budget** is proposed: a quarter of memory up to 16 GiB, with a setting. A query's budget is half of
-  it, so a source can hold several times the rows it does today. A result-scale benchmark at 1 to 8 GiB of rows
-  (`--result-scale-bench` in the .NET test project) is measuring sort, filter and pivot at those sizes.
-- **Compressed pages** are proposed after it: sealed pages compressed in place and decompressed per page on read, so
-  every scan pays for decompression.
+- **A larger global budget merged** as #447, with its gaps closed in #477: a quarter of memory up to 16 GiB, with
+  limits in Options. A query's budget is half of it, so a source can hold several times the rows it did. A result-scale
+  benchmark at 1 to 8 GiB of rows (`--result-scale-bench` in the .NET test project) measures sort, filter and pivot at
+  those sizes.
+- **Packed pages merged** in stages: #468 packs result pages inside the store behind an internal switch, #482 packs a
+  result hidden for five seconds, and #480 reads packed results fused in sorts, filters, profiles, pivots and plain
+  Save. A scan of a packed result pays for unpacking.
 - **Merged since:** #426 sends a set's truncation reason with `progress`, so the strip shows while the query still
   runs. #427, then #432, #435 and #439, stopped sorts and groupings reading the pages for every tie (numbers first, then
   text, dates and binary values) and put keys, sorts and scans on several threads. A million-row Count by a column of
@@ -268,7 +272,8 @@ What that changes here:
   the sort work, say the same reasoning now reaches 500,000 (the slowest recipe found takes 189 ms there on a 24-core
   machine). The time condition is what covers machines with few cores, long decimals and Distinct Count, so it is not
   optional. The owner accepted the row figure on 2026-11-12; it does not rise with
-  a larger budget, and it is measured again if compressed pages land before PR 17.
+  a larger budget. Packed pages landed before PR 17, so it measured it again on 2026-11-14: the slowest recipe at
+  500,000 rows takes 177 to 197 ms, raw or packed, and the figures stand.
 - **The reported slow Pivot was not reproduced.** At the reported shape (about 20,000 rows of one `int` column) a build
   takes 110 to 180 ms from the click to the painted pivot, before and after the sort fixes. If it is seen again it needs
   the machine, the build and the result's shape recorded.
@@ -534,7 +539,7 @@ Outcome, accepted by the owner:
 6. **Transposed copy and save. Merged as #448.**
 7. **Commands switch to the orientation. Merged as #449.** The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
-8. **Remove the stored transpose.** After PRs 6 and 7. What it settled or left:
+8. **Remove the stored transpose. Merged as #452.** What it settled or left:
    - Gone: `results.transpose` (`RpcMethods`, `methodPolicies`, the port request and answer schemas, `ResultsPortHost`,
      the worker protocol and core, `ResultHandle.transpose`, `SqlService`'s dispatch, lane, `MethodNames` entry and
      `TransposeAsync`, the two records in `Contracts.cs`), `ResultTransposer`, `TransposeService` with its strip, the
@@ -552,7 +557,7 @@ Outcome, accepted by the owner:
    - `ResultsService` had no branch on the `transpose` kind (only comments), so nothing there changed for PR 9 to
      conflict with. If PR 9 merges after this one it drops its own allowance: `ResultGroup.transposes`, the `'transpose'`
      `ViewKind` and its branches, and the transposes test in `tests/results-groups.test.ts`.
-9. **Groups.** In progress. It also takes what PR 3 left: closing through a command or menu target, and a Results badge
+9. **Groups. Merged as #450.** It also takes what PR 3 left: closing through a command or menu target, and a Results badge
    that counts original groups. The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
    source" picker goes, and building a group's Pivot again releases the old one first and then shows the new (not yet
@@ -585,7 +590,7 @@ Outcome, accepted by the owner:
        (`stackNeed`) counts the same rows.
      - A build and its failure belong to one group: the builder shows "running" and the message only while it is that
        group's, and names the group that is building when it is another's (one build per tab until PR 10).
-10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
+10. **Atomic Pivot replacement. Merged as #465.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
     - **What PR 10 settled or left** (`tests/results-pivot.test.ts`, `tests/results-derived-jobs.test.ts` and
@@ -652,7 +657,8 @@ Outcome, accepted by the owner:
         four in turn. Nothing starves, which is what the cap is for; two at once gain nothing over one after the other, so
         a lower cap would cost little either, but the plan's four is kept. [Pivot performance findings](pivot-performance-findings.md#measured-again-for-pr-10)
         has the table.
-11. **Out of date and Update.**
+11. **Out of date and Update. Merged as #476**, with #487 after it: the mark compares filters by the values they keep,
+    so re-ticking the same values or re-making a selection filter from other cells no longer marks a Pivot.
     - **What PR 11 settled or left** (`tests/results-pivot.test.ts`'s "an out-of-date Pivot and Update",
       `tests/menu-commands.test.ts`'s Update Pivot case, `tests/results-stack.test.ts` and `tests/results-tabs.test.ts`
       for the marks, and `results-smoke` step 13b2 hold its checks):
@@ -717,7 +723,7 @@ Outcome, accepted by the owner:
         Each errs towards offering Update. A filter's label reads its values from the resolved rows, so a selection
         filter is named by its value's lowest row (under a CI collation 'a' for a selected 'A'), as the funnel's checklist
         already lists that row's text.
-12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
+12. **`hasResultSets`** and its consumers. **Merged as #474.** (After PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
     the catalogue's preconditions for Save and Find, `PeekCard`.
@@ -747,7 +753,7 @@ Outcome, accepted by the owner:
         ordinal, stay for the next Pivot…. Until then it stayed open, hidden with the grids, and came back with the
         next run, which `results-pivot` pinned for Close Results.
       - The plan's "with only comparisons left, the badge hides" was already true from PR 9 (the badge counts groups).
-13. **Tabs layout**, default still Stacked. Tabs, the toggle and setting, view tabs, selection rules, Find Next across
+13. **Tabs layout**, default still Stacked. **Merged as #467.** Tabs, the toggle and setting, view tabs, selection rules, Find Next across
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near
     the split guideline).
@@ -783,7 +789,7 @@ Outcome, accepted by the owner:
         retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
       - Without the overflow picker, a run of more than `gridLimits.resultTabsDrawn` (64) results draws a window of 64
         result tabs around the selected one with "+N" counts either side; arrow keys and Find Next reach the rest. PR 14
-        replaces the counts with the picker. Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
+        replaced the counts with the picker (its notes, below). Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
         sideways (the wheel too) with no scroll bar and fades a clipped edge. It brings the selected tab into view, clear
         of the fade (`revealLeft`), when the selection or the window moves and when the strip is resized (`observeResize`,
         so in a popout too), never on a plain redraw, so a strip the user scrolled stays put. Comparisons are tabs in the same row, after the groups, with a "Comparison"
@@ -818,8 +824,81 @@ Outcome, accepted by the owner:
         makes Tabs the default, should add the layout there.
 14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
-15. **Save names, narrow and short panes, popouts.**
+    - **What PR 14 settled or left** (`tests/results-tabs.test.ts` holds its checks, the 1,000-result picker among them;
+      `tests/bench/grid.bench.ts` its benchmark, `node.grid.resultPicker.opsPerSecond`; `scripts/grouped-results-smoke.mjs`
+      its interface steps):
+      - `queryResults.grid.layout` defaults to `tabs`. A saved `tabs` stays; `stacked` was never saved while it was the default (the settings store drops defaults), so earlier Stacked choices become Tabs. The suites that read stacked captions were
+        already pinned (PR 13); `grid-bench` and `pivot-bench` now pin Stacked too. The grouped-results suite's first step
+        starts on Tabs and turns it off and on.
+      - The overflow picker (`ResultsPicker`, logic in `grid/result-picker.ts`) replaces PR 13's "+N" counts. A button at
+        the end of the result row (`.rt-overflow`, "+12") counts the items without a tab shown whole: those outside the
+        drawn window and those the strip scrolls out of view or cuts. It is shown only when that count is above zero, as the
+        mock has it, and it toggles the picker. The picker is a themed popover in the anchor's window (a portal, placed by
+        the Compare popover's `placePopover`, so popouts work): a filter box (a combobox that keeps the focus, with
+        `aria-activedescendant`), a virtual listbox of one row per view in the order drawn (a result's Table, its Pivot
+        indented under it and marked when out of date, then comparisons), and a footer with the counts. It draws the rows
+        in view and two either side (`pickerWindow`), 22 px rows (`--varia-row`, so `.rt-picker-row` joined
+        `densityUse.row`), at most 10 shown. The filter keeps rows holding every word typed ("3 piv"). Up, Down, Page Up and
+        Page Down move the active row; Enter or a click shows the view and gives its result's tab the focus once the drawn
+        window has moved; Escape gives the focus back to the button, or to where Go to Result… ran from (the editor, a
+        grid); a press outside, the focus leaving, the window losing the focus or the pane moving windows closes it. It
+        opens at the view shown (`aria-current`; the active row is the selected option). A new filter starts again there;
+        the run changing underneath keeps the active row. Its row height is read from `--varia-row`, so a denser or
+        roomier density keeps the list's maths right.
+      - The row still draws at most `gridLimits.resultTabsDrawn` (64) tabs around the selected one, so the DOM stays
+        bounded at 1,000 results; the picker, the arrow keys, Home, End, Find Next and the commands reach the rest. The
+        result row's `role="tablist"` moved from `.rt-results` onto `.rt-strip`, so the button is not inside a tablist.
+      - Commands (catalogue and generated pages regenerated). Owner review on PR 494 chose browser tab keys over SSMS's
+        query shortcuts (Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`; those can come back as palette commands that open a query):
+        - **Next Result** and **Previous Result**: Ctrl+Alt+Page Down and Up from anywhere (the editor too), and Ctrl+Page
+          Down and Up in the Results pane (`resultsFocus && multipleResults`: the focus in the Results pane or its picker,
+          and two or more results or comparisons; Windows and Linux, as Next and Previous Query have them). Next and
+          Previous Query keep Ctrl+Tab everywhere and Ctrl+Page Down and Up otherwise, so Messages, the plan and a query
+          with one result keep the query keys.
+        - **Go to Result 1** to **8** and **Go to Last Result** (`output.goToResult1`…, `output.goToLastResult`): Ctrl/⌘+1
+          to 9 under the same condition; otherwise the same keys run **Go to Query 1** to **8** and **Go to Last Query**
+          (`document.goToQuery1`…, in tab order across editor groups), as a browser's do. The id rule allows a trailing
+          place number.
+        - **Next Result View** and **Previous Result View**: Ctrl+Alt+Shift+Page Down and Up with `!textInputFocus` (Monaco
+          binds those keys to column selection on Windows, recorded in the Monaco allowlist); Tabs only, and unavailable
+          on a comparison or a result without a Pivot.
+        - **Go to Result…**: Ctrl/⌘+Shift+O (VS Code's Go to Symbol; Ctrl+Alt+letters are reserved for AltGr), Window
+          menu after Results as Tabs, access key G; Tabs only.
+        - All need `hasResultSets`. Next and Previous Result and Go to Result N work in Stacked too: they select through
+          `focusEntry`, bring the Results pane forward (`view.toggleResultsPane` when Ctrl+R hid every output pane, `window.results` when it is closed or behind another, the popout's tab when it is in a window), and `stackReveals` (a pending request a stack mounting within 2 s takes) asks the stack to open the view if collapsed and scroll to it, as Find Next does;
+          its grid takes the focus once mounted when the focus was in the stack. In Tabs they leave the focus where it
+          was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused tab's moves to the tab
+          now selected in its row, also when that tab unmounted (another result's view tabs, the drawn window moving).
+          Next and Previous Result wrap round, and a result shows the view it showed last. None has a menu placement but
+          Go to Result… (`menus.test.ts` lists them with the keyboard-only commands); all are in the palette. Go to
+          Result… waits up to two seconds for a layout not drawn yet (`pickerRequests`), then lapses, so a layout drawn
+          much later never opens the picker by surprise.
+      - Short panes (owner review): the results pane can be dragged to its 100 px minimum, and a window made smaller
+        takes the results pane's room first, which left the grid 8 px under the two rows of tabs at 1024×700 with a
+        banner. `tabsFold` keeps the grid's header and two rows: the rows of tabs share one row (`data-fold="one"`, the
+        facts left to the status line), then go (`data-fold="none"`, the grid alone, as Stacked's one set gives up its
+        caption; a tab that had the focus hands it to the grid). `backend-smoke` runs its short-pane step on Tabs (no Stacked pin).
+        The fold is measured before the first paint, so a new run in a short pane never shows both rows for a frame; in
+        the shortest pane the picker is placed under the top of the layout, and a pick or Escape gives the grid the focus
+        in a tab's place. The picker follows its anchor's size and closes when the anchor goes (Ctrl+R hides the pane);
+        Go to Result… asked again while it is open keeps where it was first opened from for Escape.
+      - Getting Started: the results guide has a new section, Move between results, on the tabs, the picker, the commands
+        and the layout setting, with live references.
+      - Inherited from PR 13: the grouped-results suite's CI seconds were already measured (4 s Linux, 6 s Windows), and the
+        Pivot view tab's out-of-date dot was already drawn (`rt-dot`), so neither needed work here.
+      - Departures from the mock: the picker's button reads "+N" and a chevron, without the mock's count of every item;
+        the Pivot row reads "Pivot" under its result rather than repeating the result's name; the mock's short pane hides
+        the facts and strips at 330 px, where this folds the rows of tabs only when the grid would lose its rows.
+      - Left: the SSMS query shortcuts' procedures as palette commands; the 1,440 px Tabs button cutoff, narrow panes,
+        Save names and popouts stay PR 15's.
+15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
+    button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and
+    the results toolbar's search box is squeezed in a narrow window. PR 14 folds Tabs' rows of tabs in a short pane
+    (`tabsFold`); what else a short pane hides (the mock's 330 px rules) is still this PR's.
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
+    **Merged as #466.** Changed since: #489 fixed Compare failing on results matched by whole rows (the answer has no
+    `key` member then), and #490 turned the picker into a popover beside what opened it, from the options mocked in
+    #488; it no longer takes the Pivot builder's place.
     - **What PR 16 settled or left** (`tests/results-compare.test.ts`, `tests/compare-pairing.test.ts`,
       `tests/results-derived-jobs.test.ts`, `DiffChecks.cs` and `results-smoke` step 14g hold its checks):
       - The picker is a side panel in the builder's place (`ComparePanel`): opening Compare closes the Pivot builder and
@@ -893,13 +972,84 @@ Outcome, accepted by the owner:
 17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
     took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.
+    - **What PR 17 settled or left** (`tests/results-pivot.test.ts`'s "a Pivot following its Table's filters" and the
+      collapse publish in `tests/results-stack.test.ts` hold its checks):
+      - The threshold is the owner's, as named constants in one place: `pivotFollow` in `PivotService.ts`
+        (`maxSourceRows: 500_000`, `maxLastBuildMs: 250`), both required (`followsByItself`). Rows are the Table's
+        `rowsStored`; the time is the Pivot's last build, recorded in its provenance as `buildMs`, from the moment the
+        build took one of `DerivedJobs`' places to its answer, so waits for a place or a busy backend do not count; a VIEW_NOT_FOUND
+        rerun does. Any build records it (Build Pivot, Update, automatic), so an Update that runs quicker lets the next
+        change follow by itself, and a slow one stops it. Measured again first, with compressed pages and fused reads
+        ([Measured again for PR 17](pivot-performance-findings.md#measured-again-for-pr-17)): every threshold recipe at
+        500,000 rows builds under 250 ms on the 24-core machine, raw or packed, the slowest the 30-digit `decimal` at 177
+        to 197 ms; the figures stand.
+      - **Shown** (`pivotShown`): the Results panel is showing, as the dock reports it (`PaneService`, through
+        `PivotFollowHost.resultsShowing`; not the output view last picked, since Messages docked beside Results or popped out
+        leaves Results drawn, and a closed or Ctrl+R-hidden Results panel draws nothing), and in Tabs the
+        Pivot's view is the selected entry (`selectedEntry`, moved to `ResultsService.ts` for this); in Stacked its item is
+        not collapsed. Scrolling the stack does not count: an expanded Pivot is drawn wherever it stands. Whether the query
+        tab's document is the active one is not asked: the filter is changed in that tab's grid, and a Pivot hidden by
+        another document is still drawn when it comes back. The stack's caption toggle now goes through
+        `ResultsService.setCollapsed`, which publishes, so expanding a collapsed Pivot is seen; the layout setting comes
+        through `PivotFollowHost` (the workbench passes `queryResults.grid.layout`, the Results panel's visibility and both
+        subscriptions).
+      - When a Pivot rebuilds by itself (`PivotService.followGroup`, looked at in a microtask after every results publish
+        and layout change, never a timer): it is out of date (`pivotOutOfDate`), shown, under the threshold, its Table can
+        be pivoted (`canPivot`: the run ended, its sort or filter built), no build of its group is in flight, and its
+        group was not last built over these filters. That last rule (`tried`, the last set of the Table's filters by
+        `filtersIdentity` when any build of the group starts) is what keeps a failure, a refusal or a cancel from being
+        asked again and again, and what keeps a rebuild whose answer still compares as out of date (PR 11's remaining
+        false positives, or a VIEW_NOT_FOUND rerun whose filters resolve another way) from looping: each retry needs the
+        filters to change. Hiding and showing a Pivot whose build ended does not try the same filters again; Update still
+        does. Filters whose automatic build this service gave up itself (superseded, or its Pivot hidden while it ran) are
+        not counted as tried, so a change undone and
+        made again rebuilds; a user's Cancel counts the filters shown at that moment as tried, so the cancel is not undone
+        at once by an automatic build over filters changed meanwhile. Every build that ends looks at the Pivot again, so a
+        failed Build Pivot whose filters changed while it ran is followed then, not at the next unrelated publish. An
+        automatic build leaves a failed Build Pivot's reason in the builder (and clears an earlier automatic build's or
+        Update's, which it answers; a failed automatic build tells only the toolbar, and a cancel's message is not kept as
+        the draft's failure), is named by the
+        filters of the view it actually reads, and its provenance says `followed`, so the Tabs layout does not select the
+        Pivot for it (the user may have gone back to the Table since it started). `followGroup` decides nothing while the
+        grid shows a view the results have yet to publish (they publish on the next frame); that publish looks again. A
+        Cancel records the grid's newest view's filters as tried, published or not.
+      - The rebuild is `PivotService.start` with the Pivot's own recipe, as Update: the Table's shown view held, one of
+        the shared places with its retries, `addSet`'s atomic replacement, the draft untouched. Failure, refusal or a
+        cancel from the caption keeps the old Pivot and its mark, and the toolbar says why with PR 10's sentences (nobody
+        clicked, and the builder may be closed or on another group).
+      - A newer filter change cancels an automatic build in flight once the newer view is published (the build reads the held
+        older view, so its answer would land out of date), as does undoing the change; it is given up silently and its late
+        answer released, and only the last build publishes. A build the user started (Build Pivot, Update) is never given
+        up or overtaken here: once it publishes, the Pivot is looked at again and follows the newer filters if it may.
+        Build Pivot during an automatic build gives the automatic one up, as it does an Update.
+        An automatic build whose Pivot is hidden while it runs (Results hidden, another view selected, collapsed) is given
+        up too and its filters may be tried again when shown, and a followed rebuild never switches the output pane back to
+        Results (`replaceSet` leaves `run.view` alone for `followed` provenance). `tried` keeps only the last set of filters
+        a group was built over: returning to filters that failed earlier builds them again, once.
+        A Copy of the Pivot the user started holds an automatic build back (one in flight is given up) until the copy ends,
+        since `replaceSet` cancels a copy of the entry it replaces; it reads `ResultsService.copyingEntry`, the live copy a
+        frame ahead of the published job list, and an automatic answer landing after a copy began is released. While the newer filter's view is still being built the
+        older automatic build is not given up (decisions are over published views), so a Table whose view takes longer
+        than the Pivot publishes the older Pivot briefly first. results-smoke 13b2's first check needs the 100-row Pivot's
+        build to take under 250 ms, round trip included, which holds with a wide margin.
+      - Departures: the cancel happens when the newer view is published, not when its build starts, so a Table whose new view
+        takes long to build lets the older rebuild finish (and publish) first; the plan did not say which. No new
+        caption text: an automatic rebuild shows PR 11's "Building again…" with Cancel, and a Pivot left marked shows
+        "Out of date" with Update as before. results-smoke can no longer reach a marked, shown, small Pivot whose grid has
+        the focus, so PR 11's check that the rebuilt grid keeps the focus after Update from its own menu moved to
+        `tests/result-grid-focus.test.ts`, which draws the real grid.
+      - Left: a record on the caption of why an automatic rebuild failed (the toolbar's notice fades, as PR 11 left for
+        Update); a machine with few cores, Linux and macOS measured against the 250 ms condition; a Pivot shown in a
+        popout or a docked pane counts by the same model, not by what is on screen (`ResultVisibilityService` knows the
+        latter, for the backend's packing).
 18. **Integration.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
 
 Follow-ups, not in this work: Pivot with Pivot comparison (explicit diff key); a Plan tab inside a group; uncapped
 transposed columns; value-based filters that survive a Pivot rebuild; opening one view in its own window; a selection
 filter (Keep Selected Rows included) that survives its view closing while it resolves; changing a transposed grid's
-shared width by hand; a screen reader pass over the transposed grid.
+shared width by hand; a screen reader pass over the transposed grid; a Find match past the transposed cap, which shows
+the cap's strip and is then used up, so Find Next must be pressed again to reach the next match.
 
 ## Validation
 

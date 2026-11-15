@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
-import { jobProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent } from '../../shared/ipc/port-messages'
+import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
 import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
 import { liveEndSchema, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent, type LiveSubscribeParams } from '../../shared/live/schema'
@@ -55,6 +55,8 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   onActionProgress?: (progress: ActionProgressEvent) => void
   /** explorer.index's progress. An invalid one is dropped, as an action's is: the build goes on. */
   onIndexProgress?: (progress: ObjectIndexProgressEvent) => void
+  /** A long results request's op.progress (view, profile, distinct, pivot, diff). An invalid one is dropped: the work goes on. */
+  onOperationProgress?: (progress: OperationProgressEvent) => void
   /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
   generation?: number
   /** The request's id and generation once it is written, for CREDIT and CANCEL frames. */
@@ -174,7 +176,7 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const { onEvent, onProgress, onLive, onActionProgress, onIndexProgress } = o
+    const { onEvent, onProgress, onLive, onActionProgress, onIndexProgress, onOperationProgress } = o
     let nextSeq = 0
     // The subscription the events must belong to: its source, and only the probes it named.
     const subscribed = method === 'live.subscribe' ? params as LiveSubscribeParams : undefined
@@ -196,6 +198,9 @@ export class BackendSupervisor {
       } : onIndexProgress ? raw => {
         const parsed = objectIndexProgressEventSchema.safeParse(raw)
         if (parsed.success) onIndexProgress(parsed.data)
+      } : onOperationProgress ? raw => {
+        const parsed = operationProgressSchema.safeParse(raw)
+        if (parsed.success) onOperationProgress(parsed.data)
       } : onProgress && (raw => {
         const parsed = jobProgressSchema.safeParse(raw)
         if (!parsed.success) return false

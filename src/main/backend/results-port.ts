@@ -1,5 +1,5 @@
 import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
-import { diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import { type OperationProgressEvent, diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -20,6 +20,8 @@ export interface ReadStream { readonly done: Promise<unknown>; credit(bytes: num
 /** A live subscription in the backend: its events arrive through `onLive`, its credit acknowledges them, and `done`
  *  settles with its end. */
 export interface LiveStreamHandle { readonly done: Promise<LiveEnd>; credit(bytes: number): void; cancel(reason: CancelReason): void }
+/** Where a long results request's op.progress EVENTs go, validated. */
+export type OperationProgressSink = (progress: OperationProgressEvent) => void
 /** What the host needs from the backend; supervisorResults adapts BackendSupervisor. */
 export interface ResultsBackend {
   /** The generation whose results can be read now, or undefined while none is ready. */
@@ -28,22 +30,22 @@ export interface ResultsBackend {
   close(generation: number, resultIds: number[]): Promise<ResultsCloseResult>
   rowBytes(generation: number, params: ResultsRowBytesParams): Promise<ResultsRowBytesResult>
   /** A sort may take seconds: the worker's cancel (a newer sort, or the view no longer wanted) stops it. */
-  view(generation: number, params: ResultsViewParams): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
+  view(generation: number, params: ResultsViewParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
   viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
   /** Hashing a result's rows may take seconds: the worker's cancel stops it, as it does a sort. */
   identify(generation: number, params: ResultsIdentifyParams): { readonly done: Promise<ResultsIdentifyResult>; cancel(reason: CancelReason): void }
   rowIds(generation: number, params: ResultsRowIdsParams): Promise<ResultsRowIdsResult>
   findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
   /** Comparing two results may take seconds: the worker's cancel stops it, as it does a sort. */
-  diff(generation: number, params: ResultsDiffParams): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
+  diff(generation: number, params: ResultsDiffParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
   /** Pivoting a result may take seconds: the worker's cancel stops it, as it does a sort. */
-  pivot(generation: number, params: ResultsPivotParams): { readonly done: Promise<ResultsPivotResult>; cancel(reason: CancelReason): void }
+  pivot(generation: number, params: ResultsPivotParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsPivotResult>; cancel(reason: CancelReason): void }
   /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
-  profile(generation: number, params: ResultsProfileParams): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
+  profile(generation: number, params: ResultsProfileParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
   /** A distinct snapshot reads every row of a column: the worker's cancel (the popover closed) stops building it. */
-  distinct(generation: number, params: ResultsDistinctParams): { readonly done: Promise<ResultsDistinctResult>; cancel(reason: CancelReason): void }
+  distinct(generation: number, params: ResultsDistinctParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsDistinctResult>; cancel(reason: CancelReason): void }
   /** A window of a snapshot; a new search scans its values, so the worker's cancel (a newer search) stops it. */
   distinctRead(generation: number, params: ResultsDistinctReadParams): { readonly done: Promise<ResultsDistinctReadResult>; cancel(reason: CancelReason): void }
   distinctTick(generation: number, params: ResultsDistinctTickParams): Promise<ResultsDistinctTickResult>
@@ -302,6 +304,15 @@ export class ResultsPortHost {
 
   /** Requests counted against the 64 outstanding: reads, closes, sorts, searches, row sizes and live updates (live streams
    *  have their own cap). */
+  /** Passes a long request's progress to the worker while that request is still this port's, never after its end. */
+  private relay(rid: number): OperationProgressSink {
+    const port = this.port
+    return progress => {
+      if (this.port !== port || !this.sorting.has(rid)) return
+      this.post({ t: 'progress', rid, phase: progress.phase, ...progress.percent === undefined ? {} : { percent: progress.percent } })
+    }
+  }
+
   private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size + this.searching.size }
 
   private read(request: Extract<PortRequest, { t: 'read' }>): void {
@@ -514,7 +525,7 @@ export class ResultsPortHost {
     const params: ResultsViewParams = { resultId: request.resultId, sort: request.sort.map(key => ({ ...key })) }
     if (request.filters) params.filters = request.filters.map(copyFilter)
     if (request.replaces !== undefined) params.replaces = request.replaces
-    const sort = this.backend.view(request.generation, params)
+    const sort = this.backend.view(request.generation, params, this.relay(rid))
     this.sorting.set(rid, sort)
     sort.done.then(result => {
       const parsed = viewResultSchema.safeParse(result)
@@ -591,7 +602,7 @@ export class ResultsPortHost {
     const port = this.port
     const params: ResultsProfileParams = { resultId: request.resultId, columns: [...request.columns] }
     if (request.viewId !== undefined) params.viewId = request.viewId
-    const profile = this.backend.profile(request.generation, params)
+    const profile = this.backend.profile(request.generation, params, this.relay(rid))
     this.sorting.set(rid, profile)
     profile.done.then(result => {
       if (this.port !== port || this.sorting.get(rid) !== profile) return
@@ -616,7 +627,7 @@ export class ResultsPortHost {
     const params: ResultsDistinctParams = { resultId: request.resultId, column: request.column }
     if (request.viewId !== undefined) params.viewId = request.viewId
     if (request.keptViewId !== undefined) params.keptViewId = request.keptViewId
-    this.cancellable(request, () => this.backend.distinct(request.generation, params), result => {
+    this.cancellable(request, () => this.backend.distinct(request.generation, params, this.relay(request.rid)), result => {
       const parsed = distinctResultSchema.safeParse(result)
       return parsed.success ? parsed.data : undefined
     }, 'The column\'s values could not be listed.', result => {
@@ -730,7 +741,7 @@ export class ResultsPortHost {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (!this.current(generation, request.resultId) || !this.current(generation, request.right)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const port = this.port
-    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context })
+    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context }, this.relay(rid))
     this.sorting.set(rid, diff)
     diff.done.then(result => {
       const parsed = diffResultSchema.safeParse(result)
@@ -769,7 +780,7 @@ export class ResultsPortHost {
     }
     if (request.column !== undefined) params.column = request.column
     if (request.viewId !== undefined) params.viewId = request.viewId
-    const pivot = this.backend.pivot(generation, params)
+    const pivot = this.backend.pivot(generation, params, this.relay(rid))
     this.sorting.set(rid, pivot)
     pivot.done.then(result => {
       const parsed = pivotResultSchema.safeParse(result)
@@ -865,9 +876,9 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     close: (generation, resultIds) => supervisor.request('results.close', { resultIds }, { generation }),
     rowBytes: (generation, params) => supervisor.request('results.rowBytes', params, { generation }),
-    view: (generation, params) => {
+    view: (generation, params, onProgress) => {
       let id = 0
-      const done = supervisor.request('results.view', params, { generation, onSent: sent => { id = sent } })
+      const done = supervisor.request('results.view', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     viewClose: (generation, params) => supervisor.request('results.viewClose', params, { generation }),
@@ -878,14 +889,14 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     rowIds: (generation, params) => supervisor.request('results.rowIds', params, { generation }),
     findRows: (generation, params) => supervisor.request('results.findRows', params, { generation }),
-    diff: (generation, params) => {
+    diff: (generation, params, onProgress) => {
       let id = 0
-      const done = supervisor.request('results.diff', params, { generation, onSent: sent => { id = sent } })
+      const done = supervisor.request('results.diff', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
-    pivot: (generation, params) => {
+    pivot: (generation, params, onProgress) => {
       let id = 0
-      const done = supervisor.request('results.pivot', params, { generation, onSent: sent => { id = sent } })
+      const done = supervisor.request('results.pivot', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     search: (generation, params) => {
@@ -893,14 +904,14 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       const done = supervisor.request('results.search', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
-    profile: (generation, params) => {
+    profile: (generation, params, onProgress) => {
       let id = 0
-      const done = supervisor.request('results.profile', params, { generation, onSent: sent => { id = sent } })
+      const done = supervisor.request('results.profile', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
-    distinct: (generation, params) => {
+    distinct: (generation, params, onProgress) => {
       let id = 0
-      const done = supervisor.request('results.distinct', params, { generation, onSent: sent => { id = sent } })
+      const done = supervisor.request('results.distinct', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     distinctRead: (generation, params) => {

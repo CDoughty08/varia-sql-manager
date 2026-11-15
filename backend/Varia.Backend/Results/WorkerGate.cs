@@ -31,7 +31,7 @@ internal static partial class ViewSorter
         /// share as are free now (<see cref="Lease.Count"/>).</summary>
         public Lease Take(int wanted)
         {
-            var lease = new Lease(this, Math.Max(1, wanted));
+            var lease = new Lease(this, Math.Max(1, wanted)) { progress = OperationProgress.Current };
             lease.demand = lease.Wanted;
             lock (sync)
             {
@@ -128,6 +128,8 @@ internal static partial class ViewSorter
             internal int held, target, demand = int.MaxValue;
             internal long order;
             internal Loop? loop;
+            /// <summary>The progress of the operation that took the lease: each step counts its items there.</summary>
+            internal OperationProgress? progress;
             private bool disposed;
 
             /// <summary>The threads the operation would use.</summary>
@@ -247,6 +249,18 @@ internal static partial class ViewSorter
             public void For<TState>(int items, Func<TState> state, Action<int, TState> body, CancellationToken token)
             {
                 if (items <= 0) return;
+                var meter = progress;
+                if (meter is null || !meter.Open(items))
+                {
+                    Run(items, state, body, token);
+                    return;
+                }
+                try { Run(items, state, (index, own) => { body(index, own); meter.Done(); }, token); }
+                finally { meter.Close(); }
+            }
+
+            private void Run<TState>(int items, Func<TState> state, Action<int, TState> body, CancellationToken token)
+            {
                 if (Math.Min(wanted, items) <= 1)
                 {
                     // Threads held past its own, or a demand still at what it asked for, go back: the others' shares grow.
