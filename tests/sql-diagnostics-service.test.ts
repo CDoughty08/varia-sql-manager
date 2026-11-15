@@ -6,7 +6,7 @@ import type { BackendSnapshot } from '../src/renderer/src/services/backend'
 import type { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs, sqlDiagnosticOwner } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
-import { welcomeQueryText } from '../src/renderer/src/services/documents'
+import { isWelcomeQuery, previousWelcomeQueryText, welcomeQueryText } from '../src/renderer/src/services/documents'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import { deferred, documentFixture } from './fixtures/documents'
 
@@ -67,6 +67,16 @@ describe('versioned SQL diagnostics markers', () => {
     await f.tick()
     expect(f.language.diagnostics).toHaveBeenCalledOnce()
     expect(f.markers(tab.id)).toHaveLength(2)
+  })
+  it('names the welcome query\'s result, and still skips the welcome query a hot exit kept from before it did', async () => {
+    expect(welcomeQueryText).toContain('/* #Name="Sample Query" */\nSELECT\n')
+    expect(isWelcomeQuery(welcomeQueryText.replace(/\n/g, '\r\n'))).toBe(true)
+    expect(isWelcomeQuery(welcomeQueryText.replace('Sample Query', 'Sample query'))).toBe(false)
+    expect(isWelcomeQuery(welcomeQueryText + '\n')).toBe(false)
+    const f = fixture(), restored = f.documents.create('SQLQuery1.sql', previousWelcomeQueryText.replace(/\n/g, '\r\n'), 'master')
+    await f.tick()
+    expect(f.language.diagnostics).not.toHaveBeenCalled()
+    expect(f.service.getSnapshot().documents.get(restored.id)).toEqual({ phase: 'ready', errors: 0, warnings: 0 })
   })
   it('yields held analysis to foreground requests and rechecks when they finish', async () => {
     const f = fixture(), tab = f.documents.create('foreground.sql', 'SELECT Missing', 'master'), old = deferred<LanguageDiagnosticResult | undefined>()

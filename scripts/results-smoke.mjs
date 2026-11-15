@@ -12,7 +12,7 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
@@ -436,6 +436,26 @@ try {
     expect(most).toBeLessThanOrEqual(12)
   })
   console.log('Results checks: stacked grids split the pane equally, resize by mouse and keys, and a thousand sets mount at most 12 grids.')
+
+  // 4a. Named results (a #Name marker; the fake backend names sets as the real one binds them): a named result's caption
+  // shows its name with its number first among its facts, an unnamed one reads as before, a long name gives way to an
+  // ellipsis with the whole name in the tooltip and the grid's accessible name, and the splitter is named by it.
+  const longName = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region'
+  await run(`-- varia-fake: sets=N1*20,N1*20,N1*20 names=Open%20orders,,${encodeURIComponent(longName)}`)
+  await expect(page.locator(part.resultItem)).toHaveCount(3)
+  await expect(resultToggle(page, 'Open orders, Result 1')).toHaveAttribute('title', 'Open orders · Result 1')
+  await expect(resultFacts(resultToggle(page, 'Open orders, Result 1'))).toHaveText(/^Result 1 · 20 rows · /)
+  await expect(resultToggle(page, 'Result 2')).not.toHaveAttribute('title', /./)
+  await expect(resultFacts(resultToggle(page, 'Result 2'))).toHaveText(/^20 rows · /)
+  await expect(namedResultGrid(page, 'Open orders', 1)).toHaveAttribute('aria-label', /^Open orders, Result 1 of 3, 20 rows, /)
+  await expect(grid('Result 2')).toHaveAttribute('aria-label', /^Result 2 of 3, 20 rows, /)
+  await expect(resultToggle(page, `${longName}, Result 3`)).toHaveAttribute('title', `${longName} · Result 3`)
+  // The pane here is wide enough for the whole name; the name gives way when it is not (the Tabs suite checks a cut name).
+  expect(await captionFits(resultToggle(page, `${longName}, Result 3`))).toEqual({ fits: true, ellipsis: true })
+  expect(await nameCut(resultToggle(page, 'Open orders, Result 1'))).toBe(false)
+  await expect(namedResultGrid(page, longName)).toHaveAttribute('aria-label', new RegExp(`^${longName}, Result 3 of 3, `))
+  await expect(resultSplitters(page).first()).toHaveAttribute('aria-label', 'Resize Open orders, Result 1')
+  console.log('Results checks: a named result\'s caption shows its name and number, an unnamed one reads as before, a long name gives way with the whole name in its tooltip and grid name.')
 
   // 4b. The results head and captions: one run summary; a small set sized to its rows and the rest to the large one,
   // with no outer scroll bar; a caption names its set and collapses it; splitters keep to each set's floor; headers show

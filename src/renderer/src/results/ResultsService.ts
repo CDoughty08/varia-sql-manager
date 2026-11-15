@@ -37,9 +37,57 @@ export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
 }
+type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> }
+// One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
+// and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
+/** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
+ *  are told apart by it. */
+export const entryNumber = (entry: Pick<ResultSetEntry, 'number'>): string => `Result ${entry.number}`
+/** The name the query gave an original result with a `#Name` marker, if it gave one. A Pivot's or a comparison's
+ *  descriptor never carries one. */
+export const queryName = (entry: Named): string | undefined => entry.descriptor?.name || undefined
 /** An entry's name: its label (the query's #Name for an original result, or Varia's name for one it made, "Pivot of
  *  Result 3"), else "Result N" by its number. */
-export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? `Result ${entry.number}`
+export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? entryNumber(entry)
+/** An original result's own title where its number named it before names existed (its splitter, its plans, its copy and
+ *  save jobs, the Column Profile): the query's name for it with its number ("Totals, Result 3"), so two of one name are
+ *  told apart, else "Result N". Unlike
+ *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
+export const resultTitle = (entry: Named): string => { const name = queryName(entry); return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}` }
+/** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
+ *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
+export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
+/** A named entry's name with its number ("Totals · Result 2"), an unnamed one's name alone: for places that list results
+ *  and must tell two of one name apart without room for secondary text. */
+export const numberedName = (entry: Named): string => {
+  const number = entrySecondary(entry)
+  return number ? `${entryName(entry)} · ${number}` : entryName(entry)
+}
+/** Two compared results' names, for a comparison's title: each its name, and each with its number when the two names are
+ *  the same ("Totals (Result 1)" and "Totals (Result 3)"), so the title says which way round it is. Unnamed results'
+ *  names are their numbers, which never collide. */
+export const comparedNames = (old: Named, neu: Named, sets: readonly Named[] = [old, neu]): [string, string] => [distinctName(old, [...sets, old, neu]), distinctName(neu, [...sets, old, neu])]
+/** An entry's name, with its number when another of the run's results has the same name ("Totals (Result 3)"): for the
+ *  titles a Pivot or comparison takes from its sources, and their sources' links, so two of one name are told apart.
+ *  Unnamed results, Pivots and comparisons keep their names, so theirs read as before. */
+export const distinctName = (entry: Named, sets: readonly Named[]): string => {
+  const name = entryName(entry)
+  // Only a name the query gave takes the number: an unnamed result keeps "Result 2" even when a marker named another
+  // result "Result 2", which then reads "Result 2 (Result 1)".
+  if (queryName(entry) === undefined) return name
+  return sets.some(other => other.number !== entry.number && entryName(other) === name) ? `${name} (${entryNumber(entry)})` : name
+}
+/** An entry's accessible name: a named result's name with its number ("Totals, Result 3"), so two tabs, captions or
+ *  buttons of one name are told apart by a screen reader; anything else its name alone. */
+export const spokenName = (entry: Named): string => {
+  const number = entrySecondary(entry)
+  return number ? `${entryName(entry)}, ${number}` : entryName(entry)
+}
+/** Whether a slot shows a name the query gave: a named Table, or a Pivot or comparison made from a named result (its frozen
+ *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
+ *  unnamed result's are laid out exactly as they were before names. */
+export const slotNamed = (slot: Pick<ResultSlot, 'view' | 'entry' | 'sources'>): boolean =>
+  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== `Result ${source.number}`)
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
@@ -589,7 +637,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (snapshot.state !== 'complete') continue
         available += snapshot.rowsAvailable
         for (let row = 0; row < snapshot.rowsAvailable && sources.length < retainedPlanLimits.documentsPerRun; row++) {
-          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.number}, row ${row + 1}`,
+          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.number}${queryName(entry) ? ` (${queryName(entry)})` : ''}, row ${row + 1}`,
             captureType: entry.capturedPlan ? 'actual' : 'query-returned', batchNumber: descriptor.batchNumber, iteration: descriptor.iteration,
             generation: descriptor.generation, resultId: descriptor.resultId, row, incomplete: snapshot.incomplete,
             read: async signal => {
@@ -876,7 +924,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (parts.length === 0) return undefined
     this.cancelRunning(this.copying)
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.copying = running
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
@@ -919,7 +967,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     let saved!: () => void
     const done = new Promise<void>(resolve => { saved = resolve })
-    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
@@ -1355,7 +1403,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
     // Pivot, a comparison or a plan set), and a group has one, so a new one takes the slot of the one it had.
     const group = view === 'comparison' ? undefined : origin?.group
-    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: entryName(source), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
+    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
@@ -1430,7 +1478,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
     const keys = (sort?.keys ?? []).flatMap(item => { const at = moved.get(item.column); return at === undefined ? [] : [{ ...item, column: at }] })
     if (keys.length) this.applySort(tabId, run, key, keys)
-    if (sort?.filters.length) this.notify(tabId, `${entryName(entry)} was built again, so its filters were removed.`)
+    if (sort?.filters.length) this.notify(tabId, `${distinctName(entry, run.sets)} was built again, so its filters were removed.`)
     return key
   }
 
@@ -1550,7 +1598,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       controller.abort()
       this.keepLastView(tabId, run, index, set)
     }
-    ticket = this.operations.begin(tabId, { kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
+    ticket = this.operations.begin(tabId, { kind: action, target: distinctName(set, run.sets), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.

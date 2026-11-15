@@ -1086,7 +1086,7 @@ async function runDirective(id, params, directive) {
     for (const [index, set] of directive.sets.entries()) {
       const shape = shapes[set.shape]
       if (index >= maxSets) { discarded.push(set); continue }
-      const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false }, index)
+      const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false, ...set.name ? { name: set.name } : {} }, index)
       // A directive's `truncated=`: the set stopped keeping rows (the budget filled, or the row limit) while the script read on.
       if (directive.truncated) result.truncated = directive.truncated
       results.push(result)

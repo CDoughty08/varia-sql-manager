@@ -207,6 +207,18 @@ describe('stacked result sets', () => {
     expect(value('.rg-cn', 'unicode-bidi')).toBe('isolate')
     expect(value('.rg-ct', 'unicode-bidi')).toBe('isolate')
   })
+  it('let only a name the query gave give way: a named tab is capped and a named caption shrinks, unnamed ones as before', () => {
+    const rules = stylesheetRules()
+    const declared = (selector: string, property: string) => rules.filter(rule => rule.selector.split(',').map(part => part.trim()).includes(selector) && !rule.at.length)
+      .flatMap(rule => rule.declarations).filter(item => item.property === property).at(-1)?.value
+    expect(declared('.rt-tab', 'max-width')).toBeUndefined()
+    expect(declared('.rt-tab[data-named]', 'max-width')).toBe('var(--varia-resultTab)')
+    expect(declared('.rs-caption-toggle', 'flex-shrink')).toBe('0')
+    expect(declared('.rs-caption-toggle', 'max-width')).toBeUndefined()
+    expect(declared('.rs-caption-toggle[data-named]', 'flex')).toBe('0 1 auto')
+    expect(declared('.rs-caption-toggle[data-named]', 'min-width')).toBe('0')
+    expect(declared('.rs-caption-toggle[data-named]', 'max-width')).toBe('60%')
+  })
   it('keep the results\' focus rings visible: inset where controls touch a clipping edge, and apart from the selected view under forced colours', () => {
     const rules = stylesheetRules()
     const declared = (selector: string, property: string, forced = false) => rules.filter(rule => rule.selector.split(',').map(part => part.trim()).includes(selector) && (forced ? rule.at.includes('@media (forced-colors: active)') : !rule.at.length))

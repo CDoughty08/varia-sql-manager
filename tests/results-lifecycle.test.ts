@@ -284,6 +284,18 @@ describe('closing one result', () => {
     expect(client.handle(7)!.getSnapshot().state).toBe('complete')
   })
 
+  it("labels a named SQL-returned plan set's retained plans with its name, and an unnamed one as before", async () => {
+    const retainedPlans = { capture: vi.fn(async () => {}) } as unknown as RetainedPlansService
+    const { results } = fixture({ retainedPlans })
+    results.begin('t1', 'q1')
+    await results.finish('t1', 'q1', {
+      summary: summaryOf([descriptor(1, { columns: [plan], kind: 'executionPlan', name: 'Plans' }), descriptor(2, { index: 1, columns: [plan], kind: 'executionPlan' })]),
+      planContext: {} as never
+    })
+    const sources = vi.mocked(retainedPlans.capture).mock.calls[0][2] as readonly { label: string }[]
+    expect(sources.map(source => source.label)).toEqual(['SQL-returned plan 1 (Plans), row 1', 'SQL-returned plan 1 (Plans), row 2', 'SQL-returned plan 2, row 1', 'SQL-returned plan 2, row 2'])
+  })
+
   it('releases on the next run only what was not closed already, and takes highlights of a closed result into that run', async () => {
     const { results, highlights, run, tab, releases, client } = fixture()
     const keys = run(3)

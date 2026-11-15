@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, filteredColumns, groupOf, pivotOutOfDate, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareDetails, compareSources, compareText } from '../results/CompareService'
@@ -127,7 +127,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     results.viewShown(tabId, key, sorted)
     const view = create({
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
-      entry: key, resultNumber: entry.number, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
+      entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
+import { planSourceLabel } from '../src/renderer/src/plans/ResultPlans'
+import type { ResultSetEntry } from '../src/renderer/src/results/ResultsService'
+import { comparedNames, distinctName, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
 const filter = { filter: { op: 'notNull', column: 0 }, label: 'id is not NULL' }
@@ -23,5 +26,42 @@ describe('a result caption\'s row count', () => {
 
   it('drops "so far" once nothing more arrives: a rebuild that failed, or a set lost or released mid-stream', () => {
     for (const state of ['complete', 'lost', 'released']) expect(rowsFact({ rowsAvailable: 100, state }, { applied: [filter], view: view(20, 60, false) })).toBe('20 of 60 rows')
+  })
+})
+
+describe("a result's name and its number", () => {
+  // As ResultsService makes them: an original result the query named carries the name as its label too.
+  const named = { number: 2, label: 'Open orders', descriptor: { name: 'Open orders' } }
+  const unnamed = { number: 2, descriptor: {} }
+  const pivot = { number: 4, label: 'Pivot of Open orders', descriptor: {} }
+  it('names a named result by its name and keeps its number apart', () => {
+    expect([entryName(named), entryNumber(named), entrySecondary(named), resultTitle(named), queryName(named)]).toEqual(['Open orders', 'Result 2', 'Result 2', 'Open orders, Result 2', 'Open orders'])
+  })
+  it('names an unnamed result by its number, exactly as before names', () => {
+    expect([entryName(unnamed), entryNumber(unnamed), entrySecondary(unnamed), resultTitle(unnamed), queryName(unnamed)]).toEqual(['Result 2', 'Result 2', undefined, 'Result 2', undefined])
+  })
+  it('names a Pivot by its frozen title, with no number beside it, and titles it by its own number where results are numbered', () => {
+    expect([entryName(pivot), entrySecondary(pivot), resultTitle(pivot)]).toEqual(['Pivot of Open orders', undefined, 'Result 4'])
+  })
+  it('lists a named result with its number and anything else by its name alone', () => {
+    expect([numberedName(named), numberedName(unnamed), numberedName(pivot)]).toEqual(['Open orders · Result 2', 'Result 2', 'Pivot of Open orders'])
+  })
+  it('titles a comparison of two results of one name with their numbers, so it says which way round it is', () => {
+    const other = { number: 5, label: 'Open orders', descriptor: { name: 'Open orders' } }
+    expect(comparedNames(named, other)).toEqual(['Open orders (Result 2)', 'Open orders (Result 5)'])
+    expect(comparedNames(named, pivot)).toEqual(['Open orders', 'Pivot of Open orders'])
+    expect(comparedNames(unnamed, { number: 3, descriptor: {} })).toEqual(['Result 2', 'Result 3'])
+    // A marker that names another result like a number numbers that one; the unnamed result keeps its words.
+    const like = { number: 1, label: 'Result 2', descriptor: { name: 'Result 2' } }
+    expect([distinctName(unnamed, [like, unnamed]), distinctName(like, [like, unnamed])]).toEqual(['Result 2', 'Result 2 (Result 1)'])
+  })
+})
+
+describe("a SQL-returned plan's name in the plan viewer", () => {
+  it('names a named plan set by its name with its number, an unnamed one and a captured plan as before', () => {
+    const descriptor = (name?: string) => ({ ...name ? { name } : {} }) as ResultSetEntry['descriptor']
+    expect(planSourceLabel({ number: 2, descriptor: descriptor('Plans') }, 0)).toBe('Plans, Result 2, plan 1')
+    expect(planSourceLabel({ number: 2, descriptor: descriptor() }, 1)).toBe('Result 2, plan 2')
+    expect(planSourceLabel({ number: 3, capturedPlan: true, descriptor: descriptor('Plans') }, 0, 'Batch 2')).toBe('Plan 3 · Batch 2')
   })
 })

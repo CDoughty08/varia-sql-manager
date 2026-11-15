@@ -11,7 +11,7 @@ import { join, resolve } from 'node:path'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  anyResultGrid, backendReady, nameCut, namedResultGrid, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
   resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
@@ -286,6 +286,47 @@ try {
   await expect(resultTabs(page)).toHaveCount(1)
   await expect(resultGrid(page, 'Result 30')).toBeFocused()
   console.log('Grouped results checks: switching the layout from a result far down the stack keeps its grid focused; Next Result and Ctrl+9 scroll the stack to the result and focus its grid.')
+
+  // 6b. Named results as tabs (a #Name marker; the fake backend names sets as the real one binds them): a named result's
+  // tab shows its name with its whole name and number in the tooltip, an unnamed one reads as before, a long name ends in
+  // an ellipsis at the tab's widest, two results of one name are told apart by their numbers in Go to Result and in the
+  // Compare picker, and the grid's accessible name starts with the name, then the number.
+  const longName = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region'
+  await run(`-- varia-fake: sets=N1*5,N1*5,N1*5,N1*5 names=Totals,,Totals,${encodeURIComponent(longName)}`)
+  const named = resultTabs(page).getByRole('tab')
+  await expect(named).toHaveText(['Totals', 'Result 2', 'Totals', longName])
+  await expect(named.nth(0)).toHaveAttribute('title', 'Totals · Result 1')
+  // Two tabs of one name have accessible names told apart by their numbers.
+  await expect(resultTab(page, 'Totals, Result 1')).toHaveCount(1)
+  await expect(resultTab(page, 'Totals, Result 3')).toHaveCount(1)
+  await expect(named.nth(1)).not.toHaveAttribute('title', /./)
+  await expect(named.nth(3)).toHaveAttribute('title', `${longName} · Result 4`)
+  expect(await nameCut(named.nth(3))).toBe(true)
+  expect(await nameCut(named.nth(0))).toBe(false)
+  await expect(namedResultGrid(page, 'Totals', 1)).toHaveAttribute('aria-label', /^Totals, Result 1 of 4, 5 rows, /)
+  await named.nth(3).click()
+  await expect(namedResultGrid(page, longName, 4)).toBeVisible()
+  await named.nth(1).click()
+  await expect(resultGrid(page, 'Result 2')).toHaveAttribute('aria-label', /^Result 2 of 4, 5 rows, /)
+  // Go to Result… lists both of one name with their numbers and filters on the name and on the number.
+  await textbox().focus()
+  await menu('output.goToResult')
+  await resultsPickerFilter(page).fill('totals')
+  await expect(resultsPicker(page).getByRole('option')).toHaveCount(2)
+  await expect(resultsPickerOption(page, 'Totals, Result 3, Table')).toBeVisible()
+  await resultsPickerFilter(page).fill('result 4')
+  await expect(resultsPicker(page).getByRole('option')).toHaveText([new RegExp(`^${longName}Result 4Table$`)])
+  await page.keyboard.press('Escape')
+  // The Compare picker on Result 2 offers each other Table by its name, with its number beside it.
+  await gridCell(resultGrid(page, 'Result 2'), 0, 0).click({ button: 'right' })
+  await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Compare…', exact: true }).click()
+  const comparePicker = page.getByRole('dialog', { name: 'Compare', exact: true })
+  await expect(comparePicker.getByRole('radio')).toHaveCount(3)
+  await expect(comparePicker.getByRole('radio', { name: /^Totals\s*Result 1\b/ })).toHaveCount(1)
+  await expect(comparePicker.getByRole('radio', { name: /^Totals\s*Result 3\b/ })).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(comparePicker).toHaveCount(0)
+  console.log('Grouped results checks: named results show their names on their tabs (a long one cut short, its whole name in the tooltip), unnamed ones their numbers, and two of one name are told apart by number in Go to Result and the Compare picker.')
 
   // 7. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1')

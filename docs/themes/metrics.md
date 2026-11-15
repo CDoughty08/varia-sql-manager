@@ -85,6 +85,12 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | `--varia-progress` | 4 | A progress bar's track and fill, as under a running step in a StepList. |
 | `--varia-progressThin` | 2 | The bar along the top of a results grid while an operation over its result runs, and the ring on its column's sort button. |
 
+## Widths
+
+| Token | px | Use |
+| --- | --- | --- |
+| `--varia-resultTab` | 240 | A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound. |
+
 ## Bars and rows
 
 Compact is the default and the only density `:root` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.

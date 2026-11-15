@@ -29,7 +29,7 @@ const made = (index: number): DiffAnswer => ({ descriptor: descriptor(900 + inde
 const drawnFixtures = new Set<() => void>()
 afterEach(() => { for (const unmount of drawnFixtures) unmount(); drawnFixtures.clear() })
 
-function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; open?: number } = {}) {
+function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; open?: number; names?: Record<number, string> } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
@@ -39,7 +39,7 @@ function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; 
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
   const compare = new CompareService(results, { jobs: new DerivedJobs({ timers: timers.timers }) })
   results.begin('t1', 'q1')
-  const values = Array.from({ length: o.count ?? 2 }, (_, index) => descriptor(index + 1, { index, ...o.columns?.[index] ? { columns: o.columns[index] } : {} }))
+  const values = Array.from({ length: o.count ?? 2 }, (_, index) => descriptor(index + 1, { index, ...o.columns?.[index] ? { columns: o.columns[index] } : {}, ...o.names?.[index] ? { name: o.names[index] } : {} }))
   for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })
   void results.finish('t1', 'q1', { summary: summaryOf(values) })
   const keys = results.getSnapshot().t1.sets.map(set => set.key)
@@ -471,5 +471,63 @@ describe('Compare popover placement', () => {
   })
   it('stays inside a window narrower than the card', () => {
     expect(placePopover({ ...base, width: 250, cardWidth: 234, anchor: box(200, 10, 224, 34), trigger: true }).left).toBe(8)
+  })
+})
+
+describe('Compare popover with named results', () => {
+  it('numbers a result in the columns not compared when another result of the run has its name', () => {
+    const view = fixture({ count: 3, open: 2, names: { 0: 'Totals', 1: 'Totals', 2: 'Orders' }, columns: { 0: [column('Id'), column('Name')], 1: [column('Id'), column('Price')], 2: [column('Id'), column('Name')] } })
+    expect(view.popover()!.querySelector('section')!.textContent).toContain('only in Totals (Result 2)')
+    view.unmount()
+  })
+  it("adds no tooltip to an unnamed result's heading or sides", () => {
+    const view = fixture()
+    expect(view.popover()!.querySelector('h2')!.hasAttribute('title')).toBe(false)
+    expect([...view.popover()!.querySelectorAll('.compare-side b')].map(side => side.hasAttribute('title'))).toEqual([false, false])
+    view.unmount()
+  })
+  it('lists each target by its name with its number as secondary text, so two of one name are told apart', () => {
+    const view = fixture({ count: 4, open: 3, names: { 0: 'Totals', 2: 'Totals' } })
+    expect(view.popover()?.querySelector('h2')?.textContent).toBe('Compare Result 4 with')
+    const targets = [...view.popover()!.querySelectorAll<HTMLLabelElement>('.compare-target')]
+    expect(targets.map(target => target.querySelector('.compare-target-name')?.textContent)).toEqual(['Totals', 'Result 2', 'Totals'])
+    expect(targets.map(target => target.querySelector('.compare-target-number')?.textContent ?? null)).toEqual(['Result 1', null, 'Result 3'])
+    expect(targets[0].querySelector('.compare-target-name')?.getAttribute('title')).toBe('Totals · Result 1')
+    expect(targets[1].querySelector('.compare-target-name')?.getAttribute('title')).toBeNull()
+    view.unmount()
+  })
+  it('titles a comparison of a named result by its name, frozen when made', async () => {
+    const view = fixture({ names: { 0: 'Open orders' } })
+    expect(view.popover()?.querySelector('[aria-label="Old side"] b')?.textContent).toBe('Open orders · Result 1')
+    vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))
+    await act(async () => { view.button('Compare')!.click() })
+    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve() })
+    const diff = view.results.getSnapshot().t1.sets.at(-1)!
+    expect(diff.label).toBe('Differences: Open orders → Result 2')
+    const info = view.compare.getSnapshot().info.get(`${diff.descriptor.generation}:${diff.descriptor.resultId}`)
+    expect(info && [info.leftName, info.rightName]).toEqual(['Open orders', 'Result 2'])
+    view.unmount()
+  })
+  it("says in the Compare button the title the comparison will have, numbered when another result shares a side's name", () => {
+    const view = fixture({ count: 3, open: 1, names: { 0: 'Totals', 1: 'Orders', 2: 'Totals' } })
+    expect(view.button('Compare')!.title).toBe('Opens “Differences: Totals (Result 1) → Orders”, a copy that stays when its inputs close')
+    view.unmount()
+  })
+  it('titles a comparison of two results of one name with their numbers, so it says which way round it is', async () => {
+    const view = fixture({ names: { 0: 'Totals', 1: 'Totals' } })
+    // The sides carry their numbers in full in their tooltips, as a long name cuts the text short.
+    expect([...view.popover()!.querySelectorAll('.compare-side b')].map(side => side.getAttribute('title'))).toEqual(['Totals · Result 1', 'Totals · Result 2'])
+    // The heading says which of the two is compared.
+    expect(view.popover()?.querySelector('h2')?.textContent).toMatch(/^Compare Totals \(Result [12]\)/)
+    vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))
+    await act(async () => { view.button('Compare')!.click() })
+    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve() })
+    const diff = view.results.getSnapshot().t1.sets.at(-1)!
+    expect(diff.label).toBe('Differences: Totals (Result 1) → Totals (Result 2)')
+    const info = view.compare.getSnapshot().info.get(`${diff.descriptor.generation}:${diff.descriptor.resultId}`)
+    expect(info && [info.leftName, info.rightName]).toEqual(['Totals (Result 1)', 'Totals (Result 2)'])
+    // Its sources' names, which its strip's links and "(closed)" read, carry the numbers too.
+    expect(view.results.getSnapshot().t1.comparisons.at(-1)!.sources.map(source => source.name)).toEqual(['Totals (Result 1)', 'Totals (Result 2)'])
+    view.unmount()
   })
 })

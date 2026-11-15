@@ -23,10 +23,10 @@ function fixture() {
   const compare = new CompareService(results)
   /** Runs a query of `count` complete sets (results 1 to count); `finish: false` leaves it running. */
   let next = 1
-  const run = (count: number, o: { finish?: boolean; queryId?: string } = {}) => {
+  const run = (count: number, o: { finish?: boolean; queryId?: string; names?: Record<number, string> } = {}) => {
     const queryId = o.queryId ?? 'q1'
     results.begin('t1', queryId)
-    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index }))
+    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, ...o.names?.[index] ? { name: o.names[index] } : {} }))
     for (const value of values) client.emit(queryId, { type: 'resultSet.opened', descriptor: value })
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
@@ -54,6 +54,17 @@ describe('result diffs', () => {
     expect(stopped?.aborted).toBe(true)
     expect(results.operations.getSnapshot().t1).toMatchObject({ items: [], notice: 'Comparison cancelled.' })
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
+  })
+  it('names a comparison of two results of one name in the toolbar with their numbers', async () => {
+    const { results, compare, run, timers } = fixture()
+    const [first] = run(2, { names: { 0: 'Totals', 1: 'Totals' } })
+    vi.mocked(first.diff).mockImplementationOnce((_right, o) => new Promise((_resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled')))))
+    const done = compare.compare('t1', keyAt(results, 't1', 1))
+    await settle()
+    timers.advance(300)
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'compare', target: 'Totals (Result 1) → Totals (Result 2)' }])
+    results.operations.cancel('t1')
+    await done
   })
   it('compares a set with the one before it, appends the diff as the run\'s last set, and says what was compared', async () => {
     const { results, compare, run } = fixture()
@@ -93,6 +104,11 @@ describe('result diffs', () => {
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
     expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
     expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
+    // A named result is called by its name, frozen when compared; one compared before names reads by its number.
+    expect(compareText({ ...info, leftName: 'Open orders', leftOnly: ['Old'], rightOnly: ['New'] })).toBe('Open orders → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Not compared: Old (Open orders), New (Result 3). Filters and sorts on the inputs were not applied.')
+    expect(compareText({ ...info, leftName: 'Open orders' }, [{ name: 'Open orders' }, { name: 'Result 3', entry: three.key }])).toMatch(/^Open orders \(closed\) → Result 3, /)
+    const { leftName: _left, rightName: _right, ...before } = info
+    expect(compareText(before)).toMatch(/^Result 2 → Result 3, /)
   })
 
   it('compares nothing while the query runs, says why a comparison failed, and keeps only diffs a run still shows', async () => {

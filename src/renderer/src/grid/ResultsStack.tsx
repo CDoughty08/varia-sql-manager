@@ -4,7 +4,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -102,7 +102,7 @@ export function FilterChips({ tabId, entry, name, sort, refocus }: { tabId: stri
  * stays on it as Update turns into Cancel and back; when it goes (built, and up to date) the focus goes to `refocus`,
  * unless the user had put it somewhere else. The status line is mounted with it, so a screen reader hears it start.
  */
-export function PivotMark({ tabId, entry, name, ordinal, stale, running, refocus }: { tabId: string; entry: ResultSetEntry; name: string; ordinal: number; stale: boolean; running: boolean; refocus(): void }) {
+export function PivotMark({ tabId, entry, name, ordinal, source, stale, running, refocus }: { tabId: string; entry: ResultSetEntry; name: string; ordinal: number; source: string; stale: boolean; running: boolean; refocus(): void }) {
   const { commands, results, pivot } = useWorkbench()
   const rebuilding = useSyncExternalStore(pivot.subscribe, () => pivot.building(tabId, ordinal))
   const updatable = useSyncExternalStore(results.subscribe, () => stale && pivot.canPivot(tabId, entry.key))
@@ -119,11 +119,11 @@ export function PivotMark({ tabId, entry, name, ordinal, stale, running, refocus
   }
   return <>
     <span className="rs-caption-state" role="status">{rebuilding ? 'Building again…' : ''}</span>
-    {action === 'update' && <span className="rs-caption-stale" title={`Result ${ordinal}'s filters changed after this Pivot was built`}><Icon name="warning" />Out of date</span>}
+    {action === 'update' && <span className="rs-caption-stale" title={`${source}'s filters changed after this Pivot was built`}><Icon name="warning" />Out of date</span>}
     {action && <button ref={actionRef} type="button" className="rs-caption-action" onFocus={() => { actionFocus.current = true }} onBlur={event => { if (event.relatedTarget) actionFocus.current = false }}
       {...action === 'cancel'
         ? { 'aria-label': `Cancel building ${name} again`, title: `Stop building ${name} again; it keeps its last build`, onClick: () => pivot.cancel(tabId, ordinal) }
-        : { 'aria-label': `Update ${name}`, title: `Build ${name} again from Result ${ordinal} as it is filtered now`, disabled: !updatable || running, onClick: update }}>
+        : { 'aria-label': `Update ${name}`, title: `Build ${name} again from ${source} as it is filtered now`, disabled: !updatable || running, onClick: update }}>
       {action === 'cancel' ? 'Cancel' : <><Icon name="refresh" />Update</>}
     </button>}
   </>
@@ -135,16 +135,23 @@ export function PivotMark({ tabId, entry, name, ordinal, stale, running, refocus
  * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot); a Pivot's or
  * a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, pivotOf, stale, onToggle, onClose }: {
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, named, pivotOf, pivotSource, stale, onToggle, onClose }: {
   tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string
   /** The group number of the Pivot this caption heads, and whether it is out of date (its Table's filters changed). */
   pivotOf?: number; stale?: boolean
+  /** The name of the Table that Pivot was built from ("Result 2", "Open orders"). */
+  pivotSource?: string
+  /** It shows a name the query gave (`slotNamed`): only then may its name give way to an ellipsis. */
+  named?: boolean
   onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
 }) {
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry)
-  const facts = [rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry), number = entrySecondary(entry)
+  // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
+  const spoken = number ? `${name}, ${number}` : name
+  // A named result's number leads its facts, so two results of one name are told apart.
+  const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
   const held = snapshot.state !== 'lost' && snapshot.state !== 'released'
@@ -155,17 +162,18 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const toggleRef = useRef<HTMLButtonElement>(null)
   const refocus = useCallback(() => toggleRef.current?.focus(), [])
   return <div className="rs-caption">
-    <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
+    <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} data-named={named || undefined}
+      {...number ? { title: `${name} · ${number}`, 'aria-label': spoken } : named ? { title: name } : {}} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
-    <FilterChips tabId={tabId} entry={entry} name={name} sort={sort} refocus={refocus} />
+    <FilterChips tabId={tabId} entry={entry} name={spoken} sort={sort} refocus={refocus} />
     {batch && <span className="rs-caption-batch">{batch}</span>}
-    {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} stale={!!stale} running={running} refocus={refocus} />}
-    {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
+    {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} source={pivotSource ?? `Result ${pivotOf}`} stale={!!stale} running={running} refocus={refocus} />}
+    {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${spoken} As…`} title={`Save ${spoken} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
-    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`}
+    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${spoken}`} title={running ? `Close ${spoken} (unavailable while the query runs)` : `Close ${spoken}${others}`}
       disabled={running} onClick={() => onClose(entry.key)}><Icon name="close" /></button>}
   </div>
 })
@@ -189,14 +197,14 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const sets = tab.sets, count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
   const slots = useMemo(() => {
-    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string; stale?: boolean }>()
+    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string; stale?: boolean; source?: string; named: boolean }>()
     for (const group of tab.groups) {
       // What a Table's close takes with it, for its button's tooltip.
-      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others: group.pivot ? ' and its Pivot' : '' })
+      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others: group.pivot ? ' and its Pivot' : '', named: slotNamed(group.table) })
       // A Pivot whose Table's filters changed since it was built is marked on its caption, with Update.
-      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '', ...pivotOutOfDate(tab, group) ? { stale: true } : {} })
+      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '', source: distinctName(group.table.entry, tab.sets), named: slotNamed(group.pivot), ...pivotOutOfDate(tab, group) ? { stale: true } : {} })
     }
-    for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '' })
+    for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '', named: slotNamed(slot) })
     return map
   }, [tab.groups, tab.comparisons, tab.sorts])
   const stackRef = useRef<HTMLDivElement>(null)
@@ -455,7 +463,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     // A bare run's one grid stands alone, unless it has filters to show and remove.
     const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
       {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={tab.summary?.budget} sort={sort}
         view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}
     </div>)
@@ -465,10 +473,10 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       if (!splitterMoves(count, index, collapsed)) { items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" data-inert="" style={{ top }} />); continue }
       // The value is the upper grid's height, which the splitter moves between the two grids' floors.
       const height = Math.round(layout.heights[index])
-      // Named by the number of the result above it, as that result's grid is.
-      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize Result ${entry.number}`}
+      // Named by the result above it, by its name or else its number, as that result's grid is.
+      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${resultTitle(entry)}`}
         aria-valuenow={height} aria-valuemin={Math.round(floors[index])} aria-valuemax={Math.round(Math.max(floors[index], layout.heights[index] + layout.heights[index + 1] - floors[index + 1]))}
-        aria-valuetext={`Result ${entry.number} height ${height} pixels`} tabIndex={0} style={{ top }}
+        aria-valuetext={`${resultTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
         onPointerDown={event => splitterDown(index, event)} onPointerMove={splitterMove} onPointerUp={splitterUp} onLostPointerCapture={() => { drag.current = undefined }}
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }

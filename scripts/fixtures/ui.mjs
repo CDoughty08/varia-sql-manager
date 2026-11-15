@@ -101,6 +101,10 @@ export const part = {
   resultItem: '.rs-item',
   /** A set's caption above its grid: Collapse and its name, its rows and columns, its batch, and Save Results As. */
   resultCaption: '.rs-caption',
+  /** The name in a result tab or a caption's Collapse button, which a long name ends in an ellipsis. */
+  resultName: '.rt-name, .rs-caption-name',
+  /** A caption's facts: rows and columns, after a named result's number. */
+  resultFacts: '.rs-caption-facts',
   resultStack: '.rs-stack',
   resultTabs: '.rt-root',
   /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
@@ -609,6 +613,29 @@ export const resultGridSelector = (name = 'Result 1', view) => {
   if (!resultViews.includes(view)) throw new Error(`"${view}" is not a view of a result; use one of ${resultViews.join(', ')}.`)
   return `${gridPart.root}[data-result-group="${name.slice('Result '.length)}"][data-result-view="${view}"]`
 }
+/**
+ * CSS for the results grid of the result the query named so (a `#Name` marker): the grid whose accessible name starts with
+ * the name and then its number ("Open orders, Result 2 of 3, 5 rows, …"). With `number`, only the result numbered so,
+ * which tells two results of one name apart. An unnamed result is found by its number (`resultGridSelector`).
+ */
+export const namedResultGridSelector = (name, number) => {
+  if (typeof name !== 'string' || !name) throw new Error(`namedResultGridSelector takes a result's name, not ${JSON.stringify(name)}.`)
+  if (number !== undefined && !Number.isInteger(number)) throw new Error(`"${number}" is not a result's number.`)
+  const text = `${name}, Result ${number === undefined ? '' : `${number} of `}`.replace(/["\\]/g, '\\$&')
+  return `${gridPart.root}[aria-label^="${text}"]`
+}
+/** A results grid by the name the query gave its result (Tabs or Stacked alike), and by its number when two share it. */
+export const namedResultGrid = (scope, name, number) => scope.locator(namedResultGridSelector(name, number))
+/** Whether a result tab's or a caption's name (the tab or the Collapse button) is cut short by its ellipsis. */
+export const nameCut = button => button.locator(part.resultName).evaluate(name => name.scrollWidth > name.clientWidth + 1)
+/** Whether a caption's contents fit it (a long name gives way rather than pushing its facts and buttons out), and whether
+ *  its name ends in an ellipsis when it has to give way. */
+export const captionFits = toggle => toggle.locator('xpath=..').evaluate((caption, selector) => {
+  const name = caption.querySelector(selector), style = getComputedStyle(name)
+  return { fits: caption.scrollWidth <= caption.clientWidth + 1, ellipsis: style.textOverflow === 'ellipsis' && style.overflow === 'hidden' }
+}, part.resultName)
+/** A caption's facts by the Collapse button that names it ("Result 1 · 20 rows · 2 columns" for a named result). */
+export const resultFacts = toggle => toggle.locator('xpath=..').locator(part.resultFacts)
 /** The views a group can show: its Table (`plan` when the result is a SQL-returned plan set) and its Pivot. */
 const resultViews = ['table', 'pivot', 'plan']
 /** Every comparison's grid, in the order drawn (after the groups). */
@@ -660,7 +687,8 @@ export const messagesStrip = page => outputPane(page).getByRole('button', { name
 /** The Execution plan view's unified graph and its accessible operator outline. */
 export const planViewer = page => page.getByRole('region', { name: 'Execution plan viewer', exact: true })
 export const planCanvas = page => planViewer(page).getByRole('region', { name: 'Query plan canvas', exact: true })
-export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
+/** The stack's splitters, each named by the result above it ("Resize Result 2", "Resize Open orders"). */
+export const resultSplitters = page => outputPane(page).getByRole('separator', { name: /^Resize / })
 
 // Results as tabs (queryResults.grid.layout = tabs): a row of result and comparison tabs, the selected result's view tabs.
 
@@ -668,7 +696,7 @@ export const resultSplitters = page => page.getByRole('separator', { name: /^Res
 export const resultTabs = page => outputPane(page).getByRole('tablist', { name: 'Results and comparisons', exact: true })
 export const resultTab = (page, name) => resultTabs(page).getByRole('tab', { name, exact: true })
 /** The selected result's view tabs ("Views of Result 2"), and one by its name: Table, Plan set, or "Pivot of Result 2". */
-export const viewTabs = page => outputPane(page).getByRole('tablist', { name: /^Views of Result \d+$/ })
+export const viewTabs = page => outputPane(page).getByRole('tablist', { name: /^Views of / })
 export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, exact: true })
 /** A tab's close button ("Close Result 2", "Close Pivot of Result 2"): a result's closes its Table and Pivot. */
 export const tabClose = (page, name) => outputPane(page).locator(part.resultTabs).getByRole('button', { name: 'Close ' + name, exact: true })

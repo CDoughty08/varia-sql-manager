@@ -31,10 +31,10 @@ function fixture(o: { frames?: boolean; jobs?: DerivedJobs; follow?: PivotFollow
   const flush = () => { for (const frame of queued.splice(0)) frame() }
   let next = 1
   /** Runs a query of `count` complete sets of `columns`; `finish: false` leaves it running. */
-  const run = (count: number, o: { finish?: boolean; queryId?: string; columns?: ResultColumn[] } = {}) => {
+  const run = (count: number, o: { finish?: boolean; queryId?: string; columns?: ResultColumn[]; names?: Record<number, string> } = {}) => {
     const queryId = o.queryId ?? 'q1'
     results.begin('t1', queryId)
-    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns: o.columns ?? columns }))
+    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns: o.columns ?? columns, ...o.names?.[index] ? { name: o.names[index] } : {} }))
     for (const value of values) client.emit(queryId, { type: 'resultSet.opened', descriptor: value })
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
@@ -216,6 +216,51 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
     pivot.open('t1', sets[2].key)
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: table, draft: { rows: [0] } })
+  })
+
+  it("names the builder's source, the Pivot and what it says by a named Table's name, and an unnamed one's by its number", async () => {
+    const { results, pivot, run } = fixture()
+    run(2, { names: { 0: 'Open orders' } })
+    const named = keyAt(results, 't1', 0), unnamed = keyAt(results, 't1', 1)
+    pivot.open('t1', unnamed)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: unnamed, sourceName: 'Result 2' })
+    pivot.open('t1', named)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: named, sourceName: 'Open orders' })
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    await settle()
+    const made = results.getSnapshot().t1.sets[1]
+    // The title is frozen when made, from the Table's name then.
+    expect(made.label).toBe('Pivot of Open orders')
+    expect(pivot.getSnapshot().info.get(setKey(made.descriptor))).toMatchObject({ sourceLabel: 'Open orders' })
+    expect(results.getSnapshot().t1.groups[0].pivot!.sources).toEqual([expect.objectContaining({ name: 'Open orders', number: 1 })])
+  })
+
+  it('names the build of one of two results of one name with its number in the toolbar', async () => {
+    const { results, pivot, run } = fixture()
+    const [, second] = run(2, { names: { 0: 'Totals', 1: 'Totals' } })
+    pivot.open('t1', keyAt(results, 't1', 1))
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    vi.mocked(second.pivot).mockImplementationOnce((_spec, o) => new Promise((_resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled')))))
+    const built = pivot.run('t1')
+    await settle()
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'pivot', target: 'Totals (Result 2)' }])
+    pivot.cancel('t1')
+    await built
+    await settle()
+  })
+  it('names a Pivot of one of two results of one name with its number, so the two Pivots are told apart', async () => {
+    const { results, pivot, run } = fixture()
+    run(2, { names: { 0: 'Totals', 1: 'Totals' } })
+    const second = keyAt(results, 't1', 1)
+    pivot.open('t1', second)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ sourceName: 'Totals (Result 2)' })
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    await settle()
+    const made = results.getSnapshot().t1.sets.at(-1)!
+    expect(made.label).toBe('Pivot of Totals (Result 2)')
+    expect(results.getSnapshot().t1.groups[1].pivot!.sources).toEqual([expect.objectContaining({ name: 'Totals (Result 2)', number: 2 })])
   })
 
   it('makes no pivot of a Pivot, a comparison or a plan set, and none in a bare run', async () => {

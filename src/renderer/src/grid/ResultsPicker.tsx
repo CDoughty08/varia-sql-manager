@@ -175,7 +175,7 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
               // The filter box keeps the focus, so the keys still work after a press.
               onPointerDown={event => event.preventDefault()} onClick={() => onPick(row.key)}>
               {row.kind === 'plan' && <Icon name="execution-plan" />}{row.kind === 'comparison' && <Icon name="git-compare" />}
-              <span className="rt-picker-name">{row.name}</span>{row.detail && <small>{row.detail}</small>}
+              <span className="rt-picker-name">{row.name}</span>{row.number && <small className="rt-picker-number">{row.number}</small>}{row.detail && <small>{row.detail}</small>}
             </div>
           })}
         </div>}

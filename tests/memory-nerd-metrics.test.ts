@@ -6,7 +6,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import MemoryIndicator from '../src/renderer/src/results/MemoryIndicator'
 import { MemoryUsageService } from '../src/renderer/src/results/memory'
-import { nerdMetrics, resultNames } from '../src/renderer/src/results/memory-details'
+import { labelText, nerdMetrics, resultNames } from '../src/renderer/src/results/memory-details'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { SnapshotStore } from '../src/renderer/src/core/store'
@@ -40,7 +40,7 @@ const packed: ResultMemoryDetail = {
   codec: { name: 'zstd', level: 2, pagesPacked: 15420, pagesUnpacked: 2000, packInputBytes: 342 * MB, packMicroseconds: 1_000_000, unpackOutputBytes: 1600 * MB, unpackMicroseconds: 1_000_000, cacheHits: 968, cacheLookups: 1000, lastUnpackMicroseconds: 380_000 },
   heap: { committedBytes: 2620 * MB, freeBytes: 210 * MB }
 }
-const named = (entry: { resultId: number }) => `Query · Result ${entry.resultId}`
+const named = (entry: { resultId: number }) => ({ tab: 'Query', result: `Result ${entry.resultId}` })
 
 describe('Memory panel Nerd metrics', () => {
   it('shows honest figures while nothing is compressed: no ratio, nothing given back, raw pages only, dashed codec timings', () => {
@@ -87,8 +87,12 @@ describe('Memory panel Nerd metrics', () => {
   it('names results by their query tab and Results caption in the generation the figures came from', () => {
     const set = (generation: number, resultId: number, number: number, label?: string) => ({ descriptor: { generation, resultId }, number, ...label ? { label } : {} })
     const name = resultNames({ a: { sets: [set(2, 7, 1), set(2, 8, 2, 'Pivot of Result 1'), set(1, 9, 3)] } }, id => id === 'a' ? 'Query 3' : undefined, 2)
-    expect([7, 8, 9].map(resultId => name({ resultId, logicalBytes: 1, storedBytes: 1, state: 'raw' }))).toEqual(['Query 3 · Result 1', 'Query 3 · Pivot of Result 1', 'Unlisted result'])
-    expect(name({ resultId: 9, logicalBytes: 1, storedBytes: 1, state: 'raw', live: true })).toBe('Live view table')
+    expect([7, 8, 9].map(resultId => labelText(name({ resultId, logicalBytes: 1, storedBytes: 1, state: 'raw' })))).toEqual(['Query 3 · Result 1', 'Query 3 · Pivot of Result 1', 'Unlisted result'])
+    expect(name({ resultId: 9, logicalBytes: 1, storedBytes: 1, state: 'raw', live: true })).toEqual({ result: 'Live view table' })
+    // A result the query named (a #Name marker) is listed by that name.
+    const named = resultNames({ a: { sets: [{ descriptor: { generation: 2, resultId: 7, name: 'Open orders' }, number: 1, label: 'Open orders' }] } }, () => 'Query 3', 2)
+    // The query tab's part and the result's are kept apart, so a narrow panel cuts the tab's part first, never the name.
+    expect(named({ resultId: 7, logicalBytes: 1, storedBytes: 1, state: 'raw' })).toEqual({ tab: 'Query 3', result: 'Open orders · Result 1' })
   })
 
   it('accepts the backend\'s event with its detail and bounds it', () => {

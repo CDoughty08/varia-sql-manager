@@ -58,15 +58,16 @@ afterEach(() => {
   else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
 })
 
-/** Results 1 to 3, each with more rows than its share of the pane shows, and a pivot of Result 3 after them. */
-function fixture() {
+/** Results 1 to 3, each with more rows than its share of the pane shows, and a pivot of Result 3 after them. `names`: the
+ *  query's names for Results 1 to 3 (a `#Name` marker), none by default. */
+function fixture(queryNames: readonly (string | undefined)[] = []) {
   const client = fakeResultClient(), events = new EventBus()
   const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
   const results = new ResultsService({ client, api, events, frame: callback => callback() })
   const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
   results.begin('t1', 'q1')
-  void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1, rows), descriptor(2, { index: 1, ...rows }), descriptor(3, { index: 2, ...rows })]) })
-  results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])
+  void results.finish('t1', 'q1', { summary: summaryOf([1, 2, 3].map(id => descriptor(id, { index: id - 1, ...rows, ...queryNames[id - 1] ? { name: queryNames[id - 1] } : {} }))) })
+  results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${queryNames[2] ?? 'Result 3'}`, ['1:3'])
   const keys = results.getSnapshot().t1.sets.map(set => set.key)
   // Search in results, as far as the stack reads it: where the active match is, and whether a grid has shown it yet.
   const listeners = new Set<() => void>()
@@ -101,7 +102,7 @@ function fixture() {
   /** The caption's Collapse button of the entry drawn at a place. */
   const toggle = (place: number) => act(() => { all<HTMLButtonElement>('.rs-caption-toggle')[place].click() })
   const key = (name: string, place: number) => act(() => { all('.rs-splitter')[place].dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true })) })
-  return { results, client, keys, commands, pivot, draw, reveal, names, grids, grid, focused, collapsed, heights, splitters, toggle, key }
+  return { results, client, keys, commands, pivot, draw, reveal, names, grids, grid, focused, collapsed, heights, splitters, toggle, key, all }
 }
 
 describe('the stacked results', () => {
@@ -586,5 +587,53 @@ describe('the stacked results', () => {
     void results.finish('t1', 'q2', { summary: summaryOf([descriptor(11, { index: 0 })]) })
     draw(true)
     expect(container!.querySelector<HTMLButtonElement>('.rs-caption-close')!.disabled).toBe(false)
+  })
+})
+
+describe('named results in the stack', () => {
+  it('caption a named result by its name with its number first among the facts, and an unnamed one as before', () => {
+    const long = 'Open orders awaiting approval by the regional finance team before the end of the quarter'
+    const { draw, names, splitters, all } = fixture([long, undefined, 'Totals'])
+    draw()
+    expect(names()).toEqual([long, 'Result 2', 'Totals', 'Pivot of Totals'])
+    const facts = all('.rs-caption-facts').map(element => element.textContent)
+    expect(facts[0]).toMatch(/^Result 1 · /)
+    expect(facts[1]).not.toMatch(/Result/)
+    expect(facts[2]).toMatch(/^Result 3 · /)
+    expect(facts[3]).not.toMatch(/Result/)
+    // The whole name and the number are in the toggle's tooltip, as the name may end in an ellipsis; a named result's Pivot
+    // has its name there, and an unnamed result none.
+    const toggles = all<HTMLButtonElement>('.rs-caption-toggle')
+    expect(toggles.map(toggle => toggle.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Pivot of Totals'])
+    expect(toggles[0].textContent).toBe(long)
+    // The splitters are named by the result above them, by its name when it has one.
+    expect(splitters()).toEqual([`Resize ${long}, Result 1`, 'Resize Result 2', 'Resize Totals, Result 3'])
+    // The caption's buttons name it in full.
+    expect(all('.rs-caption-close').map(button => button.getAttribute('aria-label'))[0]).toBe(`Close ${long}, Result 1`)
+    // The name reaches the DOM as text, never as markup.
+    expect(all('.rs-caption-name')[0].children).toHaveLength(0)
+  })
+  it('name the splitters of two results of one name with their numbers', () => {
+    const { draw, splitters } = fixture(['Totals', undefined, 'Totals'])
+    draw()
+    expect(splitters()).toEqual(['Resize Totals, Result 1', 'Resize Result 2', 'Resize Totals, Result 3'])
+  })
+  it('read a markup-like name as text', () => {
+    const { draw, names, all } = fixture(['<b>bold</b> & "quoted"'])
+    draw()
+    expect(names()[0]).toBe('<b>bold</b> & "quoted"')
+    expect(all('.rs-caption-name b')).toHaveLength(0)
+  })
+})
+
+describe('named captions in the stack', () => {
+  it('let only a caption that shows a name the query gave shrink, its Pivot\'s too', () => {
+    const { results, draw, all } = fixture(['Open orders'])
+    results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }), 'Pivot of Open orders', ['1:1'])
+    draw()
+    const toggles = all<HTMLButtonElement>('.rs-caption-toggle')
+    expect(toggles.map(toggle => [toggle.textContent, toggle.dataset.named ?? null])).toEqual([
+      ['Open orders', 'true'], ['Pivot of Open orders', 'true'], ['Result 2', null], ['Result 3', null], ['Pivot of Result 3', null]
+    ])
   })
 })

@@ -41,6 +41,15 @@ describe('pivot builder', () => {
     set({ running: false, queued: undefined })
     expect(live.textContent).toBe('')
     expect(container.querySelector('[aria-busy]')).toBeNull()
+    // The source is named as the service names it: with its number when another result of the run has its name.
+    set({ sourceName: 'Totals (Result 1)', pivot: 'e9' })
+    expect(container.querySelector('.pivot-source')!.textContent).toBe('Totals (Result 1)')
+    expect(container.textContent).toContain('Building again replaces Pivot of Totals (Result 1) once the new one is built.')
+    // The Pivot it replaces is named by its own title, fixed when made, though the source has since lost its number.
+    ;(tab.sets as unknown[]).push({ key: 'e9', number: 2, descriptor: { ...descriptor, kind: 'pivot' }, handle, label: 'Pivot of Totals (Result 1)' } as never)
+    set({ sourceName: 'Totals' })
+    expect(container.querySelector('.pivot-source')!.textContent).toBe('Totals')
+    expect(container.textContent).toContain('Building again replaces Pivot of Totals (Result 1) once the new one is built.')
     act(() => { root.unmount() })
   })
 })

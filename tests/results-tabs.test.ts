@@ -17,7 +17,7 @@ import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, 
 import { filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
-import { ResultsService } from '../src/renderer/src/results/ResultsService'
+import { distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { formatCount } from '../src/renderer/src/results/status'
@@ -55,14 +55,17 @@ afterEach(() => {
 })
 
 const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
-/** Results 1 to 3, a Pivot of Result 3 and a comparison of Results 1 and 2. */
-function fixture() {
+/** Results 1 to 3, a Pivot of Result 3 and a comparison of Results 1 and 2. `names`: the query's names for Results 1 to 3
+ *  (a `#Name` marker), none by default. */
+function fixture(queryNames: readonly (string | undefined)[] = []) {
   const client = fakeResultClient(), events = new EventBus()
   const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
   const results = new ResultsService({ client, api, events, frame: callback => callback() })
   results.begin('t1', 'q1')
-  void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1, rows), descriptor(2, { index: 1, ...rows }), descriptor(3, { index: 2, ...rows })]) })
-  const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])!
+  void results.finish('t1', 'q1', { summary: summaryOf([1, 2, 3].map(id => descriptor(id, { index: id - 1, ...rows, ...queryNames[id - 1] ? { name: queryNames[id - 1] } : {} }))) })
+  // Titled as PivotService titles it: by Result 3's name, with its number when another result has that name.
+  const made = results.getSnapshot().t1.sets
+  const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${distinctName(made[2], made)}`, ['1:3'])!
   const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])!
   const [one, two, three] = results.getSnapshot().t1.sets.map(set => set.key)
   const listeners = new Set<() => void>()
@@ -985,5 +988,104 @@ describe('the results tabs commands', () => {
         expect(reveals).toEqual([two, diff])
       } finally { listening.dispose() }
     } finally { f.dispose() }
+  })
+})
+
+describe('named results as tabs', () => {
+  const long = 'Open orders awaiting approval by the regional finance team before the end of the quarter'
+  it('name a named result\'s tab by its name, with its whole name and number in the tooltip, and an unnamed one as before', () => {
+    const { results, draw, resultTabs, names, closer, all } = fixture([long, undefined, 'Totals'])
+    const tab = results.getSnapshot().t1
+    expect(topItems(tab).map(item => [item.name, item.number])).toEqual([[long, 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Differences: Result 1 → Result 2', undefined]])
+    draw()
+    expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Differences: Result 1 → Result 2'])
+    expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Differences: Result 1 → Result 2'])
+    // Only a tab that shows a name the query gave is capped and may end in an ellipsis (the fixture's comparison is made from
+    // Result 1, named here); the rest are laid out as before.
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null)).toEqual(['true', null, 'true', 'true'])
+    // The name is the tab's text alone: the tab's widest is a theme metric and the text ends in an ellipsis there.
+    expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
+    expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
+    // A named result's tab and close button are named with its number too, for a screen reader; others as before.
+    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', null])
+    expect(closer(`${long}, Result 1`)).toBeTruthy()
+    expect(closer('Result 2')).toBeTruthy()
+    // The view tabs keep their words; a Pivot's accessible name uses the Table's name.
+    act(() => { resultTabs()[2].click() })
+    draw()
+    expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals')
+  })
+  it("tell two results of one name apart in their tabs' accessible names and their Pivot's", () => {
+    const { draw, resultTabs, closer, all } = fixture(['Totals', undefined, 'Totals'])
+    draw()
+    expect(resultTabs().slice(0, 3).map(button => button.getAttribute('aria-label'))).toEqual(['Totals, Result 1', null, 'Totals, Result 3'])
+    expect(closer('Totals, Result 1')).toBeTruthy()
+    expect(closer('Totals, Result 3')).toBeTruthy()
+    // On screen, the selected result's facts lead with its number, as a Stacked caption's do; an unnamed one's do not.
+    expect(document.querySelector('.rt-facts')!.textContent).toMatch(/^Result 1 · /)
+    act(() => { resultTabs()[1].click() })
+    draw()
+    expect(document.querySelector('.rt-facts')!.textContent).not.toMatch(/Result/)
+    act(() => { resultTabs()[2].click() })
+    draw()
+    expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals (Result 3)')
+    expect(all('[data-tab-row="view"] [role="tab"]').map(tab => tab.getAttribute('aria-label'))).toEqual(['Table', 'Pivot of Totals (Result 3)'])
+  })
+  it('list named results with their numbers in the picker, filter on both, and keep Go to Result 1 to 8 positional', () => {
+    const { results, one, three } = fixture(['Totals', undefined, 'Totals'])
+    const tab = results.getSnapshot().t1
+    const rows = pickerRows(tab)
+    expect(rows.map(row => [row.name, row.number])).toEqual([['Totals', 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Pivot', undefined], ['Differences: Result 1 → Result 2', undefined]])
+    // Two results of one name are told apart by their numbers, which their accessible names carry.
+    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)', 'Differences: Result 1 → Result 2, Comparison'])
+    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
+    expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
+    expect(filterRows(rows, 'totals 1').map(row => row.label)).toEqual(['Totals, Result 1, Table'])
+    // Go to Result N counts the top row's places, whatever the results are called.
+    expect(jumpResult(tab, 1)).toBe(one)
+    expect(jumpResult(tab, 3)).toBe(three)
+  })
+  it('draw a named result\'s number beside its name in the overflow picker, as text', () => {
+    const { results, draw } = fixture([long])
+    draw()
+    act(() => { pickerRequests.request('t1') })
+    draw()
+    const tab = results.getSnapshot().t1
+    expect(tab.groups[0].table.entry.descriptor.name).toBe(long)
+    const row = document.querySelector<HTMLElement>('.rt-picker [role="option"]')!
+    expect(row.querySelector('.rt-picker-name')?.textContent).toBe(long)
+    expect(row.querySelector('.rt-picker-number')?.textContent).toBe('Result 1')
+    expect(row.getAttribute('aria-label')).toBe(`${long}, Result 1, Table`)
+    // Text, never markup.
+    expect(row.querySelector('.rt-picker-name')!.children).toHaveLength(0)
+  })
+})
+
+describe('a named result\'s Pivot as tabs', () => {
+  it('say the Table\'s name in the Out of date and build-again sentences, and in the Pivot\'s view tab', () => {
+    const { results, one, draw, viewTabs, all } = fixture(['Open orders'])
+    results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Open orders', ['1:1'], {
+      pivot: { recipe: { rows: [0], values: [{ aggregate: 'count' }] }, filters: [{ op: 'keepRows', rows: [1] }], inputRows: 1, truncated: false, incomplete: false, approximate: false }
+    })
+    results.focusEntry('t1', one)
+    draw()
+    const pivotTab = viewTabs().find(tab => tab.getAttribute('aria-label') === 'Pivot of Open orders')!
+    act(() => { pivotTab.click() })
+    draw()
+    expect(all('.rt-views .rs-caption-stale')[0].getAttribute('title')).toBe("Open orders's filters changed after this Pivot was built")
+    expect(all<HTMLButtonElement>('button[aria-label="Update Pivot of Open orders"]')[0].getAttribute('title')).toBe('Build Pivot of Open orders again from Open orders as it is filtered now')
+  })
+})
+
+describe('a comparison of named results as tabs', () => {
+  it('cap a comparison made from a named result, with its whole title in the tooltip, and leave one of unnamed results as it was', () => {
+    const { results, draw, resultTabs, all } = fixture(['Open orders'])
+    const [, two, three] = results.getSnapshot().t1.sets
+    results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', [two.descriptor, three.descriptor].map(set => `${set.generation}:${set.resultId}`))
+    draw()
+    const tabs = resultTabs()
+    expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', null])
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual(['true', null])
   })
 })
