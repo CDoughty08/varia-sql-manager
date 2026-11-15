@@ -65,9 +65,9 @@ function naturalHeight(form: HTMLElement): number {
 
 /** Why a column is not compared, naming each result: only one has it, its name repeats in its own result (the other's
  *  column of that name already paired, whatever the types), or the other's holds another kind of value (text and binary). */
-function unpairedWhy(column: UnpairedColumn, own: ResultSetEntry, other: ResultSetEntry): string {
-  // Each result by its name, with its number when the two share it, so the sentence says which one.
-  const [ownName, otherName] = comparedNames(own, other)
+function unpairedWhy(column: UnpairedColumn, own: ResultSetEntry, other: ResultSetEntry, sets: readonly ResultSetEntry[]): string {
+  // Each result by its name, with its number when another result of the run shares it, so the sentence says which one.
+  const [ownName, otherName] = comparedNames(own, other, sets)
   if (column.otherType === undefined) return `only in ${ownName}`
   if (column.repeat) return `a second column of this name in ${ownName}`
   return `${column.dataType} in ${ownName}, ${column.otherType} in ${otherName}`
@@ -275,7 +275,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           <h3 id={ids + 'unpaired'}>Not compared <span className="compare-info" title={pairingRule} aria-label={pairingRule} role="img"><Icon name="info" /></span></h3>
           <ul>{left.map(([column, own, other]) => <li key={own.key + ':' + column.index}>
             <code>{nameOf(column)}</code>
-            <span>{unpairedWhy(column, own, other)}</span>
+            <span>{unpairedWhy(column, own, other, tab.sets)}</span>
           </li>)}</ul>
         </section>}
         {filtered.length > 0 && <p className="compare-note warning"><Icon name="filter" /><span>{filtered.map(entry => distinctName(entry, tab.sets)).join(' and ')} {filtered.length > 1 ? 'are' : 'is'} sorted or filtered here. The comparison uses all the stored rows, in their own order.</span></p>}

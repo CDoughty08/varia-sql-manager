@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
-import { comparedNames, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
+import { comparedNames, distinctName, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
 const filter = { filter: { op: 'notNull', column: 0 }, label: 'id is not NULL' }
@@ -49,5 +49,8 @@ describe("a result's name and its number", () => {
     expect(comparedNames(named, other)).toEqual(['Open orders (Result 2)', 'Open orders (Result 5)'])
     expect(comparedNames(named, pivot)).toEqual(['Open orders', 'Pivot of Open orders'])
     expect(comparedNames(unnamed, { number: 3, descriptor: {} })).toEqual(['Result 2', 'Result 3'])
+    // A marker that names another result like a number numbers that one; the unnamed result keeps its words.
+    const like = { number: 1, label: 'Result 2', descriptor: { name: 'Result 2' } }
+    expect([distinctName(unnamed, [like, unnamed]), distinctName(like, [like, unnamed])]).toEqual(['Result 2', 'Result 2 (Result 1)'])
   })
 })

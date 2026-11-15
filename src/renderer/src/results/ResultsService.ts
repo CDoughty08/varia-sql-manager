@@ -69,9 +69,12 @@ export const numberedName = (entry: Named): string => {
 export const comparedNames = (old: Named, neu: Named, sets: readonly Named[] = [old, neu]): [string, string] => [distinctName(old, [...sets, old, neu]), distinctName(neu, [...sets, old, neu])]
 /** An entry's name, with its number when another of the run's results has the same name ("Totals (Result 3)"): for the
  *  titles a Pivot or comparison takes from its sources, and their sources' links, so two of one name are told apart.
- *  Unnamed results' names are their numbers, which never collide, so theirs read as before. */
+ *  Unnamed results, Pivots and comparisons keep their names, so theirs read as before. */
 export const distinctName = (entry: Named, sets: readonly Named[]): string => {
   const name = entryName(entry)
+  // Only a name the query gave takes the number: an unnamed result keeps "Result 2" even when a marker named another
+  // result "Result 2", which then reads "Result 2 (Result 1)".
+  if (queryName(entry) === undefined) return name
   return sets.some(other => other.number !== entry.number && entryName(other) === name) ? `${name} (${entryNumber(entry)})` : name
 }
 /** An entry's accessible name: a named result's name with its number ("Totals, Result 3"), so two tabs, captions or

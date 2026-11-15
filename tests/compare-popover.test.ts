@@ -475,6 +475,11 @@ describe('Compare popover placement', () => {
 })
 
 describe('Compare popover with named results', () => {
+  it('numbers a result in the columns not compared when another result of the run has its name', () => {
+    const view = fixture({ count: 3, open: 2, names: { 0: 'Totals', 1: 'Totals', 2: 'Orders' }, columns: { 0: [column('Id'), column('Name')], 1: [column('Id'), column('Price')], 2: [column('Id'), column('Name')] } })
+    expect(view.popover()!.querySelector('section')!.textContent).toContain('only in Totals (Result 2)')
+    view.unmount()
+  })
   it("adds no tooltip to an unnamed result's heading or sides", () => {
     const view = fixture()
     expect(view.popover()!.querySelector('h2')!.hasAttribute('title')).toBe(false)
