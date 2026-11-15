@@ -237,14 +237,15 @@ internal static class HostChecks
             // A CANCEL whose token callback blocks (a query Stop's synchronous attention) must not hold the reader: PING is
             // still answered, and the request ends once the callback returns.
             host.Request(21, "test.blockingStop", new { });
-            Thread.Sleep(50);
+            // The CANCEL must find the callback registered, or nothing would block with or without the fix.
+            var stopRegistered = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.StopRegistered) == 1, 15000);
             host.Send(FrameKind.Cancel, 21, 1, []);
             var stopEntered = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.StopEntered) == 1, 15000);
             host.Send(FrameKind.Ping, 0, 4343, []);
             var stopPong = host.Next(FrameKind.Pong);
             host.Dispatcher.StopRelease.Set();
             var stopAnswer = host.Next(FrameKind.Response);
-            check(stopEntered && stopPong?.Header.Arg == 4343 && stopAnswer?.Header.Id == 21 && ErrorCode(stopAnswer.Value) is null,
+            check(stopRegistered && stopEntered && stopPong?.Header.Arg == 4343 && stopAnswer?.Header.Id == 21 && ErrorCode(stopAnswer.Value) is null,
                 "a CANCEL runs the token's callbacks off the reader thread, so PING is answered while a Stop's callback blocks");
 
             host.Request(20, "test.wait", new { });
@@ -544,6 +545,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int LateStarted;
     /// <summary>test.blockingStop: its token callback has started, and it blocks until StopRelease is set.</summary>
     public int StopEntered;
+    public int StopRegistered;
     public readonly ManualResetEventSlim StopRelease = new();
     /// <summary>How many test.hold and test.park handlers have started; each ends once the Release it started under is set.</summary>
     public int Parked;
@@ -618,7 +620,10 @@ internal sealed class StubDispatcher : IRequestDispatcher
                     StopRelease.Wait();
                     stopped.TrySetResult();
                 }))
+                {
+                    Interlocked.Increment(ref StopRegistered);
                     await stopped.Task;
+                }
                 return new { Stopped = true };
             case "test.unsentLate":
                 // As results.diff when a CANCEL lands after its work: it answers anyway, after the host answered CANCELLED.

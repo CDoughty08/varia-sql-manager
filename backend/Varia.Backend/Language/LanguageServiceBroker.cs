@@ -113,15 +113,22 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
                     {
                         if (documents.Count >= MaxDocuments)
                         {
-                            // A document whose close never came (a window that went without closing its tabs) must not hold
-                            // a slot for good: reclaim the least recently used idle one. Requests carry the full text, so
-                            // that tab's next request opens it again.
+                            // A close already under way frees a slot: wait for it rather than release a live document.
+                            // Otherwise a document whose close never came (a window that went without closing its tabs)
+                            // must not hold a slot for good: reclaim the least recently used idle one. Requests carry the
+                            // full text, so that tab's next request opens it again.
                             (string Id, Binding Binding)? idle = null;
                             foreach (var (id, candidate) in documents)
+                            {
+                                if (candidate.Closing && candidate.CloseTask is { } freeing) { reclaimed = freeing; break; }
                                 if (!candidate.Closing && candidate.Foreground == 0 && candidate.Background.Count == 0 && (idle is null || candidate.LastUsed < idle.Value.Binding.LastUsed))
                                     idle = (id, candidate);
-                            if (idle is not { } oldest) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
-                            reclaimed = BeginClose(oldest.Id, oldest.Binding);
+                            }
+                            if (reclaimed is null)
+                            {
+                                if (idle is not { } oldest) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
+                                reclaimed = BeginClose(oldest.Id, oldest.Binding);
+                            }
                         }
                         else
                         {

@@ -346,6 +346,22 @@ internal static class SqlLanguageChecks
             await broker.CompleteAsync(open[1] with { Version = 2 }, default).WaitAsync(CheckWait);
             check(capped.Closed.SequenceEqual([open[1].DocumentId, open[2].DocumentId]), "a reclaimed document opens again on its next request, reclaiming the next idle one");
         }
+        var draining = new StubProvider("sqlserver");
+        using (var broker = new LanguageServiceBroker([draining]))
+        {
+            var open = Enumerable.Range(0, LanguageServiceBroker.MaxDocuments).Select(_ => Request()).ToArray();
+            foreach (var document in open) await broker.CompleteAsync(document, default);
+            draining.CloseRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closing = broker.CloseAsync(open[^1].DocumentId, default);
+            await draining.CloseStarted.Task.WaitAsync(CheckWait);
+            var waiting = broker.CompleteAsync(Request(), default);
+            var held = !waiting.IsCompleted;
+            draining.CloseRelease.TrySetResult();
+            await waiting.WaitAsync(CheckWait);
+            await closing.WaitAsync(CheckWait);
+            check(held && draining.Closed.SequenceEqual([open[^1].DocumentId]),
+                "at the document cap a new document waits for a close already under way rather than releasing a live idle one");
+        }
         var busy = new StubProvider("sqlserver") { CompleteRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         using (var broker = new LanguageServiceBroker([busy]))
         {

@@ -36,7 +36,7 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     internal const int MaxPending = 128;
     /// <summary>What notifications waiting for their callback may hold: their parameters' characters plus a fixed cost per
     /// entry, so a burst of small ones (diagnostics for many documents) is absorbed while a callback runs, and only a
-    /// server that floods without end stops the transport. The cost caps the queue at 16,384 entries.</summary>
+    /// server that floods without end stops the transport. The cost holds the queue under 16,384 entries.</summary>
     internal const int MaxQueuedNotificationCharacters = 8 * 1024 * 1024;
     internal const int NotificationEntryCost = 512;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
