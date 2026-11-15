@@ -326,6 +326,34 @@ describe('versioned SQL diagnostics markers', () => {
     expect(f.language.diagnostics).not.toHaveBeenCalled()
     expect(f.service.status(tab.id)?.label).toBe('SQL analysis paused')
   })
+  // Each keystroke read the whole query (up to the analysis limit) only to see whether it was blank or the welcome query.
+  it('never reads the whole query on a keystroke, and still leaves blank queries unanalysed', async () => {
+    const f = fixture(), calls: string[] = [], wrapped = new Map<string, Monaco.editor.ITextModel>(), inner = f.documents.getModel.bind(f.documents)
+    // Records only the service's own calls: the test model's methods run on the model itself, not through the proxy.
+    f.documents.getModel = id => {
+      const model = inner(id)
+      if (!model) return
+      let proxy = wrapped.get(id)
+      if (!proxy) wrapped.set(id, proxy = new Proxy(model, { get: (target, key) => {
+        const value: unknown = Reflect.get(target, key)
+        return typeof value === 'function' ? (...args: unknown[]) => { calls.push(String(key)); return value.apply(target, args) } : value
+      } }))
+      return proxy
+    }
+    const text = 'SELECT 1\n'.repeat(1_000), tab = f.documents.create('query.sql', text, 'master')
+    await f.tick()
+    calls.length = 0
+    for (let at = 1; at <= 20; at++) f.model(tab.id).edit(text + 'x'.repeat(at))
+    expect(calls).not.toContain('getValue')
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    const blanks = ['', '   \n\t\n', ' \r\n  \r\n'].map((value, index) => f.documents.create(`blank${index}.sql`, value, 'master'))
+    blanks.push(f.documents.create('cleared.sql', 'SELECT 1', 'master'))
+    f.model(blanks[3].id).edit('\n\n')
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    for (const blank of blanks) expect(f.service.getSnapshot().documents.get(blank.id)).toEqual({ phase: 'ready', errors: 0, warnings: 0 })
+  })
   it('reports provider failures without claiming the query has no issues and retries on the next edit', async () => {
     const f = fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'master')
     f.language.diagnostics.mockRejectedValueOnce(new Error('Metadata unavailable.'))

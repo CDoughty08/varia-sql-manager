@@ -26,6 +26,12 @@ internal static class WorkerGateChecks
     {
         Shares(check);
         Unstarted(check);
+        Dropped(check);
+        HandedBackDisposes(check, fail: false);
+        HandedBackDisposes(check, fail: true);
+        DisposeThrows(check);
+        BodyBeatsDispose(check, cancel: false);
+        BodyBeatsDispose(check, cancel: true);
         QueuedFirst(check);
         Refused(check);
         Crowded(check);
@@ -101,6 +107,185 @@ internal static class WorkerGateChecks
         lease.Dispose();
         check(open == (4, 4, 3) && closed == (1, 1, 0) && late == (false, 1, 1) && gate.Busy == 0,
             "a step's owner never waits for workers the thread pool has not run: closing gives their threads back, and they do nothing when they run: " + open + " " + closed + " " + late);
+    }
+
+    private static void Dropped(Action<bool, string> check)
+    {
+        // Workers taken back when their step closed stay in the thread pool's queue until a thread reaches them, long after
+        // the step on a busy machine. They hold nothing the step's body captured: a read's raw pages stayed reachable from
+        // them, so packing its result freed nothing until the pool caught up (FusedReadChecks.SnapshotKeepsNoBodies). The
+        // workers are recorded and run only after the collection, as a starved pool would run them.
+        var queued = new List<IThreadPoolWorkItem>();
+        var gate = new Gate(() => 4, queued.Add);
+        WeakReference captured;
+        using (var lease = gate.Take(4)) captured = RunCapturing(lease);
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        var freed = !captured.IsAlive;
+        foreach (var item in queued) item.Execute();
+        check(queued.Count == 3 && freed && gate.Busy == 0,
+            "workers still queued when their step ends hold nothing its body or state captured, so a read's pages are freed while the thread pool is busy: " + queued.Count + " queued, freed " + freed);
+    }
+
+    /// <summary>A worker's state that records, as it is disposed on a worker's thread, what its step and lease count then
+    /// (the workers still in the step, the threads the lease holds), and may then fail.</summary>
+    private sealed class CountedState(Func<string> counts, int owner, Action<string> seen, bool fail) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (Environment.CurrentManagedThreadId == owner) return;
+            seen(counts());
+            if (fail) throw new InvalidOperationException("worker dispose");
+        }
+    }
+
+    private static void HandedBackDisposes(Action<bool, string> check, bool fail)
+    {
+        // A worker handed back between items (its lease over its share once the owner closed the step) still counts in the
+        // step until its state is disposed, so the owner returns only once no worker holds what the state captured. Each
+        // waits on the other by condition: the owner's item until the worker has taken the other, the worker's until the
+        // owner has closed the step (its share is then one thread). The worker disposes with its thread already handed
+        // back (the lease holds one) but still counted in the step (one worker); one leaving through Exit would still hold
+        // its thread, and before the fix it was no longer counted. A worker's state that fails to dispose is rethrown by
+        // the owner, where it once ended the process from the worker's thread.
+        var gate = new Gate(() => 2, item => new Thread(item.Execute) { IsBackground = true }.Start());
+        var owner = Environment.CurrentManagedThreadId;
+        var taken = 0;
+        var waited = true;
+        string? seen = null;
+        string? thrown = null;
+        using (var lease = gate.Take(2))
+        {
+            try
+            {
+                lease.For(2, () => new CountedState(() => Volatile.Read(ref lease.loop!.Pending) + " in the step, " + lease.Count + " held", owner, counts => Volatile.Write(ref seen, counts), fail), (_, _) =>
+                {
+                    Interlocked.Increment(ref taken);
+                    var met = Environment.CurrentManagedThreadId == owner
+                        ? SpinWait.SpinUntil(() => Volatile.Read(ref taken) == 2, TimeSpan.FromSeconds(60))
+                        : SpinWait.SpinUntil(() => lease.Target == 1 && !lease.loop!.Open, TimeSpan.FromSeconds(60));
+                    if (!met) waited = false;
+                }, CancellationToken.None);
+            }
+            catch (InvalidOperationException error) { thrown = error.Message; }
+        }
+        check(waited && taken == 2 && seen == "1 in the step, 1 held" && thrown == (fail ? "worker dispose" : null) && gate.Busy == 0,
+            "a worker handed back between items still counts in its step while its state is disposed, so the step returns only after"
+            + (fail ? ", and rethrows that dispose's failure" : "") + ": " + seen + ", " + taken + " taken, waited " + waited + ", " + thrown);
+    }
+
+    private static void DisposeThrows(Action<bool, string> check)
+    {
+        // The owner's state failing to dispose still closes the step before it is rethrown: the workers queued go back and
+        // hold nothing the body captured.
+        var queued = new List<IThreadPoolWorkItem>();
+        var gate = new Gate(() => 4, queued.Add);
+        string? thrown = null;
+        var held = -1;
+        WeakReference? captured = null;
+        using (var lease = gate.Take(4))
+        {
+            try { ThrowingDispose(lease, -1, out captured); }
+            catch (InvalidOperationException error) { thrown = error.Message; }
+            held = lease.Count;
+        }
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        var freed = captured is { IsAlive: false };
+        foreach (var item in queued) item.Execute();
+        check(thrown == "dispose" && held == 1 && freed && gate.Busy == 0,
+            "an owner's state that fails to dispose still closes its step before the failure is rethrown, giving back the queued workers and what the body captured: " + thrown + ", " + held + " held, freed " + freed);
+
+        // A body's failure wins over the state's failing dispose after it, with workers queued (the step's own path) and on
+        // the owner's thread alone; a dispose's failure alone is rethrown on the owner's thread alone too.
+        static string? Thrown(int workers, int failAt)
+        {
+            var recording = new Gate(() => workers, _ => { });
+            try
+            {
+                using var lease = recording.Take(workers);
+                ThrowingDispose(lease, failAt, out _);
+                return null;
+            }
+            catch (InvalidOperationException error) { return error.Message; }
+        }
+        var first = (Thrown(4, 3), Thrown(1, 3), Thrown(1, -1));
+        check(first == ("item", "item", "dispose"),
+            "a step rethrows a body's failure over its state's failing dispose, with workers queued and on the owner's thread alone, and the dispose's failure alone: " + first);
+    }
+
+    private static void BodyBeatsDispose(Action<bool, string> check, bool cancel)
+    {
+        // A worker's state fails to dispose first, then the owner's body fails or the operation is cancelled: the step
+        // rethrows the body's failure or the cancellation, whichever thread failed first. A failing dispose stops no other
+        // worker, so the owner still meets the cancellation at its next item. The worker's item waits until the owner has
+        // taken the other, so the owner's body runs; the owner's waits until the worker's state has failed.
+        var gate = new Gate(() => 2, item => new Thread(item.Execute) { IsBackground = true }.Start());
+        var owner = Environment.CurrentManagedThreadId;
+        var taken = 0;
+        var disposeFailed = 0;
+        var waited = true;
+        string? thrown = null;
+        using var cancellation = new CancellationTokenSource();
+        using (var lease = gate.Take(2))
+        {
+            try
+            {
+                lease.For(2, () => new DisposeFlag(owner, () => Volatile.Write(ref disposeFailed, 1)), (_, _) =>
+                {
+                    Interlocked.Increment(ref taken);
+                    if (Environment.CurrentManagedThreadId != owner)
+                    {
+                        if (!SpinWait.SpinUntil(() => Volatile.Read(ref taken) == 2, TimeSpan.FromSeconds(60))) waited = false;
+                        return;
+                    }
+                    if (!SpinWait.SpinUntil(() => Volatile.Read(ref disposeFailed) == 1, TimeSpan.FromSeconds(60))) waited = false;
+                    if (!cancel) throw new InvalidOperationException("item");
+                    cancellation.Cancel();
+                }, cancellation.Token);
+            }
+            catch (InvalidOperationException error) { thrown = error.Message; }
+            catch (OperationCanceledException) { thrown = "canceled"; }
+        }
+        check(waited && thrown == (cancel ? "canceled" : "item") && gate.Busy == 0,
+            "a " + (cancel ? "cancellation" : "body's failure") + " is rethrown over a worker's state that failed to dispose before it: " + thrown + ", waited " + waited);
+    }
+
+    /// <summary>A state that fails to dispose on a worker's thread, after saying so.</summary>
+    private sealed class DisposeFlag(int owner, Action failed) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (Environment.CurrentManagedThreadId == owner) return;
+            failed();
+            throw new InvalidOperationException("worker dispose");
+        }
+    }
+
+    private sealed class FailingState(byte[] page) : IDisposable
+    {
+        public byte[] Page => page;
+        public void Dispose() => throw new InvalidOperationException("dispose");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ThrowingDispose(Gate.Lease lease, int failAt, out WeakReference captured)
+    {
+        var page = new byte[4096];
+        captured = new WeakReference(page);
+        var sum = 0;
+        lease.For(16, () => new FailingState(page), (index, own) =>
+        {
+            if (index == failAt) throw new InvalidOperationException("item");
+            sum += own.Page[index];
+        }, CancellationToken.None);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference RunCapturing(Gate.Lease lease)
+    {
+        var page = new byte[4096];
+        var sum = 0;
+        lease.For(16, () => page, (index, own) => sum += own[index], CancellationToken.None);
+        return new WeakReference(page);
     }
 
     private static void QueuedFirst(Action<bool, string> check)

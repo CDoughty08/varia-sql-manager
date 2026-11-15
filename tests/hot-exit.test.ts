@@ -20,7 +20,7 @@ function fixture(options: { hotExit?: boolean; budget?: number; connectionTarget
   const kept: SessionWrite[] = []
   const api = {
     ...doc.api,
-    openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
+    openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),

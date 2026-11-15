@@ -646,13 +646,14 @@ describe('SQL file encodings and save hardening', () => {
     const reopen = body('async function reopenDocument(')
     expect(reopen).toMatch(/files\.register\([^)]*, targets\)/)
     expect(reopen).toMatch(/files\.read\(path, \{[^}]*\btargets\b[^}]*\}\)/)
-    const launch = body('async function openPaths(')
+    // The Open dialog's selection goes through openPaths too, so its burst shares the one cache made there.
+    const launch = body('function openPaths(')
     expect(launch.indexOf('files.targets()')).toBeGreaterThan(-1)
-    expect(launch.indexOf('files.targets()')).toBeLessThan(launch.indexOf('for (const path'))
+    expect(launch.indexOf('files.targets()')).toBeLessThan(launch.indexOf('openEach('))
     expect(launch).toContain('openPath(path, targets)')
     expect(body('async function openPath(')).toContain('files.read(path, { targets })')
-    const dialog = main.slice(main.indexOf("title: 'Open SQL query'"), main.indexOf('return opened', main.indexOf("title: 'Open SQL query'")))
-    expect(dialog).toMatch(/const targets = files\.targets\(\), opened = await Promise\.all\(selected\.filePaths\.map\(path => files\.read\(path, \{ targets \}\)\)\)/)
+    const dialog = main.slice(main.indexOf("title: 'Open SQL query'"), main.indexOf("handle('varia:files-save'"))
+    expect(dialog).toContain('return openPaths(selected.filePaths,')
   })
 })
 
