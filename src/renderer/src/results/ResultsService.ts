@@ -842,11 +842,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
   }
 
-  /**
-   * Copies the grid's selection: the backend formats it (Copy's TSV, with headers on request) and main writes the
-   * clipboard. One copy runs per window, so a new one cancels the last. Resolves to the sentence the error banner shows
-   * when it fails; a cancelled copy is silent.
-   */
   /** The entry a copy of this tab's runs now (the service's own state, a frame ahead of the published job list): a
    *  rebuild nobody asked for waits for it rather than cancel it. */
   copyingEntry(tabId: string): EntryKey | undefined {
@@ -854,6 +849,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return copying && copying.tabId === tabId && this.runs.get(tabId)?.jobs.includes(copying.job) ? copying.job.entry : undefined
   }
 
+  /**
+   * Copies the grid's selection: the backend formats it (Copy's TSV, with headers on request) and main writes the
+   * clipboard. One copy runs per window, so a new one cancels the last. Resolves to the sentence the error banner shows
+   * when it fails; a cancelled copy is silent.
+   */
   async copy(tabId: string, key: EntryKey, headers: boolean): Promise<string | undefined> {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
     if (!run || !set || !selection) return undefined

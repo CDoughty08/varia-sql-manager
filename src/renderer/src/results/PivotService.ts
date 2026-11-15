@@ -611,7 +611,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       if (tried?.get(group.ordinal)?.filters === live!.auto) tried!.delete(group.ordinal)
       live!.abort.abort()
     }
-    if (!recipe || (live && !superseded) || copying || !pivotOutOfDate(tab, group)) return
+    if ((live && !superseded) || copying || !pivotOutOfDate(tab, group)) return
     const tried = this.tried.get(tabId)?.get(group.ordinal)
     if (tried?.queryId === tab.queryId && tried.filters === filters) return
     if (!pivotShown(tab, group, layout, collapsed, showing) || !followsByItself(group) || !this.canPivot(tabId, group.table.key)) return
