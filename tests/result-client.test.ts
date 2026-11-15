@@ -377,7 +377,15 @@ describe('ResultClient', () => {
       worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, baseRows: 60, complete: true, approximate } })
       return request
     }
-    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    // The backend's op.progress reaches the caller's listener while the sort runs, through main and the worker.
+    const reported: unknown[] = []
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }], { onProgress: (phase, percent) => { reported.push([phase, percent]) } })
+    await settle()
+    const building = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'progress', rid: building.rid, phase: 'keys', percent: 40 })
+    worker().toWorker({ t: 'progress', rid: building.rid, phase: 'identify' })
+    await settle()
+    expect(reported).toEqual([['keys', 40], ['identify', undefined]])
     expect(await answerView(2)).toMatchObject({ t: 'view', generation: 1, resultId: 3, sort: [{ column: 0, descending: true, mode: 'value' }] })
     const view = await sorting
     expect([view.viewId, view.rows, view.baseRows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, 60, true, false, true])

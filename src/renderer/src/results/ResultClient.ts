@@ -2,7 +2,7 @@
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
 import type { ApiResult, BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
-import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
+import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 import { browserTimers, type Timers } from '../core/timers'
@@ -79,19 +79,19 @@ export interface ResultHandle extends Disposable {
   rowBytes(first: number, count: number, signal?: AbortSignal): Promise<RowBytes>
   /** Aggregates for up to `limits.profile.maxColumns` distinct columns over the rows (a view's rows, through a view), computed
    *  in the backend (results.profile): never rows. No columns gives only the rows' byte sizes. */
-  profile(columns: readonly number[], signal?: AbortSignal): Promise<ResultsProfileResult>
+  profile(columns: readonly number[], signal?: AbortSignal, onProgress?: OperationProgressListener): Promise<ResultsProfileResult>
   /** A column's distinct values with their counts over the rows (a view's rows, through a view), grouped in the backend as
    *  a filter compares them and kept there as a snapshot (results.distinct) to read by window, tick and filter by (a
    *  `groups` filter). Every value starts ticked, or with `kept`, a view of the same result, when a row of that view holds
    *  it; NULL likewise. The snapshot belongs to the result: close it when it is no longer wanted. */
-  distinct(column: number, o?: { kept?: ResultHandle; signal?: AbortSignal }): Promise<DistinctList>
+  distinct(column: number, o?: { kept?: ResultHandle; signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<DistinctList>
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
   /** A view of the result's stored rows kept by `filters` and sorted by `keys` in the backend (results.view), read through
    *  the same calls by view position. On a view, views its result again. `replaces` is a view of the same result the new
    *  one supersedes: the backend frees it once the new view is built, and its handle then reports itself released. */
-  sort(keys: readonly ViewSortKey[], o?: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal }): Promise<ResultView>
+  sort(keys: readonly ViewSortKey[], o?: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<ResultView>
   /** Tells the result's rows apart in the backend (results.identify), replacing its earlier identities: by a unique key
    *  column it picks (else the whole row), a given column, or the whole row. On a view, identifies its result. The
    *  result must have finished loading. */
@@ -104,12 +104,12 @@ export interface ResultHandle extends Disposable {
    *  (results.diff), and stores their unified diff as a new result, whose descriptor the answer carries: open it with
    *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
    *  all); `exact`: text compared character for character instead of by collation. */
-  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal }): Promise<ResultsDiffResult>
+  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<ResultsDiffResult>
   /** Pivots the rows (a view's rows, in its order and with its filters, through a view) in the backend (results.pivot): grouped
    *  by up to `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column by their collation, with
    *  1 to `limits.pivot.maxValues` values each, stored as a new result whose descriptor the answer carries: open it with
    *  `ResultClient.open`. The result must have finished loading. */
-  pivot(spec: PivotSpec, o?: { signal?: AbortSignal }): Promise<ResultsPivotResult>
+  pivot(spec: PivotSpec, o?: { signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<ResultsPivotResult>
   /** The cells whose grid text contains `text`, searched in the backend over the stored rows (results.search; a view's
    *  positions on a view): every match counted, and a run of up to `maxMatches` in whole rows from `fromRow`, or with
    *  `backward` the last before it. Aborting the signal stops the search. */
@@ -184,7 +184,10 @@ interface ResultState {
   /** For a view's state, its result's state id. */
   readonly base?: string
 }
-interface Pending { resolve(message: WorkerResponse): void; reject(error: Error): void }
+interface Pending { resolve(message: WorkerResponse): void; reject(error: Error): void; progress?: OperationProgressListener }
+/** How far a long request (a sort or filter, a profile, distinct values, a pivot, a diff) has got, from the backend's
+ *  op.progress: its phase, and a percentage that never goes back, absent while the phase has no total. */
+export type OperationProgressListener = (phase: OperationPhase, percent: number | undefined) => void
 /** `results` are the results this stream's events delivered that no later event retired: what its end releases. */
 interface LiveState {
   readonly onEvent: (event: LiveEvent, bytes: number) => void
@@ -375,11 +378,11 @@ export class ResultClient implements Disposable {
         if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable, estimated: response.estimated }
       },
-      profile: async (columns, signal) => {
+      profile: async (columns, signal, onProgress) => {
         this.usable(state)
         if (columns.length > wire.profile.maxColumns || new Set(columns).size !== columns.length || columns.some(column => !Number.isInteger(column) || column < 0 || column >= state.columns.length))
           throw new ResultError('INVALID_PARAMS', 'Each profiled column must be a distinct column of the result.')
-        const response = await this.request(id => ({ type: 'profile', id, key: state.key, columns: [...columns] }), signal)
+        const response = await this.request(id => ({ type: 'profile', id, key: state.key, columns: [...columns] }), signal, undefined, onProgress)
         if (response.type !== 'profile') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result
       },
@@ -397,7 +400,7 @@ export class ResultClient implements Disposable {
           const { snapshotId } = message.result
           void this.request(id => ({ type: 'distinct', id, key: owned, request: { kind: 'close', snapshotIds: [snapshotId] } })).catch(() => {})
         }
-        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, request: { kind: 'open', column, ...(keptViewId === undefined ? {} : { keptViewId }) } }), o.signal, late)
+        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, request: { kind: 'open', column, ...(keptViewId === undefined ? {} : { keptViewId }) } }), o.signal, late, o.onProgress)
         if (response.type !== 'distinct' || !('snapshotId' in response.result)) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         // The snapshot outlives the view it was read through: its requests go through its result.
         const owner = state.base === undefined ? state : this.results.get(state.base)
@@ -443,7 +446,7 @@ export class ResultClient implements Disposable {
           const { descriptor } = message.result as ResultsDiffResult
           void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
         }
-        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal, late)
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal, late, o.onProgress)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsDiffResult
       },
@@ -462,7 +465,7 @@ export class ResultClient implements Disposable {
           void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
         }
         const request = { method: 'pivot' as const, rows: [...spec.rows], ...(spec.column === undefined ? {} : { column: spec.column }), values: spec.values.map(value => ({ ...value })) }
-        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late)
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late, o.onProgress)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsPivotResult
       },
@@ -533,7 +536,7 @@ export class ResultClient implements Disposable {
   }
 
   /** results.view through the worker. A view built after its sort was given up is closed by the worker. */
-  private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal } = {}): Promise<ResultView> {
+  private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal; onProgress?: OperationProgressListener } = {}): Promise<ResultView> {
     if (!base) throw new ResultError('RESULT_RELEASED', released)
     this.usable(base)
     const columnOf = (column: number) => Number.isInteger(column) && column >= 0 && column < base.columns.length
@@ -546,7 +549,7 @@ export class ResultClient implements Disposable {
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))
-    const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(filters ? { filters } : {}), ...(replaces === undefined ? {} : { replaces }) }), o.signal)
+    const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(filters ? { filters } : {}), ...(replaces === undefined ? {} : { replaces }) }), o.signal, undefined, o.onProgress)
     if (response.type !== 'view') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     if (replaces !== undefined) this.endView(this.views.get(`${base.id}#${replaces}`), 'released')
     const key: ResultKey = { ...base.key, view: response.viewId }
@@ -833,7 +836,7 @@ export class ResultClient implements Disposable {
 
   /** Sends a worker request. Aborting it rejects at once; with `late`, an answer that still comes (sent before the cancel
    *  reached the worker) goes to `late`, and the worker's answer to the cancel ends the wait. */
-  private async request(build: (id: number) => WorkerRequest, signal?: AbortSignal, late?: (message: WorkerResponse) => void): Promise<WorkerResponse> {
+  private async request(build: (id: number) => WorkerRequest, signal?: AbortSignal, late?: (message: WorkerResponse) => void, progress?: OperationProgressListener): Promise<WorkerResponse> {
     if (this.failure) throw new ResultError('RESULT_DECODER_FAILED', this.failure)
     await this.attached
     if (signal?.aborted) throw abortError()
@@ -849,7 +852,8 @@ export class ResultClient implements Disposable {
       signal?.addEventListener('abort', onAbort, { once: true })
       this.pending.set(id, {
         resolve: message => { signal?.removeEventListener('abort', onAbort); resolve(message) },
-        reject: error => { signal?.removeEventListener('abort', onAbort); reject(error) }
+        reject: error => { signal?.removeEventListener('abort', onAbort); reject(error) },
+        ...progress ? { progress } : {}
       })
       this.worker.postMessage(build(id))
     })
@@ -871,6 +875,7 @@ export class ResultClient implements Disposable {
         pending?.reject(new ResultError(message.code, message.message))
         return
       }
+      case 'progress': return this.pending.get(message.id)?.progress?.(message.phase, message.percent)
       case 'live': return this.liveEvent(message.id, message.bytes, message.event)
       case 'liveEnd': {
         const live = this.lives.get(message.id)

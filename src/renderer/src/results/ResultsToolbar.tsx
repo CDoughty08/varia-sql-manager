@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useSyncExternalStore, type KeyboardEvent } from 'react'
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -98,6 +98,8 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const headerColumn = turned?.headerColumn === undefined ? undefined : entryOf(results.getSnapshot()[tabId]?.sets, turned.entry)?.descriptor.columns[turned.headerColumn]
   const headers = headerColumn ? columnTitle(headerColumn.name) : 'Row number'
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
+  // A sort or filter being built in any tab holds Sort text by off (it would sort every text-sorted grid again).
+  const sortHeld = useSyncExternalStore(results.operations.subscribe, () => results.operations.anyBuilding())
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize'], tabs = values['queryResults.grid.layout'] === 'tabs'
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
@@ -118,17 +120,17 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   }
   // The toolbar's one Tab stop: the first group's chosen button.
   const tabStop = Math.max(0, whitespaceChoices.findIndex(choice => choice.mode === whitespace))
-  const group = <T extends string>(label: string, icon: 'whitespace' | 'symbol-ruler', choices: readonly Choice<T>[], current: T, first: boolean) => <>
+  const group = <T extends string>(label: string, icon: 'whitespace' | 'symbol-ruler', choices: readonly Choice<T>[], current: T, first: boolean, held = false) => <>
     <span className="results-toolbar-label" aria-hidden="true" title={label}><Icon name={icon} /></span>
     <div className="results-segments" role="group" aria-label={label}>
-      {choices.map((choice, index) => <button key={choice.mode} type="button" aria-pressed={choice.mode === current} title={choice.title}
+      {choices.map((choice, index) => <button key={choice.mode} type="button" aria-pressed={choice.mode === current} title={held ? 'Waits until the sort or filter being built finishes' : choice.title} aria-disabled={held || undefined}
         tabIndex={first && index === tabStop ? 0 : -1} onClick={() => choose(choices, current, choice.mode)}>{choice.label}</button>)}
     </div>
   </>
   return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
     <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
-    {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
+    {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false, sortHeld)}
     {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
     <div className="results-segments" role="group" aria-label="Show">
       <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"

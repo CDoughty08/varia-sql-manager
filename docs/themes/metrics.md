@@ -83,6 +83,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use |
 | --- | --- | --- |
 | `--varia-progress` | 4 | A progress bar's track and fill, as under a running step in a StepList. |
+| `--varia-progressThin` | 2 | The bar along the top of a results grid while an operation over its result runs, and the ring on its column's sort button. |
 
 ## Bars and rows
 

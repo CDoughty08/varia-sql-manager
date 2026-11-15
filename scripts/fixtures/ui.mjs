@@ -75,6 +75,8 @@ export const part = {
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
   jobNotice: '.job-notice',
+  /** How the last operation over a whole result ended when it did not finish (Sort cancelled. …), beside the toolbar's strip. */
+  operationNotice: '.op-notice',
   outputEmpty: '.output-empty',
   // The states kit's empty view (src/renderer/src/kit/EmptyState.tsx) and the surfaces that place one.
   emptyState: '.empty-state',
@@ -298,6 +300,11 @@ export const gridPart = {
   /** A header's sort button and its place among several keys, hidden from screen readers (the header's aria-sort says it). */
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
+  /** The sort button of the column a sort or filter builds its view by: its progress ring and percentage. */
+  busySortButton: '.rg-cs.busy',
+  busyPercent: '.rg-cb',
+  /** The 2 px bar along the top of a grid's frame while an operation over its result runs (the toolbar's strip is its accessible copy). */
+  operationBar: '.rg-op-bar',
   sortOrder: '.rg-co',
   /** A header's funnel (results grids, and a live grid's filterable columns), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
    *  popover); filled while its column has a filter. */
@@ -568,6 +575,10 @@ export const pivotSource = page => pivotPanel(page).getByRole('group', { name: '
 export const profileFigures = card => card.locator('dl > div').evaluateAll(items => Object.fromEntries(items.map(item => [item.querySelector('dt').textContent, item.querySelector('dd').textContent])))
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
+/** The toolbar's strip for an operation over a whole result, by its progress bar ("Sorting Result 1"), its Cancel and its notice. */
+export const operationProgress = (page, name) => outputPane(page).getByRole('progressbar', { name, exact: true })
+export const operationCancel = (page, name) => outputPane(page).getByRole('button', { name, exact: true })
+export const operationNotice = page => outputPane(page).locator(part.operationNotice)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)
 /** A surface's empty view, matched only when it is the states kit's (so a hand-made one fails), and its parts. */
 export const emptyState = surface => matching(surface, part.emptyState)

@@ -80,7 +80,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const column = live && (target!.column ?? live.activeColumn())
     return live && column !== undefined ? { live, column } : undefined
   }
-  const showSortText = (mode: 'chars' | 'bytes') =>
+  // Sort text by sorts every text-sorted grid again: while a sort or filter is built it is held off like the grid's own.
+  const showSortText = (mode: 'chars' | 'bytes') => results.operations.anyBuilding() ? results.operations.refused(undefined) :
     settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
   /** The column captured by the menu, else the focused grid's active cell. */
   const sortTarget = (args?: CommandArgs) => {

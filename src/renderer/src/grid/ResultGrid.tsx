@@ -12,7 +12,8 @@ import { compareDetails, compareSources, compareText } from '../results/CompareS
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
 import { formatBytes, formatCount } from '../results/status'
-import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec, type StripLead } from './GridShell'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridShellBusy, type GridSpec, type StripLead } from './GridShell'
+import { gridOperation, operationNoun } from '../results/operations'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
@@ -94,6 +95,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
   const viewRef = useRef<GridView | undefined>(undefined), apiRef = useRef<GridShellApi | undefined>(undefined)
+  // The operation over this grid's result, from the one busy state every result control reads.
+  const operation = useSyncExternalStore(results.operations.subscribe, () => gridOperation(results.operations.getSnapshot()[tabId]?.items, entry.key))
+  const busy = useMemo((): GridShellBusy | undefined => operation && {
+    shown: operation.shown, held: !operation.ending && (operation.kind === 'sort' || operation.kind === 'filter'), label: `${operationNoun(operation.kind)} ${operation.target}`,
+    ...operation.kind === 'sort' || operation.kind === 'filter' ? operation.column === undefined ? {} : { column: operation.column } : {}, ...operation.percent === undefined ? {} : { percent: operation.percent }
+  }, [operation])
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   // Search in results: this grid's marks, and the tab's reveal of the active match.
   const search = useServiceSnapshot(resultsSearch)[tabId]
@@ -244,7 +251,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       onFocus: () => { hadFocus.current = true; onFocus(key) },
       onBlur: event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) hadFocus.current = false }
     }}
-    sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
+    sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels} busy={busy} onHeld={() => results.operations.refused(tabId, key)}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
     strip={note ? { text: note, ...stop ? { action: stop } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl} />
 }

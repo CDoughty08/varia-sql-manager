@@ -3,7 +3,7 @@ import type { Disposable } from '../core/types'
 import type { ResolvedViewFilter, ResultColumn, ResultsPivotResult } from '../../../shared/contracts'
 import { DerivedJobs } from './derived-jobs'
 import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
-import { ResultError, type PivotSpec, type ResultView } from './ResultClient'
+import { ResultError, type OperationProgressListener, type PivotSpec, type ResultView } from './ResultClient'
 import type { EntryKey, PivotProvenance, ResultGroup, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
 import { entryName, groupOf, resultLimits, setKey, slotOf } from './ResultsService'
 
@@ -33,7 +33,7 @@ export interface PivotSnapshot {
   readonly building: Readonly<Record<string, readonly number[]>>
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView' | 'notify'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView' | 'notify' | 'operations'>
 /** A build in flight: its run, the Table it reads, its group, the Pivot it replaces (none for a group's first), whether it
  *  still waits for a place, and whether the user cancelled it. */
 interface Build {
@@ -237,9 +237,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     builds.set(group.ordinal, item)
     this.refresh(tabId)
     this.publishBuilding()
-    let error: string | undefined
+    // The toolbar's strip and the Table grid's bar show the build; their Cancel is the caption's.
+    const ticket = this.results.operations.begin(tabId, { kind: 'pivot', target: entryName(entry), entry: entry.key, cancel: () => this.cancel(tabId, group.ordinal) })
+    let error: string | undefined, done = false
     try {
-      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, shown, abort.signal), {
+      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, shown, abort.signal, (phase, percent) => ticket.progress(phase, percent)), {
         signal: abort.signal, onWait: why => { item.queued = why; this.refresh(tabId) }, onStart: () => { item.queued = undefined; this.refresh(tabId) }
       })
       const { result, filters } = built
@@ -265,6 +267,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         }
         return
       }
+      done = true
       const info: PivotInfo = {
         source: entry.key, sourceLabel, viewed: built.viewed, rows: result.rows, rowGroups: result.rowGroups,
         columnGroups: result.columnGroups, approximate: result.approximate, partial: provenance.truncated || provenance.incomplete
@@ -285,6 +288,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       }
     } finally {
       hold?.()
+      // A cancel the builder or toolbar already words (a Pivot kept) is said once, by them.
+      ticket.end(done ? 'done' : item.cancelled && error === undefined ? 'cancelled' : 'dropped')
       if (this.running.get(tabId)?.get(item.ordinal) === item) {
         this.running.get(tabId)!.delete(item.ordinal)
         if (error) this.fail(tabId, item.ordinal, error)
@@ -300,11 +305,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   /** One build in the backend: the Table's view the grid showed at the click (`view`, held by run), or its stored rows. The backend may evict a view (it keeps eight a result): the build then runs once more, over the grid's current
    *  view when the grid has built another since, else over the same order and filters built again for it alone (closed
    *  when the build ends; the grid keeps its own view, which it will find closed when it next reads). */
-  private async build(tabId: string, entry: ResultSetEntry, spec: PivotSpec, view: ResultView | undefined, signal: AbortSignal): Promise<Built> {
+  private async build(tabId: string, entry: ResultSetEntry, spec: PivotSpec, view: ResultView | undefined, signal: AbortSignal, onProgress: OperationProgressListener): Promise<Built> {
     const shown = () => { const sort = this.results.sortOf(tabId, entry.key); return sort && !sort.sorting && !sort.stale ? sort.view : undefined }
     const once = async (source: ResultView | undefined): Promise<Built> => {
       const hold = source ? this.results.holdView(tabId, entry.key, source) : undefined
-      try { return { result: await (source ?? entry.handle).pivot(spec, { signal }), filters: source?.filters ?? [], viewed: !!source } }
+      try { return { result: await (source ?? entry.handle).pivot(spec, { signal, onProgress }), filters: source?.filters ?? [], viewed: !!source } }
       finally { hold?.() }
     }
     try {
@@ -316,7 +321,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (current && current !== view) return once(current)
     const rebuilt = await entry.handle.sort(view.keys, { ...view.filters.length ? { filters: view.filters } : {}, signal })
     try {
-      const built = await (rebuilt.pivot(spec, { signal }))
+      const built = await (rebuilt.pivot(spec, { signal, onProgress }))
       return { result: built, filters: rebuilt.filters, viewed: true }
     } finally {
       void rebuilt.close().catch(() => {})

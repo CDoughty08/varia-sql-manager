@@ -19,6 +19,7 @@ import PivotPanel from './PivotPanel'
 import ComparePopover from './ComparePopover'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
+import OperationStrip from './OperationStrip'
 import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
 import { formatCount, messagesSummary, plural, runSummary } from './status'
 
@@ -338,6 +339,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {leader && jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
       {/* The live region announces it; this is the visible copy. */}
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
+      {/* Sorts, filters and the other operations over whole results: their strip, notice and live region. */}
+      {leader && <OperationStrip tabId={tabId} />}
       <PaneMenuButton pane={pane} />
     </div>
     {pane === 'plan' && historyOpen ? <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Plan history'}><RetainedPlans active={visible.plan} /></div>

@@ -1,6 +1,8 @@
-# Progress for operations on a whole result (proposal)
+# Progress for operations on a whole result
 
-Status: proposal for the owner to agree. Nothing here is built yet. The interactive mock is
+Status: agreed (2026-11-14: placement B with every proposed default, see "Decisions" at the end) and built: the
+backend's `op.progress` EVENTs (docs/ipc.md, Sorted views), `ResultOperations` as the one busy state
+(docs/architecture.md), the toolbar's strip, the grid's bar and the header ring. The interactive mock is
 [prototypes/results-pane/result-operation-progress.html](../prototypes/results-pane/result-operation-progress.html): it has
 a Dark / Light switch, the three placements and every state below (`?state=<id>&option=A|B|C&theme=light`).
 
@@ -114,7 +116,7 @@ Cancel and failure clear it and leave the previous view.
 - Focus never moves. Cancel is reachable with Tab in the toolbar and Escape in the grid cancels, as for Copy and Save.
 - Reduced motion stops the slide and the spin (the bar becomes a static fill); forced colours draw the fill in Highlight.
 
-## Open questions for the owner
+## Questions put to the owner
 
 1. **Placement:** B (toolbar strip, recommended), A (status bar) or C (overlay)? Or B with a mirror in the status bar
    when the results pane is collapsed?
@@ -126,3 +128,23 @@ Cancel and failure clear it and leave the previous view.
 5. **Percentage:** one figure across phases with the phase name beside it (proposed), or a percentage per phase
    ("Merging 3 of 5")?
 6. **Timings:** 300 ms before showing, 500 ms minimum once shown, elapsed time after 10 s: agreed?
+
+## Decisions
+
+The owner chose B as proposed, which settles the questions above:
+
+1. Placement B: the toolbar's strip (what, on which result, the phase, a meter, the percentage, the elapsed time past
+   10 s, Cancel), a 2 px bar along the grid, and a ring with the percentage on the sorted or filtered column's button.
+   No status-bar mirror.
+2. A second sort or filter click is held off: refused, not queued and not replacing the running one. The operation
+   shows at once if it had not yet, pulses, and the live region says why. Cancel or Escape stops it.
+3. Held-off controls are dimmed with the not-allowed cursor and `aria-disabled` (the header buttons and funnels, Sort
+   Text By); the grid says `aria-busy`.
+4. During a sort or filter Copy is allowed (it copies what the grid shows) and Save is held off.
+5. One percentage of the whole operation that never goes back, with the phase name beside it; none while a phase has
+   no total.
+6. Shown after 300 ms, kept at least 500 ms once shown, the elapsed time added after 10 s.
+
+What the build added beyond the mock: Cancel keeps the previous view and leaves a notice ("Sort cancelled. The grid
+kept its previous order."); a failure is said once, by the toolbar's existing notice; Pivot, Compare and the column
+profile show in the same strip (the profile and a Pivot also on their grid's bar) and hold nothing off.

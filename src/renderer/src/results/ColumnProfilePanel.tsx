@@ -83,10 +83,15 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     let current: Profiles = previous ? { ...previous, loading: true, error: undefined } : { handle, columns: new Map(), loading: true }
     setProfiles(current)
     const wanted = columnKey ? columnKey.split(',').map(Number) : []
+    // The toolbar's strip and the grid's bar show it; their Cancel (or Escape in the grid) stops it, keeping the cards it has.
+    let cancelled = false, outcome: 'done' | 'dropped' = 'dropped'
+    const ticket = results.operations.begin(tabId, { kind: 'profile', target: `Result ${entry!.number}`, entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
+    const parts = wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]
     void (async () => {
       try {
-        for (const part of wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]) {
-          const result = await handle.profile(part, abort.signal)
+        for (const [at, part] of parts.entries()) {
+          // Each request reports its own 0 – 100: the strip shows the share of every chunk.
+          const result = await handle.profile(part, abort.signal, (phase, percent) => ticket.progress(phase, percent === undefined ? undefined : Math.floor((at * 100 + percent) / parts.length)))
           if (abort.signal.aborted) return
           const merged = new Map(current.columns)
           for (const column of result.columns) merged.set(column.column, { profile: column, rows: result.rows })
@@ -94,10 +99,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
           setProfiles(current)
         }
         setProfiles({ ...current, loading: false })
+        outcome = 'done'
       } catch (error) {
-        if (abort.signal.aborted) return
+        if (abort.signal.aborted) { if (cancelled) setProfiles({ ...current, loading: false }); return }
         setProfiles({ ...current, loading: false, error: error instanceof Error ? error.message : String(error) })
-      }
+      } finally { ticket.end(cancelled ? 'cancelled' : outcome) }
     })()
     return () => abort.abort()
   }, [handle, held, settled, columnKey])

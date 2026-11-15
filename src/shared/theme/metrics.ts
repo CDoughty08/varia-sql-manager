@@ -95,7 +95,8 @@ export const glyphConditions: Readonly<Record<string, { readonly container: stri
 
 /** `--varia-<name>`, in px: the thickness of indicators that are neither text nor icons. */
 export const indicators = {
-  progress: { px: 4, use: 'A progress bar\'s track and fill, as under a running step in a StepList.' }
+  progress: { px: 4, use: 'A progress bar\'s track and fill, as under a running step in a StepList.' },
+  progressThin: { px: 2, use: 'The bar along the top of a results grid while an operation over its result runs, and the ring on its column\'s sort button.' }
 } as const
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */

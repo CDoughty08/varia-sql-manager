@@ -95,7 +95,7 @@ describe('the Compare popover', () => {
     expect(compare.sidesOf('t1')).toMatchObject({ old: { key: keys[2] }, neu: { key: keys[0] } })
     await compare.run('t1')
     await settle()
-    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, signal: expect.any(AbortSignal) })
+    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const made = tab().comparisons[0]
     // Named old → new, its frozen sources in that order, and it took the focus; the popover closed, and opens again on that
     // pair, which the run now has (Show It).

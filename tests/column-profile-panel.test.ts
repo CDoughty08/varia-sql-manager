@@ -9,10 +9,13 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import ColumnProfilePanel, { profiledEntry, profileTarget } from '../src/renderer/src/results/ColumnProfilePanel'
 import type { ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
+import { ResultOperations } from '../src/renderer/src/results/operations'
+import type { OperationProgressListener } from '../src/renderer/src/results/ResultClient'
+import { manualTimers } from './fixtures/workbench'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-interface Asked { columns: number[]; signal?: AbortSignal; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
+interface Asked { columns: number[]; signal?: AbortSignal; progress?: OperationProgressListener; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
 function fixture(columns = 40, shown: string | null = 'e1') {
   const listeners = new Set<() => void>()
@@ -21,14 +24,15 @@ function fixture(columns = 40, shown: string | null = 'e1') {
   const handle = {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
     getSnapshot: () => snapshot,
-    profile: vi.fn((cols: number[], signal?: AbortSignal) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, resolve, reject }) }))
+    profile: vi.fn((cols: number[], signal?: AbortSignal, progress?: OperationProgressListener) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, progress, resolve, reject }) }))
   }
   const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })) }
   // Result 1, and a result numbered 5 that stands second (the ones between have gone) and has two columns of its own.
   const other = { columns: [{ name: 'x0', dataType: 'int' }, { name: 'x1', dataType: 'int' }] }
   const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e5', number: 5, descriptor: other, handle }] } as unknown as TabResults
   // The panel is told which grid took the focus; without one it asks the stack, which names the second.
-  const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1] }
+  const timers = manualTimers()
+  const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1], operations: new ResultOperations({ timers: timers.timers }) }
   const workbench = { results, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -41,7 +45,7 @@ function fixture(columns = 40, shown: string | null = 'e1') {
   const card = (name: string) => container.querySelector(`section[aria-label="${name}"]`)
   const nulls = (name: string) => [...card(name)?.querySelectorAll('dl > div') ?? []].find(item => item.querySelector('dt')?.textContent === 'NULLs')?.querySelector('dd')?.textContent
   const facts = () => container.querySelector('.profile-facts')?.textContent
-  return { asked, answer, setSnapshot, card, nulls, facts, unmount: () => act(() => { root.unmount() }) }
+  return { asked, answer, setSnapshot, card, nulls, facts, results, timers, unmount: () => act(() => { root.unmount() }) }
 }
 const profileOf = (column: number, rows: number, nulls: number): ColumnProfile => ({ column, values: rows - nulls, nulls, distinct: rows - nulls, distinctExact: true, approximate: false })
 
@@ -105,5 +109,22 @@ describe('column profile panel', () => {
     expect(profiledEntry(next, profileTarget(first, 'e2'))).toBe(next[2])
     expect(profiledEntry(next, profileTarget(first, 'e3'))).toBeUndefined()
     expect(profiledEntry(next, undefined)).toBeUndefined()
+  })
+
+  it('shows its progress across every request in the toolbar, and a cancel keeps the cards it has', async () => {
+    const view = fixture()
+    const ops = () => view.results.operations.getSnapshot().t
+    act(() => { view.asked[0].progress?.('profile', 50); view.timers.advance(300) })
+    expect(ops()?.items).toMatchObject([{ kind: 'profile', target: 'Result 1', entry: 'e1', shown: true, phase: 'profile', percent: 25 }])
+    await view.answer(0, 1000, 100)
+    act(() => { view.asked[1].progress?.('histogram', 40) })
+    expect(ops()?.items[0]?.percent).toBe(70)
+    act(() => { view.results.operations.cancel('t') })
+    expect(view.asked[1].signal?.aborted).toBe(true)
+    // The client rejects a request its signal stopped.
+    await act(async () => { view.asked[1].reject(new Error('Cancelled')) })
+    expect(ops()).toMatchObject({ items: [], notice: 'Profile cancelled.' })
+    expect(view.nulls('c0')).toBe('100 (10%)')
+    view.unmount()
   })
 })

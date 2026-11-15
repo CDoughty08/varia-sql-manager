@@ -78,9 +78,9 @@ export function comparableTable(tab: TabResults | undefined, entry: ResultSetEnt
 /** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text for all. */
 interface Remembered { exact: boolean; readonly groups: Map<number, { readonly targetOrdinal: number; readonly swapped: boolean }> }
 
-interface Running { readonly abort: AbortController; readonly queryId: string; readonly old: EntryKey; readonly neu: EntryKey; readonly id: string }
+interface Running { readonly abort: AbortController; readonly queryId: string; readonly old: EntryKey; readonly neu: EntryKey; readonly id: string; cancelled?: boolean }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify' | 'focusEntry'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify' | 'focusEntry' | 'operations'>
 
 /**
  * Comparisons (results.diff): one group's Table against another's of the same run, in the backend, aligned by a key column
@@ -271,6 +271,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   cancel(tabId: string, old: EntryKey, neu: EntryKey, exact: boolean): void {
     const item = this.inFlight.get(tabId)?.get(pairId(old, neu, exact))
     if (!item) return
+    item.cancelled = true
     item.abort.abort()
     if (this.shows(tabId, undefined, old, neu, exact)) this.update(tabId, { cancelled: true })
   }
@@ -317,8 +318,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     // A new attempt on the pair the popover shows clears what it said of the last (a failure, a cancel), as its Compare does.
     if (!o.quiet && this.shows(tabId, tab.queryId, old, neu, o.exact)) this.update(tabId, { error: undefined, cancelled: false })
     this.publishRunning()
+    // The toolbar's strip shows it, with a Cancel of its own beside the popover's.
+    const ticket = this.results.operations.begin(tabId, { kind: 'compare', target: `${entryName(from)} → ${entryName(to)}`, cancel: () => this.cancel(tabId, old, neu, o.exact) })
+    let done = false
     try {
-      const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal }), { signal: abort.signal })
+      const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal, onProgress: (phase, percent) => ticket.progress(phase, percent) }), { signal: abort.signal })
+      done = true
       const label = `Differences: ${entryName(from)} → ${entryName(to)}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
       const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
@@ -336,6 +341,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (abort.signal.aborted) return undefined
       return fail(error instanceof Error ? error.message : 'The results could not be compared.')
     } finally {
+      ticket.end(done ? 'done' : item.cancelled ? 'cancelled' : 'dropped')
       if (items.get(id) === item) items.delete(id)
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()

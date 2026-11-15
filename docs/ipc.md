@@ -1472,6 +1472,15 @@ itself by view position.
   ignoring trailing spaces; other types by their display text's code points. `chars` and `bytes` sort character, xml and
   json columns (and binary, for `bytes`) by each cell's length from [Cell lengths and row sizes](#cell-lengths-and-row-sizes);
   other columns ignore the mode and sort by value. Equal rows keep their base order.
+- **Progress (`op.progress`).** `results.view`, `results.profile`, `results.distinct` (open), `results.pivot` and
+  `results.diff` send droppable `{ type: 'op.progress', phase, percent? }` EVENTs on their request (`OperationProgress.cs`):
+  the phase (`filter`, `keys`, `sort`, `unpack`, `group`, `aggregate`, `write`, `identify`, `match`, `align`, `profile`,
+  `histogram`) and one percentage of the whole operation, 0 – 99, that never goes back; a phase with no total (a diff
+  looking for row keys) sends none. At most one every 250 ms, none in the first 250 ms (so a quick operation sends
+  nothing) and none once it has answered; the answer, not an EVENT, says it finished. The work is counted where it is
+  shared out (`WorkerGate.Lease.For` steps and the operations' own loops), and a step nested in a counted one counts
+  nothing, so the figure stays monotonic; with no operation current, nothing is counted (benchmarks and other callers).
+  Main checks each EVENT (`operationProgressSchema`, strict) and drops an invalid one without failing the request.
 - **Filters.** Applied in order before the sort, each over the rows the ones before it kept; `rows` counts the rows kept.
   `{ op: 'in' | 'notIn' | 'between', column, rows: 0 – 4,096 base rows, nulls? }` compares the column's values with those
   rows' values (`nulls`: NULL is among `in`'s and `notIn`'s values; `between` takes two rows, its lowest and highest
@@ -2673,7 +2682,9 @@ source (`INVALID_REQUEST`). `credit` acknowledges a live event and `cancel` ends
 
 **Main → worker:** `backend { generation, status }` on every change, `page { rid, seq, body: ArrayBuffer }`,
 `end { rid, ok, result | code, message }`, `query { queryId, event }`, `memory { usedBytes, globalBytes, generation, seq }`
-(the generation of the backend that sent the event, which may be one being replaced), and `live { rid, bytes, event }` (a
+(the generation of the backend that sent the event, which may be one being replaced), `progress { rid, phase, percent? }` (a
+view, profile, distinct, pivot or diff request's `op.progress`, posted only while that request is in flight on the same
+port; the worker hands it to the page request it answers, or drops it once the page gave that request up), and `live { rid, bytes, event }` (a
 validated live event with its EVENT body's length, which the worker grants back once the page has applied it). A live
 stream and an update end with `end` (`result`: the live end or the update answer).
 

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 
 namespace Varia.Backend.Results;
@@ -173,6 +174,10 @@ internal static partial class ViewSorter
             return;
         }
         int At(int slice, int of) => start + (int)((long)count * slice / of);
+        // The slices' sorts take about log2 of a slice's items comparisons an item, each round of merges one.
+        var rounds = BitOperations.Log2((uint)slices);
+        var slicing = Math.Max(1, BitOperations.Log2((uint)Math.Max(2, count / slices)));
+        OperationProgress.Current?.Steps(slicing + rounds, first: slicing);
         // Each slice and each merge is an item. The comparer throws a cancellation, which For rethrows once the other threads
         // have stopped.
         threads.For(slices, slice => SortRange(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
@@ -363,9 +368,13 @@ internal static partial class ViewSorter
         var order = new int[rows];
         for (var i = 0; i < rows; i++) order[i] = i;
         var resolved = new ViewFilter[filters.Count];
+        // Progress: the filters share the first part (all of it without sort keys), then the sort keys are read, then sorted.
+        var progress = OperationProgress.Current;
+        var filtersEnd = filters.Count == 0 ? 0 : keys.Count == 0 ? 0.98 : 0.3;
         for (var f = 0; f < filters.Count; f++)
         {
             var filter = filters[f];
+            progress?.Phase("filter", filtersEnd * (f + 1) / filters.Count);
             if (filter.Op == FilterOp.Duplicates)
             {
                 var columns = new Key[filter.Columns.Length];
@@ -435,8 +444,11 @@ internal static partial class ViewSorter
         foreach (var (column, key) in values)
             if (!keys.Any(sort => sort.Mode == SortMode.Value && sort.Column == column)) key.Drop();
         values.Clear();
+        var keysEnd = filtersEnd + (0.98 - filtersEnd) * 0.45;
+        progress?.Phase("keys", keysEnd, steps: built.Count(key => key is null));
         for (var k = 0; k < keys.Count; k++)
             built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate, memory);
+        progress?.Phase("sort", 0.98);
         var comparer = new Comparer(built, descending, token);
         if (kept is null)
         {
