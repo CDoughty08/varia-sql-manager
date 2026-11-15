@@ -94,6 +94,10 @@ internal static class ResultNames
         }
     }
 
+    /// <summary>The option a SET statement turns on or off that makes SQL Server skip statements without an error, or null.</summary>
+    internal static string? SkipsStatements(PredicateSetStatement statement) =>
+        (statement.Options & SetOptions.NoExec) != 0 ? "NOEXEC" : (statement.Options & SetOptions.ParseOnly) != 0 ? "PARSEONLY" : (statement.Options & SetOptions.FmtOnly) != 0 ? "FMTONLY" : null;
+
     private static bool IsNamePart(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
 
     /// <summary>A statement's class, the column count of a One statement's set when its text says it (null with a * or a FOR
@@ -118,6 +122,9 @@ internal static class ResultNames
             case WhileStatement: return (StatementClass.Unknown, null, "WHILE");
             case BeginEndBlockStatement: return (StatementClass.Unknown, null, "BEGIN … END");
             case TryCatchStatement: return (StatementClass.Unknown, null, "TRY … CATCH");
+            // While NOEXEC, PARSEONLY or FMTONLY is on, SQL Server skips statements (or runs them differently) without an error,
+            // and an OFF in a batch may end an ON from an earlier batch or run: no set's place in such a batch is known.
+            case PredicateSetStatement predicate when SkipsStatements(predicate) is { } option: return (StatementClass.Unknown, null, "SET " + option);
             // Statements that never return a set: an error one raises stops binding at run time, as any error does.
             case SetOnOffStatement or DeclareVariableStatement or DeclareTableVariableStatement or DeclareCursorStatement or UseStatement or PrintStatement
                 or BeginTransactionStatement or CommitTransactionStatement or RollbackTransactionStatement or SaveTransactionStatement
@@ -222,6 +229,11 @@ internal sealed class ResultNamePlan
         int Line(TSqlStatement statement) => firstLine + statement.StartLine - 1;
         string At(int index) => (classes[index].Kind == "statement" ? "a statement" : (classes[index].Kind is "IF" or "INSERT" or "UPDATE" or "EXEC" ? "an " : "a ") + classes[index].Kind + " statement")
             + " on line " + Line(statements[index]).ToString("N0", CultureInfo.InvariantCulture);
+        // A batch that turns NOEXEC, PARSEONLY or FMTONLY on or off: the statements before an OFF may have been skipped, so
+        // no name in it is applied, those before the SET statement included.
+        var skipping = Enumerable.Range(0, statements.Count).FirstOrDefault(index => statements[index] is PredicateSetStatement set && ResultNames.SkipsStatements(set) is not null, -1);
+        if (skipping >= 0)
+            return Refused(markers, $"was not applied: {At(skipping)} in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.");
         // The markers before each statement, in order; a marker inside a statement or after the last names nothing.
         var named = new List<ResultMarker>?[statements.Count];
         foreach (var marker in markers)
@@ -286,6 +298,7 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
 {
     private readonly bool[] applied = new bool[plan.Slots.Count];
     private int position;
+    private int lastApplied = -1;
     private string? stopped;
 
     /// <summary>The name for the set the reader is on, or null; call once for every set with columns.</summary>
@@ -295,6 +308,7 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
     /// <summary><see cref="Take(DbDataReader, bool, bool)"/> from what it reads of the set.</summary>
     internal string? Take(int fieldCount, bool showplanText, bool isPlan, bool errored)
     {
+        lastApplied = -1;
         if (isPlan) return null;
         if (stopped is null && errored) stopped = "an error earlier in its batch made the place of its result set unknown";
         if (stopped is null && showplanText) stopped = "SHOWPLAN or STATISTICS PROFILE output in its batch made the place of its result set unknown";
@@ -309,6 +323,7 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
             if (plan.Slots[i].Position == at)
             {
                 applied[i] = true;
+                lastApplied = i;
                 return plan.Slots[i].Name;
             }
         return null;
@@ -317,10 +332,19 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
     /// <summary>No later set of the batch execution is named (they are not kept).</summary>
     public void Stop(string reason) => stopped ??= reason;
 
-    /// <summary>The notes for this execution's names that no set took.</summary>
-    public IEnumerable<string> Unapplied(bool errored)
+    /// <summary>The result budget refused the set just taken: its name was not applied, and no later set is kept.</summary>
+    public void Refused()
     {
-        var reason = stopped ?? (errored ? "an error earlier in its batch made the place of its result set unknown" : null);
+        if (lastApplied >= 0) applied[lastApplied] = false;
+        lastApplied = -1;
+        Stop("result memory kept no more result sets");
+    }
+
+    /// <summary>The notes for this execution's names that no set took.</summary>
+    /// <param name="ended">Why the batch execution ended early (a cancel, or an error that ends the script), if it did.</param>
+    public IEnumerable<string> Unapplied(bool errored, string? ended = null)
+    {
+        var reason = stopped ?? ended ?? (errored ? "an error earlier in its batch made the place of its result set unknown" : null);
         for (var i = 0; i < applied.Length; i++)
         {
             if (applied[i]) continue;

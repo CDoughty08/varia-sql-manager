@@ -659,6 +659,44 @@
         []
       ],
       "notes": []
+    },
+    {
+      "name": "a batch with SET NOEXEC applies no name, even before it: an ON from an earlier batch may have skipped those statements",
+      "sql": "SET NOEXEC ON;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;\nSET NOEXEC OFF;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"A\" (line 3) was not applied: a SET NOEXEC statement on line 5 in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.",
+        "\"B\" (line 6) was not applied: a SET NOEXEC statement on line 5"
+      ]
+    },
+    {
+      "name": "SET NOEXEC in a batch of its own leaves the next batch's names applied",
+      "sql": "SET NOEXEC OFF;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;",
+      "slots": [
+        [],
+        [
+          [
+            0,
+            "A"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 1,
+        "sets": [
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "A"
+        ],
+        "unapplied": []
+      }
     }
   ]
 }

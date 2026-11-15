@@ -188,6 +188,26 @@
       "columns": 1
     },
     {
+      "sql": "SET NOEXEC ON;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "SET NOEXEC OFF;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "SET NOCOUNT, NOEXEC ON;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "SET PARSEONLY ON;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "SET FMTONLY ON;",
+      "class": "Unknown"
+    },
+    {
       "sql": "EXEC dbo.p;",
       "class": "Unknown"
     },

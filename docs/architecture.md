@@ -167,9 +167,11 @@ being true.
   `ResultNames.MaxParseChars` and `MaxParenDepth`: ScriptDom's recursion can overflow a normal stack and end the process.
   Each top-level statement is classed None, One or Unknown; a name binds by position (the batch execution's sets with
   columns, plans left out) only where every statement before it is known, an Unknown statement's names only when nothing
-  after it can return a set. While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
+  after it can return a set; a batch that sets NOEXEC, PARSEONLY or FMTONLY applies none, since an earlier ON can make
+  SQL Server skip its statements without an error. While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
   that fails returns no set), at a set whose column count its statement does not select, and at SHOWPLAN or STATISTICS
-  PROFILE text. A name not applied is an informational Messages line quoting the name and its line, never an error and
+  PROFILE text, and when the result budget keeps no more sets. A name not applied (also one a cancel, timeout or ended
+  script never reached) is an informational Messages line quoting the name and its line, never an error and
   never logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name` carries it; a name never
   changes a result's identity, which stays its ordinal.
 - Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from

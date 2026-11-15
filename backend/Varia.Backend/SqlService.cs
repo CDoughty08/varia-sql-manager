@@ -1129,6 +1129,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // Named result sets (ResultNames.cs): each batch's plan is made before its first execution; notes go to Messages.
         var nameNotes = new ResultNameNotes(text => messages.Add(text));
         var namePlans = new ResultNamePlan?[batches.Count];
+        // The running batch execution's binder until its notes are out; one an exception ended reports them in finally.
+        ResultNameBinder? pendingNames = null;
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1293,6 +1295,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     events.Progress(completed, totalBatches, batchNumber, iteration);
                     var raisedBefore = Raised();
                     var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
+                    pendingNames = names;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1359,7 +1362,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                                 sets.Add(opened);
                                                 events.Opened(opened);
                                             }
-                                            else { tally.Refused(); plan = null; }
+                                            else { tally.Refused(); plan = null; names?.Refused(); }
                                         }
                                         unkept = fate == ResultSetTally.Fate.Unkept;
                                     }
@@ -1490,6 +1493,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
                     if (names is not null) foreach (var note in names.Unapplied(failed)) nameNotes.Add(note);
+                    pendingNames = null;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
                     if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
                     if (failed) firstError ??= (batchNumber, iteration);
@@ -1500,7 +1504,6 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                             + (iteration < batch.RepeatCount ? "repetition." : "batch."));
                 }
             }
-            nameNotes.Finish();
             if (firstError is { } first)
             {
                 status = "completedWithErrors";
@@ -1546,6 +1549,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         finally
         {
+            if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived")) nameNotes.Add(note);
+            nameNotes.Finish();
             // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
             statisticsSample = statistics?.Finish();
             watch.Stop();

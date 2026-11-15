@@ -176,6 +176,20 @@ internal static class ResultNameChecks
         var binder = new ResultNameBinder(placed);
         check(binder.Take(Reader("a", "b"), isPlan: false, errored: false) == "Rows" && binder.Take(Reader("c"), isPlan: false, errored: false) is null && !binder.Unapplied(false).Any(),
             "a reader's set is named by its place and column count");
+        // The result budget refuses a named set: its name is noted as not applied, and so is every later one.
+        var budget = ResultNamePlan.BuildAsync(SqlScript.Parse("-- #Name=\"Kept\"\nSELECT 1 AS a;\n-- #Name=\"Refused\"\nSELECT 2 AS b;\n-- #Name=\"Later\"\nSELECT 3 AS c;").Single(), 1, CancellationToken.None).GetAwaiter().GetResult()!;
+        var refusing = new ResultNameBinder(budget);
+        var taken = new[] { refusing.Take(1, false, false, false), refusing.Take(1, false, false, false) };
+        refusing.Refused();
+        var unapplied = refusing.Unapplied(false).ToList();
+        check(taken is ["Kept", "Refused"] && refusing.Take(1, false, false, false) is null && unapplied is [var refusedNote, var laterNote]
+            && refusedNote == "Result name \"Refused\" (line 3) was not applied: result memory kept no more result sets." && laterNote.StartsWith("Result name \"Later\" (line 5) was not applied: result memory", StringComparison.Ordinal),
+            "a named set the result budget refuses is noted as not applied, as is each later name: " + string.Join(" / ", unapplied));
+        // A batch that ends early (an error that ends the script, a cancel) notes the names no set reached.
+        var ended = new ResultNameBinder(budget);
+        ended.Take(1, false, false, false);
+        check(ended.Unapplied(true, "its batch stopped before its result set arrived").ToList() is [var cut, _] && cut == "Result name \"Refused\" (line 3) was not applied: its batch stopped before its result set arrived.",
+            "names a batch never reached are noted with why it ended");
     }
 
     private static void Descriptor(Action<bool, string> check)
