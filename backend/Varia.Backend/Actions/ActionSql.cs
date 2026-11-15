@@ -283,7 +283,7 @@ internal static partial class ActionSql
     }
 
     /// <summary>Why a bound statement left a database alone: another database has taken the name since Delete Object read it.</summary>
-    internal const string NotTheDatabase = "N'The database is not the one Delete Object read: it was renamed, dropped or replaced since. Varia did not change it. Close Delete Object and open it again.'";
+    internal const string NotTheDatabase = "N'The database with this name is not the one Delete Object read: it was renamed, dropped or replaced since, perhaps while Varia waited for its connections to close. Varia did not change it. Close Delete Object and open it again.'";
 
     /// <summary>The templates a database's Delete binds to the database it read (<see cref="DatabaseBinding"/>): every statement its plan
     /// runs on the database by name.</summary>
@@ -337,7 +337,6 @@ internal static partial class ActionSql
     {
         ActionTemplate.DropMappedUser => ["@sid"],
         ActionTemplate.DropLogin => ["@sid", "@principal", "@created"],
-        ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser => ["@id", "@created"],
         _ => []
     };
 
@@ -681,8 +680,9 @@ internal static partial class ActionSql
     private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
 
     /// <summary>Problems with one executable batch (empty when it passes): leftover format holes, a name parameter outside
-    /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments.</summary>
-    public static List<string> LintExecutable(string text, ActionTemplate template)
+    /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments. Only a
+    /// <paramref name="bound"/> batch of a <see cref="DatabaseBound"/> template may read @id and @created, which only its check binds.</summary>
+    public static List<string> LintExecutable(string text, ActionTemplate template, bool bound = false)
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
@@ -691,7 +691,8 @@ internal static partial class ActionSql
         if (Placeholder().IsMatch(bare)) problems.Add("uses a name parameter outside QUOTENAME or a procedure argument");
         // The database a batch runs in reaches T-SQL only as QUOTENAME(@db) + N'.sys.…'.
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
-        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").Concat(Bindings(template)).ToHashSet(StringComparer.Ordinal);
+        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").Concat(Bindings(template))
+            .Concat(bound && DatabaseBound(template) ? ["@id", "@created"] : []).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Placeholder().Matches(text)) if (!parameters.Contains(used.Value)) problems.Add("uses " + used.Value + ", which the template does not bind");
         // A guarded DROP's constant check and recheck are sp_executesql's own batch, whose variables its constant parameter list declares.
         problems.AddRange(Undeclared(GuardedTexts.Aggregate(text, (rest, inner) => rest.Replace(inner, "N''", StringComparison.Ordinal)), parameters));
@@ -806,7 +807,7 @@ internal static partial class ActionSql
             foreach (var dry in new[] { false, true })
                 yield return (template + (dry ? " (dry run)" : ""), LintExecutable(Executable(template, dry), template));
         foreach (var template in Enum.GetValues<ActionTemplate>().Where(DatabaseBound))
-            yield return (template + " (bound)", LintExecutable(Executable(new PlannedStatement(template, "master", ["x"], Bound: new(1, DateTime.UnixEpoch))), template));
+            yield return (template + " (bound)", LintExecutable(Executable(new PlannedStatement(template, "master", ["x"], Bound: new(1, DateTime.UnixEpoch))), template, bound: true));
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             foreach (var kind in new[] { "table", "view", "procedure", "function" }) yield return (kind + " band " + band, LintCatalog(Object(kind, band), band, database: true));

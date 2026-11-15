@@ -219,10 +219,14 @@ internal static class ActionChecks
         var boundDrop = boundBatches[1];
         var boundMutations = new[] { boundDrop.Replace("QUOTENAME(@p1)", "@p1", StringComparison.Ordinal), boundDrop.Replace("@created", "@when", StringComparison.Ordinal),
             boundDrop.Replace("WHERE d.name = @p1 AND", "WHERE d.name = @p1 OR", StringComparison.Ordinal) };
-        check(ActionSql.LintExecutable(boundDrop, ActionTemplate.DropDatabase).Count == 0
-            && boundMutations.All(text => text != boundDrop && ActionSql.LintExecutable(text, ActionTemplate.DropDatabase).Count > 0)
-            && ActionSql.LintExecutable(ActionSql.DatabaseCheck + ActionSql.Executable(ActionTemplate.DropTable), ActionTemplate.DropTable).Count > 0,
-            "the lint refuses a bound batch that runs its name unquoted, compares it outside the check or reads an unbound value, and the check on a template that binds no database");
+        var readsBinding = "IF @id = 1 AND @created IS NULL RETURN;\n" + ActionSql.Executable(ActionTemplate.DropDatabase);
+        check(ActionSql.LintExecutable(boundDrop, ActionTemplate.DropDatabase, bound: true).Count == 0
+            && boundMutations.All(text => text != boundDrop && ActionSql.LintExecutable(text, ActionTemplate.DropDatabase, bound: true).Count > 0)
+            && ActionSql.LintExecutable(boundDrop, ActionTemplate.DropDatabase).Count > 0
+            && ActionSql.LintExecutable(readsBinding, ActionTemplate.DropDatabase).Count > 0 && ActionSql.LintExecutable(readsBinding, ActionTemplate.DropDatabase, bound: true).Count == 0
+            && ActionSql.LintExecutable(ActionSql.DatabaseCheck + ActionSql.Executable(ActionTemplate.DropTable), ActionTemplate.DropTable, bound: true).Count > 0,
+            "the lint refuses a bound batch that runs its name unquoted, compares it outside the check or reads an unbound value, an unbound batch that reads @id or "
+            + "@created, and the check on a template that binds no database");
         check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
             && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
             && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,

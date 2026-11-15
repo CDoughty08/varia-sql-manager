@@ -208,14 +208,17 @@ internal static class ActionLiveChecks
                 + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.DeleteTarget?.TransactionTabs?.Count + " tabs named; " + described.Error?.Message + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(outside), json), json); }
-        var multi = await client.Delete(database, close: true);
+        // These Deletes name the database read, so Close existing connections, the DROP and the access it restores each run bound
+        // (DatabaseCheck first in their batch) against a real server. A compensation keeps database_id and create_date, so the read stays valid.
+        var read = (await client.Describe(database)).DeleteTarget?.Identity;
+        var multi = await client.Delete(database, close: true, identity: read);
         var multiAccess = await Access(compensated);
-        check(multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),
+        check(read is not null && multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),
                 ("failed", "Drop the database", null), ("done", "Restore multi-user access", true)])
             && multi.Error.Message.EndsWith("Then \"Restore multi-user access\" completed.", StringComparison.Ordinal) && multiAccess == "MULTI_USER",
-            "a DROP its snapshot fails after Close existing connections restores multi-user access (" + multi.Error?.Message + "; " + multiAccess + ")");
+            "a bound DROP its snapshot fails after bound Close existing connections restores multi-user access (" + read?.Created + "; " + multi.Error?.Message + "; " + multiAccess + ")");
         await Exec("ALTER DATABASE " + Bracket(compensated) + " SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE;");
-        var restricted = await client.Delete(database, close: true);
+        var restricted = await client.Delete(database, close: true, identity: read);
         var restrictedAccess = await Access(compensated);
         check(restricted is { Error.Code: "DEPENDENTS" } && restricted.Steps.Last() is { Status: "done", Title: "Restore restricted user access", Compensates: true } && restrictedAccess == "RESTRICTED_USER",
             "and restricted access for a restricted database (" + restrictedAccess + ")");
