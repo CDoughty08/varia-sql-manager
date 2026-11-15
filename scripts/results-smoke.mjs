@@ -5,7 +5,7 @@
 // server through the Release backend. No assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -888,7 +888,7 @@ try {
     await setClipboard('')
     await writeFile(join(control, 'hold', 'results.copy'), '')
     await page.keyboard.press('Control+C')
-    await expect(jobProgress(page)).toContainText('Copying…')
+    await expect(jobProgress(page)).toContainText('Copying Result 1…')
     await rm(join(control, 'hold', 'results.copy'))
     await expect.poll(async () => (await clipboard()).split(eol).length, { timeout: 60000 }).toBe(200_000)
     await expect(jobProgress(page)).toHaveCount(0)
@@ -1011,6 +1011,17 @@ try {
   await page.keyboard.press('Control+S')
   await expect.poll(async () => (await application.evaluate(() => globalThis.variaSave.dialogs.length))).toBe(4)
   expect(await files()).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  // Save names follow the view and the query's names (grouped results PR 15): two results whose names make one file name
+  // keep their numbers, and an unnamed one is named by its number, through main's dialog.
+  await run('-- varia-fake: sets=N1*5,N1*5,N1*5 names=Totals,,totals')
+  for (const [of, expected, file] of [[namedResultGrid(page, 'Totals', 1), /^SQLQuery1-Totals-Result1\.[a-z]+$/, 'totals1.csv'], [grid('Result 2'), /^SQLQuery1-Result2\.[a-z]+$/, 'result2.csv']]) {
+    await choose(join(saveDir, file))
+    await cell(0, 0, of).click()
+    await page.keyboard.press('Control+S')
+    // N1 rows hold values the grid truncates, so the notice goes on to count them.
+    await expect(notice).toContainText(`Saved 5 rows to ${file}.`)
+    expect(basename((await lastDialog()).defaultPath)).toMatch(expected)
+  }
   // A save held after its first page shows its strip; Escape in the grid cancels it, and neither the file nor its
   // temporary file is left.
   await run('-- varia-fake: sets=W1*5000')
@@ -1030,7 +1041,7 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
   await page.keyboard.press('Escape')
   await expect(notice).toHaveText('Saving was cancelled. The file was not written.')
-  await expect.poll(files).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  await expect.poll(files).toEqual(['result2.csv', 'totals1.csv', 'w1.csv', 'w1.json', 'w1.txt'])
   // Running the query again releases the result, but the save goes on with its strip and finishes the file.
   await choose(join(saveDir, 'kept.csv'))
   await cell(0, 0).click()
@@ -1042,7 +1053,7 @@ try {
   await expect(notice).toHaveText('Saved 5,000 rows to kept.csv.', { timeout: 30000 })
   await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
-  expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  expect(await files()).toEqual(['kept.csv', 'result2.csv', 'totals1.csv', 'w1.csv', 'w1.json', 'w1.txt'])
   // The saves above ended in view and showed no toast. One that ends while its query is in the background says so in a
   // toast with Show results, which Focus Notifications reaches from the keyboard.
   const toast = toasts(page)
@@ -1878,14 +1889,18 @@ try {
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Yellow', exact: true }).click()
   await expect(grid().locator(gridPart.highlightedRow)).toHaveCount(1)
-  // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transposed; the grid's menu has it too.
+  // A toolbar too narrow for every tool (Windows CI's display) folds Transposed into ⋯; the grid's menu has it too. Headers
+  // appearing beside it may fold both away once there, so Headers is then chosen from the grid's menu as well.
+  const headersTool = name => resultsToolbar(page).getByRole('button', { name: `Headers: ${name}`, exact: true })
   const byToolbar = await show('Transposed').isVisible()
   if (byToolbar) {
     await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'false')
     await show('Transposed').click()
-    await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'true')
-    await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: Row number', exact: true })).toBeVisible()
+    // Headers shows beside it, or there was no room for it and Transposed and Headers folded into ⋯ (the toolbar still fits).
+    await expect.poll(async () => await headersTool('Row number').isVisible() || /\bview\b/.test((await resultsToolbarFit(page)).fold)).toBe(true)
+    expect((await resultsToolbarFit(page)).fits).toBe(true)
   } else await (await transposeMenu(cell(0, 0), 'Transposed', 'menuitemcheckbox')).click()
+  const headersByToolbar = byToolbar && await headersTool('Row number').isVisible()
   await expect(turned()).toHaveCount(1)
   // Still the run's one grid: the result's cells by their own row and column, its columns named down the frozen column.
   await expect(anyResultGrid(page)).toHaveCount(1)
@@ -1915,11 +1930,11 @@ try {
   await (await transposeMenu(nameCell('name'), 'Using Column as Headers')).click()
   await expect(grid().getByRole('columnheader', { name: new RegExp(`^${firstName}`) })).toHaveCount(1)
   await expect(drawnHeader('Row 1')).toHaveCount(0)
-  if (byToolbar) await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true })).toBeVisible()
+  if (headersByToolbar) await expect(headersTool('name')).toBeVisible()
   // The header column is still drawn as a row.
   await expect(transposedCell(grid(), 0, 1)).toHaveText(firstName)
   // Choose Headers lists Row number and the columns, on the current one; Row number brings "Row N" back.
-  if (byToolbar) await resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true }).click()
+  if (headersByToolbar) await headersTool('name').click()
   else await (await transposeMenu(transposedCell(grid(), 0, 0), 'Choose Headers…')).click()
   await expect(quickInputActive(page)).toContainText('name')
   await quickInputRows(page).filter({ hasText: 'Row number' }).click()
@@ -2168,19 +2183,31 @@ try {
 
   // 14b. White space: the results toolbar marks spaces and tabs, then line breaks and invisible characters too. The marks
   // are drawn only: the active cell's name and Copy keep the value, and the grid's menu checks the choice that is on.
-  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true })
-  const choice = name => whitespace.getByRole('button', { name, exact: true })
+  // A window as narrow as CI's 1024 px displays may fold White space into ⋯ (with Linux's fonts the search field's whole
+  // placeholder leaves it no room); its buttons still say the choice, and the grid's menu then makes it.
+  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true, includeHidden: true })
+  const choice = name => whitespace.getByRole('button', { name, exact: true, includeHidden: true })
+  const whitespaceFolded = !(await whitespace.isVisible())
+  const fromGridMenu = async name => {
+    await cell(1, 0).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitemcheckbox', { name }).click()
+  }
   const cellText = (row, column) => cell(row, column).evaluate(element => element.textContent)
   await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
   expect(await cellText(3, 2)).toBe('😀 astral')
-  await choice('Spaces').click()
+  if (whitespaceFolded) await fromGridMenu(/^Show Spaces and Tabs/)
+  else await choice('Spaces').click()
   await expect(choice('Spaces')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cellText(3, 2)).toBe('😀·astral')
   // A line break Spaces does not mark stays one line, as it shows when off.
   expect(await cellText(5, 2)).toBe('tab→line quote"\\')
-  await choice('Spaces').press('ArrowRight')
-  await expect(choice('All')).toBeFocused()
-  await page.keyboard.press('Enter')
+  // Asked again: a pressed button is bold, so a group that only just fitted may have folded once Spaces was pressed.
+  if (whitespaceFolded || !(await whitespace.isVisible())) await fromGridMenu(/^Show All White Space/)
+  else {
+    await choice('Spaces').press('ArrowRight')
+    await expect(choice('All')).toBeFocused()
+    await page.keyboard.press('Enter')
+  }
   await expect(choice('All')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cellText(5, 2)).toBe('tab→lineLFquote"\\')
   await expect(cell(5, 2).locator(gridPart.whitespaceBadge)).toHaveText('LF')
@@ -2247,9 +2274,10 @@ try {
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
 
-  // 14c2. A sort in progress: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
+  // 14c2. A sort in progress, in a 1024-wide window as on CI's displays: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
   // as a ring with the percentage on the sorted column's button and a bar along the grid. Sorting and filtering wait: a
   // second click is refused, not queued. Cancel keeps the order the grid had and says so; the controls are live again.
+  await resize(1024, 740)
   const holdSort = join(control, 'hold', 'results.view')
   await writeFile(holdSort, '')
   await header('clipped').hover()
@@ -2268,8 +2296,10 @@ try {
   await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
   await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
   await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
-  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by' }).getByRole('button', { name: 'Chars' })).toHaveAttribute('aria-disabled', 'true')
+  // A pane too narrow for the strip and every tool folds Sort text by into ⋯; held, its buttons say so either way.
+  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by', includeHidden: true }).getByRole('button', { name: 'Chars', includeHidden: true })).toHaveAttribute('aria-disabled', 'true')
   await operationCancel(page, 'Cancel sort, Result 1').click()
+  await resize(...fullSize)
   await expect(sorting).toHaveCount(0)
   await expect(operationNotice(page)).toHaveText('Sort cancelled. The grid kept its previous order.')
   await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
@@ -2535,7 +2565,7 @@ try {
   await page.keyboard.press('Escape')
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 1')).toBeFocused()
-  // The toolbar's Compare gives way below 1180px (a CI runner's window can be narrower), so the window is made wide enough.
+  // The toolbar folds Compare into ⋯ when it is narrow (a CI runner's window can be), so the window is made wide enough.
   await resize(1280, 800)
   const compareTool = resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })
   await compareTool.click()

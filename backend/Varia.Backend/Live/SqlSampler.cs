@@ -39,6 +39,35 @@ internal static class LiveConnections
     /// <summary>The permission that shows server state: VIEW SERVER PERFORMANCE STATE from SQL Server 2022 (which VIEW SERVER
     /// STATE implies), VIEW SERVER STATE before and on Managed Instance.</summary>
     public static string ServerStatePermission(ServerProfile profile) => profile.EngineEdition != 8 && profile.Major >= 16 ? "VIEW SERVER PERFORMANCE STATE" : "VIEW SERVER STATE";
+
+    /// <summary>How long <see cref="AnswersAsync"/> waits for its answer.</summary>
+    internal const int CheckMs = 1000;
+    /// <summary>What <see cref="AnswersAsync"/> runs: constant, reads no table, takes no lock.</summary>
+    internal const string Check = "SELECT @@TRANCOUNT;";
+
+    /// <summary>Whether a connection whose statement was cancelled (a budget, or a view or request that ended) is as clean as one
+    /// after any finished statement: still open, answering a trivial statement within <see cref="CheckMs"/>, with no transaction
+    /// open. SqlClient ends a cancelled statement on the server before it lets the connection run another, and dooms the
+    /// connection when it cannot; this proves it did. Such a connection may be kept or go back to its pool, so one view's timeout
+    /// never clears the pool that every live view and Details on the connection share (SqlConnection.ClearPool drops all of
+    /// its idle connections and every busy one as it comes back). One that fails the check is never pooled again: its caller
+    /// clears the pool, as before. Never throws.</summary>
+    public static async Task<bool> AnswersAsync(SqlConnection connection)
+    {
+        if (connection.State != ConnectionState.Open) return false;
+        using var bound = new CancellationTokenSource(CheckMs);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = 0;
+            command.CommandText = Check;
+            return await command.ExecuteScalarAsync(bound.Token).ConfigureAwait(false) is 0;
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>Probes the live checks register through an internal method, never a request field: their queries (by probe id and
@@ -105,6 +134,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         band = LiveConnections.Band(profile);
         permission = LiveConnections.ServerStatePermission(profile);
         bool? permitted = null;
+        // The session probe was sent: a cancel that comes after it may have cut a statement short.
+        var probing = false;
         // A view subscribed hidden runs no SQL until a probe resumes; its first sample connects and reads the session then.
         if (!probes.All(probe => probe.Paused))
         {
@@ -113,11 +144,20 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 await ConnectAsync(token).ConfigureAwait(false);
                 // The session probe is a live statement too; with the gates full, the first tick reads it instead.
                 using var lease = await gates.WaitAsync(connectionId, SessionBudgetMs, token).ConfigureAwait(false);
+                probing = lease is not null;
                 if (lease is not null) permitted = await SessionAsync(token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
+            {
+                // The subscription ended while it opened: as in SampleAsync, settled before the end goes on.
+                await SettleCancelledAsync(probing).ConfigureAwait(false);
+                throw new OperationCanceledException(token);
             }
             catch (SqlException) { Drop(); }
             catch (InvalidOperationException) { Drop(); }
-            catch (TimeoutException) { Drop(); }
+            // The connect's bound (never open: dropped) or the session probe's budget (kept when it still answers, so opening a view
+            // on a busy server never clears the pool the other views share; the first tick reads the session again).
+            catch (TimeoutException) { if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop(); }
             catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { Drop(); }
         }
         opened = true;
@@ -231,6 +271,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 continue;
             }
             var connected = false;
+            // A statement was sent (the session probe or the probe's own): a cancel after it may have cut one short.
+            var sent = false;
             LiveProbeError? failure = null;
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
             try
@@ -243,6 +285,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                     errors.Add(LiveErrors.Create(id, "BUSY", LiveErrors.BusyMessage));
                     continue;
                 }
+                sent = true;
                 if (!sessionRead) await SessionAsync(token).ConfigureAwait(false);
                 // A probe that needs server state the login lacks runs nothing, as it would have opened unavailable had the
                 // session probe run then (the source opened paused, the gates were full, the connect failed), or as a new
@@ -289,13 +332,17 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             }
             catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
             {
-                // The subscription ended mid-statement: SqlClient reports the cancel in its own words.
-                Drop();
+                // The subscription ended (mid-statement, or while it connected or waited for a gate): SqlClient reports the cancel
+                // in its own words.
+                await SettleCancelledAsync(sent).ConfigureAwait(false);
                 throw new OperationCanceledException(token);
             }
             catch (Exception error) when (error is TimeoutException || budget.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
             {
-                Drop();
+                // A statement over its budget: the probe keeps its session when the connection still answers, so its timeout
+                // never clears the pool the other views share; a connect over its bound, or a connection that does not answer,
+                // is dropped and never pooled again.
+                if (!connected || !await HeldAnswersAsync().ConfigureAwait(false)) Drop();
                 failure = LiveErrors.Create(id, "TIMEOUT", LiveErrors.TimeoutMessage);
             }
             catch (SqlException error) when (ssisdb && !connected && LiveErrors.OpensNoDatabase(error))
@@ -336,6 +383,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     private async Task<LiveProbeError?> CatalogFailureAsync(string probe, int budgetMs, CancellationToken token)
     {
         SqlConnection? server = null;
+        // The state statement was sent: only then can a cancel have cut one short (before it, nothing on the connection is dirty).
+        var sent = false;
         try
         {
             server = host.PoolConnection(connectionId, null, LiveConnections.SsisSuffix);
@@ -346,6 +395,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             }
             using var lease = await gates.WaitAsync(connectionId, budgetMs, token).ConfigureAwait(false);
             if (lease is null) return null;
+            sent = true;
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
             budget.CancelAfter(budgetMs);
             await using var command = server.CreateCommand();
@@ -360,11 +410,12 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
             // As in SampleAsync: the cancel in SqlClient's words ends the subscription cancelled, and a connection cancelled
-            // mid-statement goes back to no pool.
-            if (server is not null)
+            // mid-statement goes back to no pool unless it still answers; one cancelled before it sent anything clears nothing.
+            if (server is not null && sent && !await LiveConnections.AnswersAsync(server).ConfigureAwait(false))
             {
+                PoolClears++;
                 try { SqlConnection.ClearPool(server); }
-                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+                catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
             }
             throw new OperationCanceledException(token);
         }
@@ -591,8 +642,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         return (snapshots, appends, full);
     }
 
-    /// <summary>Gives the connection back: to the pool when it is healthy (idle), and never to it when it broke or was cancelled
-    /// mid-statement (its pool is cleared, so no other view picks it up).</summary>
+    /// <summary>Gives the connection back: to the pool when it is healthy (idle, never opened, or a cancelled statement's that passed
+    /// the clean-connection check), and never to it when it broke or failed that check (its pool is cleared, so no other view
+    /// picks it up).</summary>
     private void Drop(bool baseline = false, bool healthy = false)
     {
         // After a lost connection, which may have reached another server (a failover), rates start again.
@@ -605,10 +657,28 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         connection = null;
         if (!healthy)
         {
+            PoolClears++;
             try { SqlConnection.ClearPool(held); }
-            catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+            catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
         }
         held.Dispose();
+    }
+
+    /// <summary>How many times this sampler cleared a pool, its held connection's or the catalog lookup's (the checks read it:
+    /// ClearPool itself cannot be seen offline).</summary>
+    internal int PoolClears { get; private set; }
+
+    /// <summary>Whether the held connection survived a cancelled statement (LiveConnections.AnswersAsync); false with none held.</summary>
+    private async Task<bool> HeldAnswersAsync() => connection is { } held && await LiveConnections.AnswersAsync(held).ConfigureAwait(false);
+
+    /// <summary>The subscription ended while this source opened or sampled. Before any statement was sent (the connect or a gate
+    /// wait was cancelled) nothing on the connection can be dirty: it goes without clearing the pool (an open one back to the pool
+    /// when the sampler is disposed). After one was sent, a connection that still answers goes back to the pool too; one that
+    /// does not, or that SqlClient closed because the cancel broke it, clears the pool as before.</summary>
+    private async Task SettleCancelledAsync(bool sent)
+    {
+        if (!sent) { if (connection is not { State: ConnectionState.Open }) Drop(healthy: true); }
+        else if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop();
     }
 
     public void Idle() => Drop(healthy: true);

@@ -465,7 +465,9 @@ being true.
   input recorded by `WindowRegistry`, including input in a popout.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. The session's
+  only granted permission is a sanitized clipboard write from the main window's main frame; its permission request and
+  check handlers answer alike (`src/main/permissions.ts`), since Electron's default check grants everything. On Linux,
   Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
   the click lands) with no role or gate: in each window the page cancels every middle-button release event
   (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and every middle-button pointermove (how a
@@ -539,7 +541,10 @@ being true.
   the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
   or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
-  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
+  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. A database's Delete that names the database Delete
+  Object read (`DatabaseIdentityDto`) binds every statement it runs on it by name (SINGLE_USER, the DROP, the restored access) through
+  `PlannedStatement.Bound`, so each batch first checks `database_id` and `create_date` (`ActionSql.CheckOf`); the lint lets only those bound
+  batches read `@id` and `@created`. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
   (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
   the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
   run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),

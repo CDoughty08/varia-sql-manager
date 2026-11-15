@@ -1,8 +1,9 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
 import { planSourceLabel } from '../src/renderer/src/plans/ResultPlans'
 import type { ResultSetEntry } from '../src/renderer/src/results/ResultsService'
-import { comparedNames, distinctName, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
+import { comparedNames, comparisonName, distinctName, entryName, entryNumber, entrySecondary, numberedName, pivotName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
 const filter = { filter: { op: 'notNull', column: 0 }, label: 'id is not NULL' }
@@ -63,5 +64,24 @@ describe("a SQL-returned plan's name in the plan viewer", () => {
     expect(planSourceLabel({ number: 2, descriptor: descriptor('Plans') }, 0)).toBe('Plans, Result 2, plan 1')
     expect(planSourceLabel({ number: 2, descriptor: descriptor() }, 1)).toBe('Result 2, plan 2')
     expect(planSourceLabel({ number: 3, capturedPlan: true, descriptor: descriptor('Plans') }, 0, 'Batch 2')).toBe('Plan 3 · Batch 2')
+  })
+})
+
+// A results surface names an entry only through ResultsService's naming helpers, so a name change (named results) reaches
+// every surface. GridView sits under the results layer and builds its accessible "Result N of M" itself.
+describe('result names come from the naming helpers', () => {
+  it('builds "Result N", "Pivot of" and "Differences:" only in ResultsService', () => {
+    const roots = ['src/renderer/src/results', 'src/renderer/src/grid', 'src/renderer/src/plans', 'src/renderer/src/contributions', 'src/renderer/src/menus']
+    // Anywhere in a template, not only at its start ("Close Result ${n}", "${a}, Result ${n}").
+    const built = /\bResult \$\{|\bPivot of \$\{|\bDifferences: \$\{/
+    const offenders = roots.flatMap(root => readdirSync(root).filter(name => /\.tsx?$/.test(name)).map(name => `${root}/${name}`))
+      .filter(file => !file.endsWith('/ResultsService.ts'))
+      .flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
+      .filter(([file, , line]) => built.test(line) && !(file.endsWith('/GridView.ts') && line.includes('of ${this.resultCount}')))
+    expect(offenders.map(([file, line]) => `${file}:${line}`)).toEqual([])
+  })
+  it('names a Pivot and a comparison', () => {
+    expect(pivotName('Result 3')).toBe('Pivot of Result 3')
+    expect(comparisonName('Result 1', 'Totals (Result 3)')).toBe('Differences: Result 1 → Totals (Result 3)')
   })
 })

@@ -294,7 +294,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.TableChanges is not null && args.Action != "tableProperties") throw Invalid(args.Action + " takes no tableChanges.");
         // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
         if (args.LoginIdentity is { } loginRead && (args.Action is not ("disable" or "enable" or "delete" or "unlock" or "loginProperties") || loginRead.Sid is null || !LoginSid().IsMatch(loginRead.Sid)
-            || loginRead.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(loginRead.Created))) throw Invalid("loginIdentity.");
+            || !DatabaseAlter.CreatedValid(loginRead.Created))) throw Invalid("loginIdentity.");
         if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
         if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
         if (args.Action != "detach" && (args.UpdateStatistics is not null || args.DetachOffline is not null)) throw Invalid("only detach takes updateStatistics and detachOffline.");
@@ -317,10 +317,13 @@ internal sealed partial class ActionService : IDisposable
                 if (args.Identity is { } read && !DatabaseAlter.IdentityValid(read)) throw Invalid("identity.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
+                // A database's DROP names the database Delete Object read (its database_id and create_date), as a rename's does.
+                if (deleted.Kind != "database" && args.Identity is not null) throw Invalid("only a database has an identity its describe read.");
+                if (args.Identity is { } dropped && (!DatabaseAlter.IdentityValid(dropped) || BoundOf(dropped) is null)) throw Invalid("identity.");
                 if (deleted.Kind != "login" && (args.DropMappedUsers is not null || args.LoginIdentity is not null)) throw Invalid("only a login has mapped users and an identity to check.");
                 // DROP LOGIN and every DROP USER bind to the principal Delete Object showed; Script runs nothing and may omit it.
                 if (deleted.Kind == "login" && !script && args.LoginIdentity is null) throw Invalid("a login's delete needs the loginIdentity it read.");
@@ -852,6 +855,9 @@ internal sealed partial class ActionService : IDisposable
     {
         if (subject.Login is { } login) return LoginRefusal(login, args);
         var row = subject.Row;
+        // Another database has taken the name since Delete Object read it: its warnings, sessions and blockers were about the one it read.
+        if (args.Action == "delete" && subject.Target.Kind == "database" && args.Identity is { } read && !IsDatabase(row, read))
+            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one Delete Object read: it was renamed, dropped or replaced since. Close Delete Object and open it again.");
         var system = subject.Target.Kind == "database" ? row.Bool("is_system") : row.Bool("is_ms_shipped");
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, args.Action))
@@ -901,6 +907,10 @@ internal sealed partial class ActionService : IDisposable
         if (closeConnections && engine == "managedInstance") return Error("NOT_SUPPORTED", "Managed Instance cannot set SINGLE_USER, so Varia cannot close the connections. Rename when they are free instead.");
         return null;
     }
+
+    /// <summary>Whether a preflight row (ActionSql.Database) is the database a describe read: its database_id and create_date.</summary>
+    private static bool IsDatabase(ScriptPreflight.Row row, DatabaseIdentityDto read) =>
+        row.Int("database_id") == read.Id && DatabaseProperties.Iso(row.Raw("create_date")) == read.Created;
 
     /// <summary>A login the request's identity does not describe: the name now belongs to another principal, whose facts the user never saw.</summary>
     private ActionError? IdentityRefusal(LoginFactsDto login, ActionArgs args) =>
@@ -1054,15 +1064,22 @@ internal sealed partial class ActionService : IDisposable
         // SSMS deletes the backup history first; deleting it after the DROP keeps it when the DROP fails (IN_USE).
         var plan = new List<PlannedStatement>();
         var close = args.CloseConnections == true && facts?.Offline != true;
-        if (close) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
-        plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
+        // With the identity Delete Object read, each statement's own batch checks it is still that database (ActionSql.DatabaseCheck).
+        var bound = BoundOf(args.Identity);
+        if (close) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!], Bound: bound));
+        plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!], Bound: bound));
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         // Due only when the DROP (main step 1) did not complete; a failed history delete after it leaves no database to restore.
         var restore = facts?.UserAccess switch { 0 => ActionTemplate.SetMultiUser, 2 => ActionTemplate.SetRestrictedUser, _ => (ActionTemplate?)null };
         if (close && restore is { } undo)
-            plan.Add(new(undo, "master", [target.Name!], StepKind.Compensation, Undoes: 0, When: statuses => statuses.Count < 2 || statuses[1] != "done"));
+            plan.Add(new(undo, "master", [target.Name!], StepKind.Compensation, Undoes: 0, When: statuses => statuses.Count < 2 || statuses[1] != "done", Bound: bound));
         return plan;
     }
+
+    /// <summary>The binding a request's identity gives a database's DROP, or null without one (Validate has checked its form).</summary>
+    internal static DatabaseBinding? BoundOf(DatabaseIdentityDto? identity) =>
+        identity is { Created: { } created } && DateTime.TryParseExact(created, "yyyy-MM-dd'T'HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var at) ? new(identity.Id, at) : null;
 
     /// <summary>A database's rename (D3c, spec 7). Closing the connections is SINGLE_USER WITH ROLLBACK IMMEDIATE on the action's own
     /// connection, which keeps the database until MODIFY NAME (critic A12), and then the original access back under the new name.
@@ -1316,8 +1333,10 @@ internal sealed partial class ActionService : IDisposable
             }
         }
         var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
+        // The database read, which OK names; none when its create_date cannot be written as the request's identity carries it (Iso answers "").
+        var identity = DatabaseProperties.Iso(row.Raw("create_date")) is { Length: > 0 } created ? new DatabaseIdentityDto(row.Int("database_id"), created) : null;
         var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
-            withTransaction, blockers, blockers is null ? null : more, note, tabs);
+            withTransaction, blockers, blockers is null ? null : more, note, tabs, Identity: identity);
         return new(deleted, 0);
     }
 
@@ -1936,7 +1955,7 @@ internal sealed partial class ActionService : IDisposable
             throw new InvalidOperationException("A bound statement runs through RunBoundAsync.");
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = ActionSql.Executable(statement.Template, dryRun);
+        command.CommandText = ActionSql.Executable(statement, dryRun);
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, statement.Database);
         for (var index = 0; index < statement.Names.Count; index++) Add(command, "@p" + (index + 1), SqlDbType.NVarChar, 128, statement.Names[index]);
@@ -1950,6 +1969,12 @@ internal sealed partial class ActionService : IDisposable
                 Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId!.Value);
                 Add(command, "@created", SqlDbType.DateTime, 0, bound.Created!.Value);
             }
+        }
+        // A statement bound to a database checks it first (ActionSql.DatabaseCheck); its dry run selects the statement and binds nothing.
+        if (statement.Bound is { } database && !dryRun)
+        {
+            Add(command, "@id", SqlDbType.Int, 0, database.Id);
+            Add(command, "@created", SqlDbType.DateTime, 0, database.Created);
         }
         return await ReadAllAsync(command, token);
     }

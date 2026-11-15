@@ -32,6 +32,7 @@ import SessionTablePane from './panes/SessionTablePanes'
 import SessionDetails from './SessionDetails'
 import { KillConfirm, KillReportBanner } from './KillConfirm'
 import RecentQueriesPane from './panes/RecentQueriesPane'
+import { followPointerDrag } from '../kit/pointer-drag'
 import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
@@ -244,13 +245,8 @@ function Panes({ state, ring, handle, snapshot }: { readonly state: MonitorState
     const element = box.current
     if (!element || event.button !== 0) return
     event.preventDefault()
-    const bounds = element.getBoundingClientRect(), target = event.currentTarget
-    target.setPointerCapture(event.pointerId)
-    const move = (moved: PointerEvent) => activity.setSplitRatio(state.id, wide ? (moved.clientX - bounds.left) / bounds.width : (moved.clientY - bounds.top) / bounds.height)
-    const end = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end) }
-    target.addEventListener('pointermove', move)
-    target.addEventListener('pointerup', end)
-    target.addEventListener('pointercancel', end)
+    const bounds = element.getBoundingClientRect()
+    followPointerDrag(event.currentTarget, event.pointerId, moved => activity.setSplitRatio(state.id, wide ? (moved.clientX - bounds.left) / bounds.width : (moved.clientY - bounds.top) / bounds.height))
   }
   const splitterKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === (wide ? 'ArrowLeft' : 'ArrowUp') ? -splitLimits.step : event.key === (wide ? 'ArrowRight' : 'ArrowDown') ? splitLimits.step : undefined

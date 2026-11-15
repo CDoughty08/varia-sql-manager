@@ -2225,7 +2225,9 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-offline-dark.png') })
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
-  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'database', name: 'Archive' }, closeConnections: false, deleteHistory: true })
+  // OK names the database the dialog read, through preload and main's validation.
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'database', name: 'Archive' }, closeConnections: false, deleteHistory: true,
+    identity: { id: 9, created: '2026-01-02T03:04:05.000' } })
   await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Archive$/ })).toHaveCount(0)
   await expect(toastMessage(toasts(page).filter({ hasText: 'Archive' }))).toHaveText('1 query window was using Archive.')
   await selectOpenDocument(page, 'Database Properties - Archive')

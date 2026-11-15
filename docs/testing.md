@@ -155,8 +155,8 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
   `VARIA_TEST_SLOW_MS` is set; a suite still running after 3 minutes is named and the run exits,
   `VARIA_TEST_OFFLINE_SUITE_MS=<ms>` to change that): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
-  `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes process-wide state (the console,
-  environment variables, a static override, GC measurements). The result suites (`packedPass` in Program.cs) then run a
+  `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes or measures process-wide state (the console,
+  environment variables, a static override, GC measurements, lock contention counts). The result suites (`packedPass` in Program.cs) then run a
   second time with `ResultStore.DefaultPacking` = `EveryComplete`, so every complete result's pages are packed
   (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
   compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a

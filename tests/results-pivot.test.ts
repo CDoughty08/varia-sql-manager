@@ -2120,3 +2120,24 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.pivot.getSnapshot().building).toEqual({})
   })
 })
+
+describe('a closed tab\'s pivots', () => {
+  it('keep no builds of the tab once they end, whether they built or the tab closed while they ran', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    pivot.open('t1', keyAt(results, 't1', 0))
+    const inside = pivot as unknown as { errors: Map<string, unknown>; running: Map<string, unknown> }
+    await pivot.run('t1')
+    expect(inside.running.has('t1')).toBe(false)
+    // A build is in flight when the tab closes, and fails afterwards.
+    let fail!: (error: unknown) => void
+    vi.mocked(first.pivot).mockReturnValueOnce(new Promise((_yes, no) => { fail = no }))
+    const building = pivot.run('t1')
+    await settle()
+    expect(inside.running.has('t1')).toBe(true)
+    results.release('t1')
+    fail(new ResultError('TIMEOUT', 'The pivot took too long.'))
+    await building
+    expect([inside.errors.has('t1'), inside.running.has('t1')]).toEqual([false, false])
+  })
+})
