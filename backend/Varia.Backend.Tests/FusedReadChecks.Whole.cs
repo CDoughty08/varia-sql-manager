@@ -90,6 +90,9 @@ internal static partial class FusedReadChecks
         string? Asked(string method, object args, long room)
         {
             store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - room, false, out _);
+            // The service's own reservation before the operation fits (1 KiB to spare): any refusal comes from inside.
+            if (!store.TryReserveWork(set.Budget, room - 1024)) return "the reservation before the operation was refused";
+            store.Return(set.Budget, room - 1024);
             try { service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
             catch (RequestException error) { return error.Code + ": " + error.Message; }
             finally { store.Return(filler, filler.UsedBytes); }
@@ -98,7 +101,7 @@ internal static partial class FusedReadChecks
         {
             ("results.distinct", new { resultId = set.ResultId, column = 3 }, ViewSorter.DistinctWorkingBytes(Rows) + 1024, ViewSorter.DistinctTooLarge),
             ("results.identify", new { resultId = set.ResultId, by = "auto" }, RowIdentity.WorkingBytes(Rows) + 8L * Rows + ResultStore.ViewOverhead + 1024, RowIdentity.TooLarge),
-            ("results.search", new { resultId = set.ResultId, text = "word7", fromRow = 0, maxMatches = 10 }, 1024, ResultSearcher.TooLarge),
+            ("results.search", new { resultId = set.ResultId, text = "word7", fromRow = 0, maxMatches = 10 }, 1025, ResultSearcher.TooLarge),
         };
         foreach (var ask in asks)
         {
@@ -142,6 +145,25 @@ internal static partial class FusedReadChecks
         check(free - 2 * aheadBytes < roomy.Bytes && tight.Rows == roomy.Rows && tight.Stages.WrittenAhead > 0 && tight.Stages.WrittenBehind > 0,
             "a unified diff gives its rooms unpacked ahead back once its rows reach the budget's last eighth, and writes every row: "
             + tight.Rows + " of " + roomy.Rows + ", " + roomy.Bytes + " bytes of rows, " + free + " free, " + aheadBytes + " a side ahead, eighth " + eighth);
+
+        // The result unpacked in place by another operation mid-write: nothing is left to unpack, so the rooms go back.
+        using (pair.Left.Pin())
+        {
+            var pages = pair.Left.SealedSnapshot();
+            using var rooms = PageRooms.Over(pages, pair.Left.Wires.Count, () => new RequestException("TOO_LARGE", "refused"))!;
+            using var reader = new RowAccess(pages, pair.Left.Wires.Count).Reader(rooms, ResultDiffer.LeftSlots);
+            var before = pair.Store.UsedBytes;
+            reader.Ahead(Enumerable.Range(0, Rows), CancellationToken.None);
+            var aheadTaken = pair.Store.UsedBytes - before;
+            reader.YieldAhead();
+            var kept = pair.Store.UsedBytes - before;
+            pair.Left.TryUnpackAll();
+            var unpackedAt = pair.Store.UsedBytes;
+            reader.YieldAhead();
+            check(aheadTaken > 0 && kept == aheadTaken && unpackedAt - pair.Store.UsedBytes == aheadTaken,
+                "rooms unpacked ahead stay while the result is packed and the budget has spare memory, and go back once the result is unpacked in place: "
+                + aheadTaken + " taken, " + kept + " kept, " + (unpackedAt - pair.Store.UsedBytes) + " given back");
+        }
     }
 
     private static readonly int[] Kept500 = [.. Enumerable.Range(0, Rows).Where(row => row % 500 != 7), .. Enumerable.Range(Rows, 40)];

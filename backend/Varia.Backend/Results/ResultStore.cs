@@ -375,12 +375,6 @@ internal sealed partial class ResultStore
         return true;
     }
 
-    /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
-    /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
-    /// reservation of its own that found the budget full would stop it for good.</summary>
-    /// <param name="checkSystem">Whether to ask the system's memory load too. By default as working memory is asked
-    /// (<see cref="WorkCheckBytes"/> or more): what is taken in small pieces (a sort key's pages) asks once for every
-    /// that much taken, so a busy machine does not lose a few kilobytes that make a sort many times faster.</param>
     /// <summary>Whether both budgets are still short of the eighth <see cref="TryReserveSpare"/> leaves free: once either
     /// reaches it, memory taken as spare is better given back to the operation's own work.</summary>
     public bool HasSpare(QueryBudget query)
@@ -390,6 +384,12 @@ internal sealed partial class ResultStore
         return query.UsedBytes <= limit - limit / 8 && UsedBytes <= budget.Global - budget.Global / 8;
     }
 
+    /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
+    /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
+    /// reservation of its own that found the budget full would stop it for good.</summary>
+    /// <param name="checkSystem">Whether to ask the system's memory load too. By default as working memory is asked
+    /// (<see cref="WorkCheckBytes"/> or more): what is taken in small pieces (a sort key's pages) asks once for every
+    /// that much taken, so a busy machine does not lose a few kilobytes that make a sort many times faster.</param>
     public bool TryReserveSpare(QueryBudget query, long bytes, bool? checkSystem = null)
     {
         var budget = Volatile.Read(ref figures);

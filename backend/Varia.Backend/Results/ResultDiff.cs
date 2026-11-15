@@ -206,10 +206,11 @@ internal sealed class RowAccess
         }
 
         /// <summary>Gives the rooms unpacked ahead back once the budget has no spare memory left, so the rows being written
-        /// get the room they would have had without them; this reader then unpacks its pages itself.</summary>
+        /// get the room they would have had without them (this reader then unpacks its pages itself), or once another
+        /// operation unpacked the result in place (all of it at once), so nothing is left to unpack.</summary>
         public void YieldAhead()
         {
-            if (ahead is null || rooms!.Set.HasSpare) return;
+            if (ahead is null || (rooms!.Set.HasSpare && rooms.Set.HasPacked)) return;
             ahead.Dispose();
             aheadBefore += ahead.Unpacked;
             ahead = null;
