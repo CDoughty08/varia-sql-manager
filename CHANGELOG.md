@@ -48,6 +48,8 @@
 
 ### Fixed
 
+- **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.
+- **Pivot:** the Pivot builder could count its source result as 0 rows; it now shows the rows the result holds.
 - **Object Explorer:** pinned server shortcuts above and below the tree, including entries in More servers, offer the same full context menu as the server row in view.
 - **Connection recovery:** Connect's deferred Explorer focus yields to newer keyboard or pointer input. Rejected native opens fail without blocking cleanup, and cancelled or lost database/password changes cannot leave unverified settings eligible for connection reuse.
 - **Connection safety:** Database Properties, Table Designer, SSIS, Activity Monitor and other dependent documents no longer follow a replacement connection by server name alone. Drafts stay open, and operations require their original connection target. Legacy documents without that identity must be reopened explicitly after a connection is replaced.

@@ -319,7 +319,7 @@ describe('ResultClient', () => {
     await expect(handle.diff(client.open(descriptor({ generation: 2, resultId: 4 })))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(before)
     const comparing = view.diff(other, { exact: true, context: -1 })
-    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), key: null, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
+    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
     expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
     expect(await comparing).toEqual(diffAnswer)
     // A diff given up whose answer comes anyway is closed, and the page stops waiting for it once the worker says so.

@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1684,6 +1684,8 @@ try {
   await expect(pivoting).toBeVisible()
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'true')
   await expect(pivotSource(page)).toHaveText('Result 1')
+  // The rows its source holds, not the none it had when it opened.
+  await expect(pivotFacts(page)).toHaveText('100 rows')
   await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true })).toHaveCount(0)
   await pivoting.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ label: 'active' })
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
@@ -2466,6 +2468,20 @@ try {
   await expect(strip('Result 4').getByRole('button', { name: 'Result 2', exact: true })).toHaveCount(0)
   await expect(strip('Result 4').getByRole('button', { name: 'Result 1', exact: true })).toHaveCount(1)
   console.log('Results checks: the Compare popover offers the other Table only, says only what applies, closes on Escape giving the focus back, opens and closes from the toolbar, shows a comparison the run has and makes a new one that takes the focus as it closes, offers the last choice again, and its strip links to its inputs and reads a closed one closed.')
+
+  // 14h. Results with no column unique in both (repeated rows, NULLs) compare by whole rows: Compare counts each side's
+  // rows as the grid does, and Compare makes the comparison instead of saying the results could not be compared.
+  await run('SELECT high, name FROM Values -- DIFF_WHOLE_ROWS_FIXTURE')
+  await expect(cell(3, 1, grid('Result 2'))).toHaveText('online')
+  await cell(0, 0, grid('Result 1')).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
+  await expect(picker.getByRole('group', { name: 'Old side' })).toHaveText(/Result 2\s*4 rows$/)
+  await expect(picker.getByRole('group', { name: 'New side' })).toHaveText(/Result 1\s*4 rows$/)
+  await picker.getByRole('button', { name: 'Compare', exact: true }).click()
+  await expect(picker).toHaveCount(0)
+  await expect(grid('Result 3')).toBeFocused()
+  await expect(strip('Result 3')).toContainText('Result 2 → Result 1, whole rows matched: 0 changed rows, 1 added row, 1 removed row, 3 unchanged.')
+  console.log('Results checks: results with no shared unique column compare by whole rows from Compare, which counts each side by its stored rows.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

@@ -1652,7 +1652,7 @@ refusal (after 1, 4 and 16 s), as highlights do; the backend is unchanged by tha
   most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
   name up to 64 that do not, which are not compared.
 - **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,
-  of up to 16 candidates as `results.identify` ranks them; else by all shared columns' values together (`key` null), the
+  of up to 16 candidates as `results.identify` ranks them; else by all shared columns' values together (`key` absent), the
   k-th copy of a row matching the k-th copy. Values compare as SQL Server would (the identity hashing above): numbers by
   value, character columns by their collation, ignoring trailing spaces, each pair by `left`'s column type and collation, so
   a column whose collation or type changed between the results still matches. Matched cells compare their values, not only

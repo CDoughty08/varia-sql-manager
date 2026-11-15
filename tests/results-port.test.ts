@@ -42,7 +42,7 @@ interface FakeDistinct { generation: number; params: ResultsDistinctParams; canc
 interface FakeDistinctRead { generation: number; params: ResultsDistinctReadParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
-function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
+function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema; onRefused?: (method: string, issues: readonly string[]) => void } = {}) {
   const reads: FakeRead[] = []
   const lives: FakeLive[] = []
   const updates: FakeUpdate[] = []
@@ -137,7 +137,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     liveUpdate: (generation, params) => new Promise<LiveUpdateResult>((resolve, reject) => { updates.push({ generation, params, resolve, reject }) })
   }
   const ports: FakePort[] = []
-  const host = new ResultsPortHost({ backend, createChannel: () => { const port1 = new FakePort(); ports.push(port1); return { port1, port2: { renderer: true } } }, now: o.now, testSources: o.testSources ?? true, schema: o.schema })
+  const host = new ResultsPortHost({ backend, createChannel: () => { const port1 = new FakePort(); ports.push(port1); return { port1, port2: { renderer: true } } }, now: o.now, testSources: o.testSources ?? true, schema: o.schema, onRefused: o.onRefused })
   const frame: FrameLike & { sent: unknown[][] } = { sent: [], postMessage(...args: unknown[]) { this.sent.push(args) } }
   host.backendState({ status: 'ready', generation: 1, pid: 10, runtime: 'test', platform: 'test' })
   host.open(frame)
@@ -552,6 +552,29 @@ describe('ResultsPortHost', () => {
     diffs[3].resolve(answer(22))
     await settle()
     expect(backend.close).toHaveBeenLastCalledWith(1, [22])
+  })
+  it('accepts a whole-row diff, whose answer has no key member, and says which members a refused answer failed', async () => {
+    const refusals: [string, readonly string[]][] = []
+    const { host, port, diffs } = fixture({ onRefused: (method, issues) => refusals.push([method, issues]) })
+    host.own([descriptor(7), descriptor(8)])
+    const diffDescriptor = (resultId: number) => ({
+      resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
+      rowsRead: 110, rowsStored: 110, rowsAvailable: 110, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
+    })
+    // As the backend sends a diff of results with no unique column (repeated rows, NULLs): it leaves out the null key
+    // (Contracts.cs, WhenWritingNull). Before the fix, main refused this and the picker said "could not be compared".
+    const wholeRows = { descriptor: diffDescriptor(30), same: 45, changed: 0, added: 55, removed: 55, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
+    diffs[0].resolve(wholeRows)
+    await settle()
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { ...wholeRows, descriptor: { ...diffDescriptor(30), generation: 1 } } })
+    expect(refusals).toEqual([])
+    // A refused answer still reaches the worker as the generic sentence; the hook names the failing members, not values.
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
+    diffs[1].resolve({ ...wholeRows, descriptor: diffDescriptor(31), key: null })
+    await settle()
+    expect(port().ends().find(end => end.rid === 2)).toMatchObject({ ok: false, code: 'BACKEND_ERROR', message: 'The results could not be compared.' })
+    expect(refusals).toEqual([['results.diff', ['key: invalid_type']]])
   })
   it('pivots only owned results of the current generation within the schema bounds, owns the pivot it answers, and closes one refused or answered after its port went', async () => {
     const { host, backend, port, pivots } = fixture()

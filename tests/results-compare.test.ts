@@ -184,7 +184,7 @@ describe('the Compare popover', () => {
     await settle()
     expect(answers).toHaveLength(5)
     expect(tab().comparisons.map(slot => slot.entry.label)).toEqual(['Differences: Result 1 → Result 2'])
-    for (const [at, answer] of answers.slice(1).entries()) answer.resolve({ descriptor: descriptor(951 + at, { index: 7 + at, kind: 'diff' }), key: null, same: 0, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    for (const [at, answer] of answers.slice(1).entries()) answer.resolve({ descriptor: descriptor(951 + at, { index: 7 + at, kind: 'diff' }), same: 0, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await Promise.all(others)
     await settle()
     expect(tab().comparisons).toHaveLength(5)

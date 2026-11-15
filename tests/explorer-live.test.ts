@@ -7,7 +7,7 @@ import { ResultClient, type PortMessageEvent, type WindowLike, type WorkerLike }
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import { FLAG_NULL, type WorkerRequest, type WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { ConnectionOptions, QueryOptions, QueryResult } from '../src/shared/contracts'
-import type { PortMessage } from '../src/shared/ipc/port-messages'
+import { diffResultSchema, type PortMessage } from '../src/shared/ipc/port-messages'
 import { quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
 
 const server = process.env.VARIA_TEST_SQL_SERVER, user = process.env.VARIA_TEST_SQL_USER
@@ -98,7 +98,7 @@ async function connect() {
     await supervisor.request('query.session.close', { sessionId })
     await supervisor.request('connections.disconnect', { connectionId: connection.id })
   })
-  return { supervisor, connection, run }
+  return { supervisor, connection, run, execute, sessionId, results }
 }
 
 describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
@@ -162,4 +162,29 @@ describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
       expect(dropped.status).toBe('completed')
     }
   }, 120_000)
+})
+
+describe.runIf(server)('Compare against SQL Server', () => {
+  it('compares results with no column unique in both by whole rows, through the results port', async () => {
+    const { supervisor, connection, execute, sessionId, results } = await connect()
+    // As the owner's repro, but fixed: repeated rows and NULLs, so no column keys the rows and whole rows match.
+    const rows = (first: number) => `SELECT high, name FROM (VALUES (${first}, N'offline'), (1, N'offline'), (NULL, N'offline'), (NULL, N'online')) AS v (high, name);`
+    const { value: summary } = await execute({ connectionId: connection.id, sessionId, database: 'master', sql: rows(1) + ' ' + rows(8), queryId: crypto.randomUUID(), maxRows: 0, maxResultSets: 10, timeoutSeconds: 30 })
+    expect(summary.resultSets.map(set => set.rowsStored)).toEqual([4, 4])
+    results.applySummary(summary)
+    const [old, neu] = summary.resultSets.map(descriptor => results.open(descriptor))
+    // The real backend's answer through ResultsPortHost.diff, which refused it while its schema required the null key the
+    // backend leaves out.
+    const diff = await old.diff(neu)
+    expect(diff).toMatchObject({ same: 3, changed: 0, added: 1, removed: 1, descriptor: { kind: 'diff', state: 'complete' } })
+    expect(diff).not.toHaveProperty('key')
+    // And as the backend sends it, member by member.
+    const raw = await supervisor.request('results.diff', { left: summary.resultSets[0].resultId, right: summary.resultSets[1].resultId })
+    expect(diffResultSchema.safeParse(raw).error?.issues).toBeUndefined()
+    // That second diff is the backend's own, which no page owns: closed here.
+    await supervisor.request('results.close', { resultIds: [raw.descriptor.resultId] })
+    await results.release([diff.descriptor, ...summary.resultSets])
+    old.dispose()
+    neu.dispose()
+  }, 90_000)
 })

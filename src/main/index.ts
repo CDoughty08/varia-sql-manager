@@ -790,7 +790,10 @@ app.whenReady().then(async () => {
   settings.onDidLoad(() => memoryLimit.settingsChanged())
   loaded.then(() => memoryLimit.settingsChanged(), () => {})
   // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
-  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
+  // A derived result's answer main refuses reaches the page as a generic sentence: the members that failed (schema paths
+  // and zod codes, never values or names) go to stderr, so a schema mismatch is not silent.
+  const onRefused = (method: string, issues: readonly string[]) => console.error(`Refused a ${method} answer that failed its schema: ${issues.join(', ')}`)
+  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), onRefused, createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
   // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings
   // unreadable, or a retention reset because settings.json was invalid, nothing is deleted under a retention the user
