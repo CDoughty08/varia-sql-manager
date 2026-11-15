@@ -3,10 +3,11 @@
 A measured prototype for compressing stored result pages, measured on 2026-11-12. This is a benchmark and design page.
 The rule agreed with the owner still holds: results stay in memory and never spill to disk.
 
-**Status (2026-11-14):** steps 1 to 5 of the [proposed PR order](#proposed-pr-order) are in. The product packs every
-complete result of 1 MiB or more that no window has shown for 5 seconds (stage 1, `ResultPacker`), and the Memory
-panel's Nerd metrics report the packed figures. Fused reads (step 6) and stage 2 (step 7) are not. See
-[Stage 1 as built](#stage-1-as-built) for where it differs from the design below.
+**Status (2026-11-14):** every step of the [proposed PR order](#proposed-pr-order) is in. The product packs every
+complete result of 1 MiB or more that no window has shown for 5 seconds (stage 1, `ResultPacker`), and a shown one
+once it has been idle for 30 seconds (stage 2); sorts, filters, profiles and pivots read packed pages fused, and the
+Memory panel's Nerd metrics report the packed figures. See [Stage 1 as built](#stage-1-as-built) and
+[Stage 2 as built](#stage-2-as-built) for where they differ from the design below.
 
 The first version of this page measured only what .NET 10 has (Brotli, Deflate, ZLib) and recommended Brotli. The
 owner pointed at zstd and LZ4 and moved the backend to .NET 11 (STS, #459), whose `System.IO.Compression` has
@@ -474,6 +475,61 @@ two runs each, other sessions busy on the machine):
 A new query stored its rows no slower while the policy packed (within noise). Reads of a packed result cost what the
 codec measurements above predicted.
 
+### Stage 2 as built
+
+Stage 2 packs a shown result too, on the same thread and with the same rules as stage 1 (complete, 1 MiB or more, not
+live, not held), once it is idle. Measured first, then each rule settled:
+
+- **Idle means 30 seconds untouched.** No pin or lease (a read, operation, Copy or Save) has begun or ended, the result
+  has not completed, and it has not been shown again, for 30 s (`ResultPacker.VisibleIdleMs`; `ResultSetBuffer.Activity`
+  on `ResultStore.Clock`). A held result is in use, so the wait runs from the hold's end. The grid reads its result
+  every time it scrolls, so a result the user is looking through never falls due; 30 s is long enough that a user
+  reading one screen and scrolling on keeps it raw, and short enough that results left on screen in other tabs and
+  groups are packed within a minute. Hidden results keep 5 s.
+- **No thrash.** A read stops a pass at its next page (the set's touch count changed), keeping the pages already
+  packed: the result is then `partial` in the Memory panel and falls due again 30 s after the read. Plain reads never
+  unpack a result whole (they read through the six-page cache), so reading a packed result does not undo packing. Each
+  operation that unpacks it whole (distinct values, row identity, search, diff, a transposed Copy or Save) doubles the
+  wait, up to eight times as long (`MaxBackoff`, 4 minutes), so a result compared or searched again and again stays raw.
+- **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
+  row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (median; p99 about 145 ms against 21 ms),
+  enough to show while scrolling. A shown result with an open view is not packed (a hidden one is, as before); closing
+  its last view wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
+  `log`, a jump 0.4 to 1 ms: well inside a frame.
+- **Operations.** Fused sorts, filters, profiles and pivots read the packed result and leave it packed (the first sort
+  after idle took 0.26 to 0.37 s packed against 0.36 to 0.49 s raw on `orders`, a little faster since it reads half
+  the bytes). The rehydrating operations unpack first: 0.03 to 0.05 s per 256 MiB on 16 workers, 0.13 s on 3.
+- **Room for a query.** A query's row the budget refuses (its half or the global budget) no longer stops it while
+  something could be packed (`ResultStore.CanMakeRoom`): the row stays open, the ingestion waits outside every lock
+  (`WaitForRoomAsync`, up to 10 s a wait, 4 waits a row, 30 s in all for a result set), and the policy packs, at once and at normal priority
+  on the workers' gate (`ViewSorter.Gate`, a page an item, so it shares the threads fairly with sorts and reads), every
+  complete result not held that could make room: any query's for the global budget, only the query's own when its half is full,
+  hidden first, then largest. A user is waiting, so this ignores every delay. With nothing to pack, or once the waits
+  run out, the row is refused as before. Rows already stored are never dropped, and a stop is never undone: stored rows
+  stay a prefix of the rows read.
+- **Fairness.** Idle packing stays on the lowest-priority thread: the workers' gate shares threads fairly but has no
+  priority, so packing there would take a share from a visible sort for a saving nobody is waiting on. Packing for room
+  goes through the gate, since the query waiting for it is user work.
+- **No setting.** On in every backend Varia starts, as stage 1 is: the measured costs are below a frame for plain
+  reads, the rules above keep it away from results in use, and a setting would only let users keep half the budget idle.
+
+Measured on 2026-11-14 with `--page-compression-bench 1 <shape> --stage2` (four results of 256 MiB, the first shown and
+the others hidden; the real `ResultPacker`; other sessions busy on the machine; `orders` twice and once with
+`DOTNET_PROCESSOR_COUNT=4`):
+
+| | `orders` | `log` |
+| --- | ---: | ---: |
+| Budget charged: raw → stage 1 → stage 2 | 1,043 → 646 → 513 MiB (2.03× raw, 1.26× stage 1) | 1,033 → 607 → 466 MiB (2.22×, 1.30×) |
+| The stage 2 pass over the shown result, one thread | 0.86 to 1.27 s (213 to 312 MB/s) | 1.13 s (238 MB/s) |
+| A 1,000-row plain read while scrolling, raw → packed (median, p99) | 0.8 µs → 0.20 ms (p99 0.7 to 5 ms) | 1.2 µs → 0.77 ms (p99 1.4 ms) |
+| A 1,000-row plain read at a random row, raw → packed | 1 µs → 0.42 ms (p99 0.9 to 4 ms, one run 39 ms) | 0.9 µs → 0.96 ms (p99 3.3 ms) |
+| A sorted view's 256-row screen, raw → packed | 1.2 ms → 31 to 55 ms (3 workers: 1.0 → 22 ms) | 0.41 ms → 5.0 ms |
+| The first sort after idle, raw → packed (fused) | 0.36 to 0.49 s → 0.26 to 0.37 s | 0.13 s → 0.28 s |
+| The first whole unpack (search, value list, comparison) | 0.04 to 0.05 s (3 workers: 0.13 s) | 0.03 s |
+
+The six-page cache hits 2 to 6 % of lookups over these reads: the grid reads pages it has not read since they were
+packed, so a cold page's cost is what matters, and it is the codec's (0.2 ms a page).
+
 ## Proposed PR order
 
 1. **Move the backend to .NET 11.** Done in #459.
@@ -492,7 +548,8 @@ codec measurements above predicted.
 6. **Fused reads.** Done: sort, filter, profile, pivot and plain Copy/Save read packed pages fused, sort ties through a
    column extract (measured above). Left: distinct values, row identity, diff, search and transposed Copy/Save still
    rehydrate; Save does not decompress ahead.
-7. **Stage 2 policy.** Compress idle visible results too, after measuring scrolling and sorting in the app.
+7. **Stage 2 policy.** Done (see [Stage 2 as built](#stage-2-as-built)). Compress idle shown results too, and let a
+   query the budget refuses wait while the policy packs to make room.
 
 ## Not measured
 

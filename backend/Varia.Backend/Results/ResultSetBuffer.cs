@@ -73,6 +73,12 @@ internal sealed class ResultSetBuffer
     private int sealedPages;
     private int leases;
     private int pins;
+    /// <summary>Counts pins and leases taken: every read, operation, Copy or Save of the result (<see cref="Activity"/>).</summary>
+    private int touches;
+    /// <summary>When a pin or lease last began or ended, or the set completed, on the store's clock (<see cref="ResultStore.Now"/>).</summary>
+    private long touchedAt;
+    /// <summary>Bytes a row commit is waiting for packing to make room for (<see cref="RoomWanted"/>), or 0.</summary>
+    private long roomWanted;
     private CancellationTokenSource? released;
     private bool freePending, gone;
     /// <summary>Packed pages' bytes, their bytes as sealed, and the unpacked cache's bytes (all under the lock).</summary>
@@ -109,6 +115,7 @@ internal sealed class ResultSetBuffer
         Columns = columns;
         Wires = wires;
         builder = new PageBuilder(resultId, wires, sealBytes: sealBytes);
+        touchedAt = store.Now;
     }
 
     public QueryBudget Budget { get; }
@@ -178,17 +185,24 @@ internal sealed class ResultSetBuffer
     /// <summary>Commits the open row if the budget has room for it and for the builder's growth; otherwise rolls it back,
     /// so a page never holds a partial row, and stops the query from storing more (a derived set stops only itself).
     /// Returns whether the row was stored.</summary>
-    public bool TryCommitRow(int truncatedCellsInRow = 0)
+    /// <param name="mayWait">The query's ingestion only: when the budget refuses the row and a policy could pack complete
+    /// results to make room (<see cref="ResultStore.CanMakeRoom"/>), the row is neither stored nor rolled back and nothing
+    /// stops: false with <see cref="RoomWanted"/> set, and the caller waits for room outside every lock
+    /// (<see cref="ResultStore.WaitForRoomAsync"/>, which ends at once when nothing can be packed) and commits the same row
+    /// again, with <paramref name="mayWait"/> false once there is no more room to wait for. Stored rows stay a prefix of the rows read, so a stop is never undone; this
+    /// only lets packing run before the refusal that would stop the query.</param>
+    public bool TryCommitRow(int truncatedCellsInRow = 0, bool mayWait = false)
     {
         lock (gate)
         {
+            roomWanted = 0;
             if (builder is null) return false;
             var growth = Math.Max(0, builder.WorkingBytes - working);
             var rowBytes = builder.OpenRowBytes + 4L * Wires.Count + builder.OpenRowLengthBytes;
             var need = growth + rowBytes;
-            if (state != 0 || (need > slack && !Reserve(need - slack)))
+            if (state != 0 || (need > slack && !Reserve(need - slack, mayWait)))
             {
-                builder.AbortRow();
+                if (roomWanted == 0) builder.AbortRow();
                 return false;
             }
             slack -= need;
@@ -218,6 +232,10 @@ internal sealed class ResultSetBuffer
             return need <= slack || Reserve(need - slack);
         }
     }
+
+    /// <summary>Bytes the last <see cref="TryCommitRow"/> with mayWait is waiting for packing to make room for, its row still
+    /// open; 0 when it stored the row or refused it for good.</summary>
+    public long RoomWanted { get { lock (gate) return roomWanted; } }
 
     /// <summary>Rolls back a row whose cells could not all be read (the provider failed mid-row).</summary>
     public void AbortRow()
@@ -262,7 +280,7 @@ internal sealed class ResultSetBuffer
         else Budget.Stop(TruncationReason.SystemMemory);
     }
 
-    private bool Reserve(long bytes)
+    private bool Reserve(long bytes, bool mayWait = false)
     {
         var step = Math.Max(bytes, ResultStore.ReserveStep);
         if (store.TryReserve(Budget, step, false, out var reason) || (step > bytes && store.TryReserve(Budget, step = bytes, false, out reason)))
@@ -270,6 +288,13 @@ internal sealed class ResultSetBuffer
             slack += step;
             charged += step;
             return true;
+        }
+        // Packing may make room before the query stops: the caller asks, outside this lock, whether anything can be packed
+        // (asking here would take other sets' locks inside this one's).
+        if (mayWait && !Derived && reason is TruncationReason.QueryBudget or TruncationReason.GlobalBudget && store.CanMakeRoom(Budget))
+        {
+            roomWanted = bytes;
+            return false;
         }
         Skip(reason);
         // The first refusal ends the set, as it ends a query's: a later, smaller row must not be stored past the gap,
@@ -291,6 +316,7 @@ internal sealed class ResultSetBuffer
             slack = working = pending = 0;
             builder = null;
             state = 1;
+            touchedAt = store.Now;
         }
         if (store.Packing == PagePacking.EveryComplete) Pack();
         // Only a result the policy could pack wakes it: a script of thousands of small sets does not rescan the store each time.
@@ -339,6 +365,8 @@ internal sealed class ResultSetBuffer
         {
             if (state == 2) return false;
             leases++;
+            touches++;
+            touchedAt = store.Now;
             return true;
         }
     }
@@ -351,6 +379,7 @@ internal sealed class ResultSetBuffer
         lock (gate)
         {
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
+            touchedAt = store.Now;
             if (--leases > 0 || pins > 0) return;
             if (!freePending)
             {
@@ -374,11 +403,28 @@ internal sealed class ResultSetBuffer
     /// keeps. Dispose the pin when the read ends.</summary>
     public PagePin Pin()
     {
-        lock (gate) pins++;
+        lock (gate)
+        {
+            pins++;
+            touches++;
+            touchedAt = store.Now;
+        }
         return new PagePin(this);
     }
 
     public int Pins { get { lock (gate) return pins; } }
+
+    /// <summary>What the stage 2 policy (<see cref="ResultPacker"/>) reads to tell a result in use from an idle one, in one
+    /// lock: the pins and leases taken so far (every read, operation, Copy or Save), whether one is held now, the whole
+    /// unpacks so far (<see cref="Unpacks"/>), and when a pin or lease last began or ended or the set completed (on
+    /// <see cref="ResultStore.Now"/>'s clock).</summary>
+    public (int Touches, bool Held, int Unpacks, long TouchedAt) Activity()
+    {
+        lock (gate) return (touches, pins > 0 || leases > 0, unpacks, touchedAt);
+    }
+
+    /// <summary>The pins and leases taken so far (<see cref="Activity"/>): a pass packing a shown result stops once it changes.</summary>
+    public int Touches { get { lock (gate) return touches; } }
 
     internal void Unpin()
     {
@@ -387,6 +433,7 @@ internal sealed class ResultSetBuffer
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
+            touchedAt = store.Now;
             if (--pins > 0 || leases > 0) return;
             if (!freePending)
             {
@@ -529,14 +576,15 @@ internal sealed class ResultSetBuffer
 
     /// <summary>What the set holds now, for the Memory panel (ResultStore.MemoryDetail): its pages' bytes as sealed, what
     /// they take (raw pages plus packed ones), the packed pages' bytes and their bytes as sealed, the unpacked pages cached
-    /// for reads, and, while an operation unpacks the whole result, how far it has got (0 to 100), else null.</summary>
-    public (long Logical, long StoredBytes, long Packed, long PackedLogical, long Cache, int? Unpacking) Memory()
+    /// for reads, while an operation unpacks the whole result how far it has got (0 to 100), else null, and whether a whole
+    /// pass of <see cref="Pack"/> ended since the result was last unpacked (a pass stopped part way leaves it partial).</summary>
+    public (long Logical, long StoredBytes, long Packed, long PackedLogical, long Cache, int? Unpacking, bool Whole) Memory()
     {
         lock (gate)
         {
             var total = Volatile.Read(ref unpackTotal);
             int? unpacking = total > 0 ? (int)Math.Min(100, 100L * Volatile.Read(ref unpackDone) / total) : null;
-            return (bytesStored, bytesStored - packedLogical + packedBytes, packedBytes, packedLogical, cacheBytes, unpacking);
+            return (bytesStored, bytesStored - packedLogical + packedBytes, packedBytes, packedLogical, cacheBytes, unpacking, packDone);
         }
     }
 
@@ -554,7 +602,11 @@ internal sealed class ResultSetBuffer
     /// which lowers its thread's priority for the compression alone, outside every lock.</param>
     /// <param name="unpacks">The policy's: the <see cref="Unpacks"/> it saw when it found the result due. An operation that
     /// unpacked the result since then is a use, so nothing is packed and the policy looks again.</param>
-    public long Pack(Func<bool>? proceed = null, Action<bool>? quiet = null, int? unpacks = null)
+    /// <param name="workers">Packs the pages on these workers (the results' shared <see cref="ViewSorter.Gate"/>), each page
+    /// as one item, rather than one at a time on the caller's thread: the policy's when a query waits for room
+    /// (<see cref="ResultStore.WaitForRoomAsync"/>), which is user work that shares the workers fairly with other result
+    /// work. Pages are replaced in whatever order they finish; every check is the same as one at a time.</param>
+    public long Pack(Func<bool>? proceed = null, Action<bool>? quiet = null, int? unpacks = null, ViewSorter.WorkerGate? workers = null)
     {
         var mode = store.Packing;
         if (mode == PagePacking.Off || Budget.Live is not null) return 0;
@@ -572,37 +624,29 @@ internal sealed class ResultSetBuffer
             candidates = [.. pages.Where(page => page.Stored is byte[] && (mode == PagePacking.EveryComplete || !page.KeptRaw))];
         }
         long saved = 0;
-        var whole = true;
-        foreach (var page in candidates)
+        var stopped = 0;
+        // One page: false stops the pass there, keeping what was packed.
+        bool PackOne(StoredPage page)
         {
-            if (proceed is not null && !proceed())
-            {
-                whole = false;
-                break;
-            }
-            if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) continue;
+            if (Volatile.Read(ref stopped) != 0 || proceed is not null && !proceed()) return false;
+            if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) return true;
             var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
             lock (gate)
             {
                 if (state != 1 || pins > 0 || leases > 0)
                 {
                     notifyIdle = state == 1;
-                    whole = false;
-                    break;
+                    return false;
                 }
                 // An operation unpacked the result whole between two pages and has already ended (its end poked the
                 // policy): a use, so the rest waits the delay again.
-                if (unpacks is not null && this.unpacks != generation)
-                {
-                    whole = false;
-                    break;
-                }
-                if (!ReferenceEquals(page.Stored, raw)) continue;
+                if (unpacks is not null && this.unpacks != generation) return false;
+                if (!ReferenceEquals(page.Stored, raw)) return true;
                 if (!keep)
                 {
                     page.KeptRaw = true;
                     store.CountKeptRaw();
-                    continue;
+                    return true;
                 }
                 page.Stored = new PackedPage(bytes);
                 store.CountPacked();
@@ -613,9 +657,27 @@ internal sealed class ResultSetBuffer
                 packedLogical += raw.Length;
                 store.Held(bytes.Length, raw.Length, 0);
                 saved += difference;
+                return true;
             }
         }
-        if (whole)
+        if (workers is null)
+        {
+            foreach (var page in candidates)
+                if (!PackOne(page))
+                {
+                    stopped = 1;
+                    break;
+                }
+        }
+        else if (candidates.Length > 0)
+        {
+            using var threads = workers.Take(Math.Min(candidates.Length, ViewSorter.Workers));
+            threads.For(candidates.Length, i =>
+            {
+                if (!PackOne(candidates[i])) Volatile.Write(ref stopped, 1);
+            });
+        }
+        if (stopped == 0)
             lock (gate)
                 packDone = state == 1 && this.unpacks == generation;
         if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);

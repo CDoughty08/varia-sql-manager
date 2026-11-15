@@ -9,8 +9,9 @@ namespace Varia.Backend.Tests;
 
 /// <summary>The page compression benchmark, run by hand (docs/page-compression-findings.md holds what it measured):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench &lt;GiB&gt; &lt;shape&gt;
-/// [--codecs name,name] [--keep name] [--no-ops] [--fused] [--policy]</c>, one size and shape a process so each memory reading is its own.
-/// <c>--policy</c> measures only the stage 1 policy (ResultPacker) on the filled result instead: see <see cref="Policy"/>.
+/// [--codecs name,name] [--keep name] [--no-ops] [--fused] [--policy] [--stage2]</c>, one size and shape a process so each memory reading is its own.
+/// <c>--policy</c> measures only the stage 1 policy (ResultPacker) on the filled result instead: see <see cref="Policy"/>;
+/// <c>--stage2</c> measures stage 2 (shown results packed once idle) instead: see <see cref="RunStage2"/>.
 /// Fills one query budget of that size with rows of the shape, then measures, without changing how the product stores
 /// pages: each codec's ratio and its compress and decompress speed (one thread over a sample of pages, and the results'
 /// worker count over all of them); what the operations that read pages cost when the pages must be decompressed first
@@ -352,6 +353,11 @@ internal static partial class PageCompressionBench
         var workers = ViewSorter.Workers;
         label = gib.ToString("0.##", CultureInfo.InvariantCulture) + "GiB." + shapeName + (cores > 0 ? "." + cores + "cores" : "");
         var shape = Build(shapeName);
+        if (args.Contains("--stage2"))
+        {
+            RunStage2(gib, shapeName, shape);
+            return;
+        }
         if (args.Contains("--fused"))
         {
             RunFused(gib, shapeName, shape, workers);

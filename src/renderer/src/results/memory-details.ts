@@ -56,7 +56,7 @@ export interface NerdMetricsModel {
   readonly cozy: { readonly lead: string; readonly accent?: string }
 }
 
-const stateLabels: Readonly<Record<ResultMemoryEntry['state'], string>> = { raw: 'Raw', packed: 'Packed', unpacking: 'Unpacking' }
+const stateLabels: Readonly<Record<ResultMemoryEntry['state'], string>> = { raw: 'Raw', partial: 'Partly packed', packed: 'Packed', unpacking: 'Unpacking' }
 const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', returned: 'Given back' }
 
 /** Whether any page is compressed: what the ring's second tone, the packed chip, the ratio and the trend wait for. */

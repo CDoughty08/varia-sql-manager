@@ -30,7 +30,8 @@ internal sealed partial class ResultStore
             var bytes = figures.Logical;
             if (bytes <= 0 || largest.Count == MaxLargest && bytes <= largest[^1].LogicalBytes) continue;
             var at = largest.FindIndex(entry => entry.LogicalBytes < bytes);
-            var state = figures.Unpacking is not null ? "unpacking" : figures.PackedLogical > 0 ? "packed" : "raw";
+            // Packed once a whole pass ended; a pass stopped by a read, a pin or a lease leaves it partial until the next one.
+            var state = figures.Unpacking is not null ? "unpacking" : figures.PackedLogical == 0 ? "raw" : figures.Whole ? "packed" : "partial";
             largest.Insert(at < 0 ? largest.Count : at, new ResultMemoryEntry(set.ResultId, bytes, figures.StoredBytes, state, figures.Unpacking, Live: set.Budget.Live is null ? null : true));
             if (largest.Count > MaxLargest) largest.RemoveAt(MaxLargest);
         }

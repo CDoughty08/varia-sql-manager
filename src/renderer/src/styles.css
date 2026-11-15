@@ -1383,7 +1383,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .memory-mini > span[data-state="raw"] { background: var(--varia-charts-blue); }
 .memory-state { justify-self: end; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); font-size: var(--varia-size-xs); font-weight: 600; white-space: nowrap; }
 .memory-state[data-state="raw"] { background: var(--varia-memoryPanel-rawBackground); color: var(--varia-memoryPanel-rawForeground); }
-.memory-state[data-state="packed"] { background: var(--varia-memoryPanel-packedBackground); color: var(--varia-memoryPanel-packedForeground); }
+.memory-state:is([data-state="packed"], [data-state="partial"]) { background: var(--varia-memoryPanel-packedBackground); color: var(--varia-memoryPanel-packedForeground); }
 .memory-state[data-state="unpacking"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
 .memory-counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-2) var(--varia-space-4); margin: 0; }
 .memory-counters > div { display: flex; justify-content: space-between; gap: var(--varia-space-2); }

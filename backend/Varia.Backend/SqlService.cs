@@ -1137,6 +1137,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var noPlanEvents = false;
         List<uint>? planOrder = null;
         ResultSetBuffer? currentSet = null;
+        // How long the current result set's rows have waited for room, in milliseconds (MaxRoomWaitMs).
+        long roomWaited = 0;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         int? spid = null;
@@ -1339,6 +1341,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                             {
                                                 descriptorBytes += plan.DescriptorBytes;
                                                 currentSet = opened;
+                                                roomWaited = 0;
                                                 sets.Add(opened);
                                                 events.Opened(opened);
                                             }
@@ -1408,8 +1411,21 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         try { truncatedCells = plan!.ReadRow(reader, builder, warn, token); }
                                         catch { currentSet.AbortRow(); throw; }
                                         var sealedBefore = currentSet.SealedPages;
+                                        // A row the budget refuses waits, outside every lock, while packing complete results can make
+                                        // room for it, and is committed again; with no room to wait for it is refused as before.
+                                        var committed = currentSet.TryCommitRow(truncatedCells, mayWait: true);
+                                        for (var tries = 0; !committed && currentSet.RoomWanted is > 0 and var wanted; tries++)
+                                        {
+                                            bool made;
+                                            var left = MaxRoomWaitMs - roomWaited;
+                                            var waitStarted = Environment.TickCount64;
+                                            try { made = tries < MaxRoomWaits && left > 0 && await store.WaitForRoomAsync(budget!, wanted, token, (int)Math.Min(left, ResultStore.RoomWaitMs)); }
+                                            catch { currentSet.AbortRow(); throw; }
+                                            roomWaited += Environment.TickCount64 - waitStarted;
+                                            committed = currentSet.TryCommitRow(truncatedCells, mayWait: made);
+                                        }
                                         // A plan's row is not one of the limit's.
-                                        if (currentSet.TryCommitRow(truncatedCells) && !planRow) storedRows++;
+                                        if (committed && !planRow) storedRows++;
                                         if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                                     }
                                     if (currentSet is not null)
@@ -1693,6 +1709,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowSizes.maxRows).</summary>
     public const int MaxRowBytesRows = 16_384;
+
+    /// <summary>How many times one row waits for packing to make room (<see cref="ResultStore.WaitForRoomAsync"/>) before it is
+    /// refused: room made and taken again by another query's rows is waited for again, a few times at most.</summary>
+    internal const int MaxRoomWaits = 4;
+    /// <summary>The longest one result set's rows wait for room in all, however many rows wait: each wait ends as soon as
+    /// packing has made room or has nothing more to give, so this only bounds passes a scrolling grid keeps stopping.</summary>
+    internal const long MaxRoomWaitMs = 30_000;
 
     /// <summary>Each row's bytes (the sum of DATALENGTH over its cells) for a range of a result's sealed rows; fewer than asked
     /// past the rows available, as results.read serves them.</summary>
