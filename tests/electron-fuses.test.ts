@@ -64,6 +64,14 @@ describe('Electron fuses', () => {
     expect(readFileSync('build/nsis-check.cjs', 'utf8')).toMatch(/require\.resolve\('app-builder-lib\/package\.json', \{ paths: \[builder\] \}\)/)
   })
 
+  it('mean the same fuses to the @electron/fuses copy electron-builder flips them with', () => {
+    const builder = dirname(require.resolve('electron-builder/package.json'))
+    const lib = dirname(require.resolve('app-builder-lib/package.json', { paths: [builder] }))
+    const builderFuses = require(require.resolve('@electron/fuses', { paths: [lib] })) as { FuseV1Options: Record<string, number | string>, FuseVersion: Record<string, string> }
+    for (const index of Object.keys(fuses)) expect(builderFuses.FuseV1Options[index], FuseV1Options[Number(index)]).toBe(FuseV1Options[Number(index)])
+    expect(builderFuses.FuseVersion.V1).toBe(FuseVersion.V1)
+  })
+
   it('are read back from a packaged executable by name', () => {
     const on = 49, off = 48
     const applied = { version: '1', 0: off, 1: on, 2: off, 3: off, 4: on, 5: on, 6: off, 7: off }

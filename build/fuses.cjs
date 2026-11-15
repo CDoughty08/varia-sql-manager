@@ -1,6 +1,6 @@
-const { FuseV1Options, FuseVersion } = require('@electron/fuses')
-// FuseState is not exported from the package's entry: '0' off, '1' on, as bytes.
-const FuseState = { DISABLE: 48, ENABLE: 49 }
+// @electron/fuses 2 is ESM only; Node 24 loads it through require(). electron-builder flips the fuses with its own copy
+// (tests/electron-fuses.test.ts checks that it numbers these fuses the same way).
+const { FuseState, FuseV1Options, FuseVersion } = require('@electron/fuses')
 
 /**
  * The Electron fuses every packaged build has (build/after-pack.cjs flips them; scripts/packaged-smoke.mjs reads them back).
