@@ -34,6 +34,11 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     internal const int MaxMessageBytes = 16 * 1024 * 1024;
     internal const int MaxHeaderBytes = 8192;
     internal const int MaxPending = 128;
+    /// <summary>What notifications waiting for their callback may hold: their parameters' characters plus a fixed cost per
+    /// entry, so a burst of small ones (diagnostics for many documents) is absorbed while a callback runs, and only a
+    /// server that floods without end stops the transport. The cost holds the queue under 16,384 entries.</summary>
+    internal const int MaxQueuedNotificationCharacters = 8 * 1024 * 1024;
+    internal const int NotificationEntryCost = 512;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(5);
     private readonly Process process;
@@ -45,8 +50,10 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     private readonly SemaphoreSlim slots = new(MaxPending, MaxPending);
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
     private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Channel<(string Method, JsonElement Parameters, int Characters)> notifications = Channel.CreateBounded<(string, JsonElement, int)>(
-        new BoundedChannelOptions(256) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
+    // Bounded by MaxQueuedNotificationCharacters, not by count: the reader must never wait for room, since a callback may
+    // itself await a response that only the reader can deliver.
+    private readonly Channel<(string Method, JsonElement Parameters, int Characters)> notifications = Channel.CreateUnbounded<(string, JsonElement, int)>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly Func<string, JsonElement, Task>? notification;
     private readonly Task[] workers;
     private readonly Action<Process> kill;
@@ -202,8 +209,8 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
                     if (message.TryGetProperty("id", out var requestId)) await AnswerServerAsync(requestId.Clone(), method, parameters);
                     else if (notification is not null)
                     {
-                        var characters = parameters.GetRawText().Length;
-                        if (Interlocked.Add(ref notificationCharacters, characters) > 8 * 1024 * 1024 || !notifications.Writer.TryWrite((method, parameters, characters)))
+                        var characters = parameters.GetRawText().Length + NotificationEntryCost;
+                        if (Interlocked.Add(ref notificationCharacters, characters) > MaxQueuedNotificationCharacters || !notifications.Writer.TryWrite((method, parameters, characters)))
                             throw new IOException("The language server notification queue exceeded its limit.");
                     }
                     continue;
