@@ -20,10 +20,11 @@ internal static class SmoOptionsMapper
 
     /// <param name="dependencies">The target is a kind SMO's dependency discovery takes (<see cref="DependencyTypes"/>):
     /// for the others Generate script for dependent objects has nothing to add, and SMO would refuse the script.</param>
-    public static MappedOptions Map(ScriptingOptionsDto dto, ScriptVerb verb, ServerProfile profile, bool headers, bool cloud = false, bool dependencies = true)
+    /// <param name="sourceMajor">The SMO server's own major version, which for Managed Instance is its engine's.</param>
+    public static MappedOptions Map(ScriptingOptionsDto dto, ScriptVerb verb, ServerProfile profile, bool headers, bool cloud = false, bool dependencies = true, int? sourceMajor = null)
     {
         var warnings = new List<string>();
-        var (version, edition, type) = dto.MatchSourceSettings ? FromServer(profile, warnings) : FromOptions(dto);
+        var (version, edition, type) = dto.MatchSourceSettings ? FromServer(profile, sourceMajor, warnings) : FromOptions(dto);
         var options = new ScriptingOptions
         {
             // Fixed: what Script As always does, as sqltoolsservice's Script As does.
@@ -109,27 +110,25 @@ internal static class SmoOptionsMapper
         _ => throw new InvalidOperationException("SMO scripts " + pass + " in passes: " + string.Join(", ", Passes(pass)))
     };
 
-    /// <summary>The server's own version, edition and engine type (spec B8).</summary>
-    private static (SqlServerVersion, DatabaseEngineEdition, DatabaseEngineType) FromServer(ServerProfile profile, List<string> warnings)
+    /// <summary>The server's own version, edition and engine type (spec B8). Managed Instance (8) reports ProductMajorVersion
+    /// 12, but SMO scripts it as a stand-alone server of the engine version @@MICROSOFTVERSION gives (ServerInformation), so
+    /// a target of SQL Server 2014 would leave out what that engine has (a ledger clause, for one): there the SMO server's
+    /// own major (<paramref name="sourceMajor"/>) decides, capped at SMO's newest version so it never warns. Azure SQL
+    /// Database keeps the version it reports: SMO's Scripter holds SqlAzureDatabase targets at Version120 itself and scripts
+    /// cloud properties at any version.</summary>
+    private static (SqlServerVersion, DatabaseEngineEdition, DatabaseEngineType) FromServer(ServerProfile profile, int? sourceMajor, List<string> warnings)
     {
         var edition = Edition(profile.EngineEdition);
         var type = profile.EngineEdition is 5 or 6 or 11 ? DatabaseEngineType.SqlAzureDatabase : DatabaseEngineType.Standalone;
-        return (Version(Major(profile), warnings), edition, type);
+        var major = profile.EngineEdition == 8 && sourceMajor is int source ? Math.Max(profile.Major, Math.Min(source, Newest.Number / 10)) : profile.Major;
+        return (Version(major, warnings), edition, type);
     }
 
-    /// <summary>The major version Script As targets for a server. Azure SQL Database (5) and Managed Instance (8) report
-    /// ProductMajorVersion 12 while running a current engine, so a script would target SQL Server 2014: SMO would leave out
-    /// newer features and ledger objects would be refused. There the probe's catalog markers decide instead (CatalogBand,
-    /// and vector_dimensions for the 2025 catalog), as Object Explorer's band does, capped at SMO's newest version so a
-    /// cloud server never warns that it is newer than SMO. Other editions keep the version they report.</summary>
-    public static int Major(ServerProfile profile) => profile.EngineEdition is 5 or 8
-        ? Math.Max(profile.Major, Math.Min(profile.VectorDimensions ? 17 : profile.CatalogBand, Newest.Number / 10))
-        : profile.Major;
-
-    /// <summary>Whether a pass would script a ledger table or view for a version older than SQL Server 2022, where SMO 181
-    /// drops the LEDGER clause and keeps the ledger columns: a script no older server runs. A DROP is the same everywhere.</summary>
-    public static bool LedgerNeedsNewer(string subtype, ScriptVerb pass, SqlServerVersion target) =>
-        pass != ScriptVerb.Drop && LedgerSubtypes.Contains(subtype) && Known.First(item => item.Value == target).Number < 160;
+    /// <summary>Whether a pass would script a ledger table or view for a stand-alone target older than SQL Server 2022, where
+    /// SMO 181 drops the LEDGER clause and keeps the ledger columns: a script no older server runs. SqlAzureDatabase targets
+    /// keep the clause at any version (SMO's ledger properties have cloud_min_major 12), and a DROP is the same everywhere.</summary>
+    public static bool LedgerNeedsNewer(string subtype, ScriptVerb pass, SqlServerVersion target, DatabaseEngineType engineType) =>
+        engineType == DatabaseEngineType.Standalone && pass != ScriptVerb.Drop && LedgerSubtypes.Contains(subtype) && Known.First(item => item.Value == target).Number < 160;
 
     /// <summary>Ledger tables and views' catalogue subtypes.</summary>
     private static readonly HashSet<string> LedgerSubtypes = ["updatableLedger", "appendOnlyLedger", "ledgerHistory", "ledger"];

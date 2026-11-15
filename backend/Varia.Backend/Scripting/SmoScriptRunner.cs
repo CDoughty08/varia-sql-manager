@@ -366,9 +366,10 @@ internal sealed class SmoScriptRunner
         for (var index = 0; index < passes.Count; index++)
         {
             var pass = passes[index];
-            var mapped = SmoOptionsMapper.Map(dto, pass, session.Profile, headers, session.Cloud, dependencies);
+            // ServerVersion comes from the server information SMO reads once per connection, which it needs for scripting anyway.
+            var mapped = SmoOptionsMapper.Map(dto, pass, session.Profile, headers, session.Cloud, dependencies, smo.ServerVersion.Major);
             Target = mapped.Target;
-            if (SmoOptionsMapper.LedgerNeedsNewer(target.Subtype, pass, mapped.Target))
+            if (SmoOptionsMapper.LedgerNeedsNewer(target.Subtype, pass, mapped.Target, mapped.EngineType))
                 throw new UnsupportedVersionException("Ledger tables and views need SQL Server 2022 or later.");
             foreach (var warning in mapped.Warnings) if (!warnings.Contains(warning)) warnings.Add(warning);
             // Prefetch over a CREATE's or DROP's dependency list reads every table's columns for each type and XML schema
