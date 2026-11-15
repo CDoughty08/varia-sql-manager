@@ -3,7 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { entryName, pivotOutOfDate, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
-import { observeResize } from '../core/windows'
+import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
@@ -317,8 +317,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   useEffect(() => {
     // Opened by a request (Go to Result…), Escape gives the focus back to where it was, the editor or a grid.
     // Asked again while it is open (the focus is in it), it keeps where it was opened from.
+    // Read in the window the user is in, which may not be this layout's (the pane popped out, the editor in the main one).
     const open = () => {
-      const active = rootRef.current?.ownerDocument.activeElement
+      const active = windows.activeElement()
       if (!(active instanceof HTMLElement && active.closest('[data-results-picker]'))) pickerFrom.current = active instanceof HTMLElement ? active : undefined
       setPicking(true)
     }
@@ -334,7 +335,11 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const from = pickerFrom.current
     pickerFrom.current = undefined
     if (!restore) return
-    if (from?.isConnected && from !== from.ownerDocument.body) from.focus({ preventScroll: true })
+    if (from?.isConnected && from !== from.ownerDocument.body) {
+      // In another window (the editor, with the pane popped out): that window comes forward first.
+      if (from.ownerDocument !== rootRef.current?.ownerDocument) from.ownerDocument.defaultView?.focus()
+      from.focus({ preventScroll: true })
+    }
     // Where it was opened from may be hidden now (the pane folded while it was open): then as if it had gone.
     if (from && from.ownerDocument.activeElement === from) return
     if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })

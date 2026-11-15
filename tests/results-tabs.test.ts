@@ -21,6 +21,7 @@ import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { formatCount } from '../src/renderer/src/results/status'
+import { windows } from '../src/renderer/src/core/windows'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -779,6 +780,23 @@ describe('moving through the results as tabs', () => {
     expect(pickerRequests.take('t9', 2001)).toBe(false)
     pickerRequests.request('t9', 0)
     expect(pickerRequests.take('t9', 1000)).toBe(true)
+  })
+
+  it('give the focus back, on Escape, to where Go to Result… ran in another window (the pane popped out)', () => {
+    const { draw } = fixture()
+    draw()
+    const other = document.implementation.createHTMLDocument('main')
+    const editor = other.createElement('textarea')
+    other.body.append(editor)
+    const focus = vi.spyOn(editor, 'focus')
+    const active = vi.spyOn(windows, 'activeElement').mockReturnValue(editor)
+    try {
+      act(() => { pickerRequests.request('t1') })
+      active.mockReturnValue(document.querySelector('.rt-picker input'))
+      act(() => { document.querySelector('.rt-picker input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+      expect(document.querySelector('.rt-picker')).toBeNull()
+      expect(focus).toHaveBeenCalled()
+    } finally { active.mockRestore() }
   })
 
   it('close the picker when its anchor goes (its pane hidden), giving the focus back to where it was opened from', () => {

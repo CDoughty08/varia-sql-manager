@@ -168,7 +168,7 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   overflow picker and the query has two or more results or comparisons; otherwise, Messages and the plan included, the
   same keys pick query tabs (Go to Query 1 to 8, Go to Last Query) and Ctrl+Page Down and Up step through queries. A
   Results pane that is closed, hidden by Toggle Results Pane (Ctrl+R) or behind another output pane comes forward for
-  these commands and Go to Result…; one in a popout window is brought to the front, and Stacked still scrolls to the result.
+  these commands and Go to Result…; one in a popout window has its tab selected there (Go to Result… also brings that window forward), and Stacked still scrolls to the result.
   **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other
   text boxes, where Monaco's column selection keeps them) switch between the selected result's Table and Pivot. They work
   from a grid, whose focus moves to the grid shown, from a focused tab, whose focus follows, and from the editor, which
