@@ -62,7 +62,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(316)
+    expect(commandIds).toHaveLength(339)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -72,7 +72,8 @@ describe('command catalogue', () => {
   })
   it('uses dotted camelCase ids outside the theme menu namespace', () => {
     for (const id of commandIds) {
-      expect(id, id).toMatch(/^[a-z][A-Za-z]*(\.[a-z][A-Za-z]*)+$/)
+      // A place number may end the last part, as Go to Result 1 to 8 do (output.goToResult1).
+      expect(id, id).toMatch(/^[a-z][A-Za-z]*(\.[a-z][A-Za-z]*)*\.[a-z][A-Za-z]*\d?$/)
       // PR1's theme.mode.*, theme.dark.*, theme.light.*, theme.create, theme.openFolder, and theme.reload are themeMenuModel's item ids.
       expect(id.startsWith('theme.'), id).toBe(false)
     }

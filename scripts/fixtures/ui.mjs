@@ -660,6 +660,12 @@ export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, e
 export const tabClose = (page, name) => outputPane(page).locator(part.resultTabs).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The tab panel that holds the selected view's grid. */
 export const resultTabPanel = page => outputPane(page).locator(part.resultTabs).getByRole('tabpanel')
+/** The button at the end of the result tabs that counts those not in view and opens the overflow picker. */
+export const resultsOverflow = page => outputPane(page).getByRole('button', { name: /^All results, views and comparisons; [\d,]+ not shown as tabs$/ })
+/** The overflow picker (Go to Result…), its filter box, and one of its rows by its name ("Result 3, Table", "Pivot of Result 3"). */
+export const resultsPicker = page => page.getByRole('dialog', { name: 'Go to Result', exact: true })
+export const resultsPickerFilter = page => resultsPicker(page).getByRole('combobox', { name: 'Filter results, views and comparisons', exact: true })
+export const resultsPickerOption = (page, name) => resultsPicker(page).getByRole('option', { name, exact: true })
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 

@@ -52,9 +52,9 @@ export const queryResultsSettings = [
   },
   {
     key: 'queryResults.grid.layout', page: 'queryResults.sqlServer.grid', label: 'Show results', type: 'enum', varia: true,
-    values: [{ value: 'stacked', label: 'Stacked' }, { value: 'tabs', label: 'As tabs' }], default: 'stacked',
+    values: [{ value: 'stacked', label: 'Stacked' }, { value: 'tabs', label: 'As tabs' }], default: 'tabs',
     keywords: ['layout', 'tabs', 'stacked', 'stack', 'groups', 'results', 'pivot', 'comparison', 'view'],
-    description: 'Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs shows one at a time: a row of tabs for the results and comparisons, the selected result\'s Table and Pivot as view tabs beneath, and one grid. Switching keeps each grid\'s scroll, column widths, selection, sort and filters. The results toolbar changes this too.'
+    description: 'Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs, the default, shows one at a time: a row of tabs for the results and comparisons, the selected result\'s Table and Pivot as view tabs beneath, and one grid; when the tabs do not fit, a button at the end of the row opens a list of every result, view and comparison (Go to Result…). Switching keeps each grid\'s scroll, column widths, selection, sort and filters. The results toolbar changes this too.'
   },
   {
     key: 'queryResults.grid.rowSize', page: 'queryResults.sqlServer.grid', label: 'Show row size behind row numbers', type: 'boolean', default: true, varia: true,

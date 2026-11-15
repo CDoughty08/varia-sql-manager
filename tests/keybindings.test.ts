@@ -22,6 +22,32 @@ describe('editor group and tab keys', () => {
   it('reopens the last closed query with Ctrl+Shift+T or Cmd+Shift+T', () => {
     for (const platform of platforms) expect(commandFor(event('T', 'KeyT', { shiftKey: true, ...platform === 'darwin' ? { metaKey: true } : { ctrlKey: true } }), platform)).toBe('file.reopenClosed')
   })
+  it('give the browser tab keys to results in the Results pane while there are two or more, and to queries otherwise', () => {
+    for (const platform of platforms) {
+      const primary = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+      const grid = { activePanel: 'output', outputGridFocus: true, resultsFocus: true, multipleResults: true } as const
+      const picker = { inputFocus: true, textInputFocus: true, resultsFocus: true, multipleResults: true } as const
+      const editorText = { activePanel: 'editor', editorFocus: true, editorTextFocus: true, multipleResults: true } as const
+      // Messages and the plan are output panes too, but keep the query keys; so does a Results pane with one result.
+      const messages = { activePanel: 'output', messagesFocus: true, multipleResults: true } as const
+      const single = { activePanel: 'output', outputGridFocus: true, resultsFocus: true } as const
+      for (const [digit, place] of [['1', 'goToResult1'], ['8', 'goToResult8'], ['9', 'goToLastResult']] as const) {
+        const query = digit === '9' ? 'document.goToLastQuery' : `document.goToQuery${digit}`
+        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, grid), `${platform} ${digit}`).toBe(`output.${place}`)
+        expect(commandFor(event(digit, `Digit${digit}`, primary), platform, picker), `${platform} ${digit} in the picker`).toBe(`output.${place}`)
+        for (const [name, context] of [['editor', editorText], ['messages', messages], ['one result', single]] as const) expect(commandFor(event(digit, `Digit${digit}`, primary), platform, context), `${platform} ${digit} ${name}`).toBe(query)
+      }
+      // Ctrl+Alt+Page Down steps results from anywhere; Ctrl+Page Down only in the Results pane (queries otherwise, and
+      // not at all on macOS, which has no Ctrl+Page Down for queries either).
+      const darwin = platform === 'darwin'
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true, altKey: true }), platform, { activePanel: 'editor', editorFocus: true })).toBe('output.nextResult')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, grid)).toBe(darwin ? undefined : 'output.nextResult')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, messages)).toBe(darwin ? undefined : 'document.next')
+      expect(commandFor(event('PageDown', 'PageDown', { ctrlKey: true }), platform, single)).toBe(darwin ? undefined : 'document.next')
+      expect(commandFor(event('PageUp', 'PageUp', { ctrlKey: true }), platform, { activePanel: 'editor', editorFocus: true })).toBe(darwin ? undefined : 'document.previous')
+      expect(commandFor(event('O', 'KeyO', { shiftKey: true, ...primary }), platform)).toBe('output.goToResult')
+    }
+  })
   it('close a focused tab with Delete or Backspace, which stay text keys elsewhere, and leave AltGr arrows alone', () => {
     for (const platform of ['win32', 'linux', 'darwin'] as const) {
       expect(commandFor(event('Delete', 'Delete'), platform, { documentTabFocus: true, activePanel: 'editor' })).toBe('file.close')
@@ -214,8 +240,15 @@ describe('default keybindings', () => {
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
     // Alt+Down in a grid opens the header funnel's popover for the active cell's column.
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows']
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows']
+    // Ctrl+Alt+Page Down and Up step through the results, with Shift through a result's views; in the output panes also
+    // Ctrl+Page Down and Up (not on macOS, as for queries) and Ctrl/⌘+1 to 9. Ctrl/⌘+Shift+O opens Go to Result.
+    const resultJumps = ['output.goToResult1', 'output.goToResult2', 'output.goToResult3', 'output.goToResult4', 'output.goToResult5', 'output.goToResult6', 'output.goToResult7', 'output.goToResult8', 'output.goToLastResult']
+    const resultTabs = ['output.nextResult', 'output.nextResult', 'output.previousResult', 'output.previousResult', ...resultJumps, 'output.nextResultView', 'output.previousResultView', 'output.goToResult']
+    const macResultTabs = ['output.nextResult', 'output.previousResult', ...resultJumps, 'output.nextResultView', 'output.previousResultView', 'output.goToResult']
+    // Ctrl/⌘+1 to 9 pick query tabs outside the output panes.
+    const queryJumps = ['document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery']
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...resultTabs]
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...macResultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
@@ -224,11 +257,11 @@ describe('default keybindings', () => {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.estimatePlan', 'query.includeClientStatistics', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, 'options.focusSearch', ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : [], ...search])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', ...queryJumps, 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, 'options.focusSearch', ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : [], ...search])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'query.estimatePlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh', 'query.changeDatabase',
-      'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
+      'document.next', 'document.previous', ...queryJumps, 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', 'options.focusSearch', ...display, ...macOutput, ...search])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])
@@ -261,8 +294,9 @@ describe('default keybindings', () => {
     const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close' }
     // SSMS's Save All took Ctrl+Shift+S from Save As, which keeps ⇧⌘S on macOS (where Save All is ⌥⌘S).
     const saveKeys: Readonly<Record<Platform, CommandId>> = { win32: 'file.saveAll', linux: 'file.saveAll', darwin: 'file.saveAs' }
-    // Ctrl/⌘+Shift+F focuses Object Explorer's search box; Ctrl/⌘+Shift+T reopens a closed query.
-    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch', 'shift+t': 'file.reopenClosed' }
+    // Ctrl/⌘+Shift+F focuses Object Explorer's search box; Ctrl/⌘+Shift+T reopens a closed query; Ctrl/⌘+Shift+O is Go to
+    // Result (VS Code's Go to Symbol key).
+    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch', 'shift+t': 'file.reopenClosed', 'shift+o': 'output.goToResult' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan', l: 'query.estimatePlan' }, linux: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan', l: 'query.estimatePlan' }, darwin: { l: 'query.estimatePlan' } }
     // SSMS's search box key; Linux and macOS quit with it.

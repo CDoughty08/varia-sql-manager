@@ -74,7 +74,24 @@ was built with, not from an edit in the builder not yet built, over the result a
 **Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
 is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
 results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
-once the SQL backend has stopped. Nothing rebuilds by itself. The grid's menu shows more items than its titles have
+once the SQL backend has stopped.
+
+A Pivot that is small and quick to build **follows its result's filters by itself**: when the result stores at most
+500,000 rows and the Pivot's last build took under a quarter of a second (250 ms), a filter change rebuilds it at once,
+as Update would: its caption shows "Building again…" with Cancel (its strip still says it is out of date) until the new
+Pivot replaces it. The result's stored rows count, not the rows its filters keep, since a build
+reads them all. Otherwise it stays marked out of date with Update. Only a Pivot you can see rebuilds by itself: in Tabs
+layout while its Pivot tab is selected, stacked while its caption is expanded, and only while the Results panel is
+showing (Messages picked in its place hides it; Messages docked beside Results or popped out does not, and a closed or
+hidden Results panel does). A Pivot that is hidden keeps its mark and rebuilds when you show it (select its Pivot tab, expand it, show the
+Results panel again or switch to the stacked layout). A newer filter change stops a rebuild still running and starts one for the
+newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
+marked, says why in the results toolbar, and is not tried again by itself until the filters change (Update still
+asks for it). A Pivot hidden while it rebuilds by itself (Messages takes its place, you select another view or collapse it) stops
+that rebuild, keeps the pane you picked, and rebuilds when you show it again. A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
+clear what the builder says about a Build Pivot of yours that failed (it does clear what an earlier automatic rebuild or
+Update said). Like Update, it removes the Pivot's own filters, selection and scroll, and the toolbar says so, though you
+did not click anything. A rebuild you started with Update or Build Pivot is never stopped this way. A Copy of the Pivot still running holds a rebuild by itself back until the copy ends. The grid's menu shows more items than its titles have
 letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
 reach it.
 
@@ -122,7 +139,8 @@ Once one is closed it reads "Result 1 (closed)": the comparison copied what it c
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Stacked stays the default for now. In a window 1,440 pixels wide or narrower
+groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); turn
+it off to go back to Stacked. In a window 1,440 pixels wide or narrower
 the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
@@ -151,8 +169,36 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
 - When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
   view whenever the selection changes and fades the edge that hides tabs.
-- A run of more than 64 results draws 64 result tabs around the selected one, with a count of those before and after;
-  the arrow keys, Home, End and Find Next reach the rest. A picker that lists them all comes with Tabs becoming the default.
+- When some tabs are out of view, a button at the end of the row counts them ("+12") and opens the overflow picker: a
+  themed list of every result, each Pivot indented under its result, and the comparisons, with a filter box that keeps
+  the focus. Type words of a name ("27", "pivot 3"; every word must match), move with Up, Down, Page Up and Page Down,
+  and press Enter or click a row to show it; its tab takes the focus, scrolled into view. Escape gives the focus back to
+  the button, or to where Go to Result… was run from; a press outside or the focus leaving closes it. Results arriving
+  or closing while it is open keep the row you moved to. It opens at the view shown, which it marks, and a Pivot
+  that is out of date says so. The list draws only the rows in view, so a run of 1,000 results costs a screenful of rows
+  (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (Ctrl+Shift+O, ⇧⌘O on macOS;
+  command palette, Window menu) opens it from anywhere, even when every tab fits.
+- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up from anywhere; also Ctrl+Page Down and Up in the
+  Results pane, on Windows and Linux) select the next or previous result or comparison, wrapping round; a result shows
+  the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9, ⌘ on macOS, in the
+  Results pane) pick one as a browser's keys pick a tab. "In the Results pane" means the focus is in it or in the
+  overflow picker and the query has two or more results or comparisons; otherwise, Messages (its strip in the Results pane too) and the plan included, the
+  same keys pick query tabs (Go to Query 1 to 8, Go to Last Query) and Ctrl+Page Down and Up step through queries. A
+  Results pane that is closed, hidden by Toggle Results Pane (Ctrl+R) or behind another output pane comes forward for
+  these commands and Go to Result…; one in a popout window has its tab selected there (Go to Result… also brings that window forward), and Stacked still scrolls to the result.
+  **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other
+  text boxes, where Monaco's column selection keeps them) switch between the selected result's Table and Pivot. They work
+  from a grid, whose focus moves to the grid shown, from a focused tab, whose focus follows, and from the editor, which
+  keeps it. In Stacked, Next and Previous Result and Go to Result N scroll the stack to the result (opening it when
+  collapsed) and, from a grid, focus its grid; the view commands and the picker are for Tabs.
+- In a short results pane the Tabs layout folds its rows so the grid keeps room for its header and two rows: first the
+  result tabs and the selected view's tabs, chips and buttons share one row (the row and column counts are left to the
+  status line), then, in the shortest pane (the results pane dragged to its minimum, say), the grid shows alone, as
+  Stacked's one result gives up its caption. The keys above and Go to Result… still reach every view.
+
+![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
+
+![The same in the Light theme](images/results-picker-light.png)
 - Peek's rows are never drawn as tabs.
 
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
