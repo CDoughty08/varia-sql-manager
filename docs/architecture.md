@@ -283,7 +283,7 @@ being true.
   again. A search through a view far from its pages' order (`ResultSearcher.Local`: a sorted view) still unpacks the
   result in place first (`SqlService.Unpack`: `UnpackNeed` reserved as working memory, then `UnpackAll`, stopped by a
   release; a refusal answers `TOO_LARGE` with its sentence and unpacks none); in base order or through a filtered view it
-  reads fused, two slots a run (called directly through a far view, it reads through the accessor as before).
+  reads fused, one room a run in base order and up to two through a filtered view (called directly through a far view, it reads through the accessor as before).
   A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
   held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
   unpacking each packed page into one room of its own (`ReadRoom`, the largest page reserved as working memory;

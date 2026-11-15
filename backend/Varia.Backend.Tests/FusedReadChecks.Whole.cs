@@ -160,6 +160,12 @@ internal static partial class FusedReadChecks
             pair.Left.TryUnpackAll();
             var unpackedAt = pair.Store.UsedBytes;
             reader.YieldAhead();
+            // Two pages, one batch: one half of rooms, none for a batch after it.
+            var length = pages.Max(page => page.Length);
+            var short0 = pair.Store.UsedBytes;
+            long shortTaken;
+            using (PageAhead.TryStart(pair.Left, pages, [0, 1], length, pair.Left.Wires.Count, CancellationToken.None)) shortTaken = pair.Store.UsedBytes - short0;
+            check(shortTaken == 2L * length && pair.Store.UsedBytes == short0, "pages unpacked ahead that fit in one batch reserve one batch of rooms: " + shortTaken + " for two pages of " + length);
             check(aheadTaken > 0 && kept == aheadTaken && unpackedAt - pair.Store.UsedBytes == aheadTaken,
                 "rooms unpacked ahead stay while the result is packed and the budget has spare memory, and go back once the result is unpacked in place: "
                 + aheadTaken + " taken, " + kept + " kept, " + (unpackedAt - pair.Store.UsedBytes) + " given back");

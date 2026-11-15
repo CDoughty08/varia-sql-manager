@@ -219,7 +219,8 @@ internal sealed class PageAhead : IDisposable
     {
         if (uses.Length == 0) return null;
         var batch = Math.Min(Batch, uses.Length);
-        var bytes = 2L * Math.Min(batch, uses.Length) * roomLength;
+        // Pages that fit in one batch need no second one to unpack ahead into.
+        var bytes = (uses.Length > batch ? 2L : 1L) * batch * roomLength;
         if (!set.TryReserveSpare(bytes)) return null;
         var reader = new PageAhead(set, pages, uses, columns, token, batch, roomLength) { reserved = bytes };
         try { reader.Fill(0, 0); }
@@ -239,7 +240,7 @@ internal sealed class PageAhead : IDisposable
         layouts = new int[2, batch][];
         blobStarts = new int[2, batch];
         var layout = PageView.ScratchLength(columns);
-        for (var h = 0; h < 2; h++)
+        for (var h = 0; h < (uses.Length > batch ? 2 : 1); h++)
             for (var k = 0; k < batch; k++)
             {
                 bytes[h, k] = GC.AllocateUninitializedArray<byte>(roomLength);

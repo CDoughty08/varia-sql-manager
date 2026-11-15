@@ -1926,9 +1926,9 @@ receives at most 512 values a window, never rows.
   at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way) whose
   runs of equal values are found in even parts on several threads, each part reading only its own rows (a value on most
   rows is read by every thread, and counted once), and ranked by
-  count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
+  count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 61 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
-  `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
+  `DistinctSnapshotBytes` (30 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
   `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,
   `checked` at most `distinct`, `distinct` and `nulls` at most `rows`, a window at the offset asked with exactly
   `min(count, total − offset)` values. A snapshot built after its port went is closed.
