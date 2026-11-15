@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 // Compares scripts captured in SSMS (spec G8: Clipboard destination, default options, saved as UTF-8 named
 // <case id>.sql) with Varia's goldens in tests/fixtures/scripting/golden, after the same normalization the .NET
 // checks apply (tests/fixtures/scripting/normalize.json). Prints a unified diff per differing case and whether it is
-// only framing (blank lines, GO, trailing spaces) or content, which is usually SMO: Varia pins SMO 181.36.0 in
+// only framing (blank lines, GO, trailing spaces) or content, which is usually SMO: Varia pins SMO 181.38.1 in
 // backend/Varia.Backend/packages.lock.json, and SSMS ships its own. With --ssms <version> --write, each matching
 // golden's source in golden/manifest.json becomes "ssms-<version>", so VARIA_UPDATE_SCRIPT_GOLDENS no longer rewrites it.
 //
@@ -84,7 +84,7 @@ export function compareFolder(captures, { major = baselineMajor, folder = fixtur
 
 const labels = {
   match: 'matches', framing: 'differs in framing only (blank lines, GO, trailing spaces)',
-  content: 'differs in content (often SMO: Varia pins SMO 181.36.0, SSMS bundles its own)', missing: 'has no golden', unknown: 'is not a case in cases.json'
+  content: 'differs in content (often SMO: Varia pins SMO 181.38.1, SSMS bundles its own)', missing: 'has no golden', unknown: 'is not a case in cases.json'
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

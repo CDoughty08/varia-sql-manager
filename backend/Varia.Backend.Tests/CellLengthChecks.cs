@@ -392,7 +392,19 @@ internal static class CellLengthChecks
         check(truncated && !whole && full == "[1,2.5,-3,0.1]" && length == full.Length && wholeLength == full.Length && text.Length <= 6,
             "a cut vector reports the length of its whole text");
         check(SqlClientCollation.Available, "SqlClient still has the column metadata internals collations are read through (SqlClientCollation)");
+        // 7.1.1 kept the encoding and code page as fields (encoding, codePage), 7.1.2 as properties (Encoding, CodePage).
+        var asField = SqlClientCollation.Member(typeof(OldMeta), "encoding", "Encoding");
+        var asProperty = SqlClientCollation.Member(typeof(NewMeta), "encoding", "Encoding");
+        check(asField.Type == typeof(Encoding) && asField.Get!(new OldMeta()) == Encoding.UTF8
+            && asProperty.Type == typeof(Encoding) && asProperty.Get!(new NewMeta()) == Encoding.UTF8
+            && SqlClientCollation.Member(typeof(NewMeta), "missing").Type is null,
+            "column collations read the metadata's encoding as a field or as a property, whichever this SqlClient has");
     }
+
+#pragma warning disable CS0414, IDE0051 // read only through reflection
+    private sealed class OldMeta { internal Encoding encoding = Encoding.UTF8; }
+    private sealed class NewMeta { internal Encoding Encoding { get; } = Encoding.UTF8; }
+#pragma warning restore CS0414, IDE0051
 
     private static bool Throws(Action action)
     {

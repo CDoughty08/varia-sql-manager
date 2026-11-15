@@ -81,6 +81,7 @@
 - **Results:** the notice for a running query that has filled its result memory, or that stopped keeping rows because the computer is low on memory, now has a **Stop query** button (Cancel Executing Query for that tab), reachable by keyboard, until the query ends. The row limit you set yourself only says it was reached.
 - **Results on a computer low on memory:** sorting, filtering, listing a column's values, profiling, comparing and pivoting a result are now refused when the computer is nearly full, saying it is low on memory, instead of taking more from a computer with none to spare: a large request at once, and work that takes its memory in pieces (long values, many differing cells) for every 64 MiB it holds. A profile first tries again on one thread, which holds less; a pivot's Distinct Count falls back to a slower way rather than take more.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
+- **Security and stability updates:** Electron 44.11.3 (Chromium, V8, ANGLE and Skia security fixes), Microsoft.Data.SqlClient 7.1.2 (stricter checks on malformed server responses, and correct `HasRows` when informational messages come before the first row), SMO 181.38.1, ScriptDom 180.154.0, MSAL 4.92.0 and DOMPurify 3.4.18 for Monaco's markdown hovers.
 
 ## [0.8.0] - 2026-11-10
 
