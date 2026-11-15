@@ -240,7 +240,7 @@ being true.
   setting: the backend process's service turns it on request and runs the policy (`ResultPacker`,
   docs/page-compression-findings.md), never on a live table or a result still storing rows. Stage 1 packs a complete
   result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`). Stage 2 packs a shown one too once it is
-  idle: no pin or lease (a read, operation, Copy or Save) has begun or ended, and the set has not completed, for 30 s
+  idle: no pin or lease (a read, operation, Copy or Save) has begun or ended, and the set has not completed or been shown again, for 30 s
   (`ResultSetBuffer.Activity`, its time on `ResultStore.Clock`, which is `ResultVisibility`'s), the wait doubling for
   each operation that unpacked it whole, up to eight times as long (`MaxBackoff`, 4 minutes), so a result in use is never packed and unpacked
   in a loop. A shown result with an open view (a sorted or filtered grid) stays raw, since each of its screens reads a page or so a
