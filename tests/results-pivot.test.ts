@@ -11,6 +11,7 @@ import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixt
 import { manualTimers } from './fixtures/workbench'
 import { keyAt } from './fixtures/entries'
 import { deferred } from './fixtures/documents'
+import { selectAll } from '../src/renderer/src/grid/selection'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 const column = (name: string, dataType: string, patch: Partial<ResultColumn> = {}): ResultColumn => ({ name, dataType, wire: 'text', nullable: true, ...patch }) as ResultColumn
@@ -1269,7 +1270,13 @@ describe("a Pivot following its Table's filters", () => {
   async function following(o: { layout?: ResultsLayout; count?: number; buildMs?: number } = {}) {
     let layout: ResultsLayout = o.layout ?? 'stacked'
     const listeners = new Set<() => void>(), clock = { ms: 0 }
-    const host: PivotFollowHost = { layout: () => layout, onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+    // The Results panel shares one dock group with the other output panels unless a test docks them apart (`panel`):
+    // picking Messages then shows Messages in its place, as the dock would report.
+    const panel: { results?: boolean } = {}
+    const host: PivotFollowHost = {
+      layout: () => layout, resultsShowing: () => panel.results ?? base.results.getSnapshot().t1?.view === 'results',
+      onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+    }
     const base = fixture({ follow: host, now: () => clock.ms })
     const { results, pivot, run } = base
     const handles = run(o.count ?? 1)
@@ -1280,6 +1287,8 @@ describe("a Pivot following its Table's filters", () => {
     await pivot.run('t1')
     await wait()
     const setLayout = (next: ResultsLayout) => { layout = next; for (const listener of listeners) listener() }
+    /** Docks the Results panel apart and says whether it shows (`undefined`: back in the shared group). */
+    const setPanel = (results: boolean | undefined) => { panel.results = results; for (const listener of listeners) listener() }
     /** Shows `shown` in the Table's grid, as a filter (or sort, by `column`) the backend built would. */
     const show = async (shown: ResultView, column = 0) => {
       vi.mocked(handles[0].sort).mockResolvedValueOnce(shown)
@@ -1290,7 +1299,7 @@ describe("a Pivot following its Table's filters", () => {
     }
     const group = () => results.getSnapshot().t1.groups[0]
     const stale = () => pivotOutOfDate(results.getSnapshot().t1, group())
-    return { ...base, first: handles[0], handles, one, clock, setLayout, show, group, stale }
+    return { ...base, first: handles[0], handles, one, clock, setLayout, setPanel, show, group, stale }
   }
 
   it("rebuilds a shown Pivot by itself when its Table is filtered, from its own recipe, under the owner's figures", async () => {
@@ -1357,7 +1366,7 @@ describe("a Pivot following its Table's filters", () => {
   it('measures a build from when it takes its place, leaving out its wait for one', async () => {
     const jobs = new DerivedJobs()
     const clock = { ms: 0 }
-    const { results, pivot, run } = fixture({ jobs, follow: { layout: () => 'stacked', onLayout: () => () => {} }, now: () => clock.ms })
+    const { results, pivot, run } = fixture({ jobs, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
     const [first] = run(1)
     const one = keyAt(results, 't1', 0)
     // Every place is taken by other work for 5 s; the build itself then takes 30 ms.
@@ -1428,12 +1437,13 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.stale()).toBe(false)
     // What shown means, as a function of the run, the layout and the collapsed items.
     const tab = f.results.getSnapshot().t1
-    expect(pivotShown(tab, f.group(), 'stacked', new Set())).toBe(true)
-    expect(pivotShown(tab, f.group(), 'stacked', new Set([pivotKey]))).toBe(false)
-    expect(pivotShown(tab, f.group(), 'tabs', new Set())).toBe(false)
-    expect(pivotShown({ ...tab, focused: pivotKey }, f.group(), 'tabs', new Set([pivotKey]))).toBe(true)
-    expect(pivotShown({ ...tab, bare: true }, f.group(), 'stacked', new Set())).toBe(false)
-    expect(pivotShown(tab, { pivot: undefined }, 'stacked', new Set())).toBe(false)
+    expect(pivotShown(tab, f.group(), 'stacked', new Set(), true)).toBe(true)
+    expect(pivotShown(tab, f.group(), 'stacked', new Set(), false)).toBe(false)
+    expect(pivotShown(tab, f.group(), 'stacked', new Set([pivotKey]), true)).toBe(false)
+    expect(pivotShown(tab, f.group(), 'tabs', new Set(), true)).toBe(false)
+    expect(pivotShown({ ...tab, focused: pivotKey }, f.group(), 'tabs', new Set([pivotKey]), true)).toBe(true)
+    expect(pivotShown({ ...tab, bare: true }, f.group(), 'stacked', new Set(), true)).toBe(false)
+    expect(pivotShown(tab, { pivot: undefined }, 'stacked', new Set(), true)).toBe(false)
   })
 
   it('gives up the build in flight when the filters change again, publishing only the last; a build the user started is not overtaken', async () => {
@@ -1666,6 +1676,76 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.group().pivot!.pivot!.followed).toBeUndefined()
   })
 
+  it("holds a rebuild by itself back while the user's copy of the Pivot runs, giving up one in flight, and follows once it ends", async () => {
+    const f = await following()
+    const pivotKey = f.group().pivot!.key
+    // A copy of the Pivot runs when the Table is filtered: nothing is built, so the copy goes on.
+    const copying = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(copying.promise)
+    f.results.setSelection('t1', pivotKey, selectAll(pivotKey))
+    const copied = f.results.copy('t1', pivotKey, false)
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f1)
+    expect(f1.pivot).not.toHaveBeenCalled()
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // The copy ends: the Pivot follows.
+    copying.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await copied
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    // A rebuild already running when a copy of the Pivot starts is given up, and runs again once the copy ends.
+    const newKey = f.group().pivot!.key
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    let signal: AbortSignal | undefined
+    f2.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { signal = options?.signal; signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+    await f.show(f2)
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    const again = deferred<Awaited<ReturnType<VariaApi['copyResults']>>>()
+    f.api.copyResults.mockReturnValueOnce(again.promise)
+    f.results.setSelection('t1', newKey, selectAll(newKey))
+    const second = f.results.copy('t1', newKey, false)
+    await wait()
+    expect(signal?.aborted).toBe(true)
+    expect(f.api.cancelResultsJob).not.toHaveBeenCalled()
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    again.resolve({ ok: true, value: { rows: 3, bytes: 12, partial: false, truncatedCells: 0, capped: 0 } })
+    await second
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('asks the dock whether Results shows, not the output view last picked: Messages docked apart, or Results hidden', async () => {
+    const f = await following()
+    // Messages docked beside Results and picked: Results still shows, so the Pivot follows.
+    f.setPanel(true)
+    f.results.setView('t1', 'messages')
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f1)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    // The Results panel hidden (closed, or Ctrl+R), the output view still Results: the Pivot is hidden and keeps its mark.
+    f.results.setView('t1', 'results')
+    f.setPanel(false)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    expect(f2.pivot).not.toHaveBeenCalled()
+    expect(f.stale()).toBe(true)
+    // Shown again: the dock's report alone wakes it.
+    f.setPanel(true)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
   it('gives up an automatic build when its item is collapsed, or another view selected in Tabs, while it runs', async () => {
     const f = await following({ count: 2 })
     const pivotKey = f.group().pivot!.key
@@ -1797,7 +1877,7 @@ describe("a Pivot following its Table's filters", () => {
   it('decides nothing over a view the grid shows that the results have yet to publish, and follows it once published', async () => {
     let layout: ResultsLayout = 'tabs'
     const listeners = new Set<() => void>(), clock = { ms: 0 }
-    const f = fixture({ frames: true, follow: { layout: () => layout, onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }, now: () => clock.ms })
+    const f = fixture({ frames: true, follow: { layout: () => layout, resultsShowing: () => true, onLayout: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }, now: () => clock.ms })
     const [first] = f.run(1)
     f.flush()
     const one = keyAt(f.results, 't1', 0)
@@ -1874,7 +1954,7 @@ describe("a Pivot following its Table's filters", () => {
 
   it("counts the grid's newest view as tried on a Cancel, even before the results publish it", async () => {
     const clock = { ms: 0 }
-    const f = fixture({ frames: true, follow: { layout: () => 'stacked', onLayout: () => () => {} }, now: () => clock.ms })
+    const f = fixture({ frames: true, follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} }, now: () => clock.ms })
     const [first] = f.run(1)
     f.flush()
     const one = keyAt(f.results, 't1', 0)

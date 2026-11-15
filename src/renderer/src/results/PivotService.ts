@@ -17,13 +17,15 @@ export const pivotFollow = { maxSourceRows: 500_000, maxLastBuildMs: 250 } as co
 
 export type ResultsLayout = 'stacked' | 'tabs'
 /**
- * Whether a group's Pivot is shown, so it may rebuild by itself: its query tab's output shows Results (not Messages, a plan
- * or statistics), and in Tabs its view is the one selected, in Stacked its item is expanded (a collapsed item is its caption
- * alone, and its grid is not drawn). Scrolling the stack does not count: an expanded Pivot is drawn in it wherever it stands.
+ * Whether a group's Pivot is shown, so it may rebuild by itself: the Results panel is showing (`resultsShowing`, the dock's
+ * own report, not the output view last picked: Messages docked beside Results or popped out leaves Results showing, and a
+ * closed or hidden Results panel shows nothing), and in Tabs its view is the one selected, in Stacked its item is expanded
+ * (a collapsed item is its caption alone, and its grid is not drawn). Scrolling the stack does not count: an expanded Pivot
+ * is drawn in it wherever it stands.
  */
-export function pivotShown(tab: Pick<TabResults, 'view' | 'sets' | 'focused' | 'bare'>, group: Pick<ResultGroup, 'pivot'>, layout: ResultsLayout, collapsed: ReadonlySet<EntryKey>): boolean {
+export function pivotShown(tab: Pick<TabResults, 'sets' | 'focused' | 'bare'>, group: Pick<ResultGroup, 'pivot'>, layout: ResultsLayout, collapsed: ReadonlySet<EntryKey>, resultsShowing: boolean): boolean {
   const key = group.pivot?.key
-  if (key === undefined || tab.bare || tab.view !== 'results') return false
+  if (key === undefined || tab.bare || !resultsShowing) return false
   return layout === 'tabs' ? selectedEntry(tab)?.key === key : !collapsed.has(key)
 }
 /** Whether a Pivot's own size and history let it rebuild by itself (`pivotFollow`): its Table's stored rows and its last
@@ -65,6 +67,9 @@ type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'di
  *  Table's filters by itself (the checks that do not ask for it). */
 export interface PivotFollowHost {
   layout(): ResultsLayout
+  /** Whether the Results panel is showing (docked and selected in its group, floating or popped out). */
+  resultsShowing(): boolean
+  /** Called when either changes. */
   onLayout(listener: () => void): () => void
 }
 /** A build in flight: its run, the Table it reads, its group, the Pivot it replaces (none for a group's first), whether it
@@ -551,7 +556,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
 
   /** Every group's Pivot that follows its Table's filters: see `followGroup`. */
   private followAll(): void {
-    const layout = this.follow!.layout(), snapshot = this.results.getSnapshot()
+    const layout = this.follow!.layout(), showing = this.follow!.resultsShowing(), snapshot = this.results.getSnapshot()
     for (const [tabId, tried] of this.tried) {
       const tab = snapshot[tabId]
       if (!tab) { this.tried.delete(tabId); continue }
@@ -560,7 +565,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     for (const [tabId, tab] of Object.entries(snapshot)) {
       if (tab.bare || !tab.groups.some(group => group.pivot)) continue
       const collapsed = this.results.viewState?.(tabId).collapsed ?? new Set<EntryKey>()
-      for (const group of tab.groups) this.followGroup(tabId, tab, group, layout, collapsed)
+      for (const group of tab.groups) this.followGroup(tabId, tab, group, layout, collapsed, showing)
     }
   }
 
@@ -574,7 +579,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
    * given up or overtaken here; once it ends the Pivot is looked at again. A user's cancel counts the filters shown then as
    * tried.
    */
-  private followGroup(tabId: string, tab: TabResults, group: ResultGroup, layout: ResultsLayout, collapsed: ReadonlySet<EntryKey>): void {
+  private followGroup(tabId: string, tab: TabResults, group: ResultGroup, layout: ResultsLayout, collapsed: ReadonlySet<EntryKey>, showing: boolean): void {
     const recipe = group.pivot?.pivot?.recipe
     if (!recipe) return
     // A build already given up (superseded, cancelled) is no longer in flight here, though it stays listed until it settles.
@@ -586,7 +591,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const filters = filtersIdentity(shownFilters(tab, group.table.key))
     // Hidden while it builds (Messages picked, another view selected, its item collapsed), it is given up too: only a shown
     // Pivot rebuilds by itself, and it rebuilds when shown again.
-    const superseded = live?.auto !== undefined && (live.auto !== filters || !pivotShown(tab, group, layout, collapsed))
+    // A copy of the Pivot the user started is never stopped by a rebuild nobody asked for (`replaceSet` cancels it): the
+    // Pivot waits until it ends, whose publish looks again.
+    const copying = tab.jobs.some(job => job.kind === 'copy' && job.entry === group.pivot!.key)
+    const superseded = live?.auto !== undefined && (live.auto !== filters || copying || !pivotShown(tab, group, layout, collapsed, showing))
     if (superseded) {
       // Given up by this service, not ended: its filters were never built over, so they may be tried again (the change
       // undone, then made again).
@@ -594,10 +602,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       if (tried?.get(group.ordinal)?.filters === live!.auto) tried!.delete(group.ordinal)
       live!.abort.abort()
     }
-    if (!recipe || (live && !superseded) || !pivotOutOfDate(tab, group)) return
+    if (!recipe || (live && !superseded) || copying || !pivotOutOfDate(tab, group)) return
     const tried = this.tried.get(tabId)?.get(group.ordinal)
     if (tried?.queryId === tab.queryId && tried.filters === filters) return
-    if (!pivotShown(tab, group, layout, collapsed) || !followsByItself(group) || !this.canPivot(tabId, group.table.key)) return
+    if (!pivotShown(tab, group, layout, collapsed, showing) || !followsByItself(group) || !this.canPivot(tabId, group.table.key)) return
     void this.start(tabId, tab, group, recipeSpec(recipe), true, true)
   }
 }

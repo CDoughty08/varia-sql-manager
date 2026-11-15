@@ -915,13 +915,16 @@ Outcome, accepted by the owner:
         ([Measured again for PR 17](pivot-performance-findings.md#measured-again-for-pr-17)): every threshold recipe at
         500,000 rows builds under 250 ms on the 24-core machine, raw or packed, the slowest the 30-digit `decimal` at 177
         to 197 ms; the figures stand.
-      - **Shown** (`pivotShown`): the query tab's output shows Results (not Messages, a plan or statistics), and in Tabs the
+      - **Shown** (`pivotShown`): the Results panel is showing, as the dock reports it (`PaneService`, through
+        `PivotFollowHost.resultsShowing`; not the output view last picked, since Messages docked beside Results or popped out
+        leaves Results drawn, and a closed or Ctrl+R-hidden Results panel draws nothing), and in Tabs the
         Pivot's view is the selected entry (`selectedEntry`, moved to `ResultsService.ts` for this); in Stacked its item is
         not collapsed. Scrolling the stack does not count: an expanded Pivot is drawn wherever it stands. Whether the query
         tab's document is the active one is not asked: the filter is changed in that tab's grid, and a Pivot hidden by
         another document is still drawn when it comes back. The stack's caption toggle now goes through
         `ResultsService.setCollapsed`, which publishes, so expanding a collapsed Pivot is seen; the layout setting comes
-        through `PivotFollowHost` (the workbench passes `queryResults.grid.layout` and its subscription).
+        through `PivotFollowHost` (the workbench passes `queryResults.grid.layout`, the Results panel's visibility and both
+        subscriptions).
       - When a Pivot rebuilds by itself (`PivotService.followGroup`, looked at in a microtask after every results publish
         and layout change, never a timer): it is out of date (`pivotOutOfDate`), shown, under the threshold, its Table can
         be pivoted (`canPivot`: the run ended, its sort or filter built), no build of its group is in flight, and its
@@ -951,10 +954,15 @@ Outcome, accepted by the owner:
         answer released, and only the last build publishes. A build the user started (Build Pivot, Update) is never given
         up or overtaken here: once it publishes, the Pivot is looked at again and follows the newer filters if it may.
         Build Pivot during an automatic build gives the automatic one up, as it does an Update.
-        An automatic build whose Pivot is hidden while it runs (Messages shown, another view selected, collapsed) is given
+        An automatic build whose Pivot is hidden while it runs (Results hidden, another view selected, collapsed) is given
         up too and its filters may be tried again when shown, and a followed rebuild never switches the output pane back to
         Results (`replaceSet` leaves `run.view` alone for `followed` provenance). `tried` keeps only the last set of filters
         a group was built over: returning to filters that failed earlier builds them again, once.
+        A Copy of the Pivot the user started holds an automatic build back (one in flight is given up) until the copy ends,
+        since `replaceSet` cancels a copy of the entry it replaces. While the newer filter's view is still being built the
+        older automatic build is not given up (decisions are over published views), so a Table whose view takes longer
+        than the Pivot publishes the older Pivot briefly first. results-smoke 13b2's first check needs the 100-row Pivot's
+        build to take under 250 ms, round trip included, which holds with a wide margin.
       - Departures: the cancel happens when the newer view is published, not when its build starts, so a Table whose new view
         takes long to build lets the older rebuild finish (and publish) first; the plan did not say which. No new
         caption text: an automatic rebuild shows PR 11's "Building again…" with Cancel, and a Pivot left marked shows
