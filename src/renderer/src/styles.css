@@ -864,7 +864,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
-.results-toolbar:not([data-fold~="show"]) .results-search { min-width: 160px; }
+/* The box keeps room for a few words while Tabs folds and the groups tighten; past that it gives up its width before any
+   group goes, as a 1024-wide window (CI's displays) needs to show Sort text by, White space and Show with Linux's fonts. */
+.results-toolbar:not([data-fold~="view"]) .results-search { min-width: 160px; }
 .results-toolbar[data-fold~="layout"] .results-layout { display: none; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) .output-views button { padding: 0 6px; }
@@ -880,7 +882,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-toolbar > .job-strip, .output-toolbar > .op-strip { flex-shrink: 1; min-width: 72px; }
 .job-strip span, .job-notice, .op-strip > span:not(.op-meter), .op-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .job-strip.job-notice, .op-strip.op-notice { display: block; }
-.job-strip button, .op-strip button, .job-strip .job-done { flex-shrink: 0; }
+.job-strip button, .op-strip button { flex-shrink: 0; }
+/* A long name gives way before the progress beside it; past that the progress is cut too, never Cancel. */
+.job-strip > span:first-child { flex-shrink: 1000; }
 .output-toolbar .job-strip button, .output-toolbar .op-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 /* Operations over whole results (OperationStrip, ResultOperations): the toolbar's strip with its meter and Cancel, the
    2 px bar along the top of the grid, the ring on the busy column's sort button, and held-off controls (dimmed, not-allowed). */

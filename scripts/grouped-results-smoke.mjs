@@ -356,14 +356,15 @@ try {
 
   // 9. Narrow and short panes and popouts (grouped results PR 15), with a name of the longest a marker gives (128
   // characters). A pane too narrow for every tool folds the results toolbar by its own width: Tabs goes first and the
-  // search box keeps a readable width; ⋯ (More results tools) holds every tool, Results as Tabs among them.
+  // search box keeps a readable width until Transposed and Compare fold too; ⋯ (More results tools) holds every tool,
+  // Results as Tabs among them.
   const name128 = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region, by month and '.padEnd(128, 'z')
   expect(name128).toHaveLength(128)
   await resizeContent(application, page, 900, 900)
   await expect.poll(async () => (await resultsToolbarFit(page)).fits).toBe(true)
   const narrow = await resultsToolbarFit(page)
   expect(narrow.fold, JSON.stringify(narrow)).toMatch(/^layout( |$)/)
-  expect(narrow.search, JSON.stringify(narrow)).toBeGreaterThanOrEqual(150)
+  if (!/\bview\b/.test(narrow.fold)) expect(narrow.search, JSON.stringify(narrow)).toBeGreaterThanOrEqual(150)
   await expect(show('Tabs')).toBeHidden()
   await moreResultsTools(page).click()
   const tabsItem = () => resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })
@@ -429,9 +430,10 @@ try {
   await expect(resultsToolsMenu(popout).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })).toHaveAttribute('aria-checked', 'true')
   await popout.keyboard.press('Escape')
   await expect(resultsToolsMenu(popout)).toHaveCount(0)
-  // Narrower still, White space folds away with the toolbar's Tab stop, and ⋯ takes it, so Tab still reaches the toolbar.
-  await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '-1')
-  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(420, 480) })
+  // While White space shows, its chosen button is the toolbar's Tab stop; narrower still, it folds away with the stop and
+  // ⋯ takes it, so Tab still reaches the toolbar.
+  await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(360, 480) })
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()

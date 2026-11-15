@@ -916,7 +916,7 @@ Outcome, accepted by the owner:
       - Narrow panes: the results toolbar folds by its own measured width (`toolbarFolds`, `fitFold`, `data-fold` words),
         not by window media queries, so a docked or popped-out pane folds as a narrow window does, whatever the fonts:
         Tabs, then tightening (the old 1,180 px rules), then Transposed, Headers and Compare, Sort text by, White space and
-        the Show group. The search box keeps 160 px until the last fold. The 1,440 px and 1,180 px media queries are gone.
+        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). The 1,440 px and 1,180 px media queries are gone.
       - A new context menu, `output.tools` (**More results tools**, the toolbar's ⋯ after Close Results, target kind
         `resultsTools`, whose items run with the toolbar's `tabId` and no target), holds every tool: Results as Tabs, Go to
         Result…, Pivot…, Compare…, Transposed, Choose Headers…, Column Profile, Row Size, the White space and Sort text by
