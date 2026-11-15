@@ -1206,6 +1206,9 @@ function liveSubscribe(id, credit, params) {
   if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
+  // A CANCEL that came while the request was logged or held: SqlService registers the request before it reads the next
+  // frame and its valid subscription starts on a cancelled token, so the stream ends at once, having sent nothing.
+  if (cancelled.delete(id)) return respond(id, { ended: 'cancelled', ticks: 0, elapsedMs: 0 })
   const now = Date.now()
   const live = {
     id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,

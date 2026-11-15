@@ -178,8 +178,10 @@ internal sealed partial class ActionService
             }
             catch (SqlException sql)
             {
-                Add("failed", step, ActionErrors.FromSql(catalog, sql, connection, ddl: true, null, serverText).Message);
-                outcomes.Add("\"" + step.Title + "\" failed");
+                // The step's own reason ends the message too: a compensation refused by its own check says what it left behind.
+                var reason = ActionErrors.FromSql(catalog, sql, connection, ddl: true, null, serverText).Message;
+                Add("failed", step, reason);
+                outcomes.Add("\"" + step.Title + "\" failed: " + (reason.EndsWith('.') ? reason[..^1] : reason));
             }
             // The failure or Stop broke the connection (a severe error closes it): the step could not run.
             catch (InvalidOperationException)
@@ -188,7 +190,16 @@ internal sealed partial class ActionService
                 outcomes.Add("\"" + step.Title + "\" could not run");
             }
         }
-        if (outcomes.Count > 0) failure = failure with { Message = ScriptingErrors.Clip(failure.Message + " Then " + string.Join(", ", outcomes) + ".", ActionErrors.MaxMessage) };
+        if (outcomes.Count > 0) failure = failure with { Message = WithOutcomes(failure.Message, outcomes) };
         return new(steps, failure, completed);
+    }
+
+    /// <summary>A failure's message followed by what its compensations and cleanups did, within ActionErrors.MaxMessage. The outcomes
+    /// keep at least half the room, so a long failure (a trigger's THROW, many errors) is clipped before them and a refused restore's
+    /// reason survives.</summary>
+    internal static string WithOutcomes(string message, IReadOnlyList<string> outcomes)
+    {
+        var suffix = ScriptingErrors.Clip(" Then " + string.Join(", ", outcomes) + ".", Math.Max(ActionErrors.MaxMessage / 2, ActionErrors.MaxMessage - message.Length));
+        return ScriptingErrors.Clip(message, ActionErrors.MaxMessage - suffix.Length) + suffix;
     }
 }

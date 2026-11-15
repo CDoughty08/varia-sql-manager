@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { OpenedFiles } from '../src/shared/contracts'
-import { deliverLaunchFiles, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema } from '../src/main/launch-files'
+import { deliverLaunchFiles, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, openEach, secondInstanceSchema } from '../src/main/launch-files'
 import { reloadPromptSchema } from '../src/main/sql-files'
 
 const windows = { cwd: 'C:\\Work', defaultApp: false, platform: 'win32' as const }
@@ -122,5 +123,34 @@ describe('delivering waiting files', () => {
     expect(value.open).toHaveBeenCalledTimes(1)
     expect(queue.size).toBe(1)
     expect(sent).toEqual([])
+  })
+})
+
+describe('opening several files', () => {
+  it('opens the rest when one fails, in order, reporting the failure as described and skipping a folder', async () => {
+    const open = vi.fn(async (path: string) => {
+      if (path === '/b.sql') throw Object.assign(new Error('denied'), { code: 'EACCES' })
+      return path === '/folder' ? undefined : { path }
+    })
+    const opened = await openEach(['/a.sql', '/b.sql', '/folder', '/c.sql'], open, (path, error) => `${path}: ${(error as Error).message}`)
+    expect(opened).toEqual({ files: [{ path: '/a.sql' }, { path: '/c.sql' }], errors: ['/b.sql: denied'] })
+    expect(open.mock.calls.map(([path]) => path)).toEqual(['/a.sql', '/b.sql', '/folder', '/c.sql'])
+  })
+
+  it('opens at most the launch limit', async () => {
+    const open = vi.fn(async (path: string) => path)
+    const opened = await openEach(Array.from({ length: maxLaunchFiles + 3 }, (_, index) => `/${index}.sql`), open, () => '')
+    expect(opened.files).toHaveLength(maxLaunchFiles)
+    expect(open).toHaveBeenCalledTimes(maxLaunchFiles)
+  })
+
+  it('is what File › Open uses, so one unreadable file in a selection does not fail the others', () => {
+    const source = readFileSync('src/main/index.ts', 'utf8')
+    const handler = source.slice(source.indexOf("handle('varia:files-open'"), source.indexOf("handle('varia:files-save'"))
+    // A folder (a macOS package) is reported rather than skipped: Open said nothing at all for it otherwise.
+    expect(handler).toContain("return openPaths(selected.filePaths, 'It is a folder, not a file.')")
+    expect(source).toContain('if (!file && folder) throw new Error(folder)')
+    expect(handler).not.toContain('Promise.all')
+    expect(source).toMatch(/function openPaths\([^)]*\)[^{]*\{[^}]*openEach\(/)
   })
 })

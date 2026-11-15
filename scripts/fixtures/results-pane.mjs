@@ -39,6 +39,19 @@ export async function sizeResultStack(page, height) {
   return current
 }
 
+/** Makes the output pane about `height` pixels tall by dragging the sash above it (the editor takes the rest; a pane's
+ *  minimum may stop it). Returns the pane's height. */
+export async function sizeOutput(page, height) {
+  const paneHeight = async () => (await outputPane(page).boundingBox()).height
+  let current = await paneHeight()
+  for (let attempt = 0; attempt < 3 && Math.abs(current - height) > 2; attempt++) {
+    const sash = await outputSash(page)
+    await dragOutputSash(page, sash, sash.y + sash.height / 2 + current - height)
+    current = await paneHeight()
+  }
+  return current
+}
+
 /**
  * Pins the results layout to Stacked (queryResults.grid.layout), for suites whose steps find results by their stacked
  * captions, splitters and several grids at once. Tabs is the default (grouped results PR 14); the pin keeps those suites

@@ -164,9 +164,9 @@ Once one is closed it reads "Result 1 (closed)": the comparison copied what it c
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); turn
-it off to go back to Stacked. In a window 1,440 pixels wide or narrower
-the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the palette and the Window menu still switch the layout.
+groups one at a time instead of stacked. Tabs is the default; turn it off
+for Stacked. When the results toolbar does not fit its pane, Tabs is the first tool to give way (see
+[Narrow and short panes](#narrow-and-short-panes)); the toolbar's ⋯, the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
 
@@ -220,11 +220,11 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   result tabs and the selected view's tabs, chips and buttons share one row (the row and column counts are left to the
   status line), then, in the shortest pane (the results pane dragged to its minimum, say), the grid shows alone, as
   Stacked's one result gives up its caption. The keys above and Go to Result… still reach every view.
+- Peek's rows are never drawn as tabs.
 
 ![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
 
 ![The same in the Light theme](images/results-picker-light.png)
-- Peek's rows are never drawn as tabs.
 
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
 and closing it removes that plan from the Execution plan pane. Pivot, Compare and Transpose are unavailable for it.
@@ -265,9 +265,49 @@ result never renumbers another.
   Compare popover's heading and sentences.
 - **Go to Result 1** to **8** count places in the row of tabs, whatever the results are called.
 - A Pivot's or a comparison's title is fixed when it is made, from its result's name then.
-- Save Results As still suggests `{query}-Result2`; the name in the suggested file name comes later.
+- Save Results As suggests a file named after it (below).
 - The query a first launch opens names its result ("Sample Query"), so the first run shows a name. A session that hot
   exit kept with the earlier text keeps it; that text is still treated as the untouched welcome query.
+
+## Save Results As names
+
+Save Results As suggests a file named after the query tab and the view saved, and a copy's strip in the toolbar names
+the view the same way ("Copying Pivot of Result 2… 40%"):
+
+| Saved | Suggested file name |
+| --- | --- |
+| A result | `SQLQuery1-Result2.csv`; a named one `SQLQuery1-Open orders.csv` |
+| Its Pivot | `SQLQuery1-Result2-Pivot.csv`, `SQLQuery1-Open orders-Pivot.csv` |
+| Drawn transposed | `-Transposed` after it: `SQLQuery1-Result2-Transposed.csv` |
+| A comparison | `SQLQuery1-Differences1.csv`, numbered in the order the run's comparisons were made (a closed one keeps its number) |
+
+- A name keeps its number beside it when the name alone would not tell the file apart: another result of the run has a
+  name that makes the same file name (case aside, as Windows and macOS compare file names: "Totals" and "totals" save as
+  `SQLQuery1-Totals-Result1` and `SQLQuery1-totals-Result3`), the name is what another result's file is called anyway
+  (a result named "Result2" beside an unnamed Result 2, "Totals-Pivot" beside the Pivot of "Totals"), or the name was cut.
+- A name takes at most 64 characters of the file name; a longer one is cut there and numbered. Characters no file name
+  may hold (`\ / : * ? " < > |`) become `_`, and trailing dots go; a name of nothing else is named by its number instead.
+- The whole stays within what Windows, Linux and macOS allow (128 characters, and 240 bytes with the extension): a long
+  query tab name gives way first, then the result's name, never the part that tells results apart (`-Result2-Pivot`).
+
+## Narrow and short panes
+
+The results toolbar fits its own pane, so the Results panel docked beside the editor or popped out into a window of its
+own folds as a narrow window does. When its tools do not fit, they give way in order: **Tabs**; then the groups
+tighten (their icons go, and the search box's magnifier and its Previous and Next, while Enter, Shift+Enter, F3 and
+Shift+F3 still step); then **Transposed**, **Headers** and **Compare**; **Sort text by**; **White space**; and last the
+Profile, Row size and Pivot group. The search box keeps its whole placeholder ("Search all results", or "Search column
+names" while it searches column names): the groups fold instead, and only once all of them have folded does the field
+narrow, so **⋯** and **Close Results** stay in view. In a short pane the Pivot builder drops
+its explanations (such as "Building again replaces…") so **Build Pivot** stays whole. **⋯** (More results tools) at the
+toolbar's end, with **Close Results**, shows in any Results pane at least about 400 px wide and holds every tool: Results as Tabs, Go to Result…, Pivot…,
+Compare…, Transposed, Choose Headers… (while the grid is transposed), Column Profile, Row Size, Show Spaces and Tabs,
+Show All White Space, Sort Text by Characters or Bytes, and Close Results.
+
+A long name gives way in every place a narrow pane shows it: a result tab stops at its widest and ends in an ellipsis,
+a caption's name gives way before its facts, and Go to Result… cuts a row's name inside the list. In a short pane the
+rows of tabs fold into one row, then away, so the grid keeps its header and two rows, and the toolbar stays one row.
+A popped-out Results panel shows the same names, tooltips and accessible names as the main window.
 
 ## Peek's rows
 
@@ -289,7 +329,7 @@ Nothing is stored, so it follows the grid's sort and filters and is available wh
 | Command | What it does |
 | --- | --- |
 | Transpose Results (`output.transpose`) | Turns the grid transposed, or back. The toolbar's Transposed button and the grid menu's Transpose › Transposed show which it is. |
-| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until removed from the caption. |
+| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until its chip is removed (beside the view tabs, or on the caption when stacked). |
 | Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value for its row, and turns the grid. From a menu it is the column under the pointer; otherwise the active cell's. |
 | Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, starting on the current choice. The toolbar's Headers button opens it below itself. |
 

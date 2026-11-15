@@ -71,6 +71,8 @@ export const part = {
   resultsSearchIcon: '.results-search-icon',
   /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
   resultsSearchCount: '.results-search-count',
+  /** The results search box (input, count, Previous and Next, Data or Columns), whose field keeps its whole placeholder until every group has folded. */
+  resultsSearch: '.results-search',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
@@ -325,7 +327,7 @@ export const gridPart = {
   borderHover: '.rg-border-hover',
   /** A highlighted row (Highlight Rows), drawn in its colour; its row header's aria-description names the colour. */
   highlightedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].hl',
-  /** A transposed grid (transposedGrid): the frozen name cell of each drawn row, which names a column of the result where a
+  /** A transposed grid (transposedGridSelector): the frozen name cell of each drawn row, which names a column of the result where a
    *  table has a row number (screen readers read the row's own header), a name cell a column-name search marks, and the
    *  tint over a highlighted row's drawn column, whose column header's aria-description names the colour. */
   nameCell: '.rg-rn',
@@ -565,6 +567,24 @@ export const outputToolbar = page => outputPane(page).locator(part.outputToolbar
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
 /** The results search box's visible count, and its live region, which says only the settled count. */
 export const resultsSearchCount = page => resultsToolbar(page).locator(part.resultsSearchCount)
+/** The results toolbar's ⋯ (More results tools) and the menu it opens, which holds every tool of the toolbar. */
+export const moreResultsTools = page => resultsToolbar(page).getByRole('button', { name: 'More results tools', exact: true })
+export const resultsToolsMenu = page => page.getByRole('menu', { name: 'More results tools', exact: true })
+/** How the results toolbar sits in its pane: whether its groups fit it (none clipped past its edge, its last inside the
+ *  head), the search box's width, and how far it folded (its data-fold words). */
+export const resultsToolbarFit = page => resultsToolbar(page).evaluate((tools, selector) => {
+  const box = tools.getBoundingClientRect(), head = tools.parentElement.getBoundingClientRect(), last = [...tools.querySelectorAll('button')].filter(button => button.getClientRects().length > 0).at(-1)
+  return { fits: tools.scrollWidth <= tools.clientWidth + 0.5 && box.right <= head.right + 0.5 && (!last || last.getBoundingClientRect().right <= box.right + 0.5), search: tools.querySelector(selector).getBoundingClientRect().width, fold: tools.dataset.fold ?? '', rows: Math.round(head.height) }
+}, part.resultsSearch)
+/** The results search field's placeholder and the room it has: `fits` when the whole placeholder shows in the input. */
+export const searchPlaceholderFit = page => resultsToolbar(page).locator(`${part.resultsSearch} input`).evaluate(input => {
+  const context = input.ownerDocument.createElement('canvas').getContext('2d')
+  context.font = getComputedStyle(input).font
+  const text = context.measureText(input.placeholder).width, room = input.clientWidth
+  return { fits: text <= room + 0.5, text, room, placeholder: input.placeholder }
+})
+/** Whether an element's contents fit it across, nothing pushed past its right edge (a row of tabs, a caption, a picker row). */
+export const fitsAcross = locator => locator.evaluate(element => element.scrollWidth <= element.clientWidth + 1)
 export const resultsSearchAnnouncer = page => resultsToolbar(page).getByRole('status')
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
@@ -638,8 +658,6 @@ export const captionFits = toggle => toggle.locator('xpath=..').evaluate((captio
 export const resultFacts = toggle => toggle.locator('xpath=..').locator(part.resultFacts)
 /** The views a group can show: its Table (`plan` when the result is a SQL-returned plan set) and its Pivot. */
 const resultViews = ['table', 'pivot', 'plan']
-/** Every comparison's grid, in the order drawn (after the groups). */
-export const comparisonGrids = scope => scope.locator(`${gridPart.root}[data-result-view="comparison"]`)
 /**
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
@@ -667,8 +685,6 @@ export const resultIdOf = async grid => Number(await grid.getAttribute('data-res
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** A results grid drawn transposed (its columns as rows): `matching(resultGrid(page), transposedGridSelector)` says whether one is. */
 export const transposedGridSelector = `${gridPart.root}[data-orientation="transposed"]`
-/** The results grids drawn transposed, in a page or a locator. */
-export const transposedGrid = scope => scope.locator(transposedGridSelector)
 /** The cell of a transposed grid that shows the result's `row` and `column`, both from 0. */
 export const transposedCell = (grid, row, column) => grid.locator(transposedCellSelector(row, column))
 /** The row header a screen reader reads for the result's `column` (from 0) in a transposed grid: the column's name. The
@@ -702,6 +718,8 @@ export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, e
 export const tabClose = (page, name) => outputPane(page).locator(part.resultTabs).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The tab panel that holds the selected view's grid. */
 export const resultTabPanel = page => outputPane(page).locator(part.resultTabs).getByRole('tabpanel')
+/** How the Tabs layout folded its rows of tabs in a short pane: '' both rows, 'one' or 'none' (tabsFold). */
+export const resultTabsFold = page => outputPane(page).locator(part.resultTabs).evaluate(root => root.dataset.fold ?? '')
 /** The button at the end of the result tabs that counts those not in view and opens the overflow picker. */
 export const resultsOverflow = page => outputPane(page).getByRole('button', { name: /^All results, views and comparisons; [\d,]+ not shown as tabs$/ })
 /** The overflow picker (Go to Result…), its filter box, and one of its rows by its name ("Result 3, Table", "Pivot of Result 3"). */

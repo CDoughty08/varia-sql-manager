@@ -6,7 +6,7 @@ import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import { aggregateFits, columnGroupLimit, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, pivotFacts, valueLabel, type PivotDraft } from './pivot'
 import { pivotable } from './PivotService'
-import { entryName, entryOf, type TabResults } from './ResultsService'
+import { entryName, entryOf, pivotName, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
@@ -55,7 +55,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
   const can = !!entry && pivot.canPivot(tabId, entry.key)
   // The Pivot a build replaces, by its own title (fixed when it was made), as its tab and close button say it.
-  const shown = entryOf(tab.sets, state.pivot), built = shown ? entryName(shown) : `Pivot of ${state.sourceName ?? (entry ? entryName(entry) : '')}`
+  const shown = entryOf(tab.sets, state.pivot), built = shown ? entryName(shown) : pivotName(state.sourceName ?? (entry ? entryName(entry) : ''))
   const facts = entry ? pivotFacts(entry.handle.getSnapshot().rowsStored, sort?.view?.rows) : ''
   // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
   const waiting = state.queued === 'place' ? 'Waiting for other pivots and comparisons to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
@@ -124,8 +124,9 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
       {/* Mounted while the builder is, so a note added to it is announced. */}
       <div role="status">{waiting && <div className="profile-note">{waiting}</div>}</div>
-      {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
-      {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `${built} stays as it is until the new one is built.` : `Building again replaces ${built} once the new one is built.`}</div>}
+      {/* pivot-aside: explanations a short panel drops (styles.css), so Build Pivot stays whole; errors and states stay. */}
+      {viewed && <div className="profile-note pivot-aside">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
+      {entry && state.pivot !== undefined && <div className="profile-note pivot-aside">{state.running ? `${built} stays as it is until the new one is built.` : `Building again replaces ${built} once the new one is built.`}</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>
         : <button type="button" className="primary" disabled={!can} onClick={() => void pivot.run(tabId)}>Build Pivot</button>}

@@ -610,10 +610,18 @@ internal static class TextChecks
             var cell = PageReader.Read(builder.Seal(), [WireKind.Text]).Rows[0][0];
             check(collector.Rows == 1100 && cut && collector.Truncated && cell.Text!.Length == ColumnPlan.DocumentCap && (cell.Flags & PageReader.Truncated) != 0 && store.UsedBytes <= 2L * (ColumnPlan.DocumentCap + 1) + ResultStore.ReserveStep,
                 "output past 2,097,152 characters keeps that prefix, marked truncated (" + collector.Rows + " chunks)");
-            // The pool rounds a rented length up to a power of two: the budget must cover the array actually held.
             check(collector.Capacity <= ColumnPlan.DocumentCap && store.UsedBytes >= 2L * collector.Capacity,
                 "the collector's reservation covers its buffer (" + collector.Capacity + " characters, " + store.UsedBytes + " bytes reserved)");
         }
+        // The buffer is allocated at the size asked for, never rented: ArrayPool.Shared would round 100,000 up to 131,072 and
+        // keep the array after the collector returned its reservation, memory the budget no longer counts.
+        using (var collector = new ForXmlCollector(store, budget, cap: 100_000))
+        {
+            collector.Append(new string('x', 100_000));
+            check(collector.Capacity == 100_000 && !collector.Truncated && store.UsedBytes >= 2L * collector.Capacity,
+                "the collector's buffer is exactly its cap, not a pooled power of two (" + collector.Capacity + " characters)");
+        }
+        check(store.UsedBytes == 0, "and the collector returns its reservation for it");
         using (var collector = new ForXmlCollector(store, budget, cap: 10))
         {
             collector.Append("0123456789");

@@ -26,10 +26,12 @@ import { formatCount, messagesSummary, plural, runSummary } from './status'
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
 interface Props { pane: OutputPaneId; tabId: string; query: boolean; connected: boolean; hint?: string }
 
-function jobText(job: ResultJob): string {
+/** A job strip's two parts: what it does, which a long name cuts short, and how far it has got, which always shows. */
+export function jobText(job: ResultJob): { readonly what: string; readonly done: string } {
   const percent = job.rowsTotal > 0 ? Math.min(100, Math.floor(job.rowsDone / job.rowsTotal * 100)) : 0
   const done = `${percent}% (${formatCount(job.rowsDone)} of ${formatCount(job.rowsTotal)} ${job.columns ? 'columns' : 'rows'})`
-  return job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}… ${done}` : `Copying… ${done}`
+  // A save names its file, which carries the view's name (save-names.ts); a copy names the view the same way.
+  return { what: job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}…` : `Copying ${job.label}…`, done }
 }
 
 /** The run summary, from the run's state; elapsed time ticks while it runs. SSMS's sentence is its tooltip. A run that ended
@@ -337,7 +339,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
         : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
       {/* Visual progress only: the output's live region announces how a copy or save ended. */}
-      {leader && jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
+      {leader && jobs.map(job => { const text = jobText(job); return <div key={job.jobId} className="job-strip"><span>{text.what}</span>{' '}<span className="job-done">{text.done}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div> })}
       {/* The live region announces it; this is the visible copy. */}
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       {/* Sorts, filters and the other operations over whole results: their strip, notice and live region. */}

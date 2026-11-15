@@ -141,6 +141,16 @@ describe('bounded plan preparation', () => {
     cache.dispose()
     expect(cache.stats.parsed.entries).toBe(0)
   })
+  it('keeps the layout of the largest plan a document may hold, so hiding and showing it never lays it out again', () => {
+    const cache = new PlanPreparationCache()
+    for (const shape of ['wide', 'balanced', 'chain'] as const) {
+      const layout = layoutPlans([largePlan(planLimits.nodes, shape)])
+      cache.rememberLayout('tab', shape, layout, [])
+      expect(cache.layout('tab', shape)).toBe(layout)
+      cache.clear()
+    }
+    cache.dispose()
+  })
   it('uses exact ordered topology, omitting counters while distinguishing changed parentage and order', () => {
     const statement = { ...document.statements[0], sourceKey: 'source' }
     const topology = planTopology([statement])

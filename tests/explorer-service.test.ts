@@ -8,7 +8,7 @@ import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService, type LiveConnection } from '../src/renderer/src/services/connections'
-import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits, type SeekOutcome } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { ssisVerbContextValues, ssisVerbMenuState } from '../src/shared/ssis/catalog'
@@ -1164,6 +1164,53 @@ describe('ExplorerService: seek', () => {
     f.connections.markLostBefore(2)
     expect(await second).toEqual({ ok: false, message: 'Object Explorer is not connected to this server.' })
     expect(await f.explorer.seek(cid('server-z'), [tablePath('T1')])).toEqual({ ok: false, message: 'Object Explorer is not connected to this server.' })
+  })
+  it('ends when the user collapses a node on its path, so a later load does not open it again; other collapses leave it running', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const id = cid('server-a')
+    await f.open('Security')
+    f.hold(isFolder('tables'))
+    const seek = f.explorer.seek(id, [tablePath('T1')])
+    let outcome: SeekOutcome | undefined
+    void seek.then(value => { outcome = value })
+    await settle()
+    // Security is not on the path: the reveal still waits for Tables.
+    f.explorer.collapse(f.find('Security'))
+    await settle()
+    expect(outcome).toBeUndefined()
+    // AppData is: collapsing it ends the reveal, so Security's listing landing afterwards leaves AppData collapsed.
+    f.explorer.collapse(f.find('AppData'))
+    f.unhold()
+    f.explorer.expand(f.find('Security'))
+    f.explorer.refresh(f.find('Security'))
+    await settle()
+    expect(f.explorer.node(f.find('AppData'))!.expanded).toBe(false)
+    expect(outcome).toEqual({ ok: false, message: 'Collapsed.', cancelled: true })
+    // Collapse All ends one past the server too.
+    f.hold(isFolder('tables'))
+    const again = f.explorer.seek(id, [tablePath('T1')])
+    await settle()
+    f.explorer.collapseAll()
+    expect(await again).toEqual({ ok: false, message: 'Collapsed.', cancelled: true })
+    f.unhold()
+    f.release()
+    f.explorer.expand(f.find('Security'))
+    await settle()
+    expect(f.explorer.node(f.find('Databases'))!.expanded).toBe(false)
+  })
+  it('keeps a reveal that waits on the first page of the server node through Collapse All, which leaves servers open', async () => {
+    const f = fixture()
+    f.hold(params => params.node.type === 'object' && params.node.object.kind === 'server')
+    f.connect()
+    await settle()
+    const seek = f.explorer.seek(cid('server-a'), [[databases]])
+    await settle()
+    f.explorer.collapseAll()
+    f.unhold()
+    f.release()
+    expect(await seek).toEqual({ ok: true, nodeId: f.find('Databases') })
   })
 })
 

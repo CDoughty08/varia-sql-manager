@@ -25,8 +25,8 @@ internal static class ActionLiveChecks
         public async Task<T> Call<T>(string method, object args, RequestContext? context = null) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json, context);
         public Task<ActionExecuteResult> Rename(ObjectRefDto target, string name, RequestContext? context = null) =>
             Call<ActionExecuteResult>("actions.execute", new ActionArgs("rename", ConnectionId, Guid.NewGuid().ToString(), target, name), context);
-        public Task<ActionExecuteResult> Delete(ObjectRefDto target, bool close = false, bool history = false, RequestContext? context = null) =>
-            Call<ActionExecuteResult>("actions.execute", new ActionArgs("delete", ConnectionId, Guid.NewGuid().ToString(), target, null, close, history), context);
+        public Task<ActionExecuteResult> Delete(ObjectRefDto target, bool close = false, bool history = false, RequestContext? context = null, DatabaseIdentityDto? identity = null) =>
+            Call<ActionExecuteResult>("actions.execute", new ActionArgs("delete", ConnectionId, Guid.NewGuid().ToString(), target, null, close, history, Identity: identity), context);
         public Task<ActionScriptResult> Script(ActionArgs args) => Call<ActionScriptResult>("actions.script", args);
         public Task<ActionDescribeResult> Describe(ObjectRefDto target) =>
             Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(ConnectionId, Guid.NewGuid().ToString(), "deleteObject", target));
@@ -208,14 +208,17 @@ internal static class ActionLiveChecks
                 + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.DeleteTarget?.TransactionTabs?.Count + " tabs named; " + described.Error?.Message + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(outside), json), json); }
-        var multi = await client.Delete(database, close: true);
+        // These Deletes name the database read, so Close existing connections, the DROP and the access it restores each run bound
+        // (DatabaseCheck first in their batch) against a real server. A compensation keeps database_id and create_date, so the read stays valid.
+        var read = (await client.Describe(database)).DeleteTarget?.Identity;
+        var multi = await client.Delete(database, close: true, identity: read);
         var multiAccess = await Access(compensated);
-        check(multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),
+        check(read is not null && multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),
                 ("failed", "Drop the database", null), ("done", "Restore multi-user access", true)])
             && multi.Error.Message.EndsWith("Then \"Restore multi-user access\" completed.", StringComparison.Ordinal) && multiAccess == "MULTI_USER",
-            "a DROP its snapshot fails after Close existing connections restores multi-user access (" + multi.Error?.Message + "; " + multiAccess + ")");
+            "a bound DROP its snapshot fails after bound Close existing connections restores multi-user access (" + read?.Created + "; " + multi.Error?.Message + "; " + multiAccess + ")");
         await Exec("ALTER DATABASE " + Bracket(compensated) + " SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE;");
-        var restricted = await client.Delete(database, close: true);
+        var restricted = await client.Delete(database, close: true, identity: read);
         var restrictedAccess = await Access(compensated);
         check(restricted is { Error.Code: "DEPENDENTS" } && restricted.Steps.Last() is { Status: "done", Title: "Restore restricted user access", Compensates: true } && restrictedAccess == "RESTRICTED_USER",
             "and restricted access for a restricted database (" + restrictedAccess + ")");
@@ -233,6 +236,7 @@ internal static class ActionLiveChecks
             if (result.Status != "completed") throw new InvalidOperationException("Delete permission fixture failed: " + result.Error);
             return result;
         }
+        async Task<string?> Access(string name) => (await Exec("SELECT user_access_desc FROM sys.databases WHERE name = " + Literal(name) + ";")).Scalar;
         if (!await scratch.CreateLoginAsync())
         {
             if (required) throw new InvalidOperationException("Delete parity's permission checks require a SQL Server that accepts SQL logins.");
@@ -266,9 +270,47 @@ internal static class ActionLiveChecks
                 await Exec("REVOKE VIEW SERVER PERFORMANCE STATE FROM " + login + ";\nREVOKE VIEW SERVER STATE FROM " + login + ";");
                 check(Unknown(denied), "and with VIEW SERVER STATE but VIEW SERVER PERFORMANCE STATE denied (" + denied.Error?.Code + " " + denied.Error?.Message + ")");
             }
-            var deleted = await client.Delete(database);
+            // The describe names the database it read, exactly as sys.databases has it. A Delete naming another create_date or id is refused
+            // by the preflight, and a DROP bound to another create_date is refused by its own batch past the preflight (DatabaseCheck):
+            // nothing runs and the database stays. The Delete naming the database read deletes it.
+            var identity = described.DeleteTarget?.Identity;
+            string Count(DatabaseIdentityDto read) => "SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + " AND database_id = "
+                + read.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) + " AND create_date = CONVERT(datetime, " + Literal(read.Created) + ", 126);";
+            var exact = identity is not null && (await Exec(Count(identity))).Scalar == "1";
+            var staleCreated = identity is null ? null : await client.Delete(database, identity: identity with { Created = "2000-01-01T00:00:00.000" });
+            var staleId = identity is null ? null : await client.Delete(database, identity: identity with { Id = identity.Id + 100_000 });
+            var stale = new DatabaseBinding(identity?.Id ?? 0, new DateTime(2000, 1, 1));
+            var staleBound = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale)], CancellationToken.None);
+            // Past the preflight, a stale check in SINGLE_USER's batch skips the DROP and leaves no compensation due; a stale check in the
+            // compensation's batch (after an unbound SINGLE_USER and a DROP its stale check refuses) leaves the access alone and says so.
+            static bool NotDropped(IReadOnlyList<string> statuses) => statuses.Count < 2 || statuses[1] != "done";
+            var staleClose = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.SetSingleUser, "master", [owned], Bound: stale), new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale),
+                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [owned], StepKind.Compensation, Undoes: 0, When: NotDropped, Bound: stale)], CancellationToken.None);
+            var staleCloseAccess = await Access(owned);
+            var staleRestore = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.SetSingleUser, "master", [owned]), new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: stale),
+                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [owned], StepKind.Compensation, Undoes: 0, When: NotDropped, Bound: stale)], CancellationToken.None);
+            var staleRestoreAccess = await Access(owned);
+            await Exec("ALTER DATABASE " + Bracket(owned) + " SET MULTI_USER;");
+            var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "1";
+            static bool Refused(ActionExecuteResult? result) => result is { Error.Code: "NOT_FOUND" } && result.Steps.All(step => step.Status != "done")
+                && result.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal);
+            check(exact && Refused(staleCreated) && staleCreated!.Steps.Count == 0 && Refused(staleId) && staleId!.Steps.Count == 0 && Refused(staleBound) && kept,
+                "Delete Object names the database it read, and a Delete or a bound DROP naming another database (another create_date or id) drops nothing ("
+                + identity?.Created + "; " + staleCreated?.Error?.Code + ", " + staleId?.Error?.Code + ", " + staleBound?.Error?.Code + " " + staleBound?.Error?.Message + ")");
+            check(Refused(staleClose) && staleClose!.Steps.Select(step => step.Status).SequenceEqual(["failed", "skipped"]) && staleCloseAccess == "MULTI_USER"
+                && staleRestore is { Error.Code: "NOT_FOUND" } && staleRestore.Steps.Select(step => (step.Status, step.Compensates)).SequenceEqual([("done", (bool?)null), ("failed", null), ("failed", true)])
+                && staleRestore.Error.Message.Contains("Then \"Restore multi-user access\" failed: The database with this name is not the one Delete Object read, so Varia did not restore its access", StringComparison.Ordinal)
+                && staleRestore.Error.Message.Contains("may still be single-user", StringComparison.Ordinal) && staleRestore.Steps[2].Message!.Contains("may still be single-user", StringComparison.Ordinal)
+                && staleRestoreAccess == "SINGLE_USER",
+                "a stale check in SINGLE_USER's batch skips the DROP and restores nothing, and one in the compensation's batch leaves the access alone and says so ("
+                + string.Join(", ", staleClose?.Steps.Select(step => step.Status) ?? []) + "; " + staleCloseAccess + "; "
+                + string.Join(", ", staleRestore?.Steps.Select(step => step.Status + (step.Compensates == true ? "*" : "")) ?? []) + "; " + staleRestoreAccess + "; " + staleRestore?.Error?.Message + ")");
+            var deleted = await client.Delete(database, identity: identity);
             var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "0";
-            check(Done(deleted) && gone, "and deletes it (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
+            check(Done(deleted) && gone, "and deletes it, naming the database it read (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
         }
         finally
         {

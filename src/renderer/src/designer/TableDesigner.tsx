@@ -5,6 +5,7 @@ import { useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import SubDialog from '../dialogs/SubDialog'
 import Icon from '../Icon'
+import { followPointerDrag } from '../kit/pointer-drag'
 import PropertyGrid, { type GridGroup, type GridRow } from '../settings/PropertyGrid'
 import DesignerGrid, { typeChoices } from './DesignerGrid'
 import { parameterRows, type DesignerRow, type DesignerState, type TableDesignerService } from './TableDesignerService'
@@ -83,14 +84,10 @@ export default function TableDesigner({ documentId }: { documentId: string }) {
   if (!state) return <div className="table-designer" />
   const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
     const box = content.current?.getBoundingClientRect()
-    if (!box) return
-    event.currentTarget.setPointerCapture(event.pointerId)
-    const moveTo = (y: number) => setSplit(Math.min(0.85, Math.max(0.15, (y - box.top) / box.height)))
-    const target = event.currentTarget
-    const moveHandler = (moved: PointerEvent) => moveTo(moved.clientY)
-    const up = () => { target.removeEventListener('pointermove', moveHandler); target.removeEventListener('pointerup', up) }
-    target.addEventListener('pointermove', moveHandler)
-    target.addEventListener('pointerup', up)
+    if (!box || event.button !== 0) return
+    // No text selection starts under the drag, as with the other splitters.
+    event.preventDefault()
+    followPointerDrag(event.currentTarget, event.pointerId, moved => setSplit(Math.min(0.85, Math.max(0.15, (moved.clientY - box.top) / box.height))))
   }
   const splitterKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSplit(value => Math.min(0.85, Math.max(0.15, value + (event.key === 'ArrowUp' ? -0.05 : 0.05)))) }

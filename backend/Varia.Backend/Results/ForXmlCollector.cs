@@ -1,14 +1,15 @@
-using System.Buffers;
 using System.Data;
 using Microsoft.Data.SqlClient;
 
 namespace Varia.Backend.Results;
 
 /// <summary>SQL Server sends FOR XML and FOR JSON output as rows of about 2,033 characters in one ntext or nvarchar column
-/// with a fixed name; SSMS shows them joined as one value. The collector appends every row's text to one pooled buffer
-/// of up to the document cap (one more character marks the value truncated), reserving the memory of the arrays it holds
-/// from the query's budget in 256 KiB steps, and the caller stores the value as the set's only row when the set ends.
-/// FOR XML ... TYPE already arrives as one xml cell and is not collected.</summary>
+/// with a fixed name; SSMS shows them joined as one value. The collector appends every row's text to one buffer of up to
+/// the document cap (one more character marks the value truncated), reserving the memory of the array it holds from the
+/// query's budget in 256 KiB steps, and the caller stores the value as the set's only row when the set ends. The buffer is
+/// allocated, not rented: the shared pool keeps arrays of this size once they are returned, per thread and per core, and
+/// that memory would stay out of the budget's sight after the collector gave its reservation back. FOR XML ... TYPE already
+/// arrives as one xml cell and is not collected.</summary>
 internal sealed class ForXmlCollector : IDisposable
 {
     public const string XmlColumn = "XML_F52E2B61-18A1-11d1-B105-00805F49916B";
@@ -27,7 +28,7 @@ internal sealed class ForXmlCollector : IDisposable
         this.store = store;
         this.budget = budget;
         this.cap = cap;
-        buffer = ArrayPool<char>.Shared.Rent(Chunk);
+        buffer = new char[Chunk];
     }
 
     /// <summary>"xml" or "json" for the single column of FOR XML or FOR JSON output, otherwise null.</summary>
@@ -117,22 +118,20 @@ internal sealed class ForXmlCollector : IDisposable
         more = Math.Min(more, cap - length);
         if (length + more <= buffer.Length) return true;
         var size = (int)Math.Min(cap, Math.Max(length + (long)more, 2L * buffer.Length));
-        // The pool may hand out a larger array than asked for; the budget pays for the array held.
-        var larger = ArrayPool<char>.Shared.Rent(size);
-        var needed = 2L * larger.Length - reserved;
+        var needed = 2L * size - reserved;
         if (needed > 0)
         {
             var step = Math.Max(needed, ResultStore.ReserveStep);
             if (!store.TryReserve(budget, step, false, out var reason) && (step == needed || !store.TryReserve(budget, step = needed, false, out reason)))
             {
-                ArrayPool<char>.Shared.Return(larger);
                 Stopped = reason;
                 return false;
             }
             reserved += step;
         }
+        // Reserved before it is allocated, so the budget never trails the array held.
+        var larger = GC.AllocateUninitializedArray<char>(size);
         buffer.AsSpan(0, length).CopyTo(larger);
-        ArrayPool<char>.Shared.Return(buffer);
         buffer = larger;
         return true;
     }
@@ -151,7 +150,6 @@ internal sealed class ForXmlCollector : IDisposable
 
     public void Dispose()
     {
-        ArrayPool<char>.Shared.Return(buffer);
         buffer = [];
         store.Return(budget, reserved);
         reserved = 0;

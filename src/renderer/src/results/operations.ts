@@ -56,7 +56,7 @@ export interface OperationTicket {
 /** How it ended; a cancel that kept something other than the previous view says what, in place of its kind's sentence. */
 export type OperationOutcome = 'done' | 'cancelled' | 'dropped' | { readonly cancelled: string }
 
-interface Entry { operation: ResultOperation; readonly cancel: () => void; show?: unknown; hide?: unknown; shownAt?: number }
+interface Entry { operation: ResultOperation; readonly cancel: () => void; show?: unknown; hide?: unknown; shownAt?: number; closed?: boolean }
 
 const nouns: Readonly<Record<OperationKind, { readonly doing: string; readonly done: string; readonly cancelled: string }>> = {
   sort: { doing: 'Sorting', done: 'Sorted', cancelled: 'Sort cancelled. The grid kept its previous order.' },
@@ -175,10 +175,18 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
     return false
   }
 
-  /** A tab closed: what it said goes with it (its operations end through their owners). */
-  forget(tabId: string): void {
+  /** A tab's run went: what it said goes with it (its operations end through their owners). With `closed` the tab itself
+   *  went, and so do its operations: one that ends later (a pivot, comparison or profile settling after the close) says
+   *  nothing and leaves no strip, since no tab would ever clear it. */
+  forget(tabId: string, o: { closed?: boolean } = {}): void {
     this.clearNotice(tabId)
     this.announcements.delete(tabId)
+    if (o.closed) for (const item of [...this.entries.values()]) if (item.operation.tabId === tabId) {
+      item.closed = true
+      this.timers.clearTimeout(item.show)
+      this.timers.clearTimeout(item.hide)
+      this.entries.delete(item.operation.id)
+    }
     if (![...this.entries.values()].some(item => item.operation.tabId === tabId) && tabId in this.getSnapshot()) {
       const next = { ...this.getSnapshot() }
       delete next[tabId]
@@ -204,6 +212,7 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
   }
 
   private end(entry: Entry, outcome: OperationOutcome): void {
+    if (entry.closed) return
     const { tabId, kind } = entry.operation
     const cancelled = outcome === 'cancelled' ? '' : typeof outcome === 'object' ? outcome.cancelled : undefined
     this.timers.clearTimeout(entry.show)
