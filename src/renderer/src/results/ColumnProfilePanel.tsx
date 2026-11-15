@@ -4,7 +4,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
-import { ResultError, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
+import { ResultError, type OperationProgressListener, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
 import { entryOf, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
@@ -126,11 +126,17 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     let release = view ? results.holdView(tabId, key, view) : undefined
     const done = () => { release?.(); release = undefined }
     const wanted = columnKey ? columnKey.split(',').map(Number) : []
+    // The toolbar's strip and the grid's bar show it; their Cancel (or Escape in the grid) stops it, keeping the cards it has.
+    let cancelled = false, outcome: 'done' | 'dropped' = 'dropped'
+    const ticket = results.operations.begin(tabId, { kind: 'profile', target: `Result ${entry!.number}`, entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
+    const parts = wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]
     void (async () => {
       try {
-        for (const part of wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]) {
+        for (const [at, part] of parts.entries()) {
+          // Each request reports its own 0 – 100: the strip shows the share of every chunk.
+          const onProgress: OperationProgressListener = (phase, percent) => ticket.progress(phase, percent === undefined ? undefined : Math.floor((at * 100 + percent) / parts.length))
           let result
-          try { result = await reader.profile(part, abort.signal) }
+          try { result = await reader.profile(part, abort.signal, onProgress) }
           catch (error) {
             // The backend may still drop a held view (its views per result are bounded): the rest is read through the
             // grid's newer view of the same rows, as a pivot build does. Any other failure is reported, never sent again.
@@ -140,7 +146,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
             done()
             reader = now.handle
             release = now.view ? results.holdView(tabId, now.key, now.view) : undefined
-            result = await reader.profile(part, abort.signal)
+            result = await reader.profile(part, abort.signal, onProgress)
           }
           if (abort.signal.aborted) return
           const merged = new Map(current.columns)
@@ -149,10 +155,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
           setProfiles(current)
         }
         setProfiles({ ...current, loading: false })
+        outcome = 'done'
       } catch (error) {
-        if (abort.signal.aborted) return
+        if (abort.signal.aborted) { if (cancelled) setProfiles({ ...current, loading: false }); return }
         setProfiles({ ...current, loading: false, error: error instanceof Error ? error.message : String(error), failed: reading.current.handle })
-      } finally { done() }
+      } finally { done(); ticket.end(cancelled ? 'cancelled' : outcome) }
     })()
     return () => { abort.abort(); done() }
   }, [results, tabId, base, held, filters, settled, columnKey, retry])

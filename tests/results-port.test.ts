@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
+import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type OperationProgressSink, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
 import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
@@ -32,7 +32,7 @@ class FakePort implements PortMainLike {
 
 interface FakeRead { generation: number; params: ResultsReadParams; sink: StreamSink; credit: number; credits: number[]; cancels: number[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
-interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; onProgress?: OperationProgressSink; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakePivot { generation: number; params: ResultsPivotParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
@@ -89,10 +89,10 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
-    view: (generation, params) => {
+    view: (generation, params, onProgress) => {
       let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
       const done = new Promise<ResultsViewResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
-      const view: FakeView = { generation, params, cancels: [], resolve, reject }
+      const view: FakeView = { generation, params, cancels: [], resolve, reject, ...onProgress ? { onProgress } : {} }
       views.push(view)
       return { done, cancel: reason => view.cancels.push(reason) }
     },
@@ -393,6 +393,19 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'rowBytes', rid: 11, generation: 1, resultId: 7, firstRow: 0, count: 2, viewId: 4 })
     await settle()
     expect(backend.rowBytes).toHaveBeenLastCalledWith(1, { resultId: 7, firstRow: 0, count: 2, viewId: 4 })
+  })
+  it('relays the op.progress of a request to the worker on its rid only while it is in flight on the same port', async () => {
+    const { host, port, views } = fixture()
+    host.own([descriptor(7)])
+    const key = { column: 0, descending: true, mode: 'value' }
+    port().send({ t: 'view', rid: 1, generation: 1, resultId: 7, sort: [key] })
+    views[0].onProgress!({ type: 'op.progress', phase: 'keys', percent: 30 })
+    views[0].onProgress!({ type: 'op.progress', phase: 'identify' })
+    expect(port().posted.filter(message => message.t === 'progress')).toEqual([{ t: 'progress', rid: 1, phase: 'keys', percent: 30 }, { t: 'progress', rid: 1, phase: 'identify' }])
+    views[0].resolve({ viewId: 4, rows: 10, baseRows: 40, complete: true, approximate: false })
+    await settle()
+    views[0].onProgress!({ type: 'op.progress', phase: 'sort', percent: 90 })
+    expect(port().posted.filter(message => message.t === 'progress')).toHaveLength(2)
   })
   it('takes a keepRows filter as cells or as 1 to 4,095 rows, with no column, and relays it only resolved to rows', async () => {
     const { host, port, views } = fixture()

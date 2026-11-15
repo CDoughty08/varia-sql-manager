@@ -39,7 +39,7 @@ function fixture(o: { frames?: boolean; jobs?: DerivedJobs; follow?: PivotFollow
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
   }
-  return { client, api, results, pivot, run, flush }
+  return { client, api, results, pivot, run, flush, timers }
 }
 
 describe('pivot helpers', () => {
@@ -113,6 +113,24 @@ describe('a rebuilt Pivot', () => {
 })
 
 describe('PivotService', () => {
+  it('shows a build in the toolbar and on its Table, with the backend progress, until it is cancelled', async () => {
+    const { results, pivot, run, timers } = fixture()
+    const [, second] = run(3)
+    const table = keyAt(results, 't1', 1)
+    pivot.open('t1', table)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    vi.mocked(second.pivot).mockImplementationOnce((_spec, o) => new Promise((_resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled')))))
+    const built = pivot.run('t1')
+    await settle()
+    vi.mocked(second.pivot).mock.lastCall![1]!.onProgress!('aggregate', 60)
+    timers.advance(300)
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'pivot', target: 'Result 2', entry: table, phase: 'aggregate', percent: 60, shown: true }])
+    results.operations.cancel('t1')
+    await built
+    await settle()
+    expect(results.operations.getSnapshot().t1).toMatchObject({ items: [], notice: 'Pivot cancelled.' })
+    expect(results.getSnapshot().t1.sets).toHaveLength(3)
+  })
   it("closes the builder once its tab's results are gone, as the Compare popover does, and keeps its drafts for the next Pivot…", async () => {
     const { results, pivot, run } = fixture()
     const [first] = run(2)
@@ -173,7 +191,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.draft).toEqual({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] })
     await pivot.run('t1')
     await settle()
-    expect(second.pivot).toHaveBeenCalledWith({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, { signal: expect.any(AbortSignal) })
+    expect(second.pivot).toHaveBeenCalledWith({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, { signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const tab = results.getSnapshot().t1, sets = tab.sets
     expect(sets).toHaveLength(4)
     // Directly under Result 2, before Result 3; numbered after the run's highest, and named after its Table.
@@ -473,7 +491,7 @@ describe('PivotService', () => {
     expect([...carried.widths!].map(width => Number.isNaN(width) ? 'new' : width)).toEqual([90, 80, 'new', 'new'])
     expect([...carried.userSized!]).toEqual([1, 0])
     // The sort follows Year to its new place and is built again over the new result; the filter is gone, and said so.
-    expect(next().sort).toHaveBeenCalledWith([{ column: 0, descending: true, mode: 'value' }], { signal: expect.any(AbortSignal) })
+    expect(next().sort).toHaveBeenCalledWith([{ column: 0, descending: true, mode: 'value' }], { signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(results.sortOf('t1', key)).toMatchObject({ keys: [{ column: 0, descending: true }], filters: [] })
     expect(notices).toEqual(['Pivot of Result 1 was built again, so its filters were removed.'])
   })
@@ -840,7 +858,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.draft).toEqual({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] })
     vi.spyOn(results, 'addSet').mockReturnValueOnce(undefined)
     await pivot.run('t1')
-    expect(moved.pivot).toHaveBeenCalledWith({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] }, { signal: expect.any(AbortSignal) })
+    expect(moved.pivot).toHaveBeenCalledWith({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] }, { signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'These results were closed, so the pivot was not added.' })
   })
 

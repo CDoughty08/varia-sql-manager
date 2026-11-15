@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
@@ -1002,8 +1002,9 @@ try {
   // The strip's progress is visual only: the pane's live region says how the save ended, once.
   await expect(jobProgress(page).locator('[role="status"], [aria-live]')).toHaveCount(0)
   await expect(jobProgress(page)).not.toHaveAttribute('aria-live', /.*/)
-  // The toolbar's only live region is the search count, silent while it is empty.
-  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(1)
+  // The toolbar's live regions are the search count and the result operations' start and end, both silent here.
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(2)
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]').filter({ hasText: /\S/ })).toHaveCount(0)
   await expect(resultsToolbar(page).getByRole('status')).toHaveText('')
   await expect.poll(async () => (await files()).some(name => name.endsWith('.tmp'))).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
@@ -2225,6 +2226,41 @@ try {
   await expect(cell(0, 0)).toHaveText('0')
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
+
+  // 14c2. A sort in progress: the backend's op.progress shows in the toolbar's strip (phase, a rising percentage, Cancel),
+  // as a ring with the percentage on the sorted column's button and a bar along the grid. Sorting and filtering wait: a
+  // second click is refused, not queued. Cancel keeps the order the grid had and says so; the controls are live again.
+  const holdSort = join(control, 'hold', 'results.view')
+  await writeFile(holdSort, '')
+  await header('clipped').hover()
+  await sortButton('clipped').click()
+  const sorting = operationProgress(page, 'Sorting Result 1')
+  await expect(sorting).toBeVisible()
+  await expect.poll(async () => Number(await sorting.getAttribute('aria-valuenow'))).toBeGreaterThan(5)
+  await expect(sorting).toHaveAttribute('aria-valuetext', /^(Reading keys|Sorting), \d+%$/)
+  await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
+  await expect(sortButton('clipped').locator(gridPart.busyPercent)).toHaveText(/^\d+%$/)
+  await expect(grid().locator('xpath=..').locator(gridPart.operationBar)).toBeVisible()
+  await expect(grid()).toHaveAttribute('aria-busy', 'true')
+  await header('maybe').hover()
+  await sortButton('maybe').click()
+  // Only a refusal says why: a click wrongly taken would start a sort of its own, which says nothing of the kind.
+  await expect(operationAnnouncer(page)).toHaveText(/^Sorting Result 1. Sorting and filtering wait until it finishes; Cancel stops it.​?$/)
+  await expect(header('clipped').locator(gridPart.busySortButton)).toHaveCount(1)
+  await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
+  await expect(resultsToolbar(page).getByRole('group', { name: 'Sort text by' }).getByRole('button', { name: 'Chars' })).toHaveAttribute('aria-disabled', 'true')
+  await operationCancel(page, 'Cancel sort, Result 1').click()
+  await expect(sorting).toHaveCount(0)
+  await expect(operationNotice(page)).toHaveText('Sort cancelled. The grid kept its previous order.')
+  await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
+  await expect(grid()).not.toHaveAttribute('aria-busy', /./)
+  await rm(holdSort)
+  await header('maybe').hover()
+  await sortButton('maybe').click()
+  await expect(header('maybe')).toHaveAttribute('aria-sort', 'ascending')
+  await menuSort(0, 'Clear Sort')
+  await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
+  console.log('Results checks: a sort in progress shows its phase and percentage in the toolbar, a ring on its column and a bar along the grid, holds further sorting off, and Cancel keeps the previous order.')
 
   // 14d. Highlights: Ctrl+Shift+H colours the selected rows (yellow at first) and the grid's Highlight submenu picks a
   // colour; each follows its row by the key the backend picked (id) through a sort and a re-run of the query, and the row

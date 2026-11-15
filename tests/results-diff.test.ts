@@ -31,10 +31,30 @@ function fixture() {
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
   }
-  return { client, results, compare, run }
+  return { client, results, compare, run, timers }
 }
 
 describe('result diffs', () => {
+  it('shows a comparison in the toolbar with the phases the backend reports, and a Cancel that gives it up', async () => {
+    const { results, compare, run, timers } = fixture()
+    const [first] = run(2)
+    let stopped: AbortSignal | undefined
+    vi.mocked(first.diff).mockImplementationOnce((_right, o) => { stopped = o?.signal; return new Promise((_resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled')))) })
+    const done = compare.compare('t1', keyAt(results, 't1', 1))
+    await settle()
+    const progress = vi.mocked(first.diff).mock.lastCall![1]!.onProgress!
+    progress('identify', undefined)
+    timers.advance(300)
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'compare', target: 'Result 1 → Result 2', phase: 'identify', shown: true }])
+    expect(results.operations.getSnapshot().t1?.items[0]?.percent).toBeUndefined()
+    progress('align', 70)
+    expect(results.operations.getSnapshot().t1?.items[0]).toMatchObject({ phase: 'align', percent: 70 })
+    results.operations.cancel('t1')
+    await done
+    expect(stopped?.aborted).toBe(true)
+    expect(results.operations.getSnapshot().t1).toMatchObject({ items: [], notice: 'Comparison cancelled.' })
+    expect(results.getSnapshot().t1.sets).toHaveLength(2)
+  })
   it('compares a set with the one before it, appends the diff as the run\'s last set, and says what was compared', async () => {
     const { results, compare, run } = fixture()
     const [first, second] = run(2)
@@ -42,7 +62,7 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, signal: expect.any(AbortSignal) })
+    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
     expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
@@ -67,7 +87,7 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal) })
+    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(sets()[2]).toMatchObject({ number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
     const info = compare.getSnapshot().info.get(setKey(sets()[2].descriptor))!
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })

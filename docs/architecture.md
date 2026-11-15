@@ -228,6 +228,15 @@ being true.
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
+- Operations over whole results (a sort or filter building a grid's view, a profile, a pivot, a comparison) have one busy
+  state, `ResultsService.operations` (`results/operations.ts`), which every result control reads: a sort or filter holds that
+  grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: a click is refused, never queued,
+  and pulses the operation), and Cancel (the toolbar's strip, Escape in the grid) keeps the previous view. Its progress
+  comes only from the backend's droppable `op.progress` EVENTs (`OperationProgress.cs`, relayed by main and the results
+  worker to the request's listener); the renderer's only timers are one-shot (shown after 300 ms, kept 500 ms once shown,
+  a notice for 8 s), plus the display clock of the elapsed time. The toolbar's `OperationStrip` draws it with its live
+  region, `GridShell` the bar along the grid, and `GridView` the ring on the column's sort button (text by `nodeValue`).
+  `tests/result-operations.test.ts` and the busy-state tests in `tests/results-service.test.ts` hold this.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
   Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
   identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is

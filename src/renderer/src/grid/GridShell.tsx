@@ -74,6 +74,11 @@ export interface GridShellProps {
   readonly onSort?: (column: number, add: boolean) => void
   /** Header funnels and their popover; without them headers have none. Read when the view is built. */
   readonly funnels?: GridFunnels
+  /** An operation over the grid's result, once shown: the thin bar along the top of the frame, and (a sort or filter
+   *  building the view) the ring on its column's sort button. `held`: that sort or filter holds the header's sort buttons and
+   *  funnels off, which then call `onHeld` instead. */
+  readonly busy?: GridShellBusy
+  readonly onHeld?: () => void
   /** What changes on a built view besides sort and funnels. */
   readonly update?: { readonly resultCount: number; readonly showTypes?: boolean; readonly rowSize?: boolean; readonly headerColumn?: number | null }
   /** The rows are gone (a released or lost result, a stopped live view): an overlay says why, over the strips. */
@@ -95,7 +100,9 @@ export interface GridShellProps {
  * what it shows: a query's result set (ResultGrid) or a live view's table (LiveGridPane), which differ only in how the view
  * is built and swapped, and in what the funnels and sort ask.
  */
-export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, gone, strip, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
+export interface GridShellBusy { readonly shown: boolean; readonly held: boolean; readonly column?: number; readonly percent?: number; readonly label: string }
+
+export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
   const setting = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
   const whitespace = ownWhitespace ?? setting
@@ -103,8 +110,10 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   const [status, setStatus] = useState<GridStatus>({})
   // The header funnel's popover, while open: its column and where it opens.
   const [funnel, setFunnel] = useState<ColumnFilterTarget | undefined>()
-  const latest = useRef({ mount, sort, onSort, funnels, whitespace, onApi })
-  latest.current = { mount, sort, onSort, funnels, whitespace, onApi }
+  const latest = useRef({ mount, sort, onSort, funnels, whitespace, onApi, busy, onHeld })
+  latest.current = { mount, sort, onSort, funnels, whitespace, onApi, busy, onHeld }
+  // A funnel pressed while a sort or filter builds the view opens nothing: the operation shows why.
+  const held = () => { if (!latest.current.busy?.held) return false; latest.current.onHeld?.(); return true }
   // Before the shell paints: a source with rows builds its view now, so the grid never paints empty first.
   useLayoutEffect(() => {
     const now = latest.current
@@ -117,7 +126,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
           // A live grid builds its view at its first sample: the funnels as they are by then.
           filtered: latest.current.funnels?.filtered ?? now.funnels.filtered, ...(latest.current.funnels ?? now.funnels).filterable ? { filterable: (latest.current.funnels ?? now.funnels).filterable } : {},
           // A press on the open column's funnel closes its popover, as pressing a menu's button again does.
-          onFilter: (column: number, anchor: DOMRect) => setFunnel(current => current?.column === column ? undefined : { column, anchor })
+          onFilter: (column: number, anchor: DOMRect) => { if (!held()) setFunnel(current => current?.column === column ? undefined : { column, anchor }) }
         } : {}
       })
       viewRef.current = view
@@ -125,7 +134,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     }
     const api: GridShellApi = {
       view: () => viewRef.current,
-      openFunnel: column => { const view = viewRef.current; if (view?.canFilter(column)) setFunnel({ column, anchor: view.filterAnchor(column) }) }
+      openFunnel: column => { const view = viewRef.current; if (view?.canFilter(column) && !held()) setFunnel({ column, anchor: view.filterAnchor(column) }) }
     }
     const dispose = now.mount(create)
     now.onApi?.(api)
@@ -139,9 +148,16 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   }, [mountKey, resultClient, platform])
   const resultCount = update?.resultCount ?? 1, showTypes = update?.showTypes, rowSize = update?.rowSize, headerColumn = update?.headerColumn
   const filtered = funnels?.filtered, filterable = funnels?.filterable
+  const ring = busy?.shown && busy.column !== undefined ? busy.column : undefined, ringPercent = ring === undefined ? undefined : busy?.percent
   useEffect(() => {
-    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : {}, ...headerColumn !== undefined ? { headerColumn } : {} })
-  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, mountKey, gone])
+    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : {}, ...headerColumn !== undefined ? { headerColumn } : {},
+      busy: ring === undefined ? null : { column: ring, ...ringPercent === undefined ? {} : { percent: ringPercent } } })
+  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, mountKey, gone, ring, ringPercent])
+  // A popover opened before the sort or filter began closes: its condition would wait anyway.
+  const heldNow = !!busy?.held
+  // Marked busy and dimmed only once the operation shows: one quicker than the delay holds clicks off without a flash.
+  const heldShown = heldNow && !!busy?.shown
+  useEffect(() => { if (heldNow) setFunnel(undefined) }, [heldNow])
   // Closing the popover gives the focus back to the grid, as a menu does, unless a press elsewhere took it.
   const closeFunnel = useCallback((refocus = true) => {
     setFunnel(undefined)
@@ -169,8 +185,9 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   const columnName = funnel && funnels?.columnName(funnel.column)
   // The grid holds only rows; its strips and the overlay are its siblings, outside the table structure.
   return <div {...frameProps} className={'rg-frame' + (frameProps?.className ? ' ' + frameProps.className : '')}>
+    {busy?.shown && <div className={'rg-op-bar' + (busy.percent === undefined ? ' indeterminate' : '')} aria-hidden="true" title={busy.label}><span style={busy.percent === undefined ? undefined : { width: `${busy.percent}%` }} /></div>}
     <div {...rootProps} ref={setRoot} className={'results-grid rg' + (rootProps.className ? ' ' + rootProps.className : '')} role="grid" tabIndex={0}
-      aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown}>
+      aria-multiselectable="true" aria-readonly="true" aria-busy={heldShown ? true : undefined} data-held={heldShown ? '' : undefined} onKeyDown={keyDown}>
       <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
     </div>
     {children}

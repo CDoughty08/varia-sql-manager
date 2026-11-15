@@ -619,6 +619,27 @@ describe('BackendSupervisor results', () => {
   })
 })
 
+describe('BackendSupervisor operation progress', () => {
+  it('passes valid op.progress EVENTs of a results request on and drops the others without failing it', async () => {
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const progress: unknown[] = []
+    const view = value.request('results.view', { resultId: 1, sort: [{ column: 0, descending: false, mode: 'value' }] }, { generation: 1, onOperationProgress: event => { progress.push(event) } })
+    await settle(8)
+    const id = last().requests.at(-1)!.id
+    last().send(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: 'keys', percent: 12 })
+    last().send(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: 'identify' })
+    // Past 99, an unknown phase, or a field too many: dropped, and the sort goes on.
+    last().send(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: 'sort', percent: 100 })
+    last().send(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: 'shuffle', percent: 5 })
+    last().send(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: 'sort', percent: 5, rows: 1 })
+    last().send(FrameKind.RESPONSE, id, 0, { result: { viewId: 1, rows: 1, baseRows: 1, complete: true, approximate: false } })
+    expect(await view).toMatchObject({ viewId: 1 })
+    expect(progress).toEqual([{ type: 'op.progress', phase: 'keys', percent: 12 }, { type: 'op.progress', phase: 'identify' }])
+  })
+})
+
 describe('BackendSupervisor action progress', () => {
   it('passes valid action.progress EVENTs on and drops the others without failing the action', async () => {
     const value = supervisor('action-progress')

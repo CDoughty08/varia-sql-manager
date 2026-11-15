@@ -57,6 +57,12 @@ export const gridLimits = {
   ariaRowCountMs: 1000, liveRegionMs: 300,
   measureInitialRows: 128, measureFitRows: 4096, measureCap: 512,
   copyStripDelayMs: 300,
+  /** An operation over a whole result (a sort or filter, a profile, a pivot, a comparison) shows its progress once it has
+   *  run this long, so a quick one never flashes it; once shown, it stays at least `operationMinShownMs`, so it never blinks;
+   *  past `operationElapsedMs` the strip adds how long it has run. */
+  operationShowDelayMs: 300, operationMinShownMs: 500, operationElapsedMs: 10_000,
+  /** How long the toolbar says how an operation ended ("Sort cancelled. The grid kept its previous order."). */
+  operationNoticeMs: 8000,
   /** How long the toolbar shows how a save ended ("Saved 400 rows to results.csv."). */
   jobNoticeMs: 8000,
   /**
