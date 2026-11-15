@@ -244,7 +244,11 @@ being true.
   (`ResultSetBuffer.Activity`, its time on `ResultStore.Clock`, which is `ResultVisibility`'s), the wait doubling for
   each operation that unpacked it whole, up to eight times as long (`MaxBackoff`, 4 minutes), so a result in use is never packed and unpacked
   in a loop. A shown result with an open view (a sorted or filtered grid) stays raw, since each of its screens reads a page or so a
-  row; closing its last view wakes the policy. A read stops a shown result's pass at the next page (its touch count
+  row; one packed before its grid was sorted, or shown again with a view, is unpacked again on the workers' gate when the
+  budget has room for it twice over and no query waits (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not
+  as a use, which lengthens a hidden viewed result's delay instead), and closing its last view wakes the policy. A result
+  with an open distinct snapshot is never packed (`ResultStore.HasSnapshots`: the snapshot keeps the raw page bodies it
+  read, so packing would credit bytes still held); closing its last snapshot wakes the policy. A read stops a shown result's pass at the next page (its touch count
   changed). Both run on the policy's own thread, not the workers' gate
   (which has no lower priority), compressing at the lowest priority (honoured on Windows) and taking locks or allocating only at normal priority, so a
   starved packer never holds a lock a read or a new query waits on; waking only on a deadline, a completed result of 1 MiB or more, a
@@ -253,9 +257,9 @@ being true.
   shown (stage 1), touched (stage 2), held, released or the service disposed. A query's row the budget refuses
   (its own half or the global budget, never a live table's or a derived set's) does not stop the query at once while the
   policy runs (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`): the row stays open and the ingestion waits outside every lock
-  (`WaitForRoomAsync`, at most `RoomWaitMs` a wait, `SqlService.MaxRoomWaits` waits a row and `MaxRoomWaitMs` in all for a set) while the policy packs, at once and
+  (`WaitForRoomAsync`, `SqlService.WaitAndCommitAsync`, at most `RoomWaitMs` a wait, `SqlService.MaxRoomWaits` waits a row and `MaxRoomWaitMs` in all for the query; the rows committed before the waiting row are sealed only once it ends) while the policy packs, at once and
   at normal priority on the workers' gate (`Pack`'s `workers`, a page an item, sharing the threads fairly with other
-  result work), every complete result not held that could make room for it (`MakeRoom`, `PackForRoom`: any query's
+  result work), every complete result of 1 MiB or more not held that could make room for it, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (`ForRoom`, `MakeRoom`, `PackForRoom`: any query's
   for the global budget, only its own when its own half is full; hidden first, then largest), then commits the same row again. With
   nothing to pack the wait ends at once and the row is refused as before; a stop is never undone, since stored rows are
   a prefix of the rows read. The checks' stores leave packing off unless a check turns it on

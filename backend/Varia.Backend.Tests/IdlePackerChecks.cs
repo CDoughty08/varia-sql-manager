@@ -176,10 +176,30 @@ internal static class IdlePackerChecks
         }
         ReadOne();
         rig.Clock += Idle;
-        var packing = Task.Run(rig.Packer.PackDue);
-        while (!packing.IsCompleted && reads < 2_000) ReadOne();
-        packing.Wait();
-        check(matched, "reads during a pass of a shown result see every page as sealed: " + reads + " reads, " + PackedPages(large) + " pages packed");
+        // Reads start on another thread once three pages are packed, and run until the pass has stopped for them.
+        var largePages = 0;
+        var reading = new ManualResetEventSlim();
+        var done = false;
+        var reader = Task.Run(() =>
+        {
+            reading.Wait();
+            while (!Volatile.Read(ref done) || reads < 50) ReadOne();
+        });
+        rig.Packer.OnPage = page =>
+        {
+            if (page != large || ++largePages != 4) return;
+            // Wait until the reader has read once, so the next page sees the result touched however the threads are scheduled.
+            var before = Volatile.Read(ref reads);
+            reading.Set();
+            SpinWait.SpinUntil(() => Volatile.Read(ref reads) > before, 30_000);
+        };
+        rig.Packer.PackDue();
+        rig.Packer.OnPage = null;
+        reading.Set();
+        Volatile.Write(ref done, true);
+        reader.Wait();
+        check(matched && PackedPages(large) >= 3 && large.NeedsPacking && reads >= 50,
+            "reads on another thread during a pass of a shown result see every page as sealed, and the pass stops for them: " + reads + " reads, " + PackedPages(large) + " pages packed");
     }
 
     private static void Backoff(Action<bool, string> check)
@@ -245,6 +265,38 @@ internal static class IdlePackerChecks
         rig.Clock += ResultPacker.DelayMs;
         rig.Packer.PackDue();
         check(AllPacked(sorted), "a hidden result with an open view is packed after its 5 s");
+        rig.Show(sorted.ResultId);
+        rig.Packer.PackDue();
+        check(!sorted.HasPacked && rig.Store.HasViews(sorted), "shown again with its grid still sorted, it is unpacked for the view's screens");
+
+        // A shown result packed while idle, then sorted: the view's screens would read a page or so a row, so it is unpacked.
+        var later = Filled(rig.Store, "sorted later", BigRows);
+        rig.Show(later.ResultId);
+        rig.Packer.PackDue();
+        rig.Clock += Idle;
+        rig.Packer.PackDue();
+        check(AllPacked(later), "the fixture: a shown result packed once idle");
+        pokes = rig.Pokes;
+        Call<ResultsViewResult>("results.view", new { resultId = later.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
+        var poked = rig.Pokes > pokes;
+        rig.Packer.PackDue();
+        check(poked && !later.HasPacked && State(rig.Store, later) == "raw", "sorting a packed shown result wakes the policy, which unpacks it for the view");
+        rig.Clock += 100 * Idle;
+        check(rig.Packer.PackDue() is null && !later.HasPacked, "and it stays raw while the view is open");
+
+        // A column's value list (a distinct snapshot) keeps the raw pages it read: packing them would credit the budget bytes
+        // still held, so a result with one stays raw, hidden or shown, until it closes.
+        var listed = Filled(rig.Store, "listed", BigRows);
+        var snapshot = Call<ResultsDistinctResult>("results.distinct", new { resultId = listed.ResultId, column = 0 });
+        rig.Packer.PackDue();
+        rig.Clock += 100 * Idle;
+        check(rig.Packer.PackDue() is null && !listed.HasPacked, "a result with an open value list is never packed, however long it is hidden");
+        pokes = rig.Pokes;
+        check(rig.Store.CloseSnapshots(listed.ResultId, [snapshot.SnapshotId]) == 1 && rig.Pokes == pokes + 1, "closing its last value list wakes the policy");
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs;
+        rig.Packer.PackDue();
+        check(AllPacked(listed), "then it is packed as any hidden result");
     }
 
     private static void ReleaseAndStop(Action<bool, string> check)
@@ -282,23 +334,21 @@ internal static class IdlePackerChecks
             "disposing the policy while it packs a shown result stops at the next page, and what was packed reads as sealed: " + PackedPages(stopped));
     }
 
-    /// <summary>Stores rows as the query's ingestion does (SqlService), waiting for room when a row is refused; returns how
-    /// many times a row waited.</summary>
-    private static int Ingest(ResultStore store, ResultSetBuffer set, long rows)
+    /// <summary>Stores rows as the query's ingestion does (SqlService), through its own wait for room when a row is refused
+    /// (<see cref="SqlService.WaitAndCommitAsync"/>); returns how many rows waited. <paramref name="waited"/> is how long they
+    /// waited in all, without the time spent storing rows.</summary>
+    private static int Ingest(ResultStore store, ResultSetBuffer set, long rows, SqlService.RoomWaited? waited = null)
     {
+        waited ??= new SqlService.RoomWaited();
         var waits = 0;
         for (long row = 0; row < rows; row++)
         {
             set.CountRow();
             if (set.BeginRow() is not { } builder) continue;
             SyntheticRows.WriteCells("W1", row, builder);
-            var committed = set.TryCommitRow(0, mayWait: true);
-            for (var tries = 0; !committed && set.RoomWanted is > 0 and var wanted; tries++)
-            {
-                waits++;
-                var made = tries < SqlService.MaxRoomWaits && store.WaitForRoomAsync(set.Budget, wanted).GetAwaiter().GetResult();
-                committed = set.TryCommitRow(0, mayWait: made);
-            }
+            if (set.TryCommitRow(0, mayWait: true) || set.RoomWanted == 0) continue;
+            waits++;
+            SqlService.WaitAndCommitAsync(store, set, 0, waited, CancellationToken.None).GetAwaiter().GetResult();
         }
         set.Complete();
         return waits;
@@ -326,20 +376,21 @@ internal static class IdlePackerChecks
         var table = store.Open(new QueryBudget("live", new LiveBudget(64L << 20)), 0, 1, 1, "rows", W1Columns, W1Wires)!;
         Write(table, 0, 2_000);
         table.Complete();
-        var onWorkers = false;
-        packer.OnPage = page => onWorkers |= ViewSorter.Gate.Busy > 0;
+        var gate = new ViewSorter.WorkerGate(() => 4);
+        packer.RoomGate = gate;
         var query = Open(store, "query");
         var timer = Stopwatch.StartNew();
         var waits = Ingest(store, query, BigRows * 5 / 2);
         timer.Stop();
         // The query goes on as soon as enough pages are packed; the pass packs the rest of the result after it.
         SpinWait.SpinUntil(() => AllPacked(shown), 60_000);
-        packer.OnPage = null;
         check(query.IsComplete && query.Truncated == TruncationReason.None && query.RowsAvailable == BigRows * 5 / 2 && query.Budget.Stopped == TruncationReason.None && waits > 0,
             "a query refused for the global budget waits while a complete result is packed for it, and stores every row: " + waits + " waits, " + timer.ElapsedMilliseconds + " ms, " + query.RowsAvailable + " rows");
         check(AllPacked(shown) && !table.HasPacked && Same(expected, Bodies(shown)) && store.UsedBytes <= store.GlobalBytes && packer.RoomPasses > 0,
             "the shown result was packed for it at once, though not idle, a live table was not, and the budget held: " + store.UsedBytes + " of " + store.GlobalBytes);
-        check(onWorkers && packer.PagesAtPriority == 0, "packing for room runs on the results' shared workers at normal priority");
+        // The last page is replaced just before the pass gives its lease back.
+        SpinWait.SpinUntil(() => gate.Busy == 0, 30_000);
+        check(gate.Peak > 0 && gate.Busy == 0 && packer.PagesAtPriority == 0, "packing for room runs on the results' shared workers at normal priority: peak " + gate.Peak + ", busy " + gate.Busy + ", lowered " + packer.PagesAtPriority);
     }
 
     private static void RoomForQuery(Action<bool, string> check)
@@ -369,10 +420,10 @@ internal static class IdlePackerChecks
             check(held.TryLease(), "the fixture: a Save holds the result");
             var passes = packer.RoomPasses;
             var query = Open(store, "query");
-            var timer = Stopwatch.StartNew();
-            var waits = Ingest(store, query, BigRows * 2);
-            check(waits == 1 && query.Truncated == TruncationReason.GlobalBudget && packer.RoomPasses == passes && !held.HasPacked && timer.ElapsedMilliseconds < ResultStore.RoomWaitMs,
-                "with nothing that could be packed a refused row stops the query at once: " + waits + " waits, " + timer.ElapsedMilliseconds + " ms");
+            var waited = new SqlService.RoomWaited();
+            var waits = Ingest(store, query, BigRows * 2, waited);
+            check(waits == 1 && query.Truncated == TruncationReason.GlobalBudget && packer.RoomPasses == passes && !held.HasPacked && waited.Ms < ResultStore.RoomWaitMs,
+                "with nothing that could be packed a refused row stops the query at once: " + waits + " waits, " + waited.Ms + " ms waited");
             held.ReleaseLease();
 
             // A held result first in line (hidden) is passed over, not waited on: the shown one after it makes the room.
@@ -383,11 +434,11 @@ internal static class IdlePackerChecks
             var free = Filled(store, "free", BigRows * 2);
             visibility.Set(Guid.NewGuid(), 1, [free.ResultId], out _);
             var after = Open(store, "after");
-            timer.Restart();
-            var freeWaits = Ingest(store, after, BigRows * 5 / 2);
+            waited = new SqlService.RoomWaited();
+            var freeWaits = Ingest(store, after, BigRows * 5 / 2, waited);
             SpinWait.SpinUntil(() => AllPacked(free), 60_000);
-            check(after.Truncated == TruncationReason.None && freeWaits > 0 && AllPacked(free) && !leased.HasPacked && timer.ElapsedMilliseconds < ResultStore.RoomWaitMs,
-                "a held result never stalls packing for room: the next one is packed and the query stores every row: " + freeWaits + " waits, " + timer.ElapsedMilliseconds + " ms");
+            check(after.Truncated == TruncationReason.None && freeWaits > 0 && AllPacked(free) && !leased.HasPacked && waited.Ms < ResultStore.RoomWaitMs,
+                "a held result never stalls packing for room: the next one is packed and the query stores every row: " + freeWaits + " waits, " + waited.Ms + " ms waited");
             leased.ReleaseLease();
             store.ReleaseAll();
             store.Resize(24L << 20, 24L << 20);
@@ -396,11 +447,11 @@ internal static class IdlePackerChecks
             store.ReleaseAll();
             var packable = Filled(store, "packable", BigRows * 2);
             var greedy = Open(store, "greedy");
-            timer.Restart();
-            waits = Ingest(store, greedy, BigRows * 4);
+            waited = new SqlService.RoomWaited();
+            waits = Ingest(store, greedy, BigRows * 4, waited);
             check(waits > 0 && greedy.Truncated == TruncationReason.GlobalBudget && greedy.RowsAvailable < BigRows * 4 && greedy.Describe().RowsStored == greedy.RowsAvailable
-                && AllPacked(packable) && timer.ElapsedMilliseconds < ResultStore.RoomWaitMs,
-                "a query that does not fit even with everything packed stops for the budget once nothing more can be packed: " + waits + " waits, " + timer.ElapsedMilliseconds + " ms");
+                && AllPacked(packable) && waited.Ms < ResultStore.RoomWaitMs,
+                "a query that does not fit even with everything packed stops for the budget once nothing more can be packed: " + waits + " waits, " + waited.Ms + " ms waited");
 
             // A derived set (a pivot, a comparison) never waits: it is refused whole and can be made again.
             var derived = store.Open(store.BeginQuery("derived"), 0, 1, 1, "rows", W1Columns, W1Wires, derived: true)!;
@@ -449,6 +500,44 @@ internal static class IdlePackerChecks
         store3.RoomMaker = (_, global) => { lock (asked) asked.Add(global); return false; };
         var refused = store3.WaitForRoomAsync(own, 1L << 20, waitMs: 60_000).GetAwaiter().GetResult();
         check(reserved && !refused && asked.SequenceEqual([false]), "a query whose own half is full asks for room in its own half only: " + string.Join(",", asked));
+
+        // A policy that says it is packing but never makes room: the query's rows wait the query's cap in all, however
+        // many rows and result sets wait, then stop for the budget as they would have.
+        var store4 = new ResultStore(8L << 20, 8L << 20) { Packing = PagePacking.OnRequest, RoomMaker = (_, _) => true };
+        var capped = new SqlService.RoomWaited();
+        const long CapMs = 300;
+        bool Refused(ResultSetBuffer set, out long stored)
+        {
+            stored = 0;
+            for (long row = 0; ; row++)
+            {
+                set.CountRow();
+                if (set.BeginRow() is not { } builder) return false;
+                SyntheticRows.WriteCells("W1", row, builder);
+                if (!set.TryCommitRow(0, mayWait: true)) return set.RoomWanted > 0;
+                stored++;
+            }
+        }
+        var waitingSet = Open(store4, "capped");
+        var firstRefused = Refused(waitingSet, out var firstStored);
+        var firstStoredIt = SqlService.WaitAndCommitAsync(store4, waitingSet, 0, capped, CancellationToken.None, CapMs).GetAwaiter().GetResult();
+        var afterFirst = capped.Ms;
+        waitingSet.Complete();
+        check(firstRefused && !firstStoredIt && waitingSet.Truncated is TruncationReason.GlobalBudget or TruncationReason.QueryBudget && waitingSet.Budget.Stopped != TruncationReason.None && waitingSet.RowsAvailable == firstStored && afterFirst >= CapMs - 50 && afterFirst < ResultStore.RoomWaitMs,
+            "a row that never gets room waits at most the query's cap, then stops the query for the budget, its rows a prefix: " + afterFirst + " ms waited, " + waitingSet.RowsAvailable + " of " + firstStored + " rows");
+
+        // Cancelled while a row waits: the open row is rolled back and the cancellation reaches the query.
+        var store5 = new ResultStore(8L << 20, 8L << 20) { Packing = PagePacking.OnRequest, RoomMaker = (_, _) => true };
+        var cancelledSet = Open(store5, "cancelled");
+        var cancelledRefused = Refused(cancelledSet, out var cancelledStored);
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        string? thrown = null;
+        try { SqlService.WaitAndCommitAsync(store5, cancelledSet, 0, new SqlService.RoomWaited(), stop.Token).GetAwaiter().GetResult(); }
+        catch (OperationCanceledException failure) { thrown = failure.GetType().Name; }
+        cancelledSet.Seal();
+        check(cancelledRefused && thrown is not null && cancelledSet.RowsAvailable == cancelledStored,
+            "a query cancelled while a row waits for room rolls that row back and stops: " + thrown + ", " + cancelledSet.RowsAvailable + " of " + cancelledStored + " rows");
     }
 
     private static void Service(Action<bool, string> check)

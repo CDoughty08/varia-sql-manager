@@ -1326,16 +1326,21 @@ Results stay in backend memory, never on disk (`ResultStore`).
   and it has not completed or been shown again, for 30 seconds (`ResultPacker.VisibleIdleMs`); the wait doubles for
   each operation that unpacked it whole, up to eight times as long (4 minutes), so a result in use is never packed and unpacked in a loop. A
   shown result with an open view (a sorted or filtered grid) stays raw, since its screens read a page or so a row (about
-  30 ms a 256-row screen packed against 1 ms raw at 1 GiB); plain scrolling and jumping cost about 0.2 to 1 ms a read
+  30 to 55 ms a 256-row screen of a 256 MiB result packed against about 1 ms raw); one already packed when its grid is
+  sorted or filtered, or shown again with such a grid, is unpacked again on the results' workers once the budget has
+  room for it twice over and no query waits for room (otherwise its screens read the packed pages; it is not counted as
+  a use, and a hidden result with a view waits longer each time it was so unpacked). A result with an open distinct
+  snapshot (a value list) is never packed, by either stage or for room: the snapshot keeps the raw pages it read, so
+  packing would credit bytes still held. Closing its last snapshot wakes the policy; plain scrolling and jumping cost about 0.2 to 1 ms a read
   packed. It is on in every backend Varia starts, with no setting, as stage 1 is. Measurements and the reasons for each
   rule are in [page-compression-findings.md](page-compression-findings.md#stage-2-as-built).
 - **Room for a query.** While the policy runs, a query's row that its own half or the global budget refuses (never a
   live table's or a derived set's) does not stop the query at once: the row stays open and the ingestion waits, outside
-  every lock, at most 10 seconds a wait (`ResultStore.RoomWaitMs`), 4 waits a row (`SqlService.MaxRoomWaits`) and 30 seconds in all for a result set (`SqlService.MaxRoomWaitMs`), while the
-  policy packs every complete result not held that could make room (any query's for the global budget, only the
+  every lock, at most 10 seconds a wait (`ResultStore.RoomWaitMs`), 4 waits a row (`SqlService.MaxRoomWaits`) and 30 seconds in all for the query (`SqlService.MaxRoomWaitMs`), while the
+  policy packs every complete result of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
   query's own when its own half is full; hidden first, then largest) at normal priority on the results' workers, sharing them fairly
   with other result work. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
-  as before (truncation reason `queryBudget` or `globalBudget`). Rows already stored are never dropped, and a stop is never undone.
+  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together

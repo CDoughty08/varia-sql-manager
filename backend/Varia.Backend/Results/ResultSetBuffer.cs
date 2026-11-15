@@ -91,6 +91,9 @@ internal sealed class ResultSetBuffer
     /// <summary>Counts whole unpacks (<see cref="UnpackAll"/>), so a pass of <see cref="Pack"/> that an operation's unpack
     /// overtook between its last page and its end does not mark the result packed.</summary>
     private int unpacks;
+    /// <summary>Whole unpacks the policy made for a shown result's open view (<see cref="ResultPacker"/>): not a use, so not
+    /// in <see cref="unpacks"/>, but it lengthens the wait before such a result is packed again while hidden.</summary>
+    private int viewUnpacks;
     /// <summary>Packing stopped, or was refused, for a pin or lease, or an operation unpacked the result: the last pin or
     /// lease to end tells the store (<see cref="ResultStore.Settle"/>), so the policy looks at the result again.</summary>
     private bool notifyIdle;
@@ -570,6 +573,8 @@ internal sealed class ResultSetBuffer
     /// <summary>How many times an operation has unpacked the result whole (the policy counts each as a use).</summary>
     public int Unpacks { get { lock (gate) return unpacks; } }
 
+    public int ViewUnpacks { get { lock (gate) return viewUnpacks; } }
+
     /// <summary>Whether the policy (<see cref="ResultPacker"/>) may pack this result: complete, not a live table, and not
     /// already packed by a whole pass since it was last unpacked.</summary>
     public bool NeedsPacking { get { lock (gate) return state == 1 && !packDone && Budget.Live is null; } }
@@ -660,27 +665,34 @@ internal sealed class ResultSetBuffer
                 return true;
             }
         }
-        if (workers is null)
+        try
         {
-            foreach (var page in candidates)
-                if (!PackOne(page))
-                {
-                    stopped = 1;
-                    break;
-                }
-        }
-        else if (candidates.Length > 0)
-        {
-            using var threads = workers.Take(Math.Min(candidates.Length, ViewSorter.Workers));
-            threads.For(candidates.Length, i =>
+            if (workers is null)
             {
-                if (!PackOne(candidates[i])) Volatile.Write(ref stopped, 1);
-            });
+                foreach (var page in candidates)
+                    if (!PackOne(page))
+                    {
+                        stopped = 1;
+                        break;
+                    }
+            }
+            else if (candidates.Length > 0)
+            {
+                using var threads = workers.Take(Math.Min(candidates.Length, ViewSorter.Workers));
+                threads.For(candidates.Length, i =>
+                {
+                    if (!PackOne(candidates[i])) Volatile.Write(ref stopped, 1);
+                });
+            }
+            if (stopped == 0)
+                lock (gate)
+                    packDone = state == 1 && this.unpacks == generation;
         }
-        if (stopped == 0)
-            lock (gate)
-                packDone = state == 1 && this.unpacks == generation;
-        if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
+        finally
+        {
+            // Pages packed before a failure gave their bytes back already; they still count toward the next collection.
+            if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
+        }
         return saved;
     }
 
@@ -689,12 +701,13 @@ internal sealed class ResultSetBuffer
     /// working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from 64 MiB, as
     /// a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and
     /// view reads still work. The caller holds a pin, so nothing packs the pages again until it ends.</summary>
-    public bool TryUnpackAll(CancellationToken token = default)
+    /// <param name="forView">The policy's, for a shown result's open view: counted in <see cref="ViewUnpacks"/>, not as a use.</param>
+    public bool TryUnpackAll(CancellationToken token = default, bool forView = false)
     {
         if (!HasPacked) return true;
         var need = UnpackNeed();
         if (need > 0 && !store.TryReserveWork(Budget, need)) return false;
-        UnpackAll(need, token);
+        UnpackAll(need, token, forView);
         return true;
     }
 
@@ -715,17 +728,27 @@ internal sealed class ResultSetBuffer
     /// <summary>Unpacks every packed page in place, taking <paramref name="reserved"/> bytes already reserved from this
     /// set's budget as working memory (<see cref="UnpackNeed"/>) as its own, and giving back what it did not need. On
     /// failure (cancellation) the reservation is returned and nothing changes.</summary>
-    public void UnpackAll(long reserved, CancellationToken token = default)
+    public void UnpackAll(long reserved, CancellationToken token = default, bool forView = false)
     {
         StoredPage[] packed;
+        bool wasDone;
+        int generation;
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
             packed = [.. pages.Where(page => page.Stored is PackedPage)];
-            // Whatever happens next, the policy may pack the result again once the operation's pin ends.
-            packDone = false;
-            unpacks++;
-            notifyIdle = true;
+            wasDone = packDone;
+            generation = forView ? unpacks : unpacks + 1;
+            // Nothing packed (a comparison unpacks every side once one is packed): nothing changes, and it is no use that
+            // lengthens the policy's wait for this result.
+            if (packed.Length > 0)
+            {
+                // Whatever happens next, the policy may pack the result again once the operation's pin ends.
+                packDone = false;
+                if (forView) viewUnpacks++;
+                else unpacks++;
+                notifyIdle = true;
+            }
         }
         if (packed.Length == 0)
         {
@@ -749,6 +772,10 @@ internal sealed class ResultSetBuffer
         catch
         {
             Volatile.Write(ref unpackTotal, 0);
+            // Nothing was unpacked: a whole pass still holds (the Memory panel says packed, not partly), unless another
+            // operation's unpack came since. The cancelled operation still counts as a use.
+            lock (gate)
+                if (unpacks == generation) packDone = wasDone;
             store.Return(Budget, reserved);
             throw;
         }

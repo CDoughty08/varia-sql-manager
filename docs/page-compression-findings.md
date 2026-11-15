@@ -493,18 +493,27 @@ live, not held), once it is idle. Measured first, then each rule settled:
   wait, up to eight times as long (`MaxBackoff`, 4 minutes), so a result compared or searched again and again stays raw.
 - **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
   row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (median; p99 about 145 ms against 21 ms),
-  enough to show while scrolling. A shown result with an open view is not packed (a hidden one is, as before); closing
-  its last view wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
+  enough to show while scrolling. A shown result with an open view is not packed (a hidden one is, as before); one already
+  packed when its grid is sorted or filtered, or shown again with a view open, is unpacked again on the workers' gate
+  when the budget has room for it twice over and no query waits (its screens read packed pages otherwise). That
+  unpack is not a use, but a hidden result with a view waits longer each time it was so unpacked, so switching tabs
+  does not unpack and pack it every time. Closing its last view wakes the policy.
+- **Value lists keep a result raw.** A distinct snapshot (a column's value list, a filter by value) keeps the raw
+  bodies of the pages it read for later reads of its values, so packing that result would credit the budget bytes
+  still held. A result with an open snapshot is not packed by either stage or for room; closing it wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
   `log`, a jump 0.4 to 1 ms: well inside a frame.
 - **Operations.** Fused sorts, filters, profiles and pivots read the packed result and leave it packed (the first sort
   after idle took 0.26 to 0.37 s packed against 0.36 to 0.49 s raw on `orders`, a little faster since it reads half
   the bytes). The rehydrating operations unpack first: 0.03 to 0.05 s per 256 MiB on 16 workers, 0.13 s on 3.
 - **Room for a query.** A query's row the budget refuses (its half or the global budget) no longer stops it while
   something could be packed (`ResultStore.CanMakeRoom`): the row stays open, the ingestion waits outside every lock
-  (`WaitForRoomAsync`, up to 10 s a wait, 4 waits a row, 30 s in all for a result set), and the policy packs, at once and at normal priority
+  (`WaitForRoomAsync`, up to 10 s a wait, 4 waits a row, 30 s in all for the query), and the policy packs, at once and at normal priority
   on the workers' gate (`ViewSorter.Gate`, a page an item, so it shares the threads fairly with sorts and reads), every
-  complete result not held that could make room: any query's for the global budget, only the query's own when its half is full,
-  hidden first, then largest. A user is waiting, so this ignores every delay. With nothing to pack, or once the waits
+  complete result of 1 MiB or more not held that could make room: any query's for the global budget, only the query's own when its half is full,
+  hidden first, then largest. A user is waiting, so this ignores the idle delays, but never takes a result the user is
+  working with: a shown one with an open view (its screens would read packed pages with no room left for the cache), or
+  one an operation unpacked and still uses (its next operation would need that room again and could be refused). The
+  new query is truncated instead, as it was before. While a row waits, the rows committed before it are not yet sealed. With nothing to pack, or once the waits
   run out, the row is refused as before. Rows already stored are never dropped, and a stop is never undone: stored rows
   stay a prefix of the rows read.
 - **Fairness.** Idle packing stays on the lowest-priority thread: the workers' gate shares threads fairly but has no

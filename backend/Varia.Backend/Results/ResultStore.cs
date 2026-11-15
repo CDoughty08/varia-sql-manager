@@ -239,12 +239,16 @@ internal sealed partial class ResultStore
     internal Func<QueryBudget, bool, bool>? RoomMaker { get; set; }
 
     /// <summary>The longest a row waits for packing to make room (<see cref="WaitForRoomAsync"/>) before the query stops as
-    /// it would have: packing a GiB takes about 0.3 s on 16 workers and 1 s on 3 (docs/page-compression-findings.md), so
+    /// it would have: packing on the workers takes about 0.2 s of 16 workers a GiB (docs/page-compression-findings.md), a few
+    /// times that on a few cores, so
     /// this only bounds a pass that a held result or a starved machine keeps from finishing.</summary>
     internal const int RoomWaitMs = 10_000;
     /// <summary>How long one wait for a page's saving lasts before the room is looked at again.</summary>
     private const int RoomPollMs = 250;
     private int roomWaiters;
+
+    /// <summary>Whether a query's row is waiting for room now (<see cref="WaitForRoomAsync"/>).</summary>
+    internal bool RoomWaiting => Volatile.Read(ref roomWaiters) > 0;
     private TaskCompletionSource roomChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Whether a policy runs that could pack results to make room for a query's refused row: asked inside the refused
@@ -546,6 +550,9 @@ internal sealed partial class ResultStore
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
+        // A shown result that was packed before its grid was sorted or filtered is unpacked again for the view's screens
+        // (ResultPacker).
+        if (set.HasPacked) Settle();
         return view;
     }
 
@@ -632,7 +639,17 @@ internal sealed partial class ResultStore
                 if (snapshots.TryGetValue(id, out var snapshot) && snapshot.Set.ResultId == resultId && snapshots.Remove(id)) closed.Add(snapshot);
         }
         foreach (var snapshot in closed) Return(snapshot.Set.Budget, snapshot.Charged);
+        // A result whose last snapshot closed may be packed now (ResultPacker).
+        if (closed.Count > 0) Settle();
         return closed.Count;
+    }
+
+    /// <summary>Whether a distinct snapshot of the set is open: it keeps the raw bodies of the pages it read (its source reads
+    /// them whole, for later reads of its values), so packing the set would credit the budget bytes still held, and the
+    /// policy leaves it raw until the snapshot closes (<see cref="ResultPacker"/>).</summary>
+    public bool HasSnapshots(ResultSetBuffer set)
+    {
+        lock (gate) return snapshots.Values.Any(snapshot => snapshot.Set == set);
     }
 
     /// <summary>Keeps <paramref name="identity"/> as its result's row identities, replacing any it had; the caller reserved its
