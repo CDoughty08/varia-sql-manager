@@ -362,7 +362,7 @@ try {
 
   // 9. Narrow and short panes and popouts (grouped results PR 15), with a name of the longest a marker gives (128
   // characters). A pane too narrow for every tool folds the results toolbar by its own width: Tabs goes first, and the
-  // search field keeps its whole placeholder at every width; ⋯ (More results tools) holds every tool, Results as Tabs among
+  // search field keeps its whole placeholder until every group has folded; ⋯ (More results tools) holds every tool, Results as Tabs among
   // them.
   const name128 = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region, by month and '.padEnd(128, 'z')
   expect(name128).toHaveLength(128)
@@ -449,6 +449,16 @@ try {
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/^layout tight view/)
   expect((await resultsToolbarFit(popout)).fits).toBe(true)
   expect(await searchPlaceholderFit(popout)).toMatchObject({ fits: true })
+  // A group growing from inside a toolbar already as wide as its pane (Headers appearing, a pressed choice turning bold;
+  // here 400 px, past what the search box can give) folds it again rather than push ⋯ past its clipped edge.
+  const grown = resultsToolbar(popout).getByRole('group', { name: 'White space', exact: true }), before = (await resultsToolbarFit(popout)).fold
+  expect(before).not.toMatch(/\bspace\b/)
+  await grown.evaluate(group => { const wide = group.ownerDocument.createElement('span'); wide.dataset.smokeGrowth = ''; wide.style.cssText = 'display: inline-block; width: 400px'; group.append(wide) })
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
+  expect((await resultsToolbarFit(popout)).fits).toBe(true)
+  await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
+  await resultsToolbar(popout).evaluate(tools => tools.querySelector('[data-smoke-growth]').remove())
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe(before)
   await moreResultsTools(popout).click()
   await expect(resultsToolsMenu(popout)).toBeVisible()
   await expect(resultsToolsMenu(page)).toHaveCount(0)
@@ -459,10 +469,10 @@ try {
   // ⋯ takes it, so Tab still reaches the toolbar.
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(360, 480) })
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
   // The whole toolbar, ⋯ and Close Results included: with every group folded the field gives up its placeholder's width
   // rather than push them past the toolbar's clipped edge.
-  expect(await resultsToolbarFit(popout)).toMatchObject({ fits: true, fold: 'layout tight view sort space show' })
+  expect((await resultsToolbarFit(popout)).fits).toBe(true)
   await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()

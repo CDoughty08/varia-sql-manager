@@ -853,7 +853,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its field gives way first in a narrow
-   pane, down to the width of its whole placeholder and no further; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
+   pane, down to the width of its whole placeholder and no further while a group is left to fold; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
    toolbar's own width, so a narrow docked or popped-out pane folds as a narrow window does): Tabs goes, the groups tighten
    (their icons, the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
    Transposed, Headers and Compare, Sort text by, White space and the Show group go. The ⋯ menu holds them all. */

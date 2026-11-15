@@ -64,7 +64,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   return <div className="results-search" data-mode={search.mode}>
     <Icon name="search" className="results-search-icon" />
     {/* The field is at least as wide as its placeholder, drawn unseen beside the input (data-placeholder), so the whole
-        placeholder shows at every width and in every font; the toolbar folds its groups rather than narrow it. */}
+        placeholder shows in every font; the toolbar folds its groups rather than narrow it, until none is left to fold. */}
     <span className="results-search-field" data-placeholder={placeholder}>
       <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={placeholder}
         value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
@@ -104,7 +104,7 @@ export const foldWords = (fold: number): string => toolbarFolds.slice(0, fold).j
 export const moreIsTabStop = (fold: number): boolean => fold > toolbarFolds.indexOf('space')
 
 /**
- * Folds the toolbar to its width (`fitFold`) whenever it, its head or what shares the head changes size: the pane resized,
+ * Folds the toolbar to its width (`fitFold`) whenever it, one of its groups, its head or what shares the head changes size: the pane resized,
  * the status line or a job strip came or went, a font arrived, Headers appeared. Written to the element, not React state, so
  * a fold never renders the toolbar again; laying it out folded and unfolded settles on the same answer, so the observers
  * it triggers change nothing more.
@@ -126,12 +126,17 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     let watched: { dispose(): void } | undefined
     const watch = () => {
       watched?.dispose()
-      watched = observeResize([head, ...head.children], fit)
+      // The toolbar's own groups too: once it is as wide as its pane, a group growing inside it (Headers, a choice turning
+      // bold, the search count) changes no size outside it.
+      watched = observeResize([head, ...head.children, ...element.children], fit)
     }
     watch()
     const view = head.ownerDocument.defaultView
     const added = view ? new view.MutationObserver(() => { watch(); fit() }) : undefined
     added?.observe(head, { childList: true })
+    // A tool coming or going, or a choice pressed, anywhere in the toolbar: a group folded away has no size to watch, so
+    // Headers leaving the Show group it folded must still unfold it. fit writes only data-fold and tabIndex, never these.
+    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed'] })
     return () => { added?.disconnect(); watched?.dispose() }
   }, [])
   return useCallback((element: HTMLDivElement | null) => { toolbar.current = element }, [])

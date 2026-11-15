@@ -1128,8 +1128,11 @@ Outcome, accepted by the owner:
           Windows in a 1,024 px window, Sort text by now folds into ⋯ and White space stays with 34 px to spare; Linux's
           wider fonts may fold White space too, so `results-smoke` 14b then makes its choices from the grid's menu. Only main's Linux 1,024 px run can take that
           path in CI; it was run once locally with White space forced folded. `grouped-results-smoke` checks the
-          placeholder fits in both modes, at 900 px and in the popout at 640 and 360 px, and at 360 px that everything has
-          folded and the whole toolbar, ⋯ included, still fits.
+          placeholder fits in both modes at 900 px and in the popout at 640 px, that the toolbar folds again there when a
+          group grows inside it and unfolds when it shrinks back, and at 360 px that everything has folded and the whole toolbar, ⋯ included,
+          still fits. The fold now also watches the toolbar's own groups and any tool coming, going or pressed inside it, so
+          growth inside a toolbar already as wide as its pane (Headers, a pressed choice turning bold, the count) folds it
+          again, and Headers leaving a Show group it folded unfolds it.
         - The Pivot builder in a short pane: below about 180 px its footer note and Build Pivot were cut off. A container
           query on the builder (`pivot-panel`, at most 200 px tall) hides its explanations (`pivot-aside`), never its
           errors or waiting notes, so Build Pivot stays whole; `grouped-results-smoke` checks it at 120 px.
