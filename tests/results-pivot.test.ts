@@ -1666,6 +1666,51 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.group().pivot!.pivot!.followed).toBeUndefined()
   })
 
+  it("keeps a failed Build Pivot's reason when an automatic rebuild then fails too, which only the toolbar says", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // A Build Pivot of another draft fails over F1.
+    f.pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    f1.pivot.mockRejectedValueOnce(new Error('The draft could not be pivoted.'))
+    await f.pivot.run('t1')
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('The draft could not be pivoted.')
+    // Expanded over F2, the Pivot follows from its recipe and fails: the builder keeps the draft's reason.
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockRejectedValueOnce(new Error('The automatic rebuild failed.'))
+    await f.show(f2)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.anything())
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe('The draft could not be pivoted.')
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('The automatic rebuild failed.')
+    expect(f.stale()).toBe(true)
+  })
+
+  it("clears a cancelled Build Pivot's message once the Pivot follows newer filters", async () => {
+    const f = await following()
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    await f.show(f1)
+    // The user cancels a Build Pivot over F1: the builder says it was cancelled.
+    f1.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => options?.signal?.addEventListener('abort', () => no(new Error('aborted')))))
+    const building = f.pivot.run('t1')
+    await wait()
+    f.pivot.cancel('t1')
+    await building
+    await wait()
+    expect(f.pivot.getSnapshot().tabs.t1.error).toMatch(/cancel/i)
+    // Expanded over F2, the Pivot follows by itself, and the cancel's message goes with the build it was about.
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f2)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
   it('decides nothing over a view the grid shows that the results have yet to publish, and follows it once published', async () => {
     let layout: ResultsLayout = 'tabs'
     const listeners = new Set<() => void>(), clock = { ms: 0 }

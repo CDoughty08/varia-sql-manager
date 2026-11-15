@@ -935,7 +935,8 @@ Outcome, accepted by the owner:
         at once by an automatic build over filters changed meanwhile. Every build that ends looks at the Pivot again, so a
         failed Build Pivot whose filters changed while it ran is followed then, not at the next unrelated publish. An
         automatic build leaves a failed Build Pivot's reason in the builder (and clears an earlier automatic build's or
-        Update's, which it answers), is named by the
+        Update's, which it answers; a failed automatic build tells only the toolbar, and a cancel's message is not kept as
+        the draft's failure), is named by the
         filters of the view it actually reads, and its provenance says `followed`, so the Tabs layout does not select the
         Pivot for it (the user may have gone back to the Table since it started). `followGroup` decides nothing while the
         grid shows a view the results have yet to publish (they publish on the next frame); that publish looks again. A
@@ -944,15 +945,17 @@ Outcome, accepted by the owner:
         the shared places with its retries, `addSet`'s atomic replacement, the draft untouched. Failure, refusal or a
         cancel from the caption keeps the old Pivot and its mark, and the toolbar says why with PR 10's sentences (nobody
         clicked, and the builder may be closed or on another group).
-      - A newer filter change cancels an automatic build in flight once the newer view shows (the build reads the held
+      - A newer filter change cancels an automatic build in flight once the newer view is published (the build reads the held
         older view, so its answer would land out of date), as does undoing the change; it is given up silently and its late
         answer released, and only the last build publishes. A build the user started (Build Pivot, Update) is never given
         up or overtaken here: once it publishes, the Pivot is looked at again and follows the newer filters if it may.
         Build Pivot during an automatic build gives the automatic one up, as it does an Update.
-      - Departures: the cancel happens when the newer view shows, not when its build starts, so a Table whose new view
+      - Departures: the cancel happens when the newer view is published, not when its build starts, so a Table whose new view
         takes long to build lets the older rebuild finish (and publish) first; the plan did not say which. No new
         caption text: an automatic rebuild shows PR 11's "Building again…" with Cancel, and a Pivot left marked shows
-        "Out of date" with Update as before.
+        "Out of date" with Update as before. results-smoke can no longer reach a marked, shown, small Pivot whose grid has
+        the focus, so PR 11's check that the rebuilt grid keeps the focus after Update from its own menu moved to
+        `tests/result-grid-focus.test.ts`, which draws the real grid.
       - Left: a record on the caption of why an automatic rebuild failed (the toolbar's notice fades, as PR 11 left for
         Update); a machine with few cores, Linux and macOS measured against the 250 ms condition; a Pivot shown in a
         popout or a docked pane counts by the same model, not by what is on screen (`ResultVisibilityService` knows the

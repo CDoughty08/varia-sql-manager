@@ -357,7 +357,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       hold?.()
       if (this.running.get(tabId)?.get(item.ordinal) === item) {
         this.running.get(tabId)!.delete(item.ordinal)
-        if (error) this.fail(tabId, item.ordinal, error, !item.update)
+        // A failed Build Pivot's reason stays in the builder until the user acts: an automatic build's failure goes only to
+        // the toolbar. A cancel is not the draft's failure, so a later build over the Pivot's recipe clears what it said.
+        const keeps = item.auto !== undefined && !!this.errors.get(tabId)?.get(item.ordinal)?.draft
+        if (error && !keeps) this.fail(tabId, item.ordinal, error, !item.update && !item.cancelled)
         // Update's caller, or a caption's Cancel, may not be looking at the builder: the toolbar says it too, while the run is still the one it
         // updated (a new run or a closed tab has nothing to say it about).
         if (error && (item.update || item.cancelled) && this.results.getSnapshot()[tabId]?.queryId === item.queryId) this.results.notify(tabId, error)
