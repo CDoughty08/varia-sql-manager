@@ -860,6 +860,29 @@ internal static class LiveSchedulerChecks
             check(connectEnd == "cancelled" && connecting.PoolClears == 0 && held is not null && stillWaiting && gateEnd == "cancelled" && waiting.PoolClears == 0 && gates.Busy == 1,
                 "a view that ends while its connection opens, or while it waits for a live gate, sends nothing and clears no pool: " + connectEnd + " " + connecting.PoolClears + ", " + gateEnd + " " + waiting.PoolClears);
         }
+        {
+            // An SSISDB source whose catalog's database will not open (4060) reads why on another connection; a view that ends while
+            // that lookup opens has sent it nothing, so the lookup clears no pool. The one clear counted is the failed open's own.
+            var host = new ScriptedOpenHost(id);
+            using var ending = new CancellationTokenSource();
+            var lookups = 0;
+            host.Open = (connection, token) =>
+            {
+                if (connection.Database.Length > 0) throw ConnectionFailureChecks.Sql(4060);
+                Interlocked.Increment(ref lookups);
+                ending.Cancel();
+                throw ConnectionFailureChecks.Sql(0, 0, 11, "server", "Operation cancelled by user.");
+            };
+            var catalogSource = LiveCatalog.Current.Sources["ssis.catalog"];
+            var catalogProbe = new LiveProbeState(LiveCatalog.Current.Probes[LiveSql.CatalogProbe], 10_000);
+            using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, catalogSource, LiveCatalog.Current.Limits, null);
+            await sampler.OpenAsync([new LiveProbeState(LiveCatalog.Current.Probes[LiveSql.CatalogProbe], 10_000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            string ended;
+            try { await sampler.SampleAsync([new LiveDue(catalogProbe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), catalogProbe.BudgetMs, 10_000)], ending.Token).WaitAsync(TimeSpan.FromSeconds(15)); ended = "sampled"; }
+            catch (OperationCanceledException) { ended = "cancelled"; }
+            check(lookups == 1 && ended == "cancelled" && sampler.PoolClears == 1,
+                "an SSISDB view that ends while it looks up why its catalog's database will not open clears no pool for the lookup, which sent nothing: " + ended + " " + sampler.PoolClears);
+        }
     }
 
     /// <summary>The activity source through SqlService, with no SQL Server: refused as values before any connection.</summary>
