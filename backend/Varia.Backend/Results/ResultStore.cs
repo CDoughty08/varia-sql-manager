@@ -450,6 +450,15 @@ internal sealed partial class ResultStore
         return true;
     }
 
+    /// <summary>Whether both budgets are still short of the eighth <see cref="TryReserveSpare"/> leaves free: once either
+    /// reaches it, memory taken as spare is better given back to the operation's own work.</summary>
+    public bool HasSpare(QueryBudget query)
+    {
+        var budget = Volatile.Read(ref figures);
+        var limit = Math.Min(budget.Query, query.MaxBytes);
+        return query.UsedBytes <= limit - limit / 8 && UsedBytes <= budget.Global - budget.Global / 8;
+    }
+
     /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
     /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
     /// reservation of its own that found the budget full would stop it for good.</summary>
@@ -639,17 +648,7 @@ internal sealed partial class ResultStore
                 if (snapshots.TryGetValue(id, out var snapshot) && snapshot.Set.ResultId == resultId && snapshots.Remove(id)) closed.Add(snapshot);
         }
         foreach (var snapshot in closed) Return(snapshot.Set.Budget, snapshot.Charged);
-        // A result whose last snapshot closed may be packed now (ResultPacker).
-        if (closed.Count > 0) Settle();
         return closed.Count;
-    }
-
-    /// <summary>Whether a distinct snapshot of the set is open: it keeps the raw bodies of the pages it read (its source reads
-    /// them whole, for later reads of its values), so packing the set would credit the budget bytes still held, and the
-    /// policy leaves it raw until the snapshot closes (<see cref="ResultPacker"/>).</summary>
-    public bool HasSnapshots(ResultSetBuffer set)
-    {
-        lock (gate) return snapshots.Values.Any(snapshot => snapshot.Set == set);
     }
 
     /// <summary>Keeps <paramref name="identity"/> as its result's row identities, replacing any it had; the caller reserved its

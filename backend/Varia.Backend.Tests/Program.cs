@@ -405,6 +405,7 @@ if (liveGroup is null)
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
+        ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),

@@ -9,13 +9,16 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (339)
+## Commands (342)
 
 ### File
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
+| New Query with sp_help | `query.newSpHelp` | — | — | — | `!documentBusy` | — |
+| New Query with sp_who | `query.newSpWho` | — | — | — | `!documentBusy` | — |
+| New Query with sp_lock | `query.newSpLock` | — | — | — | `!documentBusy` | — |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
 | Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
 | Save As… | `file.saveAs` | — | — | ⇧⌘S | `activeDocumentIsText && !documentBusy` | File › Save As…; Query tab context menu › Save As… |

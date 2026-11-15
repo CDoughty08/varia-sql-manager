@@ -220,7 +220,8 @@ internal static class IdlePackerChecks
         rig.Clock += Idle;
         rig.Packer.PackDue();
         check(AllPacked(set), "the fixture: a shown result packed once idle");
-        // Each operation that unpacks it whole (a search, a value list, a comparison) doubles its wait, up to eight times.
+        // Each operation that unpacks it whole (a search through a sorted grid, a comparison read far out of order, a
+        // transposed Copy or Save) doubles its wait, up to eight times.
         var waits = new List<long>();
         var ok = true;
         for (var k = 1; k <= 5; k++)
@@ -302,10 +303,11 @@ internal static class IdlePackerChecks
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         check(view.Rows == set.RowsAvailable && AllPacked(set) && !set.NeedsPacking && set.Unpacks == 0 && State(rig.Store, set) == "packed",
             "a sort of a packed shown result reads it packed and leaves it packed");
-        // An operation that still unpacks first (a search; a value list and a comparison too, until they read packed pages)
-        // answers from the same rows and counts as a use.
-        var search = Call<ResultsSearchResult>("results.search", new { resultId = set.ResultId, text = "no such text", fromRow = 0, maxMatches = 10 });
-        check(search.Rows == set.RowsAvailable && !set.HasPacked && set.NeedsPacking, "a search of a packed shown result unpacks it first and answers from the same rows");
+        // An operation that still unpacks first (a search through a grid sorted far from the pages' order, a transposed Copy
+        // or Save) counts as a use.
+        bool unpacked;
+        using (set.Pin()) unpacked = set.TryUnpackAll();
+        check(unpacked && !set.HasPacked && set.NeedsPacking && set.Unpacks == 1, "an operation's unpack of a packed shown result leaves it raw and due again");
         // Its grid is sorted (the view is open): each sorted screen reads hundreds of pages, so it stays raw while shown so.
         rig.Clock += 10 * Idle;
         check(rig.Packer.PackDue() is null && !set.HasPacked, "a shown result whose grid is sorted or filtered is not packed, however long it is idle");
@@ -314,7 +316,7 @@ internal static class IdlePackerChecks
         var next = rig.Packer.PackDue();
         rig.Clock += 2 * Idle;
         rig.Packer.PackDue();
-        check(next == rig.Clock && AllPacked(set), "then it is packed once idle, its wait doubled by the search: " + next);
+        check(next == rig.Clock && AllPacked(set), "then it is packed once idle, its wait doubled by the unpack: " + next);
         // Hidden, a sorted result is packed as any other (stage 1): only a shown one keeps its views' pages raw.
         var sorted = Filled(rig.Store, "sorted", BigRows);
         Call<ResultsViewResult>("results.view", new { resultId = sorted.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
@@ -386,19 +388,15 @@ internal static class IdlePackerChecks
         rig.Packer.PackDue();
         check(leftPacked && !tight.HasPacked, "without room for it the view's result stays packed and is unpacked at the next look once there is room: " + (retryAt - rig.Clock + ResultPacker.DelayMs));
 
-        // A column's value list (a distinct snapshot) keeps the raw pages it read: packing them would credit the budget bytes
-        // still held, so a result with one stays raw, hidden or shown, until it closes.
+        // A column's value list (a distinct snapshot) keeps its result's pages, not their bytes, and reads them packed: a
+        // result with one open is packed as any other, and the budget gets the raw bytes back.
         var listed = Filled(rig.Store, "listed", BigRows);
         var snapshot = Call<ResultsDistinctResult>("results.distinct", new { resultId = listed.ResultId, column = 0 });
-        rig.Packer.PackDue();
-        rig.Clock += 100 * Idle;
-        check(rig.Packer.PackDue() is null && !listed.HasPacked, "a result with an open value list is never packed, however long it is hidden");
-        pokes = rig.Pokes;
-        check(rig.Store.CloseSnapshots(listed.ResultId, [snapshot.SnapshotId]) == 1 && rig.Pokes == pokes + 1, "closing its last value list wakes the policy");
+        var usedRaw = rig.Store.UsedBytes;
         rig.Packer.PackDue();
         rig.Clock += ResultPacker.DelayMs;
         rig.Packer.PackDue();
-        check(AllPacked(listed), "then it is packed as any hidden result");
+        check(AllPacked(listed) && rig.Store.FindSnapshot(listed.ResultId, snapshot.SnapshotId) is not null && rig.Store.UsedBytes < usedRaw, "a result with an open value list is packed as any hidden result, its raw bytes given back: " + rig.Store.UsedBytes + " of " + usedRaw);
     }
 
     private static void ReleaseAndStop(Action<bool, string> check)
@@ -514,8 +512,8 @@ internal static class IdlePackerChecks
 
     private static void RoomRecheck(Action<bool, string> check)
     {
-        // A value list opened on a later candidate while packing for room works on an earlier one: that candidate is asked
-        // again before it is packed, and its raw pages, which the value list keeps, are not credited to the budget.
+        // A grid sorted on a later shown candidate while packing for room works on an earlier one: that candidate is asked
+        // again before it is packed, so a result the user has just begun to work with is not packed for the query.
         var (store, visibility, packer) = Running(40L << 20, 40L << 20);
         using var running = packer;
         using var service = new SqlService(store);
@@ -530,7 +528,7 @@ internal static class IdlePackerChecks
         packer.OnPage = page =>
         {
             if (page != first || Interlocked.Exchange(ref opened, 1) != 0) return;
-            try { service.DispatchAsync("results.distinct", JsonSerializer.SerializeToElement(new { resultId = later.ResultId, column = 0 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
+            try { service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = later.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
             catch (Exception error) { failed = error.GetType().Name + ": " + error.Message; }
         };
         // A wait for more than packing everything can free: it asks again on every page's saving and stays until nothing is
@@ -538,14 +536,14 @@ internal static class IdlePackerChecks
         var fits = store.WaitForRoomAsync(query.Budget, 39L << 20, waitMs: 60_000).GetAwaiter().GetResult();
         SpinWait.SpinUntil(() => AllPacked(first) && AllPacked(spare), 60_000);
         packer.OnPage = null;
-        check(!fits && opened == 1 && AllPacked(first) && AllPacked(spare) && store.HasSnapshots(later) && !later.HasPacked,
-            "a result given a value list while packing for room works on another is not packed for it: " + opened + " " + failed + ", snapshot " + store.HasSnapshots(later) + ", first packed " + AllPacked(first) + ", spare packed " + AllPacked(spare) + ", later packed " + later.HasPacked);
+        check(!fits && opened == 1 && AllPacked(first) && AllPacked(spare) && store.HasViews(later) && !later.HasPacked,
+            "a shown result sorted while packing for room works on another is not packed for it: " + opened + " " + failed + ", view " + store.HasViews(later) + ", first packed " + AllPacked(first) + ", spare packed " + AllPacked(spare) + ", later packed " + later.HasPacked);
     }
 
     private static void RoomSpares(Action<bool, string> check)
     {
-        // Packing for room passes over results the user works with: a shown one whose grid is sorted, and one a search has
-        // just unpacked and may search again. Only the hidden one is packed, then the query stops for the budget.
+        // Packing for room passes over results the user works with: a shown one whose grid is sorted, and one an operation
+        // has just unpacked (a search through a sorted grid, say) and may need again. Only the hidden one is packed, then the query stops for the budget.
         var (store, visibility, packer) = Running(40L << 20, 40L << 20);
         using var running = packer;
         using var service = new SqlService(store);
@@ -556,7 +554,7 @@ internal static class IdlePackerChecks
         visibility.Set(Guid.NewGuid(), 1, [viewed.ResultId, searched.ResultId], out _);
         Call<ResultsViewResult>("results.view", new { resultId = viewed.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         searched.Pack(() => true);
-        Call<ResultsSearchResult>("results.search", new { resultId = searched.ResultId, text = "no such text", fromRow = 0, maxMatches = 10 });
+        using (searched.Pin()) searched.TryUnpackAll();
         var fixture = !viewed.HasPacked && !searched.HasPacked && searched.Unpacks == 1;
         var query = Open(store, "query");
         var waited = new SqlService.RoomWaited();

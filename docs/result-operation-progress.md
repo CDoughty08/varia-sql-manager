@@ -39,9 +39,9 @@ page or slice by slice through `WorkerGate`. So most phases have an honest fract
 | Sort | filters (pages), keys (pages × sort keys), sort slices, merge rounds (log2 slices), map back | Yes. One figure across phases weighted by their measured share (the sorter's own cost model, `SortCost`) |
 | Filter | value keys and the keep pass per filtered column (pages, rows) | Yes |
 | Profile | pass 1 (pages), merge, pass 2 for histograms (pages, only when needed) | Yes; the share of pass 2 is known once pass 1 merges |
-| Distinct values | unpack, keys, scan, group or sort and runs | Yes |
+| Distinct values | keys, scan, group or sort and runs (a packed result is read as it is, with no unpack) | Yes |
 | Pivot | keys, grouping, aggregation (pages, one thread), write (rows) | Yes |
-| Compare | unpack, finding row keys, match, align, write | No while finding row keys: it tries key candidates until one holds, with no count known ahead. Yes from matching on |
+| Compare | finding row keys, match, align, write (packed results are read as they are; only a first result read far from its pages' order is unpacked, inside the comparison) | No while finding row keys: it tries key candidates until one holds, with no count known ahead. Yes from matching on |
 | Copy, Save | rows written of a known total | Yes, today |
 
 Cost: one `Interlocked` counter per page or slice item (each is a page or at least 32K rows, so no contention) and a

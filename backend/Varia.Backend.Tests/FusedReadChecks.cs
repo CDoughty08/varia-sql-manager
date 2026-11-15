@@ -9,7 +9,7 @@ namespace Varia.Backend.Tests;
 /// what they give over the same rows unpacked. Ties that go back to cells read an extract of their column, not a page
 /// unpacked a comparison. Cancellation and refused rooms or extracts leave the result packed and the budget as it was.
 /// The suite sets each store's packing itself, so it is not in the packed pass.</summary>
-internal static class FusedReadChecks
+internal static partial class FusedReadChecks
 {
     private static readonly ResultCollation CaseInsensitive = new(1033, 0, 1252, false, 1 | 8 | 16);
 
@@ -36,17 +36,25 @@ internal static class FusedReadChecks
         return z ^ (z >> 31);
     }
 
-    private static ResultSetBuffer Filled(ResultStore store, string session, int rows = Rows)
+    /// <param name="query">The query the set is a result of (a new one when null): a diff's two results share one.</param>
+    /// <param name="rowAt">Which fixture row the k-th row stored is (its own by default): another order of the same rows.</param>
+    /// <param name="changed">Whether a fixture row's values change (a diff's second result): its <c>grp</c> in case only (a
+    /// soft difference) and its <c>dec</c>.</param>
+    private static ResultSetBuffer Filled(ResultStore store, string session, int rows = Rows, QueryBudget? query = null, int index = 0, Func<int, int>? rowAt = null,
+        Func<int, bool>? changed = null, IReadOnlyList<ResultColumn>? columns = null)
     {
-        var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
-        for (var row = 0; row < rows; row++)
+        var set = store.Open(query ?? store.BeginQuery(session), index, 1, 1, "rows", columns ?? Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        for (var k = 0; k < rows; k++)
         {
+            var row = rowAt?.Invoke(k) ?? k;
+            var change = changed?.Invoke(row) == true;
             set.CountRow();
             if (set.BeginRow() is not { } builder) continue;
             builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), row));
             if (Mix(row, 1) % 17 == 0) builder.AppendNull();
+            else if (change) builder.AppendText(Groups[Mix(row, 2) % (ulong)Groups.Length].ToUpperInvariant());
             else builder.AppendText(Groups[Mix(row, 2) % (ulong)Groups.Length]);
-            var whole = (long)(Mix(row, 3) % 40) * 1_000_000_007L - 9_000_000_000L;
+            var whole = (long)(Mix(row, 3) % 40) * 1_000_000_007L - 9_000_000_000L + (change ? 1 : 0);
             builder.AppendText(whole.ToString(CultureInfo.InvariantCulture) + ".1234567891");
             builder.AppendText("CUSTOMER-ACCOUNT-REFERENCE-" + (Mix(row, 4) % 3000).ToString("D6", CultureInfo.InvariantCulture));
             builder.EndFormatted(CellFormat.WriteFloat(builder.BeginFormatted(), (Mix(row, 5) % 100_000) / 7.0));
@@ -239,34 +247,38 @@ internal static class FusedReadChecks
 
     /// <summary>A result packed on request, whose incompressible pages stay as sealed beside packed ones: those read in
     /// place, the others fused, and every operation gives what it gives unpacked.</summary>
+    private static readonly IReadOnlyList<ResultColumn> MixedColumns = [new("id", "int", "text", Nullable: false), new("grp", "nvarchar(20)", "text"), new("data", "varbinary(400)", "binary")];
+    private static readonly IReadOnlyList<WireKind> MixedWires = [WireKind.Text, WireKind.Text, WireKind.Binary];
+
+    /// <summary>8,000 rows in runs of 1,500: noise (a page of it saves nothing, so packing on request leaves it as sealed),
+    /// then a few repeated values (it packs). <paramref name="changed"/> rows (a diff's second result) change their group.</summary>
+    private static ResultSetBuffer MixedFilled(ResultStore store, string session, QueryBudget? query = null, int index = 0, Func<int, bool>? changed = null)
+    {
+        var set = store.Open(query ?? store.BeginQuery(session), index, 1, 1, "rows", MixedColumns, MixedWires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var bytes = new byte[300];
+        for (var row = 0; row < 8_000; row++)
+        {
+            set.CountRow();
+            if (set.BeginRow() is not { } builder) continue;
+            builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), row));
+            builder.AppendText(Groups[(Mix(row, 2) + (changed?.Invoke(row) == true ? 1UL : 0)) % (ulong)Groups.Length]);
+            if (row / 1_500 % 2 == 0)
+                for (var k = 0; k < bytes.Length; k += 8) BitConverter.TryWriteBytes(bytes.AsSpan(k), Mix(row * 64L + k / 8, 9));
+            else
+            {
+                Array.Clear(bytes);
+                bytes[0] = (byte)(Mix(row, 10) % 7);
+            }
+            builder.AppendBinary(bytes);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        return set;
+    }
+
     private static void Mixed(Action<bool, string> check)
     {
-        IReadOnlyList<ResultColumn> columns = [new("id", "int", "text", Nullable: false), new("grp", "nvarchar(20)", "text"), new("data", "varbinary(400)", "binary")];
-        IReadOnlyList<WireKind> wires = [WireKind.Text, WireKind.Text, WireKind.Binary];
-        ResultSetBuffer Fill(ResultStore store, string session)
-        {
-            var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
-            var bytes = new byte[300];
-            for (var row = 0; row < 8_000; row++)
-            {
-                set.CountRow();
-                if (set.BeginRow() is not { } builder) continue;
-                builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), row));
-                builder.AppendText(Groups[Mix(row, 2) % (ulong)Groups.Length]);
-                // Runs of 1,500 rows: noise (a page of it saves nothing), then a few repeated values (it packs).
-                if (row / 1_500 % 2 == 0)
-                    for (var k = 0; k < bytes.Length; k += 8) BitConverter.TryWriteBytes(bytes.AsSpan(k), Mix(row * 64L + k / 8, 9));
-                else
-                {
-                    Array.Clear(bytes);
-                    bytes[0] = (byte)(Mix(row, 10) % 7);
-                }
-                builder.AppendBinary(bytes);
-                set.TryCommitRow();
-            }
-            set.Complete();
-            return set;
-        }
+        ResultSetBuffer Fill(ResultStore store, string session) => MixedFilled(store, session);
         var rawStore = Raw();
         var raw = Fill(rawStore, "raw");
         var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };

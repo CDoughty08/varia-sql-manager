@@ -5,9 +5,9 @@ The rule agreed with the owner still holds: results stay in memory and never spi
 
 **Status (2026-11-14):** every step of the [proposed PR order](#proposed-pr-order) is in. The product packs every
 complete result of 1 MiB or more that no window has shown for 5 seconds (stage 1, `ResultPacker`), and a shown one
-once it has been idle for 30 seconds (stage 2); sorts, filters, profiles and pivots read packed pages fused, and the
-Memory panel's Nerd metrics report the packed figures. See [Stage 1 as built](#stage-1-as-built) and
-[Stage 2 as built](#stage-2-as-built) for where they differ from the design below.
+once it has been idle for 30 seconds (stage 2); fused reads cover every whole-result operation but a search through a
+sorted view and a transposed Copy or Save, and the Memory panel's Nerd metrics report the packed figures. See
+[Stage 1 as built](#stage-1-as-built) and [Stage 2 as built](#stage-2-as-built) for where they differ from the design below.
 
 The first version of this page measured only what .NET 10 has (Brotli, Deflate, ZLib) and recommended Brotli. The
 owner pointed at zstd and LZ4 and moved the backend to .NET 11 (STS, #459), whose `System.IO.Compression` has
@@ -38,6 +38,10 @@ Zstandard built in. This version measures both on .NET 11, and the recommendatio
   instead of what unpacking adds (525 MiB at 1 GiB, 2.1 GiB at 4 GiB) and cost from 10 % less to 26 % more time than
   rehydrating. Sort ties that compare cells read a column extract made once. A plain Save unpacks a page at a time on
   one thread, 1.4 to 2.5 times its raw time. See [Fused reads at 1 and 4 GiB](#fused-reads-at-1-and-4-gib).
+- **Distinct values, row identity, diff and search read fused too:** they hold 4 to 89 MiB instead of 0.5 to 4.2 GiB
+  and cost from 25 % less to 27 % more time than rehydrating. A diff whose first result is read far from its pages' order
+  still unpacks that result in place, as does a search through a sorted view. See
+  [Whole-result operations fused](#whole-result-operations-fused-at-1-and-4-gib).
 - **This makes compressing much more actively possible,** as the owner suggested: every complete result can be
   compressed a few seconds after it is hidden, showing it again needs no wait, and a later step can keep even visible
   results compressed. See [Recommended design](#recommended-design).
@@ -248,6 +252,60 @@ groups and figures (`ResultPivoter.Build`); writing its output (`RowAccess.Hold`
 - The heap columns: rehydrating's is the raw copy the operation needs; fused rooms are plain arrays freed with the
   operation, so they show in the fused column while it runs.
 
+### Whole-result operations fused at 1 and 4 GiB
+
+`--page-compression-bench <GiB> orders --fused --whole` measures the operations that used to rehydrate, in the same
+three ways and with the same columns as above: a distinct list of a low-cardinality column (status) and of a
+high-cardinality one (the customer name, 3.7 million values at 1 GiB, with one search of its values), row identities
+(the key found by sampling, then every row's identity), a search for text no row holds, and a diff with its unified
+result (three rows of context) against a second result of the same rows with one row in 500 replaced: in the same
+order, and shuffled. Rehydrating a diff unpacks both results. Median of three runs, seconds, 16 workers, one run each
+on a machine other sessions shared; `orders` packs 2.05 times.
+
+1 GiB (3,686,386 rows, 4,022 pages):
+
+| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Distinct list, low cardinality | 0.16 | 0.11 | 0.12 | 525 MiB | 4 MiB | 1,055 MiB | 47 MiB |
+| Distinct list, high cardinality, and a search of its values | 2.53 | 2.47 | 2.83 | 639 MiB | 118 MiB | 1,249 MiB | 2,180 MiB |
+| Row identities | 0.06 | 0.09 | 0.08 | 525 MiB | 4 MiB | 1,066 MiB | 61 MiB |
+| Search | 0.12 | 0.20 | 0.15 | 525 MiB | 4 MiB | 1,010 MiB | 5 MiB |
+| Diff, second result in the same order | 0.32 | 0.38 | 0.49 | 1,067 MiB | 35 MiB | 1,935 MiB | 436 MiB |
+| Diff, second result shuffled | 0.67 | 0.76 | 0.84 | 1,060 MiB | 562 MiB | 1,941 MiB | 1,439 MiB |
+
+4 GiB (14,727,412 rows, 16,089 pages):
+
+| Operation | raw | rehydrate | fused | budget, rehydrate | budget, fused | heap, rehydrate | heap, fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Distinct list, low cardinality | 0.19 | 0.41 | 0.42 | 2,108 MiB | 4 MiB | 4,220 MiB | 176 MiB |
+| Distinct list, high cardinality, and a search of its values | 13.86 | 17.76 | 15.87 | 2,563 MiB | 459 MiB | 4,927 MiB | 6,472 MiB |
+| Row identities | 0.11 | 0.38 | 0.30 | 2,108 MiB | 4 MiB | 4,264 MiB | 230 MiB |
+| Search | 0.49 | 0.71 | 0.62 | 2,108 MiB | 4 MiB | 4,040 MiB | 6 MiB |
+| Diff, second result in the same order | 1.16 | 1.83 | 2.06 | 4,283 MiB | 89 MiB | 9,628 MiB | 1,568 MiB |
+| Diff, second result shuffled | 2.99 | 3.50 | 3.97 | 4,248 MiB | 2,244 MiB | 9,684 MiB | 5,650 MiB |
+
+- **A distinct list, row identities and a search hold a page a worker (4 MiB) instead of what unpacking adds**, and
+  cost from 25 % less to 15 % more time than rehydrating. The high-cardinality list's extra budget is its key memory, as
+  raw. Its fused heap column is garbage not yet collected (its allocations, measured separately, are those of the raw
+  list plus 4 MiB: the rooms and the values' row order), not memory held.
+- **A distinct snapshot keeps its result's pages, not their bytes.** Its later reads and value searches go in row order
+  through one room, each page unpacked once (a search of 3.7 million values unpacks each of the 4,022 pages once), and
+  a result packed again after the list was built frees its raw bytes; before, the snapshot kept them alive uncharged.
+- **A diff in about its pages' order holds 35 to 89 MiB instead of both results' growth** (1 and 4.2 GiB) and costs
+  13 to 27 % more time than rehydrating both. The comparison reads the first result in the second's order through a few
+  kept pages a run (`LeftSlots`), and the unified result, written on one thread, has each side's pages unpacked ahead on
+  the workers (two batches of rooms, taken only from memory the budget can spare and given back when it has none).
+  Without that the writer unpacked
+  every page itself on one thread, and the in-order diff took 1.62 s at 1 GiB and 6.6 s at 4 GiB.
+- **A diff whose first result is read far from its pages' order unpacks that result in place**, as before, after
+  counting the unpacks its order would cost (`ResultDiffer.Local`: past four a page). It holds what unpacking the first
+  result adds (562 MiB at 1 GiB) instead of both results' growth (1,060 MiB), and the second result stays packed.
+- **Results not packed read as they did:** each operation's raw time matched main's within noise (1 GiB, main then
+  this branch: distinct 0.12 and 0.15 to 0.16, high-cardinality 2.52 and 2.47 to 2.53, identities 0.06 and 0.06 to
+  0.07, search 0.12 and 0.12, diff 0.33 and 0.31 to 0.32, shuffled 0.66 and 0.64 to 0.67).
+- A search through a sorted view still unpacks first: its runs visit pages at random, so two rooms a run would unpack
+  a page a row.
+
 ### Scrolling
 
 | Read (zstd 2) | Time |
@@ -319,9 +377,11 @@ per-result cache of decompressed pages, charged to the budget as working memory:
 - **Whole-result operations:** a sort, a filter, a profile, a pivot and a plain Copy or Save read the packed result
   fused (step 6 below): each worker unpacks the page it is about to read into a room of its own, reserved as working
   memory, so the operation holds about a page a worker and the result stays packed. A sort whose ties compare cells
-  extracts that column once. Distinct values, row identity, diff, search and a transposed Copy or Save still
-  **rehydrate** first (unpack every page on the workers into raw pages, after reserving what that adds, raw less packed; 0.15 s per GiB
-  on 16 workers, 0.36 s on 3): their readers keep pages or revisit cells at random.
+  extracts that column once. Distinct values, row identity, a diff and a search read it fused too (see
+  [Whole-result operations fused](#whole-result-operations-fused-at-1-and-4-gib)). Only a search through a sorted view,
+  a diff whose first result is read far from its pages' order and a transposed Copy or Save still **rehydrate** first
+  (unpack every page on the workers into raw pages, after reserving what that adds, raw less packed; 0.15 s per GiB on
+  16 workers, 0.36 s on 3): their readers revisit pages at random.
 
 ### When a result is compressed
 
@@ -454,7 +514,8 @@ with these differences, decided from the code:
   few narrow rows, may pack a few percent less.
 - **Event-driven.** The thread sleeps until the next hidden result falls due or until a result of 1 MiB or more
   completes, `results.visibility` applies a new set, or a pin, lease or operation that stopped or undid packing ends.
-- **An operation's unpack counts as a use.** A hidden result that a search, value list or comparison has just unpacked
+- **An operation's unpack counts as a use.** A hidden result that a search through a sorted view, a comparison read far
+  from its pages' order or a transposed Copy or Save has just unpacked
   waits the delay again, so a result read run after run is not unpacked and packed each time.
 - **Copy and Save do not rehydrate.** A plain Copy or Save reads page by page through the cache (1.3 to 1.8 times the
   raw Save, above) and so is never refused for want of room; a transposed one unpacks the pages its rows lie on.
@@ -489,8 +550,9 @@ live, not held), once it is idle. Measured first, then each rule settled:
 - **No thrash.** A read stops a pass at its next page (the set's touch count changed), keeping the pages already
   packed: the result is then `partial` in the Memory panel and falls due again 30 s after the read. Plain reads never
   unpack a result whole (they read through the six-page cache), so reading a packed result does not undo packing. Each
-  operation that unpacks it whole (distinct values, row identity, search, diff, a transposed Copy or Save) doubles the
-  wait, up to eight times as long (`MaxBackoff`, 4 minutes), so a result compared or searched again and again stays raw.
+  operation that unpacks it whole (a search through a view far from its pages' order, a diff whose first result is read
+  far from its pages' order, a transposed Copy or Save, a pivot or extract refused its rooms) doubles the wait, up to
+  eight times as long (`MaxBackoff`, 4 minutes), so a result such an operation keeps reading stays raw.
 - **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
   row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (median; p99 about 145 ms against 21 ms),
   enough to show while scrolling. A shown result with an open view is not packed (a hidden one is, as before); one already
@@ -498,13 +560,17 @@ live, not held), once it is idle. Measured first, then each rule settled:
   when the budget has room for it twice over and no query waits (its screens read packed pages otherwise). That
   unpack is not a use, but a hidden result with a view waits longer each time it was so unpacked, so switching tabs
   does not unpack and pack it every time. Closing its last view wakes the policy.
-- **Value lists keep a result raw.** A distinct snapshot (a column's value list, a filter by value) keeps the raw
-  bodies of the pages it read for later reads of its values, so packing that result would credit the budget bytes
-  still held. A result with an open snapshot is not packed by either stage or for room; a pass for room asks each candidate again before it and before each page, since one opened mid-pass would otherwise be packed anyway. Closing it wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
-  `log`, a jump 0.4 to 1 ms: well inside a frame.
-- **Operations.** Fused sorts, filters, profiles and pivots read the packed result and leave it packed (the first sort
-  after idle took 0.26 to 0.37 s packed against 0.36 to 0.49 s raw on `orders`, a little faster since it reads half
-  the bytes). The rehydrating operations unpack first: 0.03 to 0.05 s per 256 MiB on 16 workers, 0.13 s on 3.
+- **Value lists do not keep a result raw.** A distinct snapshot keeps its result's pages, not their bytes (#498), so a
+  result with one open is packed as any other and its later reads go through packed pages. (Built before #498, this
+  stage kept such a result raw, since the snapshot then held the raw bodies it read.) Plain scrolling packed costs
+  about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on `log`, a jump 0.4 to 1 ms: well inside a frame.
+- **Candidates are asked again.** Packing one result for room takes seconds, so a pass asks each candidate again before
+  it starts and before each page: one the user began to work with meanwhile (a view opened, an operation's unpack) is
+  left alone, and the pass stops once no query still waits rather than packing every candidate for one row.
+- **Operations.** Fused sorts, filters, profiles, pivots, value lists, row identity, searches and diffs read the packed
+  result and leave it packed (the first sort after idle took 0.26 to 0.37 s packed against 0.36 to 0.49 s raw on
+  `orders`, a little faster since it reads half the bytes). The operations that still unpack first (above) take 0.03
+  to 0.05 s per 256 MiB on 16 workers, 0.13 s on 3.
 - **Room for a query.** A query's row the budget refuses (its half or the global budget) no longer stops it while
   something could be packed (`ResultStore.CanMakeRoom`): the row stays open, the ingestion waits outside every lock
   (`WaitForRoomAsync`, up to 10 s a wait, 4 waits a row, 30 s in all for the query), and the policy packs, at once and at normal priority
@@ -534,7 +600,7 @@ the others hidden; the real `ResultPacker`; other sessions busy on the machine; 
 | A 1,000-row plain read at a random row, raw → packed | 1 µs → 0.42 ms (p99 0.9 to 4 ms, one run 39 ms) | 0.9 µs → 0.96 ms (p99 3.3 ms) |
 | A sorted view's 256-row screen, raw → packed | 1.2 ms → 31 to 55 ms (3 workers: 1.0 → 22 ms) | 0.41 ms → 5.0 ms |
 | The first sort after idle, raw → packed (fused) | 0.36 to 0.49 s → 0.26 to 0.37 s | 0.13 s → 0.28 s |
-| The first whole unpack (search, value list, comparison) | 0.04 to 0.05 s (3 workers: 0.13 s) | 0.03 s |
+| The first whole unpack (measured on a search, before #498 fused it) | 0.04 to 0.05 s (3 workers: 0.13 s) | 0.03 s |
 
 The six-page cache hits 2 to 6 % of lookups over these reads: the grid reads pages it has not read since they were
 packed, so a cold page's cost is what matters, and it is the codec's (0.2 ms a page).
@@ -555,8 +621,9 @@ packed, so a cold page's cost is what matters, and it is the codec's (0.2 ms a p
    thread of its own that compresses at the lowest priority. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
    README, status-bar memory docs, CHANGELOG, and the Getting Started guides that show the status bar.
 6. **Fused reads.** Done: sort, filter, profile, pivot and plain Copy/Save read packed pages fused, sort ties through a
-   column extract (measured above). Left: distinct values, row identity, diff, search and transposed Copy/Save still
-   rehydrate; Save does not decompress ahead.
+   column extract; then distinct values, row identity, diff and search (measured above). Left: a search through a sorted
+   view, a diff whose first result is read far from its pages' order and transposed Copy/Save rehydrate (the path
+   stays for them and as the fallback of a refused extract or pivot hold); Save does not decompress ahead.
 7. **Stage 2 policy.** Done (see [Stage 2 as built](#stage-2-as-built)). Compress idle shown results too, and let a
    query the budget refuses wait while the policy packs to make room.
 

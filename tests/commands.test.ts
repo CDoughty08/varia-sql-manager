@@ -243,6 +243,18 @@ describe('command execution', () => {
     expect(editorOptions.getSnapshot().wordWrap).toBe(true)
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(true)
   })
+  it('opens SSMS\'s default query shortcuts as unrun New Queries on the active target, with no keys', async () => {
+    const { commands, documents, model, api } = fixture()
+    documents.create('active.sql', '', 'analytics', 'server-a')
+    const expected = [['query.newSpHelp', 'EXEC sp_help;', 'SQLQuery2.sql'], ['query.newSpWho', 'EXEC sp_who;', 'SQLQuery3.sql'], ['query.newSpLock', 'EXEC sp_lock;', 'SQLQuery4.sql']] as const
+    for (const [id, sql, name] of expected) {
+      expect(commandDescriptor(id).keybindings).toBeUndefined()
+      await commands.execute(id, undefined, 'palette')
+      expect(documents.active).toMatchObject({ name, connectionId: 'server-a', database: 'analytics', dirty: false })
+      expect(model(documents.active!.id).getValue()).toBe(sql)
+    }
+    expect(api.execute).not.toHaveBeenCalled()
+  })
   it('changes the active tab shelf from the palette and disables stack commands after its layout goes', async () => {
     const { commands, documents, editorGroups } = fixture(), adjust = vi.fn()
     const pinned = documents.create('pinned.sql', '', 'master'), query = documents.create('query.sql', '', 'master')

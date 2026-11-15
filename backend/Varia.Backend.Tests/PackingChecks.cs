@@ -290,10 +290,16 @@ internal static class PackingChecks
         var set = Filled(store, "service", 60_000);
         set.Pack();
         var packed = store.UsedBytes;
-        // A search keeps the pages it reads, so it unpacks the result first and its pages are charged.
+        // A search in the result's own order reads it fused and leaves it packed (FusedReadChecks); through a view far from
+        // its pages' order (sorted by amount) it unpacks the result first and its pages are charged.
         Call<object>("results.search", new { resultId = set.ResultId, text = "59999", fromRow = 0, maxMatches = 1 });
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed,
+            "a search of a packed result in its own order reads it fused and leaves it packed");
+        var byAmount = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } });
+        packed = store.UsedBytes;
+        Call<object>("results.search", new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "59999", fromRow = 0, maxMatches = 1 });
         check(!set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]) && store.UsedBytes > packed,
-            "a search unpacks a packed result first, so the pages it keeps are charged");
+            "a search through a sorted view of a packed result unpacks it first, so the pages it keeps are charged");
         // A transposed Copy keeps the pages its rows lie on: it unpacks only those, as working memory returned when it ends.
         CopyPartArgs[] scattered = [new([[0, 0], [8000, 8000], [16000, 16000], [24000, 24000], [32000, 32000], [40000, 40000], [48000, 48000], [56000, 56000]], [[0, 1]])];
         var rawTurned = ResultJobs.EstimateCopy(set, scattered, true, false, transposed: true);
@@ -315,7 +321,8 @@ internal static class PackingChecks
         catch (RequestException error) { turnedCode = error.Code; }
         check(turnedCode == "TOO_LARGE" && set.HasPacked, "a transposed Copy that cannot unpack the result answers TOO_LARGE and leaves it packed");
 
-        // A diff reserves both results' unpacking together: with room for one only, it answers TOO_LARGE and both stay packed.
+        // A diff reads both results fused: with room to unpack only one of them (which answered TOO_LARGE when a diff unpacked
+        // both first), it answers and both stay packed.
         var pair = Store(PagePacking.OnRequest, 96L << 20);
         using var pairService = new SqlService(pair);
         var query = pair.BeginQuery("pair");
@@ -329,11 +336,10 @@ internal static class PackingChecks
         var pairFiller = pair.BeginQuery("filler");
         var pairFilled = pair.TryReserve(pairFiller, pair.GlobalBytes - pair.UsedBytes - leftNeed - rightNeed / 2, false, out _);
         var pairUsed = pair.UsedBytes;
-        string? diffCode = null;
-        try { pairService.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
-        catch (RequestException error) { diffCode = error.Code; }
-        check(pairFilled && leftNeed > 0 && rightNeed > 0 && diffCode == "TOO_LARGE" && left.HasPacked && right.HasPacked
-            && left.SealedSnapshot().All(page => page.Stored is PackedPage) && pair.UsedBytes == pairUsed,
-            "a diff with room to unpack only one of its results answers TOO_LARGE and leaves both packed");
+        var diff = (ResultsDiffResult)pairService.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = 0 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
+        pair.Release([diff.Descriptor.ResultId]);
+        check(pairFilled && leftNeed > 0 && rightNeed > 0 && diff.Same == 40_000 && diff.Changed + diff.Added + diff.Removed == 0 && left.HasPacked && right.HasPacked
+            && left.SealedSnapshot().All(page => page.Stored is PackedPage) && right.SealedSnapshot().All(page => page.Stored is PackedPage) && pair.UsedBytes == pairUsed,
+            "a diff with room to unpack only one of its results reads both fused, answers and leaves both packed");
     }
 }

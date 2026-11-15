@@ -54,7 +54,7 @@ internal sealed class ResultPacker : IDisposable
     private readonly CancellationTokenSource ending = new();
     private int passes;
     /// <summary>Each result an operation has unpacked: its unpack count when the policy noticed it, and when. An operation's
-    /// unpack counts as a use, so a hidden result a search or comparison reads again and again is not packed between runs.
+    /// unpack counts as a use, so a hidden result an unpacking operation (a search through a sorted grid, a far-ordered comparison) reads again and again is not packed between runs.
     /// Only results still stored are kept.</summary>
     private readonly Dictionary<uint, (int Unpacks, long At, bool Held)> used = [];
     /// <summary>Who asked for room since the last pass for it: some query for the global budget, and queries for their own half.</summary>
@@ -184,9 +184,6 @@ internal sealed class ResultPacker : IDisposable
             // its last view pokes the policy. Pressure for room packs it all the same.
             if (!hidden && (idle is null || store.HasViews(set))) continue;
             if (!set.NeedsPacking || set.BytesStored is var bytes && bytes < floor) continue;
-            // A distinct snapshot (a column's value list or a filter by value) keeps the raw pages it read: packing them would
-            // credit the budget bytes it still holds. Closing its last snapshot pokes the policy.
-            if (store.HasSnapshots(set)) continue;
             var (touches, held, unpacks, touchedAt) = set.Activity();
             var usedAt = UsedAt(set, unpacks, held, now);
             long at;
@@ -360,7 +357,7 @@ internal sealed class ResultPacker : IDisposable
             {
                 if (stopping) break;
                 // Packing one candidate takes seconds: one later in the list may have become one the user works with since
-                // (a value list or a view opened, an operation's unpack), so it is asked again now, and again before each
+                // (a view opened, an operation's unpack), so it is asked again now, and again before each
                 // page. An operation that unpacks it during its pass stops it too (Pack's unpacks).
                 if (!ForRoom(set, all, queries)) continue;
                 var unpacks = set.Unpacks;
@@ -368,7 +365,7 @@ internal sealed class ResultPacker : IDisposable
                 long got;
                 // One candidate's failure (out of memory compressing a page) skips it rather than every other candidate and
                 // the scheduled passes after this one.
-                try { got = set.Pack(() => Page(set) && !store.HasSnapshots(set) && (hidden || !store.HasViews(set)), unpacks: unpacks, workers: RoomGate); }
+                try { got = set.Pack(() => Page(set) && (hidden || !store.HasViews(set)), unpacks: unpacks, workers: RoomGate); }
                 catch (OutOfMemoryException) { continue; }
                 saved += got;
                 // A candidate that saved something wakes the waits, which ask again while they still have no room: carry on
@@ -392,15 +389,14 @@ internal sealed class ResultPacker : IDisposable
     /// <para>Never a result the user is working with: a shown one with an open view (a sorted or filtered grid, whose
     /// screens would then read a page or so a row with no room left for the cache), nor one an operation unpacked whole
     /// and that is still in use (touched within the wait the policy would give it), whose next operation would need its
-    /// unpack's room again and could be refused; nor one with an open distinct snapshot, which keeps its raw pages (packing
-    /// would credit bytes still held). Packing such a result would trade the result the user is looking at for
+    /// unpack's room again and could be refused. Packing such a result would trade the result the user is looking at for
     /// the rows of a new query; that query is truncated instead, as without the policy.</para></summary>
     private bool ForRoom(ResultSetBuffer set, bool all, QueryBudget[] queries)
     {
         if (set.Budget.Live is not null || !all && !queries.Contains(set.Budget) || !set.NeedsPacking || set.BytesStored < floor) return false;
         var (_, held, unpacks, touchedAt) = set.Activity();
         if (held || !visibility.State(set.ResultId, out var hidden, out _)) return false;
-        if (!hidden && store.HasViews(set) || store.HasSnapshots(set)) return false;
+        if (!hidden && store.HasViews(set)) return false;
         var wait = hidden || VisibleDelay is not { } idle ? Delay : idle << Math.Min(unpacks, MaxBackoff);
         return unpacks == 0 || store.Now - touchedAt >= wait;
     }
