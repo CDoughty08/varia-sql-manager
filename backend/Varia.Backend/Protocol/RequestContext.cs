@@ -90,8 +90,15 @@ internal sealed class RequestContext : IDisposable
         if (Interlocked.Exchange(ref announced, 1) == 0) cancelled?.Invoke(this);
     }
 
-    /// <summary>True exactly once; the caller that wins writes the RESPONSE.</summary>
-    public bool TrySettle() => Interlocked.Exchange(ref settled, 1) == 0;
+    // Settling and queuing an EVENT exclude each other: an event checked before a CANCEL settled the request on another
+    // thread (a worker's op.progress) would otherwise be queued after the CANCELLED answer, which main counts as a violation.
+    private readonly Lock eventGate = new();
+
+    /// <summary>True exactly once; the caller that wins writes the RESPONSE, after every EVENT already queued.</summary>
+    public bool TrySettle()
+    {
+        lock (eventGate) return Interlocked.Exchange(ref settled, 1) == 0;
+    }
 
     public void Cancel(CancelReason why)
     {
@@ -178,7 +185,9 @@ internal sealed class RequestContext : IDisposable
     /// precede it; a droppable event may also be dropped while main is not reading.</summary>
     public void SendEvent(object value, bool droppable)
     {
-        if (!IsSettled) sendEvent?.Invoke(this, value, droppable);
+        // Queuing never blocks (Outbound.Control drops a droppable frame when the lane is full), so the gate is held briefly.
+        lock (eventGate)
+            if (!IsSettled) sendEvent?.Invoke(this, value, droppable);
     }
 
     private void WakeCreditWaiter()

@@ -123,7 +123,13 @@ internal static class ColumnProfiler
         }
         var parts = new Accumulator[runs][];
         var sized = new LengthStats[runs];
-        Each(run =>
+        // Progress counts pages, not runs (a run is a thread's share): the step is opened here, so the runs' own isn't counted.
+        var progress = OperationProgress.Current;
+        progress?.Phase("profile", 0.7);
+        var pass = progress?.Count(pages.Length) ?? default;
+        try { Each(FirstPass); }
+        finally { pass.Dispose(); }
+        void FirstPass(int run)
         {
             var own = parts[run] = [.. columns.Select(column => new Accumulator(set, column, charges))];
             var size = sized[run] = new LengthStats();
@@ -147,8 +153,9 @@ internal static class ColumnProfiler
                     else size.Add(0, false);
                     foreach (var accumulator in own) accumulator.Add(parsed, page.Lengths, r);
                 }
+                pass.Done();
             }
-        });
+        }
         var accumulators = parts[0];
         var sizes = sized[0];
         for (var run = 1; run < runs; run++)
@@ -160,6 +167,8 @@ internal static class ColumnProfiler
         var binned = accumulators.Where(accumulator => accumulator.NeedsBins).ToArray();
         if (binned.Length > 0)
         {
+            progress?.Phase("histogram", 0.98);
+            using var second = progress?.Count(pages.Length) ?? default;
             var counts = new long[runs][][];
             Each(run =>
             {
@@ -178,6 +187,7 @@ internal static class ColumnProfiler
                         for (var b = 0; b < binned.Length; b++)
                             if (binned[b].BinOf(parsed, page.Lengths, r) is >= 0 and var bin) own[b][bin]++;
                     }
+                    second.Done();
                 }
             });
             foreach (var own in counts)

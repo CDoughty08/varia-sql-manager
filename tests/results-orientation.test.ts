@@ -218,7 +218,7 @@ describe('Transpose Selected Rows', () => {
     expect(orientation()).toEqual({ transposed: false })
   })
 
-  it('turns the grid only for its own view: not when it fails over an older filter, nor when another filter replaced it', async () => {
+  it('turns the grid only for its own view: not when it fails over an older filter; a Keep Selected Rows meanwhile waits', async () => {
     const { commands, results, resultSelection, tab, key, on, cells, orientation, handle } = await ran()
     // A Keep Selected Rows filter is already applied, and the grid is a table.
     const first = nextView(handle())
@@ -233,14 +233,16 @@ describe('Transpose Selected Rows', () => {
     await failing.fail('The view could not be built.')
     expect(results.sortOf(tab.id, key())?.applied.map(item => item.filter.op)).toEqual(['keepRows'])
     expect(orientation()).toEqual({ transposed: false })
-    // Transpose Selected Rows, then a plain Keep Selected Rows before its view answers: the second is not the command's.
-    const replaced = nextView(handle()), plain = nextView(handle())
+    // Transpose Selected Rows, then a plain Keep Selected Rows before its view answers: the second is refused, not queued
+    // (the filter being built holds the grid's filtering off), so the command's own view answers and turns the grid.
+    const own = nextView(handle())
     await commands.execute('output.transposeSelectedRows', on(), 'menu')
+    const calls = vi.mocked(handle().sort).mock.calls.length
     await commands.execute('output.keepSelectedRows', on(), 'menu')
-    await replaced.answer()
-    await plain.answer()
+    expect(vi.mocked(handle().sort).mock.calls.length).toBe(calls)
+    await own.answer()
     expect(results.sortOf(tab.id, key())).toMatchObject({ sorting: false })
-    expect(orientation()).toEqual({ transposed: false })
+    expect(orientation()).toEqual({ transposed: true })
   })
 
   it('leaves a grid already transposed as the user turns it while the kept rows are built', async () => {

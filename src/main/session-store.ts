@@ -1,10 +1,12 @@
-import { chmod, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
+import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
 
@@ -43,7 +45,7 @@ const legacyRecordSchema = z.object({
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents)
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
 const recordSchema = z.object({
-  ...recordFields, version: z.literal(2), workspace: connectionWorkspaceSchema.optional(),
+  ...recordFields, version: z.literal(2), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
   documents: z.array(z.object({
     ...fields, ...fileFields
   }).strict().refine(fits).refine(associated)
@@ -55,7 +57,7 @@ const storedSessionSchema = z.union([recordSchema, legacyRecordSchema.transform(
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
-export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & Pick<SessionRecordDocument, 'path' | 'fileSha256'>)[] }
+export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & Pick<SessionRecordDocument, 'path' | 'fileSha256'>)[]; readonly seal?: WorkspaceSeal }
 
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
@@ -94,7 +96,7 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
       ...document.targetId ? { targetId: document.targetId, attachWanted: document.attachWanted } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     })),
-    ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace } : {}
+    ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace, ...session.seal ? { seal: session.seal } : {} } : {}
   }
   recordSchema.parse(record)
   const bytes = Buffer.from(JSON.stringify(record) + '\n')
@@ -124,6 +126,8 @@ export class SessionStore {
   private prepared = false
   /** The page generation whose close kept the session, if any. */
   private kept: number | undefined
+  /** A take handed out files no page has acknowledged reopening (`restored`). */
+  private unrestored = false
   constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {}
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -149,12 +153,30 @@ export class SessionStore {
       const { bytes } = encodeSession(session, this.options)
       await this.prepare()
       // A failed restore must not allow a later close to replace the only copy we could not read or quarantine.
-      await this.read(this.current)
-      await this.read(this.previous)
+      await this.setAsideUnrestored(await this.read(this.current), await this.read(this.previous))
       await writeBytesAtomic(this.current, bytes, { mode: 0o600 })
       await rm(this.previous, { force: true })
       this.kept = generation
     })
+  }
+
+  /** A page reopened what `take` handed it: its files are no longer the only copy of tabs nobody saw. */
+  restored(): void { this.unrestored = false }
+
+  /**
+   * A take that no page acknowledged (the read failed, or the restore stopped part-way) leaves the files as the only copy
+   * of tabs the user never saw. The first close after it sets them aside as quarantined copies, dated now so the purge
+   * keeps them for the full Keep AutoRecover information for, instead of overwriting or deleting them.
+   */
+  private async setAsideUnrestored(current: SessionRecord | undefined, previous: SessionRecord | undefined): Promise<void> {
+    if (!this.unrestored) return
+    for (const [record, path] of [[current, this.current], [previous, this.previous]] as const) {
+      if (!record) continue
+      const aside = `${path}.invalid-${randomUUID()}.json`, now = this.options.now?.() ?? new Date()
+      await rename(path, aside)
+      await utimes(aside, now, now).catch(() => {})
+    }
+    this.unrestored = false
   }
 
   /**
@@ -163,6 +185,7 @@ export class SessionStore {
    */
   take(previous: boolean): Promise<SessionRecord | undefined> {
     return this.serial(async () => {
+      this.unrestored = true
       const current = await this.read(this.current)
       if (current) {
         await this.read(this.previous)
@@ -173,11 +196,24 @@ export class SessionStore {
     })
   }
 
+  /**
+   * `generation` cancelled the close it kept a session for, and stays open. Its file moves to `previous.json`: a reload of
+   * this process (which takes only `session.json`) must not reopen tabs the user went on to close, while the next start
+   * still has it if the process dies before another close.
+   */
+  release(generation: number): Promise<void> {
+    return this.serial(async () => {
+      if (this.kept !== generation) return
+      // If the move fails the file must still not be reloaded: removing it is the fallback, and only then is the mark gone.
+      try { if (await this.read(this.current)) await replaceFile(this.current, this.previous) } catch { await rm(this.current, { force: true }) }
+      this.kept = undefined
+    })
+  }
+
   /** Deletes what was kept when the close leaves no session to reopen. */
   clear(): Promise<void> {
     return this.serial(async () => {
-      await this.read(this.current)
-      await this.read(this.previous)
+      await this.setAsideUnrestored(await this.read(this.current), await this.read(this.previous))
       await rm(this.current, { force: true })
       await rm(this.previous, { force: true })
       this.kept = undefined

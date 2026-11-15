@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { lowMemoryStop, lowMemoryText, stopIfLowMemory } from './fixtures/memory-load.mjs'
-import { sizeResultStack } from './fixtures/results-pane.mjs'
+import { pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, outputStatus, part, pivotPanel, resultsToolbar } from './fixtures/ui.mjs'
 
@@ -190,6 +190,8 @@ try {
   })
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await backendReady(page).waitFor({ timeout: 60000 })
+  // The steps read the stack (a Table and its Pivot at once); Tabs is the default.
+  await pinStackedResults(page)
   client = await page.context().newCDPSession(page)
   await client.send('Performance.enable')
   step = 'connect'

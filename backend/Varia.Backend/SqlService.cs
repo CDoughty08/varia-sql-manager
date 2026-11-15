@@ -456,16 +456,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
-        "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
+        "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), context),
         "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
         "results.identify" => await IdentifyAsync(Read<ResultsIdentifyArgs>(parameters, json), Token(context)),
         "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
         "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
         "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
-        "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
+        "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), context),
         "results.pivot" => await PivotAsync(Read<ResultsPivotArgs>(parameters, json), context),
-        "results.distinct" => await DistinctAsync(Read<ResultsDistinctArgs>(parameters, json), Token(context)),
+        "results.distinct" => await DistinctAsync(Read<ResultsDistinctArgs>(parameters, json), context),
         "results.distinctRead" => await DistinctReadAsync(Read<ResultsDistinctReadArgs>(parameters, json), Token(context)),
         "results.distinctTick" => await DistinctTickAsync(Read<ResultsDistinctTickArgs>(parameters, json), Token(context)),
         "results.distinctClose" => CloseSnapshots(Read<ResultsDistinctCloseArgs>(parameters, json)),
@@ -1742,8 +1742,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.view: sorts a result's sealed rows (ViewSorter) off the frame loop, charging the sort's working
     /// memory and then the view's order to the result's query budget; TOO_LARGE when the budget has no room.</summary>
-    private async Task<ResultsViewResult> ViewAsync(ResultsViewArgs args, CancellationToken token)
+    private async Task<ResultsViewResult> ViewAsync(ResultsViewArgs args, RequestContext? context)
     {
+        var token = Token(context);
         if (args.ResultId == 0 || args.Sort is not { Length: <= ViewSorter.MaxKeys } || args.Replaces == 0
             || args.Filters is { Length: > ViewSorter.MaxFilters } || args.Sort.Length + (args.Filters?.Length ?? 0) == 0)
             throw new RequestException("INVALID_PARAMS", "A view needs up to 16 sort keys and up to 16 filters, and at least one of either.");
@@ -1780,7 +1781,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         (int[] Order, bool Approximate, ViewFilter[] Filters) built;
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-        try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, set); }
+        try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, ProgressOf(context), set); }
         // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
         // answers as it would anywhere else.
         // Only those: a limit with its own reason (too many values, rows or comparisons) is answered as it is.
@@ -1905,8 +1906,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.profile: a column profile (ColumnProfiler) of a result's sealed rows or a view's, off the frame loop,
     /// charging its working memory to the result's query budget while it runs; TOO_LARGE when the budget has no room.</summary>
-    private async Task<ResultsProfileResult> ProfileAsync(ResultsProfileArgs args, CancellationToken token)
+    private async Task<ResultsProfileResult> ProfileAsync(ResultsProfileArgs args, RequestContext? context)
     {
+        var token = Token(context);
+        var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.Columns is not { Length: <= ColumnProfiler.MaxColumns } || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Up to 32 columns are profiled at a time.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
@@ -1944,7 +1947,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 var threads = workers;
-                var result = await UntilReleased(work => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, work, charges, threads), token, set);
+                var result = await UntilReleased(work => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, work, charges, threads), token, progress, set);
                 if (set.IsReleased) throw Unavailable(args.ResultId);
                 if (view is not null && !store.HasView(view)) throw ViewClosed();
                 return result;
@@ -1966,8 +1969,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>results.distinct: keeps a column's distinct values with their counts (ViewSorter.DistinctValues) over a
     /// result's sealed rows or a view's as a snapshot, built off the frame loop; its working memory is charged to the
     /// result's query budget while it runs and the snapshot's own while it is kept (TOO_LARGE when the budget has no room).</summary>
-    private async Task<ResultsDistinctResult> DistinctAsync(ResultsDistinctArgs args, CancellationToken token)
+    private async Task<ResultsDistinctResult> DistinctAsync(ResultsDistinctArgs args, RequestContext? context)
     {
+        var token = Token(context);
+        var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
@@ -1988,7 +1993,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            snapshot = await LowMemoryAware(UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, set), ViewSorter.DistinctTooLarge);
+            snapshot = await LowMemoryAware(UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, progress, set), ViewSorter.DistinctTooLarge);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
             // Cancelled once built: nobody waits for it, so it is not kept.
@@ -2168,7 +2173,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// caller holding their pins: the bytes for all of them are reserved together first, so either every one is unpacked
     /// or none is (TOO_LARGE with the operation's own sentence). A release stops it as it stops the operation
     /// (<see cref="UntilReleased{T}"/>). Plain and view reads read packed pages as they are.</summary>
-    private async Task Unpack(string tooLarge, CancellationToken token, params ResultSetBuffer[] sets)
+    private Task Unpack(string tooLarge, CancellationToken token, params ResultSetBuffer[] sets) => Unpack(tooLarge, token, null, sets);
+
+    private async Task Unpack(string tooLarge, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets)
     {
         // Pages that packing made larger (the checks' mode packs every page) need nothing, but are unpacked all the same.
         if (!sets.Any(set => set.HasPacked)) return;
@@ -2190,7 +2197,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     began = false;
                 }
                 return true;
-            }, token, sets);
+            }, token, progress, sets);
         }
         catch
         {
@@ -2239,6 +2246,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         using var rightPin = right.Pin();
         // Packed results are read fused (ResultDiffer.Compare, UnifiedDiff.Write); only a first result read far from its
         // pages' order is unpacked, and that inside the comparison.
+        var progress = ProgressOf(context);
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2252,7 +2260,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             DiffModel model;
-            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, left, right); }
+            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, progress, left, right); }
             catch (RequestException error) when (error.Code == "TOO_LARGE")
             {
                 // A room or the first result's unpacking refused may be the machine's memory as much as the budget's.
@@ -2271,7 +2279,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             try
             {
-                try { await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, left, right); }
+                progress?.Phase("write", 0.98);
+                try { await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, progress, left, right); }
                 catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right)); }
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
@@ -2303,6 +2312,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private async Task<ResultsPivotResult> PivotAsync(ResultsPivotArgs args, RequestContext? context)
     {
         var token = Token(context);
+        var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
             throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
@@ -2327,7 +2337,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             PivotModel model;
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, figures.TryReserve, keyMemory), token, set); }
+            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, figures.TryReserve, keyMemory), token, progress, set); }
             catch (PivotTooLargeException)
             {
                 // Thrown only for the figures, the first step: a refused Distinct Count bounds step (also LowMemory) comes
@@ -2352,7 +2362,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 // The rows it copies from a packed result are read together (RowAccess.Hold): refused, why, as above.
-                try { await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, set); }
+                progress?.Phase("write", 0.98);
+                try { await UntilReleased(work => PivotOutput.Write(pivot, set, pages, spec, model, work), token, progress, set); }
                 catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == ResultPivoter.TooLarge) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
                 // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
                 if (pivot.Describe().RowsStored < model.RowGroups) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
@@ -2412,13 +2423,30 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>
     public const int MaxViewIds = 64;
 
+    /// <summary>The droppable op.progress EVENTs of a results request (view, profile, distinct, pivot, diff), or none for a
+    /// call without a request (the checks).</summary>
+    private static OperationProgress? ProgressOf(RequestContext? context) => context is null ? null
+        : new OperationProgress((phase, percent) => context.SendEvent(new OperationProgressEvent("op.progress", phase, percent), droppable: true));
+
     /// <summary>Runs an operation over whole results on the thread pool, stopped by the request's cancellation or by the
     /// release of any of <paramref name="sets"/> (<see cref="ResultSetBuffer.Released"/>), so it never holds a released
     /// result's pinned pages, and their budget, until it finishes. A release answers RESULT_RELEASED.</summary>
-    internal async Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, params ResultSetBuffer[] sets)
+    internal Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, params ResultSetBuffer[] sets) =>
+        UntilReleased(operation, token, null, sets);
+
+    /// <summary>As above, reporting how far it got through <paramref name="progress"/> (<see cref="OperationProgress.Current"/>
+    /// on the operation's flow, so the leases it takes count their items there).</summary>
+    internal async Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets)
     {
         using var work = CancellationTokenSource.CreateLinkedTokenSource([token, .. sets.Select(set => set.Released)]);
-        try { return await Task.Run(() => operation(work.Token), work.Token); }
+        try
+        {
+            return await Task.Run(() =>
+            {
+                OperationProgress.Current = progress;
+                return operation(work.Token);
+            }, work.Token);
+        }
         catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.FirstOrDefault(set => set.IsReleased) is { } released)
         {
             throw Unavailable(released.ResultId);
@@ -2427,6 +2455,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal Task UntilReleased(Action<CancellationToken> operation, CancellationToken token, params ResultSetBuffer[] sets) =>
         UntilReleased(work => { operation(work); return true; }, token, sets);
+
+    internal Task UntilReleased(Action<CancellationToken> operation, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets) =>
+        UntilReleased(work => { operation(work); return true; }, token, progress, sets);
 
     private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)
         ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")

@@ -2,6 +2,8 @@
 
 > Re-measured on 2026-11-12 after the sort keys changed (#432, #435, #439): see [Re-measured](#re-measured-on-2026-11-12).
 > The figures for text, date and binary groups, the proposal and the threshold below are of 2026-11-11.
+> The threshold's cases were measured again for PR 17 on 2026-11-14, with compressed pages and fused reads: see
+> [Measured again for PR 17](#measured-again-for-pr-17). They still support 500,000 rows with a last build under 250 ms.
 
 The investigation [pivot-performance-follow-up.md](pivot-performance-follow-up.md) asked for, measured on 2026-11-11. It
 serves the [Grouped views plan](grouped-results-implementation-plan.md): PR 17's automatic rebuild needs a source-row
@@ -134,7 +136,8 @@ of the warm builds and, in brackets, the slowest.
 ## Fixtures and how to run them
 
 - **Backend:** `dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --pivot-bench
-  [--budget-gib N] [--only name,name] [--max-rows N] [--view-rows N]` (`PivotBench.cs`). It fills a `ResultStore` as
+  [--budget-gib N] [--only name,name] [--max-rows N] [--view-rows N] [--packed]` (`PivotBench.cs`). `--packed` packs each
+  threshold case's source as a hidden result is packed and times only `results.pivot`, which reads it fused. It fills a `ResultStore` as
   ingestion does and runs each pivot as `SqlService.PivotAsync` does, stage by stage, then the same pivot through
   `results.pivot`. Each case builds once (the first build), then seven more or for 20 s. It prints one JSON line a case.
   `ResultPivoter.Build` takes an optional `PivotStages` that records the ticks spent in sort keys, grouping,
@@ -515,6 +518,55 @@ build (median and slowest of the builds at once), as `--pivot-bench --only paral
   stored); it is refused in under 0.1 s, as before for the second one.
 - **The cap of four stands** (PR 10): nothing starves, which is what the cap is for. A lower cap would cost little.
 
+## Measured again for PR 17
+
+The threshold's cases once more on `main` at `cd91e31c` (2026-11-14), after compressed pages for hidden results (#468,
+#482), fused page reads (#480) and the threaded sorts, on the same 24-core machine at 2 GiB global and 1 GiB a query
+(.NET 11, workstation GC). `--pivot-bench --only threshold`, then the same with `--packed`, a new option that packs each
+source as the backend packs a hidden result (Zstandard, every sealed page) and times the build through `results.pivot`,
+which reads it fused and leaves it packed. A Table is packed when only its Pivot has been shown for five seconds (in Tabs,
+the Pivot's tab selected), which is when a hidden Pivot is shown and rebuilds, so both cases matter.
+
+Load: other sessions were working on the machine throughout. Each run held the machine lock alone (no other check, smoke
+suite or benchmark ran under the lock at the same time), but unlocked work went on: the processor read 13 to 27 % busy
+before the runs and 48 to 97 % between them. One run's raw half ended without output after waiting for the lock behind another
+session's `npm run check` (the cause was not found); it was run again, so the raw column is one run and the
+packed column two.
+
+Median of the warm builds and, in brackets, the slowest (raw: `ResultPivoter.Build` as the bench's stages time it;
+packed: the whole host method, as `results.pivot` runs it).
+
+| Recipe | 50,000 rows | 100,000 | 250,000 | 500,000 |
+| --- | ---: | ---: | ---: | ---: |
+| Count by an `int` of 40 values, raw | 31 ms (32) | 10 ms (14) | 20 ms (35) | 33 ms (55) |
+| packed | 31 ms (37) | 12 to 13 ms (14) | 21 ms (25) | 32 to 33 ms (45) |
+| By a text of 40 values, raw | 34 ms (43) | 14 ms (15) | 17 ms (20) | 26 ms (31) |
+| packed | 34 to 35 ms (44) | 12 to 13 ms (15) | 18 to 19 ms (20) | 27 ms (30) |
+| By a text with a value every 20 rows, raw | 23 ms (31) | 15 ms (27) | 24 ms (38) | 57 ms (72) |
+| packed | 34 to 37 ms (44) | 16 to 17 ms (30) | 29 ms (45) | 51 to 53 ms (65) |
+| By a `datetime2` of 40 values, raw | 28 ms (29) | 17 ms (19) | 26 ms (29) | 47 ms (55) |
+| packed | 11 to 27 ms (31) | 17 to 18 ms (19) | 29 to 30 ms (34) | 45 to 47 ms (50) |
+| By a `decimal(38,10)` of 40 values, raw | 92 ms (126) | 50 ms (55) | 101 ms (118) | 177 ms (198) |
+| packed | 135 to 141 ms (181) | 46 to 50 ms (59) | 86 to 102 ms (117) | 194 to 197 ms (240) |
+| By a text of 190 characters with a value every 20 rows, raw | 21 ms (29) | 23 ms (34) | 39 ms (60) | 87 ms (94) |
+| packed | 19 to 22 ms (32) | 21 to 23 ms (46) | 43 to 45 ms (62) | 79 to 83 ms (109) |
+| Two row groups, Count, Sum and Distinct Count of a text that never repeats, raw | 35 ms (47) | 40 ms (52) | 49 ms (53) | 95 ms (121) |
+| packed | 37 to 38 ms (47) | 44 to 45 ms (71) | 57 to 58 ms (73) | 97 ms (114) |
+
+- **The owner's figures hold.** Every recipe at 500,000 rows is under 250 ms on this machine, raw or packed; the slowest
+  is still the 30-digit `decimal` (177 to 197 ms, at worst 240 ms in one packed run). The "two row groups and Distinct
+  Count" recipe that set the 2026-11-12 row figure (189 ms) now takes about 95 ms.
+- **Packed pages cost little here.** At these sizes a packed source builds within the noise of a raw one: the fused read
+  unpacks each page once into a worker's room. The long `decimal` is the exception at 500,000 rows (about 10 % slower and
+  less steady), because its ties re-read cells, as this page said they would.
+- **The 50,000-row cases are slower than the 100,000-row ones.** They run first in the process, while the runtime is
+  still compiling the paths (the int case's first build is 60 to 96 ms); the warm figures at 100,000 rows are the ones
+  to read for small sources.
+- **The 250 ms condition still does the work the row count cannot.** The long `decimal` at 500,000 rows leaves only about
+  50 ms of margin on a 24-core machine; on a machine with a third of the threads it will pass 250 ms and stay marked with
+  Update, which is what the condition is for. Nothing here argues for a lower row figure, and nothing measured past
+  500,000 rows was run as a threshold case.
+
 ## Not measured
 
 - The owner's own session. The report is a screenshot; its data, build, recipe and machine state are unknown. The
@@ -526,7 +578,8 @@ build (median and slowest of the builds at once), as `--pivot-bench --only paral
 - The grouped UI against today's: only today's exists on `main`.
 - Renderer memory after closing results, and backend memory beyond the store's own accounting.
 - A machine with few cores, Linux and macOS, a packaged build.
-- Budgets between 2 and 16 GiB, sources past 100 million rows, and compressed pages.
+- Budgets between 2 and 16 GiB and sources past 100 million rows. (Compressed pages were measured for PR 17, at the
+  threshold's sizes only.)
 - Source closure and backend loss in the middle of a build.
 
 ## Noticed on the way

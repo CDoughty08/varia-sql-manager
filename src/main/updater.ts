@@ -123,6 +123,8 @@ export class Updater {
   private recovered: Promise<void> | undefined
   private armed = false
   private arming: Promise<boolean> | undefined
+  /** The last sweep: a download waits for it, or a sweep that listed the folder first would delete the new file. */
+  private sweeping: Promise<void> = Promise.resolve()
   private disposed = false
   private readonly now: () => number
   private readonly timers: NonNullable<UpdaterOptions['timers']>
@@ -440,6 +442,8 @@ export class Updater {
     let file: Awaited<ReturnType<typeof open>> | undefined
     try {
       if (this.options.privateDir) await mkdir(this.options.downloadDir, { recursive: true })
+      // A sweep the previous check started removes everything but its release, so it must be done before this file exists.
+      await this.sweeping
       // Before the request: a folder Varia cannot write to fails without spending the download.
       file = await open(partial, 'w', 0o600)
       const { response, controller, refresh, clear } = await this.request(this.options.assetUrl(version, asset.name), updateLimits.stallTimeoutMs, 'application/octet-stream')
@@ -481,7 +485,13 @@ export class Updater {
   }
 
   /** Removes earlier releases' files: the whole private folder but `keep`, or only Varia's own hidden files elsewhere. */
-  private async sweep(keep: UpdateAsset | undefined): Promise<void> {
+  private sweep(keep: UpdateAsset | undefined): Promise<void> {
+    const run = this.sweeping.then(() => this.sweepNow(keep))
+    this.sweeping = run
+    return run
+  }
+
+  private async sweepNow(keep: UpdateAsset | undefined): Promise<void> {
     const keepNames = keep ? new Set([this.stagedPath(keep).slice(this.options.downloadDir.length + 1), `.${keep.name}.partial`]) : new Set<string>()
     let names: string[]
     try { names = await readdir(this.options.downloadDir) } catch { return }

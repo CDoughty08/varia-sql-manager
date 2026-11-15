@@ -330,6 +330,9 @@ internal static class ResultDiffer
         var approximate = false;
         var rightCandidates = RowIdentity.Candidates(right.Columns, right.Wires).ToHashSet();
         var tried = 0;
+        // How many key candidates it takes is not known ahead: no percentage until rows are matched.
+        var progress = OperationProgress.Current;
+        progress?.Phase("identify", 0.45, known: false);
         foreach (var candidate in RowIdentity.Candidates(left.Columns, left.Wires))
         {
             var pair = Array.FindIndex(pairs, item => item.Left == candidate);
@@ -352,7 +355,9 @@ internal static class ResultDiffer
 
         var matching = System.Diagnostics.Stopwatch.GetTimestamp();
         if (stages is not null) stages.Identity += matching - started;
+        progress?.Phase("match", 0.55);
         var (matchedLeft, rightMatch) = Match(leftIds, rightIds, token);
+        progress?.Phase("align", 0.85);
         var aligning = System.Diagnostics.Stopwatch.GetTimestamp();
         if (stages is not null) stages.Matching += aligning - matching;
         if (leftRooms is not null && !Local(leftPages, rightMatch, token))
@@ -735,6 +740,7 @@ internal static class UnifiedDiff
         }
         var tone = new System.Text.StringBuilder(64);
         var counter = 0;
+        using var written = OperationProgress.Current?.Count((model.Entries.Length >> 10) + 1) ?? default;
         try
         {
             // Inside the try: a room refused while writing (TOO_LARGE) still completes the result with what it holds.
@@ -742,7 +748,7 @@ internal static class UnifiedDiff
             rightReader.Ahead(Read(false), token);
             for (var k = 0; k < model.Entries.Length; k++)
             {
-                if (++counter == 1 << 10) { counter = 0; token.ThrowIfCancellationRequested(); }
+                if (++counter == 1 << 10) { counter = 0; token.ThrowIfCancellationRequested(); written.Done(); }
                 if (!shown[k]) continue;
                 // Before each row, not each thousand: one row can be up to a page.
                 leftReader.YieldAhead();

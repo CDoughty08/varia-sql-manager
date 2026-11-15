@@ -98,6 +98,8 @@ being true.
   receipts and acknowledges them through the bounded main-only IPC. `docs/connection-ownership.md` describes main's
   authentication, receipt, checkpoint and pruning contracts. Replacement pages reconcile obsolete pins against their
   trusted saved workspace while protecting current live/pending/delivered owners, including late credential settlement.
+  A disk restore pins Windows/Entra accounts only when `connection-workspace-seal.ts`'s OS-key HMAC proves main wrote
+  them; an unproven silent target never reconnects in the background.
 - Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
   targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
   validate that pinned principal before caller SQL. Entra uses target-private token-callback pool keys while preserving
@@ -226,6 +228,15 @@ being true.
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
+- Operations over whole results (a sort or filter building a grid's view, a profile, a pivot, a comparison) have one busy
+  state, `ResultsService.operations` (`results/operations.ts`), which every result control reads: a sort or filter holds that
+  grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: a click is refused, never queued,
+  and pulses the operation), and Cancel (the toolbar's strip, Escape in the grid) keeps the previous view. Its progress
+  comes only from the backend's droppable `op.progress` EVENTs (`OperationProgress.cs`, relayed by main and the results
+  worker to the request's listener); the renderer's only timers are one-shot (shown after 300 ms, kept 500 ms once shown,
+  a notice for 8 s), plus the display clock of the elapsed time. The toolbar's `OperationStrip` draws it with its live
+  region, `GridShell` the bar along the grid, and `GridView` the ring on the column's sort button (text by `nodeValue`).
+  `tests/result-operations.test.ts` and the busy-state tests in `tests/results-service.test.ts` hold this.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
   Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
   identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
@@ -305,6 +316,16 @@ being true.
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- A Pivot follows its Table's filters only through `PivotService.followGroup`, looked at in a microtask after a results
+  publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer. It decides over the published run only
+  (it waits while the grid shows a view not yet published), rebuilds through Update's path, and does not build again over the filters it last built over (`tried`, the last set
+  only: filters whose automatic build it gave up itself, superseded or hidden, may be tried again), so a failure, a
+  refusal or a cancel never loops; each retry needs the filters to change. An automatic build whose Pivot is hidden
+  while it runs is given up, and a followed rebuild (`followed` provenance) never switches the output pane. Whether a Pivot is shown is
+  `pivotShown`, a function of the run, the layout, the stack's collapsed entries and whether the Results panel shows
+  (`PaneService`, not `TabResults.view`), so every collapse change goes through
+  `ResultsService.setCollapsed`, which publishes; a toggle never mutates `TabViewState.collapsed` directly. The threshold is
+  `pivotFollow`, in one place.
 - A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
   any other kind). The Compare popover's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
   pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both

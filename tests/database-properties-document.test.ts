@@ -71,6 +71,26 @@ describe('Database Properties as a document', () => {
     expect(f.properties.canApply(f.id)).toBe(true)
     expect(f.properties.context.getSnapshot().byDocument[f.id].applicable).toBe(true)
   })
+  it('keeps the draft through a completed disconnect, and Refresh and Apply return on exact reattachment to its own target', async () => {
+    const f = opened(undefined, true)
+    await settled()
+    f.edit('recoveryModel', 'SIMPLE')
+    const draft = f.draft()
+    const operation = f.connectionTargets.beginDisconnect(f.targetId, crypto.randomUUID())!
+    f.connectionTargets.completeDisconnect(operation)
+    f.targets.detached(f.targetId, { id: f.connectionId, generation: 1 })
+    expect(f.properties.canRefresh(f.id)).toBe(false)
+    expect(f.properties.canApply(f.id)).toBe(false)
+    const next = crypto.randomUUID(), attempt = f.connections.beginConnect(connectionOptions, 1, f.targetId)!
+    expect(f.connections.accept(connectionInfo(next), connectionOptions, f.targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt).status).toBe('accepted')
+    f.targets.attachTarget(f.targetId, next, true)
+    expect(f.documents.get(f.id)).toMatchObject({ connectionId: next, targetId: f.targetId, dirty: true })
+    expect(f.draft()).toBe(draft)
+    expect(f.properties.canApply(f.id)).toBe(true)
+    f.edit('recoveryModel', 'FULL')
+    await settled()
+    expect(f.properties.canRefresh(f.id)).toBe(true)
+  })
   it('opens a clean tab at once, reads the database, and brings an open one forward rather than opening it twice', async () => {
     const { properties, documents, id, state, api } = opened()
     expect(documents.active).toMatchObject({ id, kind: 'databaseProperties', name: 'Database Properties - AppData', dirty: false, connectionId: 'c1', database: 'AppData' })

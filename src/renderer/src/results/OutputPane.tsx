@@ -19,6 +19,7 @@ import PivotPanel from './PivotPanel'
 import ComparePopover from './ComparePopover'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
+import OperationStrip from './OperationStrip'
 import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
 import { formatCount, messagesSummary, plural, runSummary } from './status'
 
@@ -157,7 +158,8 @@ function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: Ta
   const summary = messagesSummary(tab.messages)
   const open = tab.strip && (tab.stripChosen || fits)
   const style: CSSProperties | undefined = open && maxHeight !== undefined ? { maxHeight, minHeight: g.messagesStripOpen } : undefined
-  return <div className="messages-strip" data-open={open || undefined} style={style}>
+  // `data-messages-strip`: the focus here (its toggle too) takes the query keys, not the results' (`resultsFocus`).
+  return <div className="messages-strip" data-messages-strip="" data-open={open || undefined} style={style}>
     <button type="button" className="messages-strip-toggle" aria-label={summary.label} aria-describedby={!open && summary.firstError ? errorId : undefined} aria-expanded={open} aria-controls={open ? id : undefined}
       title={!open && summary.firstError ? summary.firstError : undefined} onClick={() => results.setStrip(tabId, !open)}>
       <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span className="messages-strip-name">Messages</span>
@@ -338,6 +340,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {leader && jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
       {/* The live region announces it; this is the visible copy. */}
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
+      {/* Sorts, filters and the other operations over whole results: their strip, notice and live region. */}
+      {leader && <OperationStrip tabId={tabId} />}
       <PaneMenuButton pane={pane} />
     </div>
     {pane === 'plan' && historyOpen ? <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Plan history'}><RetainedPlans active={visible.plan} /></div>

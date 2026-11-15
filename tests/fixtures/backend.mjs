@@ -20,7 +20,8 @@
 //                       results filled its result memory; budget-stopped-low the same with the low-memory sentence,
 //                       budget-stopped-global with the global budget's
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
-//                       messages, and results.export after each page (so a test can cancel it mid-save)
+//                       messages, and results.export after each page (so a test can cancel it mid-save); results.view
+//                       reports op.progress while it waits and answers CANCELLED to a CANCEL frame, as SqlService does
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
 //   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE; for
 //                       ssisFolders and ssisProjects the SSIS catalog probe's fingerprints change with it, as after a
@@ -1720,7 +1721,7 @@ async function workbench(id, method, params, credit) {
   }
   // A directive's `hold` and an export's hold apply later, after their first output.
   const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
-  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) {
+  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe' && method !== 'results.view') while (await controlled(join('hold', method))) {
     if (method === 'connections.connect' && cancelled.delete(id)) return fail(id, 'CANCELLED', 'The operation was cancelled.')
     await sleep(25)
   }
@@ -1854,6 +1855,12 @@ async function workbench(id, method, params, credit) {
     case 'results.view': {
       const result = stored.get(params.resultId)
       if (!result) return missing(id, params.resultId)
+      // hold/results.view: the sort waits, reporting its phase and a rising figure below 100, until the file goes or a CANCEL stops it.
+      for (let percent = 5; await controlled(join('hold', 'results.view')); percent = Math.min(95, percent + 5)) {
+        if (cancelled.delete(id)) return fail(id, 'CANCELLED', 'The operation was cancelled.')
+        write(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: percent < 40 ? 'keys' : 'sort', percent })
+        await sleep(100)
+      }
       let view
       try { view = buildView(result, params.sort, params.filters) } catch (error) { return fail(id, error.code ?? 'BACKEND_ERROR', error.message) }
       result.views ??= new Map()

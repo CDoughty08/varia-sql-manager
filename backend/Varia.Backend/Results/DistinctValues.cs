@@ -272,8 +272,11 @@ internal static partial class ViewSorter
         using var source = new PageSource(pages, set.Wires.Count, DistinctTooLarge);
         var keptPages = new KeptPages(set, pages, set.Wires.Count);
         var approximate = false;
+        var progress = OperationProgress.Current;
+        progress?.Phase("keys", 0.5);
         var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
         if (stages is not null) stages.Key += Lap();
+        progress?.Phase("group", 0.98);
         var looked = view?.Order.Length ?? rows;
         var values = new int[looked];
         var count = 0;

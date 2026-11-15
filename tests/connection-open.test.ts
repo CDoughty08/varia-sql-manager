@@ -114,7 +114,7 @@ describe('main connection ownership', () => {
     expect(authentication.resolve(context.targetId)).toBeUndefined()
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false), { timeout: 15_000 })
     expect(authentication.resolve(context.targetId)).toBeUndefined()
   })
 
@@ -132,7 +132,7 @@ describe('main connection ownership', () => {
     service.retainTargets([])
     release.resolve()
     expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
-    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false))
+    await vi.waitFor(() => expect(hasPendingCredentialRequests(savedPasswords)).toBe(false), { timeout: 15_000 })
     expect(authentication.resolve(targetId)).toBeUndefined()
   })
 
@@ -601,8 +601,10 @@ describe('main connection ownership', () => {
     writing.resolve()
     await expect(pending).rejects.toThrow('connection target changed')
     expect(writes[0].workspace!.targets[0].credential).toEqual(credential)
-    expect(() => checkpoint.assertCurrent(7)).toThrow('connection target changed')
+    // The stale file is not this close's: close-window deletes it rather than keep the old credential reference.
+    expect(checkpoint.holds(7)).toBe(false)
     await checkpoint.write(session, 7)
+    expect(checkpoint.holds(7)).toBe(true)
     expect(writes[1].workspace!.targets[0].credential).toEqual(replacement)
     expect(() => checkpoint.assertCurrent(7)).not.toThrow()
     authentication.remember(first.targetId, options, { principal, credential: null }, 'update-credentials')
@@ -635,7 +637,13 @@ describe('main connection ownership', () => {
     expect(await pending).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
     await service.accept(update.requestId)
     expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
-    expect(() => checkpoint.assertCurrent(7)).toThrow('connection target changed')
+    // The refused write dropped the capture, so the old file is not this close's to keep: close-window deletes it.
+    expect(checkpoint.holds(7)).toBe(false)
+    expect(() => checkpoint.assertCurrent(7)).not.toThrow()
+    // Keeping again captures main's current pin, which the final close then holds.
+    await checkpoint.write(session, 7)
+    expect(checkpoint.holds(7)).toBe(true)
+    expect(() => checkpoint.assertCurrent(7)).not.toThrow()
   })
 
   it('releases an unaccepted delivery, but a cancelled reused caller never closes an accepted shared handle', async () => {

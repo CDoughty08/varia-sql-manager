@@ -163,3 +163,15 @@ describe('a results grid and its view\'s orientation', () => {
     expect(results.getSnapshot()[tab.id].jobNotice).toBe('')
   })
 })
+
+describe('results toolbar Sort text by', () => {
+  it('names its own tab when a sort elsewhere refuses it, so that tab says why', async () => {
+    const { results, tab, container, draw, settings } = await ran()
+    results.operations.begin('elsewhere', { kind: 'sort', target: 'Result 3', entry: 'e3' as never, cancel: () => {} })
+    await draw(() => createElement(ResultsToolbar, { tabId: tab.id }))
+    const chars = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Sort text by"] button')].find(button => button.textContent === 'Chars')!
+    await act(async () => { chars.click() })
+    expect(settings.getSnapshot().values['queryResults.grid.sortText']).toBe('value')
+    expect(results.operations.getSnapshot()[tab.id]?.announcement).toBe('Sorting Result 3. Sort Text By waits until it finishes.')
+  })
+})

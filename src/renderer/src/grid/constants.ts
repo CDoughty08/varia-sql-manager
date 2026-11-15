@@ -36,7 +36,7 @@ export const gridLimits = {
   captionHeight: 26, stripHeight: 25,
   /** Tabs layout: the row of result and comparison tabs (.rt-results) and the row of a result's view tabs (.rt-views), for
    *  the Messages strip's room; and the most result tabs drawn at once, a window around the selected one (the overflow
-   *  picker that lists them all is PR 14's). */
+   *  picker, ResultsPicker, lists them all). */
   resultTabsHeight: 28, viewTabsHeight: 28, resultTabsDrawn: 64,
   /** The Messages strip's line (.messages-strip-toggle), and the least it takes open: the line, the log's padding and three
    *  lines of messages (.messages .msg, 12 px at 1.7), so an open strip always shows some. */
@@ -57,6 +57,12 @@ export const gridLimits = {
   ariaRowCountMs: 1000, liveRegionMs: 300,
   measureInitialRows: 128, measureFitRows: 4096, measureCap: 512,
   copyStripDelayMs: 300,
+  /** An operation over a whole result (a sort or filter, a profile, a pivot, a comparison) shows its progress once it has
+   *  run this long, so a quick one never flashes it; once shown, it stays at least `operationMinShownMs`, so it never blinks;
+   *  past `operationElapsedMs` the strip adds how long it has run. */
+  operationShowDelayMs: 300, operationMinShownMs: 500, operationElapsedMs: 10_000,
+  /** How long the toolbar says how an operation ended ("Sort cancelled. The grid kept its previous order."). */
+  operationNoticeMs: 8000,
   /** How long the toolbar shows how a save ended ("Saved 400 rows to results.csv."). */
   jobNoticeMs: 8000,
   /**

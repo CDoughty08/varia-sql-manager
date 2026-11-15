@@ -95,7 +95,8 @@ export const glyphConditions: Readonly<Record<string, { readonly container: stri
 
 /** `--varia-<name>`, in px: the thickness of indicators that are neither text nor icons. */
 export const indicators = {
-  progress: { px: 4, use: 'A progress bar\'s track and fill, as under a running step in a StepList.' }
+  progress: { px: 4, use: 'A progress bar\'s track and fill, as under a running step in a StepList.' },
+  progressThin: { px: 2, use: 'The bar along the top of a results grid while an operation over its result runs, and the ring on its column\'s sort button.' }
 } as const
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
@@ -126,7 +127,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   documentTab: ['.query-shelf-more'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],
-  row: ['.explorer-row', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target'],
+  row: ['.explorer-row', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */

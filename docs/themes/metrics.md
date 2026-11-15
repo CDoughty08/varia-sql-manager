@@ -83,6 +83,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use |
 | --- | --- | --- |
 | `--varia-progress` | 4 | A progress bar's track and fill, as under a running step in a StepList. |
+| `--varia-progressThin` | 2 | The bar along the top of a results grid while an operation over its result runs, and the ring on its column's sort button. |
 
 ## Bars and rows
 
@@ -94,5 +95,5 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.editor-empty > .editor-group-actions`, `.explorer-header`, `.peek-head`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
 | `--varia-documentTab` | 44 | 48 | Two-line document tabs and their shelf overflow buttons. | `.query-shelf-more` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.object-search-field`, `.object-search-filter-button`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle`, `.activity-tool`, `.activity-filter-box input`, `.compare-side` |
-| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.dependencies-row`, `.explorer-pin-more`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head`, `.new-login-credentials-grid th`, `.new-login-credentials-grid td`, `.shortcuts-table td`, `.shortcuts-group th`, `.compare-target` |
+| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.dependencies-row`, `.explorer-pin-more`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head`, `.new-login-credentials-grid th`, `.new-login-credentials-grid td`, `.shortcuts-table td`, `.shortcuts-group th`, `.compare-target`, `.rt-picker-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar`, `.activity-pane-status` |

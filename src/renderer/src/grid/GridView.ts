@@ -80,7 +80,10 @@ interface RowSlot {
 }
 /** What shows a row-size bar (a row's number). `size` is what the bar shows now. */
 interface SizeMark { readonly el: HTMLElement; size: string }
-interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
+interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; readonly busy: Text; state: string }
+/** A sort or filter building the grid's view: the column whose sort button shows its ring, and its percentage (none while
+ *  the backend has no total). */
+export interface GridBusy { readonly column?: number; readonly percent?: number }
 interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
 /** A transposed grid's row mark is a name cell: it holds a column's name where a row number goes, with the type, sort
  *  button and funnel a header has. `look` is the class string it shows now (selected, unnamed, filterable, its search mark). */
@@ -265,6 +268,7 @@ export class GridView {
   private whitespace: WhitespaceMode
   /** Each sorted column's place among the keys and direction. */
   private sortKeys: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>
+  private busy: GridBusy | undefined
   private filtered: ReadonlySet<number>
   private filterable: ReadonlySet<number> | undefined
   /** The row-size bar's sizes for the handle shown, while the bar is on. */
@@ -453,7 +457,8 @@ export class GridView {
     this.schedule()
   }
   /** `headerColumn` (a transposed grid's): a column, or null for none; absent leaves it as it is. */
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null; busy?: GridBusy | null }): void {
+    if (o.busy !== undefined && (o.busy?.column !== this.busy?.column || o.busy?.percent !== this.busy?.percent)) { this.busy = o.busy ?? undefined; this.schedule() }
     if (this.rotated && o.headerColumn !== undefined && this.validHeaderColumn(o.headerColumn) !== this.headerColumn) {
       // Its tile is read with the rows from the next frame on, and each header shows its value once read.
       this.headerColumn = this.data.also = this.validHeaderColumn(o.headerColumn)
@@ -1225,15 +1230,19 @@ export class GridView {
    *  column is sorted, and the menu's Sort commands sort it. */
   private sortButton(parent: HTMLElement): SortButton {
     const doc = parent.ownerDocument, button = doc.createElement('span'), glyph = doc.createElement('span'), orderEl = doc.createElement('span'), order = doc.createTextNode('')
+    const busyEl = doc.createElement('span'), busy = doc.createTextNode('')
     button.className = 'rg-cs'
     button.setAttribute('aria-hidden', 'true')
     glyph.className = codiconClass('arrow-up')
     orderEl.className = 'rg-co'
     orderEl.append(order)
-    button.append(glyph, orderEl)
+    // The ring and percentage of a sort or filter building the view (the toolbar's strip says it to screen readers).
+    busyEl.className = 'rg-cb'
+    busyEl.append(busy)
+    button.append(glyph, orderEl, busyEl)
     button.title = 'Sort ascending'
     parent.append(button)
-    return { el: button, glyph, order, state: '' }
+    return { el: button, glyph, order, busy, state: '' }
   }
   /** A funnel at the end of `parent`. Hidden from screen readers like the sort button: Filter Column Values (Alt+Down)
    *  opens the same popover. */
@@ -1948,11 +1957,15 @@ export class GridView {
    *  `target`, the element that heads the first key's column (ARIA allows one at a time). Unsorted, the button shows only
    *  while its header is hovered. */
   private paintSort(target: HTMLElement, sort: SortButton, column: number): void {
-    const key = this.sortKeys.get(column)
-    const state = key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : ''
+    const key = this.sortKeys.get(column), busy = this.busy?.column === column ? this.busy : undefined
+    const state = (key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : '') + (busy ? `|${busy.percent ?? '-'}` : '')
     if (state === sort.state) return
     sort.state = state
     sort.el.classList.toggle('on', !!key)
+    sort.el.classList.toggle('busy', !!busy)
+    sort.el.classList.toggle('indeterminate', !!busy && busy.percent === undefined)
+    if (busy?.percent !== undefined) sort.el.style.setProperty('--rg-busy', `${busy.percent * 3.6}deg`)
+    sort.busy.nodeValue = busy?.percent !== undefined ? `${busy.percent}%` : ''
     sort.glyph.className = codiconClass(key?.descending ? 'arrow-down' : 'arrow-up')
     sort.order.nodeValue = key && this.sortKeys.size > 1 ? String(key.at + 1) : ''
     sort.el.title = !key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending'
