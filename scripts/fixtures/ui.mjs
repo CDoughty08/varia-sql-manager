@@ -327,7 +327,7 @@ export const gridPart = {
   borderHover: '.rg-border-hover',
   /** A highlighted row (Highlight Rows), drawn in its colour; its row header's aria-description names the colour. */
   highlightedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].hl',
-  /** A transposed grid (transposedGrid): the frozen name cell of each drawn row, which names a column of the result where a
+  /** A transposed grid (transposedGridSelector): the frozen name cell of each drawn row, which names a column of the result where a
    *  table has a row number (screen readers read the row's own header), a name cell a column-name search marks, and the
    *  tint over a highlighted row's drawn column, whose column header's aria-description names the colour. */
   nameCell: '.rg-rn',
@@ -651,8 +651,6 @@ export const captionFits = toggle => toggle.locator('xpath=..').evaluate((captio
 export const resultFacts = toggle => toggle.locator('xpath=..').locator(part.resultFacts)
 /** The views a group can show: its Table (`plan` when the result is a SQL-returned plan set) and its Pivot. */
 const resultViews = ['table', 'pivot', 'plan']
-/** Every comparison's grid, in the order drawn (after the groups). */
-export const comparisonGrids = scope => scope.locator(`${gridPart.root}[data-result-view="comparison"]`)
 /**
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
@@ -680,8 +678,6 @@ export const resultIdOf = async grid => Number(await grid.getAttribute('data-res
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** A results grid drawn transposed (its columns as rows): `matching(resultGrid(page), transposedGridSelector)` says whether one is. */
 export const transposedGridSelector = `${gridPart.root}[data-orientation="transposed"]`
-/** The results grids drawn transposed, in a page or a locator. */
-export const transposedGrid = scope => scope.locator(transposedGridSelector)
 /** The cell of a transposed grid that shows the result's `row` and `column`, both from 0. */
 export const transposedCell = (grid, row, column) => grid.locator(transposedCellSelector(row, column))
 /** The row header a screen reader reads for the result's `column` (from 0) in a transposed grid: the column's name. The

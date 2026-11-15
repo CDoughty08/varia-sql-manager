@@ -44,6 +44,10 @@ type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: 
 /** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
  *  are told apart by it. */
 export const entryNumber = (entry: Pick<ResultSetEntry, 'number'>): string => `Result ${entry.number}`
+/** A Pivot's name, from its Table's ("Pivot of Result 3", "Pivot of Open orders"). */
+export const pivotName = (source: string): string => `Pivot of ${source}`
+/** A comparison's name, old side first ("Differences: Result 1 → Result 3"). */
+export const comparisonName = (old: string, neu: string): string => `Differences: ${old} → ${neu}`
 /** The name the query gave an original result with a `#Name` marker, if it gave one. A Pivot's or a comparison's
  *  descriptor never carries one. */
 export const queryName = (entry: Named): string | undefined => entry.descriptor?.name || undefined
@@ -88,7 +92,7 @@ export const spokenName = (entry: Named): string => {
  *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
  *  unnamed result's are laid out exactly as they were before names. */
 export const slotNamed = (slot: Pick<ResultSlot, 'view' | 'entry' | 'sources'>): boolean =>
-  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== `Result ${source.number}`)
+  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== entryNumber(source))
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)

@@ -4,6 +4,7 @@ import type { PivotAggregate, PivotValueSpec, ResultColumn } from '../../../shar
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { PivotSpec } from './ResultClient'
 import { formatCount, plural } from './status'
+import { pivotName } from './ResultsService'
 
 /** The aggregates in the panel's order, with their names (as a spreadsheet's value field settings name them). */
 export const pivotAggregates: readonly { readonly aggregate: PivotAggregate; readonly label: string }[] = [
@@ -126,7 +127,7 @@ export function pivotText(info: PivotInfo): string {
   const groups = info.columnGroups > 0
     ? `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')} × ${formatCount(info.columnGroups)} ${plural(info.columnGroups, 'column group')}`
     : `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')}`
-  const parts = [`Pivot of ${info.sourceLabel}${info.viewed ? ' (as sorted and filtered)' : ''}: ${formatCount(info.rows)} ${plural(info.rows, 'row')} in ${groups}.`]
+  const parts = [`${pivotName(info.sourceLabel)}${info.viewed ? ' (as sorted and filtered)' : ''}: ${formatCount(info.rows)} ${plural(info.rows, 'row')} in ${groups}.`]
   if (info.partial) parts.push(`${info.sourceLabel} holds only part of its query's rows, so the pivot counts those.`)
   if (info.approximate) parts.push('Long values were grouped by the part these results keep.')
   return parts.join(' ')

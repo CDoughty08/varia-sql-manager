@@ -4,7 +4,7 @@ import { pairColumns, type ColumnPairing } from './compare-pairing'
 import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
-import { comparedNames, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
+import { comparedNames, comparisonName, entryNumber, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
 import { formatCount } from './status'
 
 /** What a diff set compared, for its grid's strip. */
@@ -335,7 +335,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       // Given up after the backend answered (a Cancel, a new run, an input closed in the same task): nothing is added, and
       // the diff it built is released.
       if (abort.signal.aborted) { this.results.discard(result.descriptor); return undefined }
-      const label = `Differences: ${fromName} → ${toName}`
+      const label = comparisonName(fromName, toName)
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
       // says nothing was compared.
       const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
@@ -435,7 +435,7 @@ export function compareSources(tab: TabResults | undefined, sources: readonly So
 }
 
 /** The two compared results' names as they were when compared, "Result N" for a comparison made before names. */
-const sideNames = (info: CompareInfo): [string, string] => [info.leftName ?? `Result ${info.leftNumber}`, info.rightName ?? `Result ${info.rightNumber}`]
+const sideNames = (info: CompareInfo): [string, string] => [info.leftName ?? entryNumber({ number: info.leftNumber }), info.rightName ?? entryNumber({ number: info.rightNumber })]
 
 /** What a diff grid's strip says after its two inputs: how rows matched, the counts, soft differences, the columns left
  *  out, and that the inputs' filters and sorts were not applied. */

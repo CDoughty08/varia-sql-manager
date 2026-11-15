@@ -43,7 +43,9 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
   `grouped-results-smoke.mjs` covers the results' Tabs layout (grouped results PR 13) in its own launch, because
   `results-smoke.mjs` is already near the split guideline; the existing results suites pin the Stacked layout by setting.
-  PR #467's run measured it at 4 seconds on Linux and 6 on Windows.
+  PR #467's run measured it at 4 seconds on Linux and 6 on Windows; with PR #509's narrow-pane and popout steps (9 and 10)
+  [that PR's run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/43739577663) measured 7 and 9, which the
+  shard weights record.
 
   About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
   browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took

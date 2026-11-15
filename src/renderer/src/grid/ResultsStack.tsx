@@ -4,7 +4,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { distinctName, entryName, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entryNumber, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -170,7 +170,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
     <FilterChips tabId={tabId} entry={entry} name={spoken} sort={sort} refocus={refocus} />
     {batch && <span className="rs-caption-batch">{batch}</span>}
-    {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} source={pivotSource ?? `Result ${pivotOf}`} stale={!!stale} running={running} refocus={refocus} />}
+    {pivotOf !== undefined && <PivotMark tabId={tabId} entry={entry} name={name} ordinal={pivotOf} source={pivotSource ?? entryNumber({ number: pivotOf })} stale={!!stale} running={running} refocus={refocus} />}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${spoken} As…`} title={`Save ${spoken} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
     {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${spoken}`} title={running ? `Close ${spoken} (unavailable while the query runs)` : `Close ${spoken}${others}`}

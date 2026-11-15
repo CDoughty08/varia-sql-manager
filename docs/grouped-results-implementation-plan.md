@@ -4,11 +4,15 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 9 (2026-11-14). It follows the owner's decisions, three independent reviews against the code, the orientation
-spike's findings, what PRs 1 to 13 and 16 found when they merged, and the
-[pivot performance findings](pivot-performance-findings.md). PRs 14 and 17 are in progress; 15 and 18 follow. Each
-merged PR's entry under Delivery says what it settled or left, and where the PR and an earlier section of this document
-disagree, the entry is the later word.
+Revision 10 (2026-11-15), the closing revision: the work is delivered. All eighteen PRs and the spike are merged: PR 0
+(the spike), #411, #413 and #429, #441, #442, #430 and #443, #448, #449, #452, #450, #465, #476, #474, #467, #494, #509,
+#466, #493 and PR 18 (Integration, see its entry). Beside them landed named result sets (#502, #504, #503, which PR 15
+builds on), the Compare popover (#490), Pivot filters compared by value (#487) and the result memory work below. It
+follows the owner's decisions, three independent reviews against the code, the orientation spike's findings, what each
+PR found when it merged, and the [pivot performance findings](pivot-performance-findings.md). Each merged PR's entry
+under Delivery says what it settled or left, and where the PR and an earlier section of this document disagree, the
+entry is the later word; the earlier sections point at the entry where a merged PR changed the behaviour. What is left
+is the [Follow-ups](#follow-ups) list.
 
 The visual references are the three mocks in [prototypes/results-pane](../prototypes/results-pane/README.md): Tabs,
 Stacked and the transposed grid. The owner accepted their defaults on 2026-11-11, to be adjusted as the PRs land: the
@@ -56,7 +60,9 @@ always shows the source's current rows.
 ### Navigation and layout
 
 - Results and Messages stay at the output level. Execution plan and Client Statistics keep their availability and docking.
-- Each original result is a group, named by its original number. Closing Result 2 does not rename Result 3.
+- Each original result is a group, named by its original number. Closing Result 2 does not rename Result 3. Since
+  named result sets (#502 to #504), a `#Name` marker's name stands where the number was, with the number beside it in
+  lists and accessible names; see [named-result-sets-scope.md](named-result-sets-scope.md).
 - A group has a Table view, and a Pivot view once one is built.
 - A SQL-returned execution plan set is a group, as it is a numbered grid today: its link cell opens the plan and it counts
   as a result. Pivot, Compare and Transposed are unavailable for it. Closing that group releases the set, so the Execution
@@ -86,12 +92,15 @@ The output toolbar keeps search, white space, text sorting, Profile, Row size, t
 command that closes them all keeps its title and behaviour).
 
 Pivot, Transposed, Compare, Save Results As and the close actions address the active view or the exact context-menu
-target. Narrow panes fold the labelled actions into a menu.
+target. Narrow panes fold the labelled actions into a menu: as built (PR 15), the results toolbar folds by its own
+measured width and a ⋯ menu, More results tools, always holds every tool; there is no per-view Actions menu.
 
 Column Profile follows the active view. The pivot builder belongs to one group and names its Table as the source; there is
 no source picker. In Tabs it is the selected group; in Stacked, the group of the grid that last had focus, or, when that
 grid is a comparison or a plan set, the first group whose Table can be pivoted (as the panel falls back today). Every capability
 of today's builder stays. Wide panes show Profile and a builder together; otherwise a selector shares the side area.
+(As built, Profile and the builder sit side by side whenever both are open, at any width, with no selector; the Compare
+picker is a popover since #490, so it no longer takes the side area.)
 
 ### Operations
 
@@ -208,6 +217,7 @@ There is no Undo for a close.
 
 - Compare opens a picker of targets: other groups' Tables of the same run and backend generation, complete and readable,
   sharing at least one column with the active Table. Comparisons, pivots, plan sets and live results are not offered.
+  The picker is a popover beside what opened it since #490 (PR 16's entry, "Compare popover").
 - The active Table is the new side (+) and the picked one the old side (−); the picker can swap them. The name always
   reads old → new.
 - Pairing is the backend's: visible columns by case-insensitive name and matching wire kind, repeated names in order. The
@@ -238,8 +248,8 @@ There is no Undo for a close.
 - A run holds at most 1,000 results in the renderer, derived ones included (the backend caps only the query's own sets).
   A build that would pass it, counting builds in flight, is refused before the backend is asked, and says so; a
   replacement counts once.
-- Save Results As suggests `{tab}-Result2`, `{tab}-Result2-Pivot`, `{tab}-Differences1`, with `-Transposed` when it is. Job
-  strips use the same names. Main's shortening of a long name, which keeps only a `-Result{n}` suffix today
+- Save Results As suggests `{tab}-Result2`, `{tab}-Result2-Pivot`, `{tab}-Differences1`, with `-Transposed` when it is
+  (a named result's name in place of its number, PR 15's entry). Job strips use the same names. Main's shortening of a long name, which keeps only a `-Result{n}` suffix today
   (`results-jobs.ts`), and `suggestedName` keep the whole suffix.
 
 ### Result memory work alongside
@@ -761,7 +771,7 @@ Outcome, accepted by the owner:
       the focus across a switch and `tests/results-stack.test.ts` for the stack's side; `scripts/grouped-results-smoke.mjs`
       its interface steps):
       - The layout is `ResultsTabs` beside `ResultsStack`, chosen by `OutputPane` from `queryResults.grid.layout`
-        (`stacked` | `tabs`, default `stacked`). The toggle is `output.toggleResultsTabs` ("Show Results as Tabs"), a
+        (`stacked` | `tabs`, default `stacked` here; PR 14 made it `tabs`). The toggle is `output.toggleResultsTabs` ("Show Results as Tabs"), a
         context key `resultsTabs`, a toolbar button in the results toolbar's last group, and Window › Results as Tabs.
         It is not in the grid menu: that menu has no free access key left (as PR 9 found), so the native menu
         placement every toggle needs went to the Window menu, beside Panel Tabs.
@@ -822,7 +832,7 @@ Outcome, accepted by the owner:
         actions stay in the results toolbar (the mock's Actions menu is PR 15's narrow-pane work).
       - Getting Started: the results guide describes per-grid actions and no layout, so it is unchanged; PR 14, which
         makes Tabs the default, should add the layout there.
-14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
+14. **Overflow picker and navigation commands; Tabs becomes the default. Merged as #494.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
     - **What PR 14 settled or left** (`tests/results-tabs.test.ts` holds its checks, the 1,000-result picker among them;
       `tests/bench/grid.bench.ts` its benchmark, `node.grid.resultPicker.opsPerSecond`; `scripts/grouped-results-smoke.mjs`
@@ -891,7 +901,7 @@ Outcome, accepted by the owner:
         the facts and strips at 330 px, where this folds the rows of tabs only when the grid would lose its rows.
       - Left: the 1,440 px Tabs button cutoff, narrow panes,
         Save names and popouts stay PR 15's.
-15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
+15. **Save names, narrow and short panes, popouts. Merged as #509.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
     button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and
     the results toolbar's search box is squeezed in a narrow window. PR 14 folds Tabs' rows of tabs in a short pane
     (`tabsFold`); what else a short pane hides (the mock's 330 px rules) is still this PR's.
@@ -933,7 +943,7 @@ Outcome, accepted by the owner:
         components), its toolbar folds to the popout's width (`observeResize` follows the element's window), and ⋯ opens
         its menu in that window. Popout window titles name no result, as the scope says.
       - Left for PR 18: the review of Dark and Light, docked, floating and popped out at narrow and short sizes; the
-        grouped-results suite's CI seconds after steps 9 and 10.
+        grouped-results suite's CI seconds after steps 9 and 10. Both are done there (PR 18's entry).
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
     **Merged as #466.** Changed since: #489 fixed Compare failing on results matched by whole rows (the answer has no
     `key` member then), and #490 turned the picker into a popover beside what opened it, from the options mocked in
@@ -1008,7 +1018,7 @@ Outcome, accepted by the owner:
         target with a column of either result left out (M counts a pair once), "Not compared" only when columns are left out (the pairing rule in its
         ⓘ), the sorted-or-filtered warning only while it holds, the comparison's name in the Compare button's tooltip.
         Enter on a target or Exact text compares.
-17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
+17. **Pivots follow filters. Merged as #493.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
     took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.
     - **What PR 17 settled or left** (`tests/results-pivot.test.ts`'s "a Pivot following its Table's filters" and the
@@ -1083,12 +1093,65 @@ Outcome, accepted by the owner:
         latter, for the backend's packing).
 18. **Integration.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
+    - **What PR 18 settled or left** (`tests/results-caption.test.ts`' naming lint holds its one new check):
+      - Removed: the smoke locators `comparisonGrids` and `transposedGrid` (`scripts/fixtures/ui.mjs`), which no suite
+        used. A sweep of exports, CSS classes, theme keys, metrics, icons, settings, context keys, commands and smoke
+        helpers found nothing else the grouped results work left without a user: PR 8 had removed the stored transpose
+        in every place, and PR 15 the 1,440 px and 1,180 px media queries. Nothing reachable by a user was removed, and
+        no backend method or contract field went.
+      - Names: the four places that still built "Result N", "Pivot of …" or "Differences: … → …" by hand (the stack's
+        Pivot mark, the builder's followed source, the comparison's side names and title, a Pivot's label, strip and
+        refusal sentence) now go through `entryNumber`, `pivotName` and `comparisonName` in `ResultsService.ts`. Nothing
+        reads differently. The lint fails on such a template anywhere in the results, grid, plans, contributions and
+        menus sources but `ResultsService.ts` and GridView's accessible "Result N of M" (the grid sits under the
+        results layer).
+      - CI seconds: PR #509's run measured the grouped-results suite at 7 s on Linux and 9 s on Windows, now in
+        `scripts/smoke-shards.mjs` and `docs/ci.md`.
+      - Documents checked against the code, not this plan: the results guide said a search and a column's value list
+        unpack a packed result (they read it as it is since #480); the CHANGELOG named a 1,440 px rule that never
+        shipped; `docs/results-tools.md` listed Choose Headers… as always in ⋯ (only while transposed) and said filters
+        are removed "from the caption" (in Tabs, the default, their chips sit beside the view tabs); README said a close
+        button closes "that result alone" (it closes its Pivot too). Each is corrected. Earlier sections of this plan
+        point at the entry that changed them.
+      - Review, on Windows against the fake backend through the smoke build (Electron, 1500×900, 900×900, 640×800, and
+        the results pane dragged to 150 and 110 px): Dark and Light; Tabs and Stacked; docked at the bottom, docked
+        right, floating and popped out (640×360 and 640×200); named and unnamed results, a 128-character name, a Pivot, a
+        transposed grid, a comparison, the Compare popover, 120 results with the overflow picker at normal, narrow and
+        short sizes. No defect needing a code change was found: nothing overlapped or spilled out of the pane, tabs past
+        the strip scroll as built, the picker stays inside the window, and the popout folds to its width. Two judgement
+        calls went to the owner (the search input's width, and the Pivot builder's footer in a short pane; see the PR).
+        Not looked at: macOS and Linux fonts, high-contrast (forced colours), a screen reader, and a live SQL Server.
+      - Departure found: Column Profile and the Pivot builder sit side by side whenever both are open; the selector the
+        plan named for narrow panes was never built (now in Follow-ups).
 
-Follow-ups, not in this work: Pivot with Pivot comparison (explicit diff key); a Plan tab inside a group; uncapped
-transposed columns; value-based filters that survive a Pivot rebuild; opening one view in its own window; a selection
-filter (Keep Selected Rows included) that survives its view closing while it resolves; changing a transposed grid's
-shared width by hand; a screen reader pass over the transposed grid; a Find match past the transposed cap, which shows
-the cap's strip and is then used up, so Find Next must be pressed again to reach the next match.
+## Follow-ups
+
+Not in this work. Each is open; the entry that left it is named in brackets.
+
+- Pivot with Pivot comparison: the diff needs the pivot's row-group columns as an explicit key (Decisions).
+- A Plan tab inside a group (Decisions).
+- Uncapped transposed columns, past 4,095 drawn rows (Transposed orientation).
+- Value-based filters that survive a Pivot rebuild; a rebuild drops the Pivot's own filters (Pivot lifecycle).
+- Opening one view in its own window; today the whole Results panel pops out (Navigation and layout).
+- A selection filter, Keep Selected Rows included, that survives its view closing while it resolves (PR 4).
+- A check of Keep Selected Rows on Pivot and comparison grids (PR 4).
+- Changing a transposed grid's shared width by hand (PR 5b).
+- A screen reader pass over the transposed grid (PR 5b), and over the Tabs layout and the overflow picker (PR 18).
+- A Find match past the transposed cap shows the cap's strip and is used up, so Find Next must be pressed again (PR 7).
+- Holding a Pivot build back by its budget estimate: two large builds of one query can refuse each other with
+  `TOO_LARGE`, and a replacement counts the old Pivot's memory against the new (PR 10).
+- A record on the Pivot's caption of why its last Update or automatic rebuild failed; the toolbar's notice fades and
+  the Pivot stays marked (PRs 11 and 17).
+- Out of date errs towards offering Update: a `groups` filter and a value filter keeping the same values, snapshots
+  over different rows freezing to the same rows, and `notIn` against `in` snapshots still compare as different (PR 11).
+- The Compare picker counts a target's stored rows, not its view's (PR 16).
+- The 250 ms automatic-rebuild condition measured on a machine with few cores, on Linux and on macOS (PR 17).
+- Automatic rebuild's "shown" is a model of the layout (Results panel showing, tab selected, item expanded), not what
+  is on screen in a popout or docked pane (PR 17).
+- A superseded automatic build is cancelled when the newer view publishes, not when it starts building (PR 17).
+- A selector for Column Profile and the Pivot builder in a narrow pane; both sit side by side today (PR 18).
+- PR 1's memory-probe checks name byte counts; look at them again if packed pages change what a stored page charges
+  (Result memory work alongside).
 
 ## Validation
 

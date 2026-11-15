@@ -164,8 +164,8 @@ Once one is closed it reads "Result 1 (closed)": the comparison copied what it c
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); turn
-it off to go back to Stacked. When the results toolbar does not fit its pane, Tabs is the first tool to give way (see
+groups one at a time instead of stacked. Tabs is the default; turn it off
+for Stacked. When the results toolbar does not fit its pane, Tabs is the first tool to give way (see
 [Narrow and short panes](#narrow-and-short-panes)); the toolbar's ⋯, the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
@@ -220,11 +220,11 @@ it off to go back to Stacked. When the results toolbar does not fit its pane, Ta
   result tabs and the selected view's tabs, chips and buttons share one row (the row and column counts are left to the
   status line), then, in the shortest pane (the results pane dragged to its minimum, say), the grid shows alone, as
   Stacked's one result gives up its caption. The keys above and Go to Result… still reach every view.
+- Peek's rows are never drawn as tabs.
 
 ![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
 
 ![The same in the Light theme](images/results-picker-light.png)
-- Peek's rows are never drawn as tabs.
 
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
 and closing it removes that plan from the Execution plan pane. Pivot, Compare and Transpose are unavailable for it.
@@ -299,7 +299,8 @@ Shift+F3 still step); then **Transposed**, **Headers** and **Compare**; **Sort t
 Profile, Row size and Pivot group. The search box keeps room for a few words until Transposed and Compare go, then gives
 up its width before any other group does. **⋯** (More results tools) at the
 toolbar's end, with **Close Results**, always shows and holds every tool: Results as Tabs, Go to Result…, Pivot…,
-Compare…, Transposed, Choose Headers…, Column Profile, Row Size, White space, Sort text by and Close Results.
+Compare…, Transposed, Choose Headers… (while the grid is transposed), Column Profile, Row Size, Show Spaces and Tabs,
+Show All White Space, Sort Text by Characters or Bytes, and Close Results.
 
 A long name gives way in every place a narrow pane shows it: a result tab stops at its widest and ends in an ellipsis,
 a caption's name gives way before its facts, and Go to Result… cuts a row's name inside the list. In a short pane the
@@ -326,7 +327,7 @@ Nothing is stored, so it follows the grid's sort and filters and is available wh
 | Command | What it does |
 | --- | --- |
 | Transpose Results (`output.transpose`) | Turns the grid transposed, or back. The toolbar's Transposed button and the grid menu's Transpose › Transposed show which it is. |
-| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until removed from the caption. |
+| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until its chip is removed (beside the view tabs, or on the caption when stacked). |
 | Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value for its row, and turns the grid. From a menu it is the column under the pointer; otherwise the active cell's. |
 | Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, starting on the current choice. The toolbar's Headers button opens it below itself. |
 

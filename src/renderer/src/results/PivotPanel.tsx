@@ -6,7 +6,7 @@ import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import { aggregateFits, columnGroupLimit, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, pivotFacts, valueLabel, type PivotDraft } from './pivot'
 import { pivotable } from './PivotService'
-import { entryName, entryOf, type TabResults } from './ResultsService'
+import { entryName, entryOf, pivotName, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
@@ -55,7 +55,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
   const can = !!entry && pivot.canPivot(tabId, entry.key)
   // The Pivot a build replaces, by its own title (fixed when it was made), as its tab and close button say it.
-  const shown = entryOf(tab.sets, state.pivot), built = shown ? entryName(shown) : `Pivot of ${state.sourceName ?? (entry ? entryName(entry) : '')}`
+  const shown = entryOf(tab.sets, state.pivot), built = shown ? entryName(shown) : pivotName(state.sourceName ?? (entry ? entryName(entry) : ''))
   const facts = entry ? pivotFacts(entry.handle.getSnapshot().rowsStored, sort?.view?.rows) : ''
   // Busy is the draft's controls only: the foot's live notes (waiting, the backend busy) are announced while it builds.
   const waiting = state.queued === 'place' ? 'Waiting for other pivots and comparisons to finish: four build at once.' : state.queued === 'busy' ? 'The backend is busy, so the pivot is asked again in a moment.' : undefined
