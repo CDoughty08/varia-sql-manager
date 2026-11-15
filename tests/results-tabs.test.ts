@@ -934,6 +934,13 @@ describe('the results tabs commands', () => {
       expect(f.host.reveal).not.toHaveBeenCalled()
       expect(f.host.toggleOutput).toHaveBeenCalledTimes(1)
       expect(commands.isEnabled('output.nextResultView')).toBe(true)
+      // From a Peek card's grid (bare, not a query's): the active query's results.
+      const peek = { kind: 'output', tabId: 'peek-run', view: 'grid', entry: 'peek-run:1', bare: true, selectedText: '', element: document.createElement('div') } as const
+      expect(commands.isEnabled('output.nextResult', { target: peek })).toBe(true)
+      await commands.execute('output.nextResult', { target: peek }, 'keybinding')
+      expect(shown()).toBe(two)
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(shown()).toBe(one)
       await commands.execute('output.nextResult', undefined, 'keybinding')
       expect(shown()).toBe(two)
       // Result 2 has one view.

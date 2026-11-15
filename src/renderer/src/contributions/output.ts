@@ -144,10 +144,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
   /** The query whose results Next Result, Go to Result N, the view commands and Go to Result… act on: the focused output's,
-   *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. */
+   *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. A bare grid focused
+   *  (a Peek card's rows) is not a query's: from there they act on the active query, as from anywhere else. */
   const tabs = () => settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs'
   const resultsRun = (args?: CommandArgs, onlyTabs = false) => {
-    const tabId = searchTab(args), tab = tabId ? results.getSnapshot()[tabId] : undefined
+    const target = targetOf(args), tabId = target && !target.bare ? target.tabId : documents.getSnapshot().activeId
+    const tab = tabId ? results.getSnapshot()[tabId] : undefined
     return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
   const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
