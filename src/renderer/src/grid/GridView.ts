@@ -646,6 +646,9 @@ export class GridView {
     for (const timer of this.retries) clearTimeout(timer)
     this.retries.clear()
     for (const dispose of this.cleanup.splice(0)) { try { dispose() } catch (error) { this.o.onError(error) } }
+    // The scroller is the shell's and outlives this view: a listener left on it would keep cancelling the next view's
+    // native wheel scrolling from this view's stale virtual model, and pin this view.
+    if (this.wheelAttached) { this.wheelAttached = false; this.scroller.removeEventListener('wheel', this.onWheel) }
     this.scroller.replaceChildren()
   }
 

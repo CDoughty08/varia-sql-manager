@@ -57,6 +57,7 @@
 
 ### Fixed
 
+- **Mouse wheel after Transpose:** on a very large result (around 750,000 rows or more, fewer on high-DPI displays or when zoomed in), turning the grid transposed could stop the mouse wheel and trackpad from scrolling it, leaving only the scroll bar. The wheel now scrolls it, and grids redrawn this way are no longer kept in memory.
 - **Results edge cases:** Copy pressed just after a sort finished, before the grid had redrawn, copied the rows the selection would cover in the new order; it now copies what the grid shows. Cancelling a comparison as its answer arrived still added it and said "Compared"; it now adds nothing and frees its memory. A cleared sort's view stays in memory only while its grid is on screen, not until the grid is shown again. The Search Objects filter and server pickers now follow their pane when it is popped out and that window is resized or scrolled.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
@@ -73,6 +74,7 @@
 - **Closing during reconnect:** closing the workbench, including Windows session end after crash recovery, settles automatic reconnect work before saving the tabs and server associations. Repeated failed connections no longer exhaust the pending-attempt allowance.
 - **View Dependencies during Disconnect:** pause metadata reads and retain the tree while teardown is in progress. A cancelled or failed disconnect restores explicit reads only for the same connection; stale replies and replacement connections cannot change the retained tree.
 - **Fused result reads:** release returned scratch buffers with their working-memory reservation, including before fallback unpacking.
+- **Result memory on a busy machine:** compressing a result after a sort, filter, value list or other operation that read it on several threads now frees its uncompressed pages at once, rather than once the busy threads catch up.
 - **Connection authentication:** initial SQL authentication uses a fresh physical session, and Entra connections preserve the configured Application Name. Cancelled or transient guarded opens no longer retire unrelated pooled sessions. Commands and pickers stop admitting new work while a server disconnects.
 - Clicking inside selected query text clears the selection and places the caret where you clicked.
 - **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.

@@ -3,7 +3,7 @@ import { languageLimits, type LanguageDiagnostic } from '../../../shared/languag
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
-import { isWelcomeQuery, type DocumentService } from '../services/documents'
+import { isWelcomeQuery, mayBeWelcomeQuery, type DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 import type { SqlLanguageService } from './SqlLanguageService'
@@ -110,9 +110,9 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     this.put(entry.id, { phase: detail ? 'paused' : 'checking', errors: previous?.errors ?? 0, warnings: previous?.warnings ?? 0,
       ...previous?.isIncomplete ? { isIncomplete: true } : {}, ...detail ? { detail } : {} })
     // The welcome query is known to be valid: analysing it started a SQL Tools process at every first launch, to report
-    // nothing. Its first edit is analysed as any other.
-    const text = detail ? '' : entry.model.getValue()
-    if (detail || !text.trim() || isWelcomeQuery(text)) {
+    // nothing. Its first edit is analysed as any other. This runs on every keystroke, so the whole text is read only when
+    // its length could be the welcome query's; the analysis reads it once, after the debounce.
+    if (detail || blank(entry.model) || (mayBeWelcomeQuery(entry.model.getValueLength()) && isWelcomeQuery(entry.model.getValue()))) {
       if (!detail) this.put(entry.id, { phase: 'ready', errors: 0, warnings: 0 })
       return
     }
@@ -206,6 +206,12 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     this.queue.length = 0
     this.clearListeners()
   }
+}
+
+/** Whether the text is empty or only whitespace, as `trim()` says: line by line, stopping at the first line with text. */
+function blank(model: Pick<Monaco.editor.ITextModel, 'getLineCount' | 'getLineContent'>): boolean {
+  for (let line = 1, count = model.getLineCount(); line <= count; line++) if (model.getLineContent(line).trim()) return false
+  return true
 }
 
 function marker(monaco: MarkerMonaco, model: Monaco.editor.ITextModel, item: LanguageDiagnostic, version: number): Monaco.editor.IMarkerData[] {
