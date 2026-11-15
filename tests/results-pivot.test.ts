@@ -1666,6 +1666,43 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.group().pivot!.pivot!.followed).toBeUndefined()
   })
 
+  it('gives up an automatic build whose Pivot is hidden while it runs, leaves the pane the user picked, and rebuilds once shown', async () => {
+    const f = await following()
+    // F1's rebuild starts while the Pivot is shown, then the user shows Messages before it answers.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    let signal: AbortSignal | undefined
+    f1.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { signal = options?.signal; signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+    await f.show(f1)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    f.results.setView('t1', 'messages')
+    await wait()
+    expect(signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(801)
+    expect(f.stale()).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    // Results shown again: the same filters are built over, since the given-up build never answered for them.
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    f.results.setView('t1', 'results')
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.stale()).toBe(false)
+  })
+
+  it('leaves the pane the user picked when a followed rebuild is added, and shows Results for one the user asked for', async () => {
+    const f = await following()
+    f.results.setView('t1', 'messages')
+    const provenance = { ...f.group().pivot!.pivot!, followed: true as const }
+    f.results.addSet('t1', pivoted(905).descriptor, 'Pivot of Result 1', [setKey(f.group().table.entry.descriptor)], { pivot: provenance })
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(905)
+    expect(f.results.getSnapshot().t1.view).toBe('messages')
+    const { followed: _followed, ...asked } = provenance
+    f.results.addSet('t1', pivoted(906).descriptor, 'Pivot of Result 1', [setKey(f.group().table.entry.descriptor)], { pivot: asked })
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(906)
+    expect(f.results.getSnapshot().t1.view).toBe('results')
+  })
+
   it("keeps a failed Build Pivot's reason when an automatic rebuild then fails too, which only the toolbar says", async () => {
     const f = await following()
     const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])

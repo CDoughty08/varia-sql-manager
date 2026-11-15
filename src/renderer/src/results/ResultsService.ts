@@ -1383,7 +1383,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (grids && state) grids.set(key, carriedState(state, moved, descriptor.columns.length))
     this.settleDerived(run, setKey(descriptor), descriptor)
     run.emptied = false
-    run.view = 'results'
+    // A rebuild the user asked for shows the results; one that followed its Table's filters by itself leaves the pane alone.
+    if (!pivot?.followed) run.view = 'results'
     // Published now, before the old result is released: no snapshot ever points a grid at a released handle.
     this.publishNow(tabId)
     // A save of the old Pivot may still be in its file dialog, before main checks the result is there: it is released

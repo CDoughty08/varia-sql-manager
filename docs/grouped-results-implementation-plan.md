@@ -950,6 +950,10 @@ Outcome, accepted by the owner:
         answer released, and only the last build publishes. A build the user started (Build Pivot, Update) is never given
         up or overtaken here: once it publishes, the Pivot is looked at again and follows the newer filters if it may.
         Build Pivot during an automatic build gives the automatic one up, as it does an Update.
+        An automatic build whose Pivot is hidden while it runs (Messages shown, another view selected, collapsed) is given
+        up too and its filters may be tried again when shown, and a followed rebuild never switches the output pane back to
+        Results (`replaceSet` leaves `run.view` alone for `followed` provenance). `tried` keeps only the last set of filters
+        a group was built over: returning to filters that failed earlier builds them again, once.
       - Departures: the cancel happens when the newer view is published, not when its build starts, so a Table whose new view
         takes long to build lets the older rebuild finish (and publish) first; the plan did not say which. No new
         caption text: an automatic rebuild shows PR 11's "Building again…" with Cancel, and a Pivot left marked shows

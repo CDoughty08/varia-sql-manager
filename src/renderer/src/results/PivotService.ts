@@ -152,7 +152,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly now: () => number
   private readonly defer: (callback: () => void) => void
   /** The Table's filters each group was last built over (`filtersIdentity`), by tab and ordinal, with the run: a Pivot
-   *  rebuilds by itself once for each set of filters, so a build that failed, was refused or cancelled is not asked again
+   *  does not rebuild by itself over the filters it was last built over (only the last set is kept), so a build that failed, was refused or cancelled is not asked again
    *  until the filters change or the user asks (Update). */
   private readonly tried = new Map<string, Map<number, { readonly queryId: string; readonly filters: string }>>()
   private following = false
@@ -568,8 +568,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
    * A Pivot follows its Table's filters (PR 17): once the filters the Table's grid shows differ from those it was built
    * over, it rebuilds by itself from its own recipe through Update's path, when it is shown (`pivotShown`), its Table can
    * be pivoted now, and it is small and quick enough (`followsByItself`); otherwise it stays marked out of date with
-   * Update, and rebuilds when it is shown. It rebuilds once for each set of filters (`tried`). An automatic build whose
-   * filters are no longer the Table's (a newer change, or the change undone) is given up silently: its answer would be out
+   * Update, and rebuilds when it is shown. It does not rebuild by itself over the filters it last built over (`tried`). An automatic build whose
+   * filters are no longer the Table's (a newer change, or the change undone), or whose Pivot is hidden, is given up silently: its answer would be out
    * of date when it landed, and its filters may be tried again. A build the user started (Build Pivot, Update) is never
    * given up or overtaken here; once it ends the Pivot is looked at again. A user's cancel counts the filters shown then as
    * tried.
@@ -584,7 +584,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const published = tab.sorts.get(group.table.key)?.view
     if (published !== this.results.sortOf(tabId, group.table.key)?.view) return
     const filters = filtersIdentity(shownFilters(tab, group.table.key))
-    const superseded = live?.auto !== undefined && live.auto !== filters
+    // Hidden while it builds (Messages picked, another view selected, its item collapsed), it is given up too: only a shown
+    // Pivot rebuilds by itself, and it rebuilds when shown again.
+    const superseded = live?.auto !== undefined && (live.auto !== filters || !pivotShown(tab, group, layout, collapsed))
     if (superseded) {
       // Given up by this service, not ended: its filters were never built over, so they may be tried again (the change
       // undone, then made again).

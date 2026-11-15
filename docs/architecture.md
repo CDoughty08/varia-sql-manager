@@ -295,9 +295,10 @@ being true.
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
 - A Pivot follows its Table's filters only through `PivotService.followGroup`, looked at in a microtask after a results
   publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer. It decides over the published run only
-  (it waits while the grid shows a view not yet published), rebuilds through Update's path, and builds over each set of
-  filters at most once per run (`tried`; filters whose automatic build it gave up itself may be tried again), so a
-  failure, a refusal or a cancel never loops. Whether a Pivot is shown is
+  (it waits while the grid shows a view not yet published), rebuilds through Update's path, and does not build again over the filters it last built over (`tried`, the last set
+  only: filters whose automatic build it gave up itself, superseded or hidden, may be tried again), so a failure, a
+  refusal or a cancel never loops; each retry needs the filters to change. An automatic build whose Pivot is hidden
+  while it runs is given up, and a followed rebuild (`followed` provenance) never switches the output pane. Whether a Pivot is shown is
   `pivotShown`, a function of the run, the layout and the stack's collapsed entries, so every collapse change goes through
   `ResultsService.setCollapsed`, which publishes; do not mutate `TabViewState.collapsed` elsewhere. The threshold is
   `pivotFollow`, in one place.

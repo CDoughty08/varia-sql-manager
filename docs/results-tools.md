@@ -85,8 +85,9 @@ layout while its Pivot tab is selected, stacked while its caption is expanded, a
 showing. A Pivot that is hidden keeps its mark and rebuilds when you show it (select its Pivot tab, expand it, switch
 back to Results or to the stacked layout). A newer filter change stops a rebuild still running and starts one for the
 newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
-marked, says why in the results toolbar, and is not tried again by itself for those filters in this run (Update still
-asks for it). A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
+marked, says why in the results toolbar, and is not tried again by itself until the filters change (Update still
+asks for it). A Pivot hidden while it rebuilds by itself (you show Messages, select another view or collapse it) stops
+that rebuild, keeps the pane you picked, and rebuilds when you show it again. A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
 clear what the builder says about a Build Pivot of yours that failed (it does clear what an earlier automatic rebuild or
 Update said). Like Update, it removes the Pivot's own filters, selection and scroll, and the toolbar says so, though you
 did not click anything. A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
