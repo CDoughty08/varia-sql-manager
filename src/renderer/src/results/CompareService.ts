@@ -4,7 +4,7 @@ import { pairColumns, type ColumnPairing } from './compare-pairing'
 import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
-import { entryName, entryOf, resultLimits, resultTitle, setKey, slotOf } from './ResultsService'
+import { comparedNames, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
 import { formatCount } from './status'
 
 /** What a diff set compared, for its grid's strip. */
@@ -322,18 +322,19 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (!o.quiet && this.shows(tabId, tab.queryId, old, neu, o.exact)) this.update(tabId, { error: undefined, cancelled: false })
     this.publishRunning()
     // The toolbar's strip shows it, with a Cancel of its own beside the popover's.
-    const ticket = this.results.operations.begin(tabId, { kind: 'compare', target: `${entryName(from)} → ${entryName(to)}`, cancel: () => this.cancel(tabId, old, neu, o.exact) })
+    const [fromName, toName] = comparedNames(from, to)
+    const ticket = this.results.operations.begin(tabId, { kind: 'compare', target: `${fromName} → ${toName}`, cancel: () => this.cancel(tabId, old, neu, o.exact) })
     let done = false
     try {
       const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal, onProgress: (phase, percent) => ticket.progress(phase, percent) }), { signal: abort.signal })
-      const label = `Differences: ${entryName(from)} → ${entryName(to)}`
+      const label = `Differences: ${fromName} → ${toName}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
       // says nothing was compared.
       const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
       if (key === undefined) return undefined
       done = true
       const info: CompareInfo = {
-        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: resultTitle(from), rightName: resultTitle(to), key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
+        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
       // Only diffs some run still shows are kept.

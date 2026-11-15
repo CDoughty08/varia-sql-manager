@@ -161,7 +161,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const refocus = useCallback(() => toggleRef.current?.focus(), [])
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} data-named={named || undefined}
-      {...number ? { title: `${name} · ${number}` } : {}} onClick={() => onToggle(entry.key)}>
+      {...number ? { title: `${name} · ${number}` } : named ? { title: name } : {}} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}

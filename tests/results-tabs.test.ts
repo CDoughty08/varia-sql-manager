@@ -1016,16 +1016,16 @@ describe('named results as tabs', () => {
     const rows = pickerRows(tab)
     expect(rows.map(row => [row.name, row.number])).toEqual([['Totals', 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Pivot', undefined], ['Differences: Result 1 → Result 2', undefined]])
     // Two results of one name are told apart by their numbers, which their accessible names carry.
-    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals', 'Differences: Result 1 → Result 2, Comparison'])
-    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals'])
-    expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals'])
+    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals, Result 3', 'Differences: Result 1 → Result 2, Comparison'])
+    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals, Result 3'])
+    expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals, Result 3'])
     expect(filterRows(rows, 'totals 1').map(row => row.label)).toEqual(['Totals, Result 1, Table'])
     // Go to Result N counts the top row's places, whatever the results are called.
     expect(jumpResult(tab, 1)).toBe(one)
     expect(jumpResult(tab, 3)).toBe(three)
   })
   it('draw a named result\'s number beside its name in the overflow picker, as text', () => {
-    const { results, draw, all } = fixture([long])
+    const { results, draw } = fixture([long])
     draw()
     act(() => { pickerRequests.request('t1') })
     draw()

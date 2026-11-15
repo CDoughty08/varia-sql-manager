@@ -67,7 +67,7 @@ function fixture(queryNames: readonly (string | undefined)[] = []) {
   const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
   results.begin('t1', 'q1')
   void results.finish('t1', 'q1', { summary: summaryOf([1, 2, 3].map(id => descriptor(id, { index: id - 1, ...rows, ...queryNames[id - 1] ? { name: queryNames[id - 1] } : {} }))) })
-  results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), 'Pivot of Result 3', ['1:3'])
+  results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${queryNames[2] ?? 'Result 3'}`, ['1:3'])
   const keys = results.getSnapshot().t1.sets.map(set => set.key)
   // Search in results, as far as the stack reads it: where the active match is, and whether a grid has shown it yet.
   const listeners = new Set<() => void>()
@@ -595,15 +595,16 @@ describe('named results in the stack', () => {
     const long = 'Open orders awaiting approval by the regional finance team before the end of the quarter'
     const { draw, names, splitters, all } = fixture([long, undefined, 'Totals'])
     draw()
-    expect(names()).toEqual([long, 'Result 2', 'Totals', 'Pivot of Result 3'])
+    expect(names()).toEqual([long, 'Result 2', 'Totals', 'Pivot of Totals'])
     const facts = all('.rs-caption-facts').map(element => element.textContent)
     expect(facts[0]).toMatch(/^Result 1 · /)
     expect(facts[1]).not.toMatch(/Result/)
     expect(facts[2]).toMatch(/^Result 3 · /)
     expect(facts[3]).not.toMatch(/Result/)
-    // The whole name and the number are in the toggle's tooltip, as the name may end in an ellipsis; an unnamed one has none.
+    // The whole name and the number are in the toggle's tooltip, as the name may end in an ellipsis; a named result's Pivot
+    // has its name there, and an unnamed result none.
     const toggles = all<HTMLButtonElement>('.rs-caption-toggle')
-    expect(toggles.map(toggle => toggle.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', null])
+    expect(toggles.map(toggle => toggle.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Pivot of Totals'])
     expect(toggles[0].textContent).toBe(long)
     // The splitters are named by the result above them, by its name when it has one.
     expect(splitters()).toEqual([`Resize ${long}`, 'Resize Result 2', 'Resize Totals'])

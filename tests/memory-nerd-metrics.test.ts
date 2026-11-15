@@ -87,7 +87,7 @@ describe('Memory panel Nerd metrics', () => {
     expect(name({ resultId: 9, logicalBytes: 1, storedBytes: 1, state: 'raw', live: true })).toBe('Live view table')
     // A result the query named (a #Name marker) is listed by that name.
     const named = resultNames({ a: { sets: [{ descriptor: { generation: 2, resultId: 7, name: 'Open orders' }, number: 1, label: 'Open orders' }] } }, () => 'Query 3', 2)
-    expect(named({ resultId: 7, logicalBytes: 1, storedBytes: 1, state: 'raw' })).toBe('Query 3 · Open orders')
+    expect(named({ resultId: 7, logicalBytes: 1, storedBytes: 1, state: 'raw' })).toBe('Query 3 · Open orders · Result 1')
   })
 
   it('accepts the backend\'s event with its detail and bounds it', () => {

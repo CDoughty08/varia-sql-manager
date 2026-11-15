@@ -7,7 +7,7 @@ import { windows } from '../core/windows'
 import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
-import { entryName, entryOf, entrySecondary, type ResultSetEntry, type TabResults } from './ResultsService'
+import { comparedNames, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
@@ -233,9 +233,9 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const side = (entry: ResultSetEntry, old: boolean) => <div className="compare-side" role="group" aria-label={old ? 'Old side' : 'New side'}
     title={old ? 'Old side: its rows that differ show as removed (−)' : 'New side: its rows that differ show as added (+)'}>
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>
-    <b>{entryName(entry)}</b>{!list && <small>{rows(entry)}</small>}
+    <b>{numberedName(entry)}</b>{!list && <small>{rows(entry)}</small>}
   </div>
-  const title = sides ? `Differences: ${entryName(sides.old)} → ${entryName(sides.neu)}` : ''
+  const title = sides ? `Differences: ${comparedNames(sides.old, sides.neu).join(' → ')}` : ''
 
   return <>
     <span ref={home} hidden />

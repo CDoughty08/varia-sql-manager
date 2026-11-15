@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
-import { entryName, entryNumber, entrySecondary, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
+import { comparedNames, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
 const filter = { filter: { op: 'notNull', column: 0 }, label: 'id is not NULL' }
@@ -40,5 +40,14 @@ describe("a result's name and its number", () => {
   })
   it('names a Pivot by its frozen title, with no number beside it, and titles it by its own number where results are numbered', () => {
     expect([entryName(pivot), entrySecondary(pivot), resultTitle(pivot)]).toEqual(['Pivot of Open orders', undefined, 'Result 4'])
+  })
+  it('lists a named result with its number and anything else by its name alone', () => {
+    expect([numberedName(named), numberedName(unnamed), numberedName(pivot)]).toEqual(['Open orders · Result 2', 'Result 2', 'Pivot of Open orders'])
+  })
+  it('titles a comparison of two results of one name with their numbers, so it says which way round it is', () => {
+    const other = { number: 5, label: 'Open orders', descriptor: { name: 'Open orders' } }
+    expect(comparedNames(named, other)).toEqual(['Open orders (Result 2)', 'Open orders (Result 5)'])
+    expect(comparedNames(named, pivot)).toEqual(['Open orders', 'Pivot of Open orders'])
+    expect(comparedNames(unnamed, { number: 3, descriptor: {} })).toEqual(['Result 2', 'Result 3'])
   })
 })

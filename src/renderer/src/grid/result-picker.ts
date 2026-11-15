@@ -93,8 +93,9 @@ export function pickerRows(tab: Pick<TabResults, 'groups' | 'comparisons' | 'sor
     const named = number ? `${name}, ${number}` : name, words = number ? `${name} ${number}` : name
     rows.push({ key: group.table.key, name, ...number ? { number } : {}, label: `${named}, ${detail}`, detail, kind: group.planSet ? 'plan' : 'table', text: `${words} ${detail}`.toLowerCase() })
     if (group.pivot) {
-      const stale = pivotOutOfDate(tab, group), label = `Pivot of ${name}`
-      rows.push({ key: group.pivot.key, name: 'Pivot', label: stale ? `${label}, out of date` : label, detail: stale ? 'Out of date' : '', kind: 'pivot', text: `${label}${number ? ` ${number}` : ''}${stale ? ' out of date' : ''}`.toLowerCase() })
+      // A named result's Pivot carries its number too, so two results of one name have Pivots told apart.
+      const stale = pivotOutOfDate(tab, group), label = `Pivot of ${named}`
+      rows.push({ key: group.pivot.key, name: 'Pivot', label: stale ? `${label}, out of date` : label, detail: stale ? 'Out of date' : '', kind: 'pivot', text: `${label}${stale ? ' out of date' : ''}`.toLowerCase() })
     }
   }
   for (const slot of tab.comparisons) {

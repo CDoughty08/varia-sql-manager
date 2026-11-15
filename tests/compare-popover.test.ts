@@ -487,7 +487,7 @@ describe('Compare popover with named results', () => {
   })
   it('titles a comparison of a named result by its name, frozen when made', async () => {
     const view = fixture({ names: { 0: 'Open orders' } })
-    expect(view.popover()?.querySelector('[aria-label="Old side"]')?.textContent).toContain('Open orders')
+    expect(view.popover()?.querySelector('[aria-label="Old side"] b')?.textContent).toBe('Open orders · Result 1')
     vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))
     await act(async () => { view.button('Compare')!.click() })
     await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve() })
@@ -495,6 +495,17 @@ describe('Compare popover with named results', () => {
     expect(diff.label).toBe('Differences: Open orders → Result 2')
     const info = view.compare.getSnapshot().info.get(`${diff.descriptor.generation}:${diff.descriptor.resultId}`)
     expect(info && [info.leftName, info.rightName]).toEqual(['Open orders', 'Result 2'])
+    view.unmount()
+  })
+  it('titles a comparison of two results of one name with their numbers, so it says which way round it is', async () => {
+    const view = fixture({ names: { 0: 'Totals', 1: 'Totals' } })
+    vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))
+    await act(async () => { view.button('Compare')!.click() })
+    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve() })
+    const diff = view.results.getSnapshot().t1.sets.at(-1)!
+    expect(diff.label).toBe('Differences: Totals (Result 1) → Totals (Result 2)')
+    const info = view.compare.getSnapshot().info.get(`${diff.descriptor.generation}:${diff.descriptor.resultId}`)
+    expect(info && [info.leftName, info.rightName]).toEqual(['Totals (Result 1)', 'Totals (Result 2)'])
     view.unmount()
   })
 })

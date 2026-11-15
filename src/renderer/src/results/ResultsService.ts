@@ -56,6 +56,19 @@ export const resultTitle = (entry: Named): string => queryName(entry) ?? entryNu
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
+/** A named entry's name with its number ("Totals · Result 2"), an unnamed one's name alone: for places that list results
+ *  and must tell two of one name apart without room for secondary text. */
+export const numberedName = (entry: Named): string => {
+  const number = entrySecondary(entry)
+  return number ? `${entryName(entry)} · ${number}` : entryName(entry)
+}
+/** Two compared results' names, for a comparison's title: each its name, and each with its number when the two names are
+ *  the same ("Totals (Result 1)" and "Totals (Result 3)"), so the title says which way round it is. Unnamed results'
+ *  names are their numbers, which never collide. */
+export const comparedNames = (old: Named, neu: Named): [string, string] => {
+  const a = entryName(old), b = entryName(neu)
+  return a === b ? [`${a} (${entryNumber(old)})`, `${b} (${entryNumber(neu)})`] : [a, b]
+}
 /** Whether a slot shows a name the query gave: a named Table, or a Pivot or comparison made from a named result (its frozen
  *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
  *  unnamed result's are laid out exactly as they were before names. */
