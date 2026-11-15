@@ -1475,7 +1475,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
     const keys = (sort?.keys ?? []).flatMap(item => { const at = moved.get(item.column); return at === undefined ? [] : [{ ...item, column: at }] })
     if (keys.length) this.applySort(tabId, run, key, keys)
-    if (sort?.filters.length) this.notify(tabId, `${entryName(entry)} was built again, so its filters were removed.`)
+    if (sort?.filters.length) this.notify(tabId, `${distinctName(entry, run.sets)} was built again, so its filters were removed.`)
     return key
   }
 
@@ -1595,7 +1595,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       controller.abort()
       this.keepLastView(tabId, run, index, set)
     }
-    ticket = this.operations.begin(tabId, { kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
+    ticket = this.operations.begin(tabId, { kind: action, target: distinctName(set, run.sets), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.

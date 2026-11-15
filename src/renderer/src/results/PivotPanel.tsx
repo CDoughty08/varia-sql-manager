@@ -66,10 +66,11 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     {/* Without the group (a new run has yet to return it) there are no columns to edit a draft over: the group's kept
         draft waits for them, and these controls take no input meanwhile. */}
     <div className="pivot-body" inert={!entry} aria-busy={state.running || undefined}>
-      {/* The group it belongs to; a result a new run has yet to return is still named. */}
+      {/* The group it belongs to; a result a new run has yet to return is still named. The service names it, with its
+          number when another result has its name. */}
       <div className="pivot-field" role="group" aria-label="Pivot source">
         <span>Source</span>
-        <span className="pivot-source" aria-live="polite">{entry ? entryName(entry) : state.sourceName ?? ''}</span>
+        <span className="pivot-source" aria-live="polite">{state.sourceName ?? (entry ? entryName(entry) : '')}</span>
       </div>
       <section className="pivot-section" aria-labelledby={ids + 'rows'}>
         <h3 id={ids + 'rows'}>Rows</h3>
@@ -122,7 +123,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {/* Mounted while the builder is, so a note added to it is announced. */}
       <div role="status">{waiting && <div className="profile-note">{waiting}</div>}</div>
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
-      {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `Pivot of ${entryName(entry)} stays as it is until the new one is built.` : `Building again replaces Pivot of ${entryName(entry)} once the new one is built.`}</div>}
+      {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `Pivot of ${state.sourceName ?? entryName(entry)} stays as it is until the new one is built.` : `Building again replaces Pivot of ${state.sourceName ?? entryName(entry)} once the new one is built.`}</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>
         : <button type="button" className="primary" disabled={!can} onClick={() => void pivot.run(tabId)}>Build Pivot</button>}

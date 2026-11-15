@@ -475,6 +475,12 @@ describe('Compare popover placement', () => {
 })
 
 describe('Compare popover with named results', () => {
+  it("adds no tooltip to an unnamed result's heading or sides", () => {
+    const view = fixture()
+    expect(view.popover()!.querySelector('h2')!.hasAttribute('title')).toBe(false)
+    expect([...view.popover()!.querySelectorAll('.compare-side b')].map(side => side.hasAttribute('title'))).toEqual([false, false])
+    view.unmount()
+  })
   it('lists each target by its name with its number as secondary text, so two of one name are told apart', () => {
     const view = fixture({ count: 4, open: 3, names: { 0: 'Totals', 2: 'Totals' } })
     expect(view.popover()?.querySelector('h2')?.textContent).toBe('Compare Result 4 with')

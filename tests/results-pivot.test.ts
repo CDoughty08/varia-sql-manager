@@ -236,6 +236,19 @@ describe('PivotService', () => {
     expect(results.getSnapshot().t1.groups[0].pivot!.sources).toEqual([expect.objectContaining({ name: 'Open orders', number: 1 })])
   })
 
+  it('names the build of one of two results of one name with its number in the toolbar', async () => {
+    const { results, pivot, run } = fixture()
+    const [, second] = run(2, { names: { 0: 'Totals', 1: 'Totals' } })
+    pivot.open('t1', keyAt(results, 't1', 1))
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    vi.mocked(second.pivot).mockImplementationOnce((_spec, o) => new Promise((_resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled')))))
+    const built = pivot.run('t1')
+    await settle()
+    expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'pivot', target: 'Totals (Result 2)' }])
+    pivot.cancel('t1')
+    await built
+    await settle()
+  })
   it('names a Pivot of one of two results of one name with its number, so the two Pivots are told apart', async () => {
     const { results, pivot, run } = fixture()
     run(2, { names: { 0: 'Totals', 1: 'Totals' } })

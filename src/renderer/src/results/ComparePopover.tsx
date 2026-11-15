@@ -236,7 +236,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const side = (entry: ResultSetEntry, old: boolean) => <div className="compare-side" role="group" aria-label={old ? 'Old side' : 'New side'}
     title={old ? 'Old side: its rows that differ show as removed (−)' : 'New side: its rows that differ show as added (+)'}>
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>
-    <b title={numberedName(entry)}>{numberedName(entry)}</b>{!list && <small>{rows(entry)}</small>}
+    <b {...entrySecondary(entry) ? { title: numberedName(entry) } : {}}>{numberedName(entry)}</b>{!list && <small>{rows(entry)}</small>}
   </div>
   const title = sides ? `Differences: ${comparedNames(sides.old, sides.neu, tab.sets).join(' → ')}` : ''
 
@@ -245,7 +245,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     {host && createPortal(<form ref={card} className="compare-popover" role="dialog" aria-label="Compare" aria-busy={running || undefined} style={place ?? { visibility: 'hidden' }}
       onKeyDown={keyDown} onBlur={leave} onSubmit={event => { event.preventDefault(); void start() }}>
       <div className="compare-head">
-        <h2 title={`Compare ${name}`}>Compare {name}{targets.length > 0 && <span> with</span>}</h2>
+        <h2 {...active && entrySecondary(active) ? { title: `Compare ${name}` } : {}}>Compare {name}{targets.length > 0 && <span> with</span>}</h2>
         <button type="button" className="icon-button" aria-label="Close Compare" title="Close (Escape)" onClick={dismiss}><Icon name="close" /></button>
       </div>
       <div className="compare-body">

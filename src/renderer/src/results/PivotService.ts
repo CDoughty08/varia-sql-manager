@@ -311,7 +311,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     this.refresh(tabId)
     this.publishBuilding()
     // The toolbar's strip and the Table grid's bar show the build; their Cancel is the caption's.
-    const ticket = this.results.operations.begin(tabId, { kind: 'pivot', target: entryName(entry), entry: entry.key, cancel: () => this.cancel(tabId, group.ordinal) })
+    const ticket = this.results.operations.begin(tabId, { kind: 'pivot', target: distinctName(entry, this.results.getSnapshot()[tabId]?.sets ?? []), entry: entry.key, cancel: () => this.cancel(tabId, group.ordinal) })
     let error: string | undefined, done = false
     try {
       const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, shown, abort.signal, (phase, percent) => ticket.progress(phase, percent)), {
