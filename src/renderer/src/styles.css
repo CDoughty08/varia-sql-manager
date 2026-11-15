@@ -853,9 +853,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
-   panel, never below what the box holds, so its buttons never run under the groups after it; past that the toolbar clips
-   its last groups. A narrow window (a 1024-wide display) drops the groups' icons, the box's magnifier and its Previous and
-   Next (Enter, Shift+Enter, F3 and Shift+F3 still step), and tightens the buttons, so every group fits while the box is empty. */
+   pane, down to what keeps a few words of text readable; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
+   toolbar's own width, so a narrow docked or popped-out pane folds as a narrow window does): Tabs goes, the groups tighten
+   (their icons, the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
+   Transposed, Headers and Compare, Sort text by, White space and the Show group go. The ⋯ menu holds them all. */
 .results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
 .results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
 .results-search input { flex: 1 1 0; width: 0; min-width: 32px; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
@@ -863,29 +864,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
-@media (max-width: 1180px) {
-  .output-toolbar { gap: 4px; }
-  .output-views button { padding: 0 6px; }
-  .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
-  /* A 1024-wide window (CI's displays) fits every group with Linux's wider fonts: the box gives up its width first. */
-  .results-toolbar { gap: 1px; padding-left: 6px; }
-  .results-segments button { padding: 0 3px; }
-  .results-segments button.results-icon-toggle { padding: 0 3px; }
-  .results-search { padding-left: 4px; }
-  .results-search input { min-width: 12px; }
-  /* Transposed and its Headers, and Compare, give way too: they are also in the grid's menu and the palette. */
-  .results-toolbar .results-transpose, .results-toolbar .results-compare { display: none; }
-}
-/* Tabs gives way first, being also in the palette and the Window menu: with every group shown the toolbar fills a
-   1280-wide window on Windows to the pixel and overflows it with Linux's wider fonts, putting its last group under the
-   status. */
-@media (max-width: 1440px) { .results-toolbar .results-layout { display: none; } }
+/* The box keeps room for a few words while Tabs folds and the groups tighten; past that it gives up its width before any
+   group goes, as a 1024-wide window (CI's displays) needs to show Sort text by, White space and Show with Linux's fonts. */
+.results-toolbar:not([data-fold~="view"]) .results-search { min-width: 160px; }
+.results-toolbar[data-fold~="layout"] .results-layout { display: none; }
+.output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
+.output-toolbar:has(> .results-toolbar[data-fold~="tight"]) .output-views button { padding: 0 6px; }
+.results-toolbar[data-fold~="tight"] { gap: 1px; padding-left: 6px; }
+.results-toolbar[data-fold~="tight"] .results-toolbar-label, .results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
+.results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle { padding: 0 3px; }
+.results-toolbar[data-fold~="tight"] .results-search { padding-left: 4px; }
+.results-toolbar[data-fold~="tight"] .results-search input { min-width: 12px; }
+.results-toolbar[data-fold~="view"] .results-transpose, .results-toolbar[data-fold~="view"] .results-compare,
+.results-toolbar[data-fold~="sort"] .results-sort, .results-toolbar[data-fold~="space"] .results-space, .results-toolbar[data-fold~="show"] .results-show { display: none; }
 .job-strip, .op-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip, .output-toolbar > .op-strip { flex-shrink: 1; min-width: 72px; }
 .job-strip span, .job-notice, .op-strip > span:not(.op-meter), .op-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .job-strip.job-notice, .op-strip.op-notice { display: block; }
 .job-strip button, .op-strip button { flex-shrink: 0; }
+/* A long name gives way before the progress beside it; past that the progress is cut too, never Cancel. */
+.job-strip > span:first-child { flex-shrink: 1000; }
 .output-toolbar .job-strip button, .output-toolbar .op-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 /* Operations over whole results (OperationStrip, ResultOperations): the toolbar's strip with its meter and Cancel, the
    2 px bar along the top of the grid, the ring on the busy column's sort button, and held-off controls (dimmed, not-allowed). */
@@ -2038,7 +2037,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .table-designer-main { flex: 1; min-height: 0; display: flex; }
 .table-designer-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .table-designer-top { flex: 0 0 55%; min-height: 60px; display: flex; overflow: hidden; }
-.table-designer-splitter { flex: 0 0 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); }
+.table-designer-splitter { flex: 0 0 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); touch-action: none; }
 .table-designer-splitter:hover, .table-designer-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
 /* The property grids sit on the Options dialog's surface, so its rows keep the colours that pass the contrast checks there. */
 .table-designer-column-properties { flex: 1; min-height: 60px; display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); }
@@ -2619,7 +2618,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-panes { display: grid; flex: 1 1 260px; min-height: 260px; }
 .activity-panes[data-orientation="column"][data-split] { grid-template-columns: minmax(0, 1fr); }
 .activity-panes[data-orientation="row"][data-split] { grid-template-rows: minmax(0, 1fr); }
-.activity-splitter { background: transparent; outline: none; }
+.activity-splitter { background: transparent; outline: none; touch-action: none; }
 .activity-panes[data-orientation="row"] > .activity-splitter { width: 6px; cursor: col-resize; }
 .activity-panes[data-orientation="column"] > .activity-splitter { height: 6px; cursor: row-resize; }
 .activity-splitter:hover, .activity-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }

@@ -196,8 +196,9 @@ export class ResultsJobHost {
       // A view is of one result: a live table's newer revision has none of its views.
       const newest = request.viewId === undefined ? this.deps.liveNewest?.(request.generation, request.resultId) : undefined
       const requested = request.format ?? this.lastFormat ?? 'csv'
-      // '{tab}-Result{n}' (ResultsService.suggestedName): a long tab name gives way, never the number that tells sets apart.
-      const [, base, suffix] = /^([\s\S]*?)(-Result\d+)?$/.exec(request.suggestedName)!
+      // '{tab}-Result{n}-Pivot', '{tab}-Open orders' (save-names.ts): a long name gives way, never the suffix that tells
+      // results apart. A request without one keeps a '-Result{n}' it ends in, as before suffixes were sent.
+      const suffix = request.suggestedSuffix ?? /-Result\d+$/.exec(request.suggestedName)?.[0] ?? '', base = request.suggestedName.slice(0, request.suggestedName.length - suffix.length)
       const name = sanitizeFileName(base + '.' + extensions[requested], suffix)
       const order: ResultsFormat[] = [requested, ...(['csv', 'tsv', 'json'] as const).filter(format => format !== requested)]
       const selection = await this.deps.showSaveDialog({

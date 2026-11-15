@@ -181,6 +181,22 @@ describe('ResultsJobHost save', () => {
       expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(240)
     }
   })
+  it('keeps the suffix the renderer sends whole, whatever it says, and cuts the name before it', async () => {
+    const cases: [object, string][] = [
+      [{ suggestedName: 'SQLQuery1-Open orders-Pivot', suggestedSuffix: '-Pivot' }, 'SQLQuery1-Open orders-Pivot.csv'],
+      [{ suggestedName: '報告'.repeat(55) + '-Result2-Pivot', suggestedSuffix: '-Result2-Pivot' }, '報告'.repeat(37) + '-Result2-Pivot.csv'],
+      [{ suggestedName: 'SQLQuery1-Differences2', suggestedSuffix: '-Differences2' }, 'SQLQuery1-Differences2.csv'],
+      // Without a suffix a name is cut from its end, but one that ends in -Result{n} keeps it, as before suffixes were sent.
+      [{ suggestedName: 'SQLQuery1-Open orders' }, 'SQLQuery1-Open orders.csv']
+    ]
+    for (const [request, expected] of cases) {
+      const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: true }))
+      expect(await host({ showSaveDialog: dialog }).jobs.save(saveRequest({ format: 'csv', ...request }))).toBeNull()
+      expect(dialog.mock.calls[0][0].defaultPath, JSON.stringify(request)).toBe(join('/home/me/Documents', expected))
+    }
+    // A suffix that does not end the name is refused.
+    expect(await failure(host().jobs.save(saveRequest({ suggestedName: 'SQLQuery1-Result1', suggestedSuffix: '-Pivot' })))).toMatchObject({ code: 'INVALID_REQUEST' })
+  })
   it('reports a save as soon as its file is chosen, and names the file (never the path) in every report', async () => {
     const { jobs, calls, progress, tick } = host()
     const request = saveRequest()

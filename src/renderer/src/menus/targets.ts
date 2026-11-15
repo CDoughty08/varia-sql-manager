@@ -136,16 +136,18 @@ export type MenuTarget =
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
   | SearchHitTarget
   | InputTarget
+  /** The results toolbar's ⋯ button (More results tools): its items act on the toolbar's query, as its buttons do. */
+  | { readonly kind: 'resultsTools'; readonly tabId: string }
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context'
+  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
-  'search.hit.context': 'Search result'
+  'search.hit.context': 'Search result', 'output.tools': 'More results tools'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -183,6 +185,9 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
  * for the focused grid's (a Peek card's grid belongs to no query tab).
  */
 export function argsFor(target: MenuTarget): CommandArgs {
+  // The results toolbar's ⋯ runs its items as the toolbar's buttons do: with the toolbar's query and no target, so a command
+  // that reads a grid from its target falls back to that query's focused grid.
+  if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
   const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }

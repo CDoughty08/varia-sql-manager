@@ -302,6 +302,49 @@ internal static class ScriptingChecks
         var chosen = SmoOptionsMapper.Map(dto with { MatchSourceSettings = false, TargetServerVersion = "170", TargetEngineEdition = "personal" }, ScriptVerb.Create, Box2022, true);
         check(chosen.Target == SqlServerVersion.Version170 && chosen.Edition == DatabaseEngineEdition.Personal && chosen.EngineType == DatabaseEngineType.Standalone,
             "with Match script settings to source off, the version rows decide");
+        // Azure SQL Database and Managed Instance report ProductMajorVersion 12. Managed Instance targets the engine version
+        // SMO reads from it; Azure SQL Database stays at Version120, as SMO's Scripter holds it, and other editions ignore it.
+        SqlServerVersion Capped(SqlServerVersion wanted) => SmoOptionsMapper.Known.First(item => item.Value == wanted).Number > newest.Number ? newest.Value : wanted;
+        var azureDb = Box2022 with { Major = 12, EngineEdition = 5 };
+        var managed = Box2022 with { Major = 12, EngineEdition = 8 };
+        var sourceTargets = new (ServerProfile Profile, int? Source, SqlServerVersion Expected, DatabaseEngineType Type, string Name)[]
+        {
+            (managed, 16, SqlServerVersion.Version160, DatabaseEngineType.Standalone, "Managed Instance on a 2022 engine"),
+            (managed, 17, Capped(SqlServerVersion.Version170), DatabaseEngineType.Standalone, "Managed Instance on a 2025 engine"),
+            (managed, newest.Number / 10 + 1, newest.Value, DatabaseEngineType.Standalone, "Managed Instance on an engine newer than SMO"),
+            (managed, null, SqlServerVersion.Version120, DatabaseEngineType.Standalone, "Managed Instance without SMO's version"),
+            (azureDb, 16, SqlServerVersion.Version120, DatabaseEngineType.SqlAzureDatabase, "Azure SQL Database with SMO's version 16"),
+            (azureDb, 17, SqlServerVersion.Version120, DatabaseEngineType.SqlAzureDatabase, "Azure SQL Database with SMO's version 17"),
+            (azureDb, null, SqlServerVersion.Version120, DatabaseEngineType.SqlAzureDatabase, "Azure SQL Database without SMO's version"),
+            (Box2022 with { Major = 12 }, 16, SqlServerVersion.Version120, DatabaseEngineType.Standalone, "a box server reporting 12"),
+            (Box2022, 13, SqlServerVersion.Version160, DatabaseEngineType.Standalone, "a box server reporting 16")
+        };
+        var sourceWrong = sourceTargets.Where(item => SmoOptionsMapper.Map(dto, ScriptVerb.Create, item.Profile, true, sourceMajor: item.Source) is var mapped
+            && (mapped.Target != item.Expected || mapped.EngineType != item.Type || mapped.Warnings.Count != 0)).Select(item => item.Name).ToList();
+        check(sourceWrong.Count == 0, "Managed Instance targets the engine version SMO reads from it, without a warning; Azure SQL Database and box servers the version they report: " + string.Join(", ", sourceWrong));
+        var chosenOnManaged = SmoOptionsMapper.Map(dto with { MatchSourceSettings = false, TargetServerVersion = "130", TargetEngineEdition = "personal" }, ScriptVerb.Create, managed, true, sourceMajor: 16);
+        check(chosenOnManaged.Target == SqlServerVersion.Version130 && chosenOnManaged.Warnings.Count == 0, "with Match script settings to source off, SMO's version does not change the version rows' target");
+        var ledgerOnAzure = SmoOptionsMapper.Map(dto, ScriptVerb.Create, azureDb, true, sourceMajor: 12);
+        var ledgerOnManaged = SmoOptionsMapper.Map(dto, ScriptVerb.Create, managed, true, sourceMajor: 16);
+        check(!SmoOptionsMapper.LedgerNeedsNewer("updatableLedger", ScriptVerb.Create, ledgerOnAzure.Target, ledgerOnAzure.EngineType)
+            && !SmoOptionsMapper.LedgerNeedsNewer("appendOnlyLedger", ScriptVerb.Create, ledgerOnManaged.Target, ledgerOnManaged.EngineType),
+            "ledger tables and views script on Azure SQL Database and on a Managed Instance with a 2022 engine");
+        check(!SmoOptionsMapper.LedgerNeedsNewer("ledger", ScriptVerb.Create, SqlServerVersion.Version120, DatabaseEngineType.SqlAzureDatabase)
+            && SmoOptionsMapper.LedgerNeedsNewer("updatableLedger", ScriptVerb.Create, SqlServerVersion.Version120, DatabaseEngineType.Standalone)
+            && SmoOptionsMapper.LedgerNeedsNewer("ledgerHistory", ScriptVerb.Alter, SqlServerVersion.Version150, DatabaseEngineType.Standalone)
+            && !SmoOptionsMapper.LedgerNeedsNewer("appendOnlyLedger", ScriptVerb.Create, SqlServerVersion.Version160, DatabaseEngineType.Standalone)
+            && !SmoOptionsMapper.LedgerNeedsNewer("ledger", ScriptVerb.Drop, SqlServerVersion.Version120, DatabaseEngineType.Standalone)
+            && !SmoOptionsMapper.LedgerNeedsNewer("table", ScriptVerb.Create, SqlServerVersion.Version120, DatabaseEngineType.Standalone),
+            "ledger tables and views are refused only for stand-alone targets older than SQL Server 2022, outside DROP; SqlAzureDatabase keeps the LEDGER clause at Version120");
+        // An unconnected SMO server whose version is set, as SMO sets a Managed Instance's from @@MICROSOFTVERSION. Engine type
+        // and edition are set too, as SMO reports them for Managed Instance, so a later read of either is answered from these
+        // overrides instead of connecting to the default local instance.
+        var managedSmo = new Server(new ServerConnection
+        {
+            ServerVersion = new ServerVersion(16, 0, 4135), DatabaseEngineType = DatabaseEngineType.Standalone, DatabaseEngineEdition = DatabaseEngineEdition.SqlManagedInstance
+        });
+        var runnerPass = SmoScriptRunner.MapPass(managedSmo, dto, ScriptVerb.Create, managed, true, false, true);
+        check(runnerPass.Target == SqlServerVersion.Version160 && runnerPass.Warnings.Count == 0, "Script As hands SMO's own server version to the mapper, so a Managed Instance reporting 12 targets its engine's version");
         check(ScriptingErrors.VersionName(SqlServerVersion.Version130) == "SQL Server 2016" && ScriptingErrors.VersionName(SqlServerVersion.Version170) == "SQL Server 2025",
             "versions are named as the options page names them");
     }

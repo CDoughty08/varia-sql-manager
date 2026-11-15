@@ -71,6 +71,8 @@ export const part = {
   resultsSearchIcon: '.results-search-icon',
   /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
   resultsSearchCount: '.results-search-count',
+  /** The results search box (input, count, Previous and Next, Data or Columns), which keeps a readable width in a narrow pane. */
+  resultsSearch: '.results-search',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
@@ -565,6 +567,17 @@ export const outputToolbar = page => outputPane(page).locator(part.outputToolbar
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
 /** The results search box's visible count, and its live region, which says only the settled count. */
 export const resultsSearchCount = page => resultsToolbar(page).locator(part.resultsSearchCount)
+/** The results toolbar's ⋯ (More results tools) and the menu it opens, which holds every tool of the toolbar. */
+export const moreResultsTools = page => resultsToolbar(page).getByRole('button', { name: 'More results tools', exact: true })
+export const resultsToolsMenu = page => page.getByRole('menu', { name: 'More results tools', exact: true })
+/** How the results toolbar sits in its pane: whether its groups fit it (none clipped past its edge, its last inside the
+ *  head), the search box's width, and how far it folded (its data-fold words). */
+export const resultsToolbarFit = page => resultsToolbar(page).evaluate((tools, selector) => {
+  const box = tools.getBoundingClientRect(), head = tools.parentElement.getBoundingClientRect(), last = [...tools.querySelectorAll('button')].filter(button => button.getClientRects().length > 0).at(-1)
+  return { fits: tools.scrollWidth <= tools.clientWidth + 0.5 && box.right <= head.right + 0.5 && (!last || last.getBoundingClientRect().right <= box.right + 0.5), search: tools.querySelector(selector).getBoundingClientRect().width, fold: tools.dataset.fold ?? '', rows: Math.round(head.height) }
+}, part.resultsSearch)
+/** Whether an element's contents fit it across, nothing pushed past its right edge (a row of tabs, a caption, a picker row). */
+export const fitsAcross = locator => locator.evaluate(element => element.scrollWidth <= element.clientWidth + 1)
 export const resultsSearchAnnouncer = page => resultsToolbar(page).getByRole('status')
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
@@ -702,6 +715,8 @@ export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, e
 export const tabClose = (page, name) => outputPane(page).locator(part.resultTabs).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The tab panel that holds the selected view's grid. */
 export const resultTabPanel = page => outputPane(page).locator(part.resultTabs).getByRole('tabpanel')
+/** How the Tabs layout folded its rows of tabs in a short pane: '' both rows, 'one' or 'none' (tabsFold). */
+export const resultTabsFold = page => outputPane(page).locator(part.resultTabs).evaluate(root => root.dataset.fold ?? '')
 /** The button at the end of the result tabs that counts those not in view and opens the overflow picker. */
 export const resultsOverflow = page => outputPane(page).getByRole('button', { name: /^All results, views and comparisons; [\d,]+ not shown as tabs$/ })
 /** The overflow picker (Go to Result…), its filter box, and one of its rows by its name ("Result 3, Table", "Pivot of Result 3"). */

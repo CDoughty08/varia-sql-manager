@@ -220,8 +220,9 @@ The same search runs in two places, with the same options and results, and the h
   and scrolls it into view. A database is looked for under Databases, then System Databases (the other way round for
   master, model and msdb).
 - **When a reveal fails.** The status says why: the listing failed, a filter hides the row, the folder stopped at its
-  100,000-item cap (filter it by name), or the object is gone. Stop in Object Explorer, another reveal, or losing the
-  server ends it.
+  100,000-item cap (filter it by name), or the object is gone. Stop in Object Explorer, another reveal, collapsing a
+  node on its path (or Collapse All once it is past the server node), or losing the server ends it, so a folder you
+  collapse stays collapsed.
 - **A hit's menu** (`search.hit.context`) is Object Explorer's menu for the hit's object, which the tree need not have
   loaded: Reveal in Object Explorer; Select Top N Rows on a table or view; Modify on a T-SQL module; Script … as, titled
   and greyed for the object's kind as in the tree; and Copy. Its Object Explorer commands read the hit's own selection

@@ -441,7 +441,7 @@ GO
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }]
       : target.kind === 'database' && target.name === 'Archive' ? [{ text: offlineWarning, blocking: false }] : []
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
-      ...(target.kind === 'database' ? { isSnapshot: false, ...sessionsOf(target.name) } : {}) }, elapsedMs: 1 })
+      ...(target.kind === 'database' ? { isSnapshot: false, identity: { id: 9, created: '2026-01-02T03:04:05.000' }, ...sessionsOf(target.name) } : {}) }, elapsedMs: 1 })
   }
   /** Restore Database's reads (D1e): AppData's history (a full, a differential and a log backup in the default backup
    *  folder, all on 2026-10-29), its files (PRIMARY's, the log, and AppData_2 in Archive, which Restore Files and Filegroups

@@ -23,7 +23,7 @@ filter starts again over the running one.
 | Column profile | `aria-busy` on the panel, "Profiling…" cards | none (cards fill in, 32 columns a request) | closing the panel | a newer profile replaces it |
 | Pivot (Build, Update) | `PivotService.running`; "Building again…", Build turns into Cancel | none | yes | a newer build of the same group replaces it; at most 4 pivots and comparisons a window, the rest queued |
 | Compare (`results.diff`) | in the popover only: "Comparing…", Cancel | none | yes | the same pair is refused; Compare with Previous shows nothing at all |
-| Copy, Save | the job strip after 300 ms: "Copying… 42% (x of y rows)", Cancel, Escape | `job.progress` rows done of a known total, 4 a second | yes | one at a time a window |
+| Copy, Save | the job strip after 300 ms: "Copying Result 2… 42% (x of y rows)", Cancel, Escape | `job.progress` rows done of a known total, 4 a second | yes | one at a time a window |
 
 The grid keeps showing the previous view while a sort or filter is built (`ResultGrid` prepares the new view and then
 swaps it in), and a failure goes back to it. None of the port operations (view, profile, distinct, pivot, diff) carries

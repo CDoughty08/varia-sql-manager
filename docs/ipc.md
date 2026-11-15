@@ -384,7 +384,8 @@ in order and stop at the first failure. `rolledBack` marks a step that completed
 back (the table designer's Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for
 the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
 warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
-host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, login?, mappings? }`: for a database, the session count
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, identity?, login?, mappings? }`: for a database, `identity`
+(`{ id, created }`, its database_id and create_date) is the database read, which the Delete request names, and the session count
 (sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
 most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
 session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
@@ -662,6 +663,7 @@ spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then name
 (`##…##`, trailing spaces ignored; zod and `Validate` refuse such a target name as `INVALID_PARAMS` too) for every action,
 the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
 server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
+A database's `delete` takes `identity?: { id, created }` (refused on any other kind; optional, as for the other database actions), the database Delete Object's describe read: the execute preflight refuses another database with the name as `NOT_FOUND` before any DDL, and each statement the Delete runs on the database by name (SINGLE_USER, the DROP, the access a compensation restores) checks it again first in its own batch (50010, `NOT_FOUND`).
 A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity` (both refused on any other kind, and
 `dropMappedUsers` on any other action; `loginIdentity` required on `actions.execute`, by zod's `actionExecuteRequestSchema`
 and `Validate`, optional on `actions.script`), with `closeConnections` and `deleteHistory` absent or false. Its execute
@@ -1273,11 +1275,12 @@ Results stay in backend memory, never on disk (`ResultStore`).
   would pass that, it and later sets are counted as discarded.
 - **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
-  `ForXmlCollector` joins them into one pooled buffer of up to 2,097,152 + 1 characters (the excess marks the value
-  truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
+  `ForXmlCollector` joins them into one buffer of up to 2,097,152 characters (one more character read marks the
+  value truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
   (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. Text past the cap is read past in
   chunks, row by row, so a long nvarchar(max) value that a query names like that column is never buffered whole.
-  `FOR XML … TYPE` already arrives as one xml cell.
+  The buffer is allocated, not rented from the shared array pool, which would keep arrays of that size once returned,
+  outside the budget. `FOR XML … TYPE` already arrives as one xml cell.
 - **Never unowned.** If a `query.execute` summary still cannot be encoded (`RESPONSE_TOO_LARGE`), its results are
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
@@ -1347,7 +1350,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   policy packs the complete results of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
   query's own when its own half is full; hidden first, then largest) at normal priority on the results' workers, sharing them fairly
   with other result work, one result after another until no query still waits. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
-  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends.
+  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends. The query's reader is not read meanwhile, so SQL Server sees its session wait on `ASYNC_NETWORK_IO` and keeps the statement's locks for that time; each wait ends as soon as packing has made room or has nothing more it may pack (a result held, under 1 MiB, one the user is working with, or one an earlier pass kept raw), so it waits only while a pass is packing, though a first pass over a result whose pages do not compress frees nothing (still within the limits above).
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
@@ -1551,9 +1554,14 @@ itself by view position.
     in order and held per run (a profile's working memory is reserved per run), so each hands a thread back only when
     one of its runs ends, which for a profile that started first is about when it ends.
   - A failure or cancellation stops the step's workers at their next item and is rethrown, as itself, once they have
-    all stopped; every thread is back when the step returns. Workers still queued to the thread pool when a step closes
-    are given back at once (the owner never waits for a starved pool to run them), a lease over its share hands back a
-    queued worker before a running one, and a worker the thread pool refuses is taken back as if never granted.
+    all stopped; every thread is back and every worker has disposed its state when the step returns. A state whose
+    Dispose throws fails the step too, rethrown by the owner only when no body or state factory failed and no worker
+    met a cancellation; it stops no other worker and is never thrown on a worker's thread. Workers still queued to the
+    thread pool when a step closes are given back at once (the owner never waits for a starved pool to run them), a
+    lease over its share hands back a queued worker before a running one, and a worker the thread pool refuses is taken
+    back as if never granted.
+  - A step lets go of its body and state when it returns, so workers still queued after it hold nothing the body
+    captured: a read's raw pages stay freeable by packing while the thread pool is busy.
   - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
     lowering it takes effect at the workers' next items, raising it at the next such event.
   - Measured (`--fairness-bench`, 2,000,000 W1 rows, 24 cores and 16 workers, then `DOTNET_PROCESSOR_COUNT=4`, 3
@@ -2013,7 +2021,7 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number, otherwise a string; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits (which a reader parsing numbers as doubles reads back as the same digits), otherwise a string, so one column can hold both; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 
@@ -2084,8 +2092,9 @@ cap, views, blocks, cancellation and the estimate; the golden bytes are `cases.j
   anyway ends it with `CANCELLED` and leaves the clipboard alone); a new copy cancels the running one. A save runs one at
   a time (`JOB_BUSY`), shows the native dialog
   ("Save Grid Results", the requested format's filter first, then CSV, Text, JSON and All Files) with the suggested name
-  and extension sanitised as Script As's File… names are (`src/main/file-names.ts`; a name too long is cut in the tab's
-  name, never in its `-Result{n}`), takes the format from the chosen
+  and extension sanitised as Script As's File… names are (`src/main/file-names.ts`; a name too long is cut before its
+  `suggestedSuffix`, the end of the name that tells results apart, such as `-Result2-Pivot`, which ends `suggestedName`
+  and is kept whole; a request without one keeps a `-Result{n}` it ends in), takes the format from the chosen
   extension (any other extension keeps the requested format, and none is appended, so the dialog's overwrite
   confirmation stays valid), checks ownership again, and returns only the file's
   name; `EXPORT_FAILED` tokens become sentences naming only that name. `varia:results-job-cancel` sends CANCEL reason 1;
@@ -2441,8 +2450,13 @@ restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above 
 `CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
 advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
 must change, 18452 untrusted domain) `LOGIN_FAILED`, terminal, since retrying alone would only count more failures against
-the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
-connection or a budget cancel drops the connection without returning it to the pool (its pool is cleared), and the next
+the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A
+statement cancelled at its budget (a probe's, or the session probe's as the view opens), or by a view that ends (and a
+Details read cancelled the same way), leaves a connection
+that is kept, or goes back to the pool, only when it passes the clean-connection check (`LiveConnections.AnswersAsync`: open,
+`SELECT @@TRANCOUNT` answers 0 within 1 s, outside the live gates for a sampler and inside Details' own gate), so one view's
+timeout never clears the pool every view on the connection shares. A lost connection, or one that fails the check, is
+dropped without returning it to the pool (its pool is cleared), and the next
 due tick reopens it under the back-off, for as long as the view runs; only `NOT_CONNECTED` (the connection id is gone)
 ends the view `disconnected`. Nothing is logged.
 

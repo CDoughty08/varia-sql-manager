@@ -144,7 +144,7 @@ interface NodeState { pendingMode?: FirstMode; retryMode?: FirstMode; deep?: boo
 /** What `reconcile` does besides reloading the node. */
 /** A path from the server down to a node: each ref a child of the one before (the server itself is not a step). */
 export type RevealPath = readonly ExplorerNodeRef[]
-/** How a seek ended: the node it selected, or why it could not (`cancelled` when Stop, another seek or a reset ended it). */
+/** How a seek ended: the node it selected, or why it could not (`cancelled` when Stop, another seek, a collapse on its path or a reset ended it). */
 export type SeekOutcome = { readonly ok: true; readonly nodeId: number } | { readonly ok: false; readonly message: string; readonly cancelled?: boolean }
 interface Seeking { readonly connectionId: string; readonly paths: readonly { readonly steps: RevealPath; readonly keys: readonly string[] }[]; at: number; reason?: string; readonly resolve: (outcome: SeekOutcome) => void }
 
@@ -305,6 +305,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.rev++
     this.evictable = true
     this.abortWithin(new Set([node.id]), 'collapse')
+    // A reveal walking through this node would expand it again when its next page lands: the user's collapse ends it.
+    if (this.seekWalk().includes(node.id)) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     if (this.selected !== undefined && this.selected !== id && this.within(rowOwner(this.selected), id)) this.selected = id
     this.invalidate()
   }
@@ -323,6 +325,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Collapses everything below the servers. */
   collapseAll(): void {
     const roots = new Set(this.roots)
+    // A reveal past its server node walks through a node this collapses (see collapse).
+    if (this.seekWalk().some(id => !roots.has(id))) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     this.abortWithin(undefined, 'collapse', task => !roots.has(task.nodeId))
     for (const node of this.nodes.values()) if (node.expanded && node.parent !== 0) { node.expanded = false; node.rev++ }
     this.stalled.clear()
@@ -576,8 +580,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * each node on it and loading a folder's later pages (at the user's priority, past the node budget) until the next step
    * arrives, then selects the node and scrolls it into view. A path whose step a fully listed node lacks gives way to the
    * next path (a database under System Databases); when none is left the seek ends with why: the listing failed, a filter
-   * hides the row, the folder stopped at its cap, or the object is no longer there. Stop, a reset, a lost server or another
-   * seek ends it.
+   * hides the row, the folder stopped at its cap, or the object is no longer there. Stop, a reset, a lost server, another
+   * seek or collapsing a node on its path ends it.
    */
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome> {
     this.endSeek({ ok: false, message: 'Another reveal started.', cancelled: true })
@@ -835,6 +839,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.seeking = undefined
     this.reveal(node.id)
     seeking.resolve({ ok: true, nodeId: node.id })
+  }
+  /** The nodes a running reveal has walked down so far on its current path, from the server to the node it waits on. */
+  private seekWalk(): number[] {
+    const seeking = this.seeking
+    const rootId = seeking && this.rootByConnection.get(seeking.connectionId), root = rootId === undefined ? undefined : this.nodes.get(rootId)
+    if (!seeking || !root) return []
+    const { steps, keys } = seeking.paths[seeking.at]
+    const walk = [root.id]
+    let node = root
+    for (let at = 0; at < steps.length; at++) {
+      const child = node.children?.find(candidate => this.isStep(candidate, steps[at], keys[at]))
+      if (!child) break
+      walk.push(child.id)
+      node = child
+    }
+    return walk
   }
   private isStep(candidate: TreeNode, step: ExplorerNodeRef, key: string): boolean {
     if (candidate.ref.type !== step.type) return false

@@ -93,3 +93,18 @@ export function deliverLaunchFiles(queue: LaunchQueue, host: LaunchDeliveryHost)
     deliverLaunchFiles(queue, host)
   })
 }
+
+/**
+ * Opens each path in turn, at most `maxLaunchFiles`: one that fails is reported as `describe` words it, and the rest
+ * still open. `open` answers undefined for a path skipped without a word (a folder).
+ */
+export async function openEach<T>(paths: readonly string[], open: (path: string) => Promise<T | undefined>, describe: (path: string, error: unknown) => string): Promise<{ files: T[]; errors: string[] }> {
+  const files: T[] = [], errors: string[] = []
+  for (const path of paths.slice(0, maxLaunchFiles)) {
+    try {
+      const file = await open(path)
+      if (file !== undefined) files.push(file)
+    } catch (error) { errors.push(describe(path, error)) }
+  }
+  return { files, errors }
+}

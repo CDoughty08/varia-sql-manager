@@ -48,7 +48,12 @@ internal static partial class DatabaseAlter
     internal static partial Regex IdentityCreated();
 
     /// <summary>Whether a request's identity is one a describe wrote: a database_id and create_date as DatabaseProperties.Iso writes it.</summary>
-    internal static bool IdentityValid(DatabaseIdentityDto identity) => identity.Id >= 1 && identity.Created is not null && IdentityCreated().IsMatch(identity.Created);
+    internal static bool IdentityValid(DatabaseIdentityDto identity) => identity.Id >= 1 && CreatedValid(identity.Created);
+
+    /// <summary>Whether a create_date is written as DatabaseProperties.Iso writes it and is a real date and time, as main's identitySchema
+    /// refuses 2026-02-30 and year 0000.</summary>
+    internal static bool CreatedValid(string? created) => created is not null && IdentityCreated().IsMatch(created)
+        && DateTime.TryParseExact(created, "yyyy-MM-dd'T'HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _);
 
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>
     public static OptionJson? Option(ActionsCatalog catalog, string key) =>
