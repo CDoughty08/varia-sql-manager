@@ -57,6 +57,10 @@ export function needsDetailsConfirmation(opened: OpenedConnection): boolean {
 }
 
 /** A dialog may outlive a disconnect, removal, backend loss or replacement connect. None may resurrect its target. */
+/** While its details review is open, a close or reload going ahead cancels it as Cancel would, then `hide`s the dialog. */
+export function yieldReviewToClose(opened: OpenedConnection, hide: () => void): () => void {
+  return opened.association?.yieldTo(() => { opened.association?.abandon(true); hide() }) ?? (() => {})
+}
 export function finishConnectionDetails(connections: ConnectionService, opened: OpenedConnection, choice: 'selected' | 'current' | 'cancel'): LiveConnection | undefined {
   if (choice === 'cancel') return undefined
   const connection = connections.get(opened.targetId ?? opened.id)

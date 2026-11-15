@@ -18,7 +18,7 @@ export class ConnectionSessionCheckpoint {
 
   constructor(private readonly authentication: Pick<ConnectionAuthenticationGuard, 'revision' | 'project'>, private readonly store: Pick<SessionStore, 'write' | 'keptBy'>, private readonly credentialsPending: () => boolean = () => false, private readonly beforeCapture: () => Promise<void> = async () => {}, private readonly requireGeneration: (generation: number) => void = () => {}, private readonly seal: (workspace: ConnectionWorkspace | undefined) => Promise<WorkspaceSeal | undefined> = async () => undefined) {}
 
-  async write(session: SessionInput, generation: number, unrestored = false): Promise<void> {
+  async write(session: SessionInput, generation: number): Promise<void> {
     const operation = ++this.operation
     this.kept = undefined
     await this.beforeCapture()
@@ -29,17 +29,24 @@ export class ConnectionSessionCheckpoint {
     const capture: Capture = { generation, revision: this.authentication.revision, workspace, projection: JSON.stringify(workspace) }
     // A seal over a projection that changes meanwhile fails current() below, so the written file never outlives its pins.
     const seal = await this.seal(workspace)
-    await this.store.write({ ...session, ...workspace ? { workspace } : {}, ...seal ? { seal } : {} }, generation, unrestored)
+    await this.store.write({ ...session, ...workspace ? { workspace } : {}, ...seal ? { seal } : {} }, generation)
     this.requireIdle()
     if (operation !== this.operation || !this.current(capture)) throw changed()
     this.kept = capture
   }
 
   /**
-   * Whether `generation`'s close kept a session this checkpoint captured. A later write of the same page that failed (or a
-   * close that kept nothing after an aborted one) leaves the store's mark without a capture: that file is not this close's.
+   * Whether `generation`'s close kept a session this checkpoint captured and still stands by. A later write of the same
+   * page that failed, or a close the page cancelled after writing (`release`), leaves the store's mark without a capture:
+   * that file is not this close's to keep, and close-window must delete it.
    */
   holds(generation: number): boolean { return this.store.keptBy(generation) && this.kept?.generation === generation }
+
+  /**
+   * The page cancelled its close after keeping the session (an edit while writing, a refused final check, a failed close). What
+   * it kept is no longer what the next close will leave, so that close must keep again or delete this file.
+   */
+  release(generation: number): void { if (this.kept?.generation === generation) this.kept = undefined }
 
   /** Rechecked after close's final asynchronous cleanup, immediately before closing or quitting. */
   assertCurrent(generation: number): void {

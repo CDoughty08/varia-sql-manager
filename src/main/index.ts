@@ -35,7 +35,7 @@ import { SavedPasswordStore } from './saved-passwords'
 import { ConnectionAuthenticationGuard } from './connection-authentication'
 import { ConnectionOpenService, validateOpenedConnection } from './connection-open'
 import { ConnectionSessionCheckpoint } from './connection-session-checkpoint'
-import { ConnectionWorkspaceSealer } from './connection-workspace-seal'
+import { ConnectionWorkspaceSealer, unprovenWithoutAccount } from './connection-workspace-seal'
 import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
 import { hasPendingCredentialRequests, prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
@@ -130,9 +130,6 @@ type SessionCheckpoint = { generation: number } & (
   { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: readonly (string | null)[] }
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
-// A page took the disk session and no page has acknowledged reopening it (the read failed, or the restore did not
-// finish): a close then sets the files it would replace aside instead of deleting the only copy (session-store.ts).
-let sessionUnrestored = false
 const connectionAuthentication = new ConnectionAuthenticationGuard()
 let credentialRequestsPending = () => false
 let connectionOpen: ConnectionOpenService | undefined
@@ -850,7 +847,8 @@ app.whenReady().then(async () => {
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
-  workspaceSealer = new ConnectionWorkspaceSealer(secretCipher)
+  // A smoke profile disables secret storage on purpose, as a keyring-less desktop does.
+  workspaceSealer = new ConnectionWorkspaceSealer(secretCipher, { trustUnsealed: !!smokeProfile })
   credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
   connectionOpen = new ConnectionOpenService({
     authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
@@ -912,7 +910,13 @@ app.whenReady().then(async () => {
   })
   // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
   // A Restart to Update whose quit was cancelled (a query kept) installs nothing at a later exit.
-  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined; updater?.disarm() } })
+  ipcMain.on('varia:close-cancelled', event => {
+    if (!trusted(event)) return
+    // Even during startup: a close that kept the session and was then cancelled no longer stands behind that file.
+    connectionSession.release(pageGeneration)
+    void openSession.release(pageGeneration).catch(() => {})
+    if (rendererReady) { closePending = false; closeIntent = undefined; updater?.disarm() }
+  })
   handle('varia:updates-state', () => requireUpdater().state)
   handle('varia:updates-check', () => requireUpdater().check(true))
   handle('varia:updates-download', () => requireUpdater().download())
@@ -1174,7 +1178,7 @@ app.whenReady().then(async () => {
   handle('varia:session-write', async value => {
     if (!hotExitAvailable) throw new Error('Restore open queries on startup is off.')
     const generation = pageGeneration
-    await connectionSession.write(sessionInput(sessionWriteSchema.parse(value)), generation, sessionUnrestored)
+    await connectionSession.write(sessionInput(sessionWriteSchema.parse(value)), generation)
     if (generation !== pageGeneration || generation !== rendererGeneration) throw new Error('The workbench changed while keeping the session.')
   })
   handle('varia:session-take', async (): Promise<RestoredSession> => {
@@ -1184,7 +1188,6 @@ app.whenReady().then(async () => {
     if (checkpoint?.generation !== generation) {
       checkpoint = sessionCheckpoint = { kind: 'disk', generation, record: openSession.take(!sessionTaken) }
       sessionTaken = true
-      sessionUnrestored = true
     }
     let record: SessionRecord | undefined
     try { record = await checkpoint.record } catch (error) {
@@ -1198,12 +1201,13 @@ app.whenReady().then(async () => {
     connectionOpen?.retainTargets(record?.workspace?.targets.map(target => target.id) ?? [])
     if (record?.workspace) {
       // A disk file is pinned only as far as its seal proves main wrote it; an unsealed silent target waits for Reconnect.
+      let workspace = record.workspace
       if (checkpoint.kind === 'disk') {
-        const trusted = workspaceSealer ? await workspaceSealer.trusted(record.workspace, record.seal) : record.workspace
+        workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal) : workspace
         if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
-        connectionAuthentication.restore(trusted)
+        connectionAuthentication.restore(workspace)
       }
-      record = { ...record, workspace: connectionAuthentication.project(record.workspace) }
+      record = { ...record, workspace: checkpoint.kind === 'disk' ? unprovenWithoutAccount(workspace, connectionAuthentication.project(workspace)) : connectionAuthentication.project(workspace) }
     }
     const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
@@ -1227,7 +1231,7 @@ app.whenReady().then(async () => {
     const generation = z.int().parse(value)
     if (generation !== pageGeneration || generation !== rendererGeneration) return
     if (sessionCheckpoint?.generation !== generation) return
-    if (sessionCheckpoint.kind === 'disk') sessionUnrestored = false
+    if (sessionCheckpoint.kind === 'disk') openSession.restored()
     sessionCheckpoint = undefined
   })
   handle('varia:recent-files', () => recentFiles())
@@ -1280,7 +1284,11 @@ app.whenReady().then(async () => {
     // exit. A close that kept nothing leaves nothing for the next start to reopen.
     try {
       await recovery.discardOwned(pageGeneration).catch(() => {})
-      if (!connectionSession.holds(pageGeneration)) await openSession.clear().catch(() => {})
+      if (!connectionSession.holds(pageGeneration)) {
+        // This page's own file without a current capture holds pins main no longer has: the close waits until it is gone.
+        if (openSession.keptBy(pageGeneration)) await openSession.clear()
+        else await openSession.clear().catch(() => {})
+      }
       connectionSession.assertCurrent(pageGeneration)
       if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
       else app.quit()

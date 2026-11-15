@@ -275,7 +275,8 @@ describe('safeStorage cipher', () => {
     for (const fallback of ['v10', 'plain', '']) {
       const storage = api('gnome_libsecret')
       storage.encryptStringAsync.mockImplementation(async (text: string) => Buffer.from(fallback + text))
-      expect(await safeStorageCipher(storage, 'linux').state(), fallback).toEqual({ available: false, reason: 'no-keyring' })
+      // Configured but not reachable: it may answer later, so it is not reported as having no keyring (which trusts unsealed files).
+      expect(await safeStorageCipher(storage, 'linux').state(), fallback).toEqual({ available: false, reason: 'unavailable' })
     }
     const throwing = api('kwallet6')
     throwing.encryptStringAsync.mockRejectedValue(new Error('dbus'))
@@ -284,6 +285,12 @@ describe('safeStorage cipher', () => {
     const portal = api('gnome_libsecret')
     portal.encryptStringAsync.mockImplementation(async (text: string) => Buffer.from('v12' + text))
     expect(await safeStorageCipher(portal, 'linux').state()).toEqual({ available: true })
+  })
+  it('refuses a Linux blob under the hard-coded Chromium fallback key, which anyone can forge', async () => {
+    const storage = api('gnome_libsecret'), cipher = safeStorageCipher(storage, 'linux')
+    for (const forged of ['v10' + marker, marker]) await expect(cipher.decrypt(Buffer.from(forged))).rejects.toThrow('could not read the protected secret')
+    expect(storage.decryptStringAsync).not.toHaveBeenCalled()
+    expect((await cipher.decrypt(Buffer.from('v12' + marker))).text).toBe(marker)
   })
   it('refuses Linux without a keyring before starting the encryptor', async () => {
     for (const [backend, reason] of [['basic_text', 'no-keyring'], ['unknown', 'unknown-backend']] as const) {

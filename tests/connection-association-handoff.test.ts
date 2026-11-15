@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { connectionTargetOptions, type PersistedConnectionTarget } from '../src/shared/connection-targets'
 import { bindStartupReconnect } from '../src/renderer/src/services/connection-startup'
 import { acceptConnectionReceipt } from '../src/renderer/src/services/connection-receipts'
-import { executePendingQuery, finishConnectionDetails, whenConnectionDocumentsIdle } from '../src/renderer/src/services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, whenConnectionDocumentsIdle, yieldReviewToClose } from '../src/renderer/src/services/connection-opening'
 import { keptSession, reloadSession } from '../src/renderer/src/services/session'
 import { deferred } from './fixtures/documents'
 import { connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -191,21 +191,30 @@ describe('connection association checkpoints', () => {
     } finally { value.dispose() }
   })
 
-  it('lets a window close (a Windows session end) cancel a pending details review instead of being refused', async () => {
+  it('lets a window close (a Windows session end) cancel a pending details review only once the close goes ahead', async () => {
     const value = await fixture()
     try {
       const opened = (await acceptConnectionReceipt(value.receipt()))!
-      const cancelled = vi.fn(() => opened.association!.abandon(true))
-      const unregister = value.connections.yieldToCheckpoint(cancelled)
-      await value.files.closeWindow(async () => {})
-      expect(cancelled).toHaveBeenCalledTimes(1)
+      const hidden = vi.fn()
+      const unregister = yieldReviewToClose(opened, hidden)
+      // A close stopped after its first look (a prompt cancelled, here the cleanup refusing) leaves the review open.
+      await value.files.closeWindow(async () => { throw new Error('The user cancelled.') })
+      expect(hidden).not.toHaveBeenCalled()
       expect(value.files.getSnapshot().error).not.toContain('Wait for query tabs to finish connecting')
+      expect(() => value.connections.assertCheckpointReady(false)).not.toThrow()
+      expect(hidden).not.toHaveBeenCalled()
+      // Without a yield the handoff still refuses even a first look.
+      unregister()
+      expect(() => value.connections.assertCheckpointReady(false)).toThrow('Wait for query tabs to finish connecting')
+      yieldReviewToClose(opened, hidden)
+      // The close that goes ahead cancels it as Cancel would, keeps the session and closes.
+      await value.files.closeWindow(async () => {})
+      expect(hidden).toHaveBeenCalledTimes(1)
       expect(value.api.keepSession).toHaveBeenCalled()
       expect(value.api.closeWindow).toHaveBeenCalledTimes(1)
-      // A yield runs once; a later checkpoint does not call a review that already ended.
-      unregister()
+      expect(value.connectionTargets.get(id(1))?.resumeWanted).toBe(false)
       value.connections.assertCheckpointReady()
-      expect(cancelled).toHaveBeenCalledTimes(1)
+      expect(hidden).toHaveBeenCalledTimes(1)
     } finally { value.dispose() }
   })
 

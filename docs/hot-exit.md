@@ -68,7 +68,8 @@ offers what changed since in its Recover dialog: a restore never loses text. A r
 same: Reload in the crash dialog reopens `previous.json` (it holds the only copy of the restored text until a close keeps
 the tabs again or AutoRecover's interval comes round), and a later close then keeps or asks about those tabs as usual.
 A reload of the page within one process otherwise reopens only a session written since (macOS: closing the window and
-opening a new one).
+opening a new one). A close that kept the session and was then cancelled (an edit while writing, a failed close) moves its
+file to `previous.json`, so a later reload does not reopen tabs closed since, while the next start still has it.
 
 Version 2 keeps the nonsecret connection workspace beside the text tabs, including when there are no tabs. Version 1
 sessions migrate with their server and database hints intact; the migration does not infer a target or account from
@@ -76,8 +77,9 @@ a server name. Unknown fields, secrets, duplicate target IDs and query associati
 and the file is quarantined. A failed or oversized write leaves the previous checkpoint available.
 Temporary read or quarantine failures preserve the original bytes and refuse a replacement or clear until the file
 can be read or safely quarantined. If a start took the session but never finished reopening it (the read failed, or the
-restore stopped part-way), that run's close sets `session.json` and `previous.json` aside as quarantined copies, kept as
-long as Keep AutoRecover information for, instead of overwriting or deleting them. Reload checkpoints also keep each surviving tab's matching AutoRecover copy when
+restore stopped part-way), that run's first close, whether it keeps a session or not, sets `session.json` and
+`previous.json` aside as quarantined copies dated when they were set aside, so they are kept for the full Keep
+AutoRecover information for, instead of overwriting or deleting them. Reload checkpoints also keep each surviving tab's matching AutoRecover copy when
 an unavailable file is omitted.
 
 AutoRecover is unchanged: a hot-exit close counts as handling every query, so AutoRecover's copies are deleted and the
@@ -101,12 +103,19 @@ override, and respects explicit Disconnect. It can restore a connection without 
 sign-in. Missing credentials or a required sign-in leave the target available for an explicit reconnect.
 
 Windows Authentication and Microsoft Entra targets sign in without a password, so startup would send the account's
-credentials to the target's server before the account check could refuse it. Main therefore seals those targets'
-identities in `session.json` with an HMAC whose random key is protected by the operating system's secret storage (the
-same protection as remembered passwords, `src/main/connection-workspace-seal.ts`). A target the seal does not prove (an
-edited or added entry, a removed seal, or a seal that cannot be read this run) loses its remembered account and waits for
-an explicit Reconnect. Without OS secret storage (Linux with no keyring) there is no seal and the file is trusted as
-before. Password targets need no seal: their saved password is bound to the server and TLS settings.
+credentials to the target's server before the account check could refuse it. Main therefore seals each such target
+(destination, account, Explorer membership, resume intent and labels) in `session.json` with an HMAC whose random key is
+protected by the operating system's secret storage (the same protection as remembered passwords,
+`src/main/connection-workspace-seal.ts`). A target the seal does not prove (an edited or added entry, a removed seal, or
+a seal that cannot be read within ten seconds this run) loses its remembered account and waits for an explicit
+Reconnect, which shows the account and server before it signs in. Its tabs, labels and resume intent stay, so a refused
+Keychain prompt costs only that one automatic reconnect. On Linux only a key the keyring holds counts: a blob under
+Chromium's hard-coded fallback key is refused. Only where there is no keyring at all (Linux's `basic_text` backend) is
+there no seal and the file trusted as before; a keyring that is locked, not running yet, unknown or answering with the
+fallback key fails closed. The seal stops a process that can
+write the file but cannot use the OS key. It does not stop one running as the same user that can use that key (DPAPI on
+Windows), nor putting back an older file with its own valid seal; either way credentials only go to a server and account
+main verified before. Password targets need no seal: their saved password is bound to the server and TLS settings.
 
 Only queries that wanted attachment to the exact successfully reconnected target attach. Each keeps its own database;
 an unavailable database needs an explicit choice and never silently falls back to another one. A new SQL session has

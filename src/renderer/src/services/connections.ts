@@ -23,6 +23,11 @@ export interface ConnectionAssociationHandoff {
   adopted(targetId: string): void
   complete(): void
   abandon(explicitlyCancelled?: boolean): void
+  /**
+   * A pending choice holding this handoff open (the Connection Details review) that a close or reload going ahead cancels
+   * instead of being refused by it: a Windows session end must not wait on a dialog. Returns the unregistration.
+   */
+  yieldTo(cancel: () => void): () => void
 }
 
 function withoutPassword(options: ConnectionOptions): SavedOptions {
@@ -41,7 +46,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   private readonly targetEpochs = new Map<string, number>()
   private readonly targetStates = new Map<string, string>()
   private readonly associationHandoffs = new Map<symbol, () => void>()
-  private readonly checkpointYields = new Set<() => void>()
+  private readonly checkpointYields = new Map<symbol, () => void>()
   private targetRevision = 0
   private readonly unsubscribe: () => void
   constructor(readonly connectionTargets = new ConnectionTargetService()) {
@@ -55,16 +60,17 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   isLive(id: string): boolean { return isLiveConnection(this.get(id)) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
   /**
-   * A pending choice that holds a handoff open (the Connection Details review) and that a close or reload cancels instead
-   * of being refused by it: a Windows session end must not wait on a dialog. Returns the unregistration.
+   * Refuses a checkpoint while query affinity is still being handed over. `final`: the close or reload is going ahead now,
+   * so a handoff that yields (a pending details review) is cancelled; before that (the close's first look, which a Save
+   * prompt can still cancel) a yielding handoff is left alone and does not refuse.
    */
-  yieldToCheckpoint(cancel: () => void): () => void {
-    this.checkpointYields.add(cancel)
-    return () => { this.checkpointYields.delete(cancel) }
-  }
-  assertCheckpointReady(): void {
-    for (const cancel of [...this.checkpointYields]) { this.checkpointYields.delete(cancel); cancel() }
-    if (this.associationHandoffs.size) throw new Error('Wait for query tabs to finish connecting, or cancel the connection dialog, before closing or reloading.')
+  assertCheckpointReady(final = true): void {
+    for (const [token, cancel] of [...this.checkpointYields]) {
+      if (!final) continue
+      this.checkpointYields.delete(token)
+      cancel()
+    }
+    if ([...this.associationHandoffs.keys()].some(token => !this.checkpointYields.has(token))) throw new Error('Wait for query tabs to finish connecting, or cancel the connection dialog, before closing or reloading.')
   }
   /** Canonical adoption and query affinity must be one durable checkpoint, including across main's acknowledgement. */
   beginAssociationHandoff(attempt: ConnectionAttempt, canonical: BackendConnectionHandle & { readonly targetId: string }, settled: () => void = () => {}): ConnectionAssociationHandoff {
@@ -100,7 +106,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
       try {
         if (repair && restoreWanted && canonicalId !== sourceId && canonicalValid && this.targetEpochs.get(sourceId) === sourceEpoch)
           registry.restoreCancelledConnectIntent(sourceId)
-      } finally { this.associationHandoffs.delete(token); settled() }
+      } finally { this.associationHandoffs.delete(token); this.checkpointYields.delete(token); settled() }
     }
     this.associationHandoffs.set(token, () => finish(false))
     return {
@@ -114,6 +120,11 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
       abandon: (explicitlyCancelled = false) => {
         if (!adopted) { abandoned = explicitlyCancelled || abandoned === true; return }
         finish(!explicitlyCancelled)
+      },
+      yieldTo: cancel => {
+        if (!this.associationHandoffs.has(token)) return () => {}
+        this.checkpointYields.set(token, cancel)
+        return () => { if (this.checkpointYields.get(token) === cancel) this.checkpointYields.delete(token) }
       }
     }
   }

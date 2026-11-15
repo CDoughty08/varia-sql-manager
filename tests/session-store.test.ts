@@ -89,19 +89,67 @@ describe('the hot exit session store', () => {
     expect((await store.take(true))?.documents).toEqual(tabs.documents)
   })
 
-  it('sets an unrestored session aside instead of replacing it when the page never finished reopening it', async () => {
-    const store = new SessionStore(folder)
+  it('sets an unrestored session aside once, dated now, on the next close that writes or clears', async () => {
+    let now = new Date('2026-01-01T00:00:00Z')
+    const store = new SessionStore(folder, { now: () => now })
     await store.write(tabs, 1)
     const unrestored = await readFile(join(folder, 'session.json'), 'utf8')
+    await utimes(join(folder, 'session.json'), new Date('2025-01-01T00:00:00Z'), new Date('2025-01-01T00:00:00Z'))
     const read = vi.spyOn(jsonFile, 'readJsonFile').mockRejectedValueOnce(new Error('Antivirus held the file.'))
     await expect(store.take(true)).rejects.toThrow('Antivirus held the file.')
     read.mockRestore()
     const later: SessionInput = { activeIndex: 0, documents: [{ name: 'Later.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 9' }] }
-    await store.write(later, 2, true)
-    const kept = (await files()).filter(name => /^session\.json\.invalid-/.test(name))
-    expect(kept).toHaveLength(1)
-    expect(await readFile(join(folder, kept[0]), 'utf8')).toBe(unrestored)
-    expect((await store.take(true))?.documents.map(document => document.name)).toEqual(['Later.sql'])
+    await store.write(later, 2)
+    const aside = async () => (await files()).filter(name => /^session\.json\.invalid-/.test(name))
+    expect(await aside()).toHaveLength(1)
+    expect(await readFile(join(folder, (await aside())[0]), 'utf8')).toBe(unrestored)
+    // Dated when it was set aside, so a purge a day later (with a week's retention) keeps it.
+    now = new Date('2026-01-02T00:00:00Z')
+    await store.purge(Promise.resolve(7))
+    expect(await aside()).toHaveLength(1)
+    // A retried close replaces its own file as usual instead of setting it aside again.
+    await store.write(tabs, 2)
+    expect(await aside()).toHaveLength(1)
+  })
+
+  it('sets an unrestored session aside when the close keeps nothing, and leaves an acknowledged one to the usual rules', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    vi.spyOn(jsonFile, 'readJsonFile').mockRejectedValueOnce(new Error('Antivirus held the file.'))
+    await expect(store.take(true)).rejects.toThrow('Antivirus held the file.')
+    vi.mocked(jsonFile.readJsonFile).mockRestore()
+    await store.clear()
+    expect((await files()).filter(name => /^session\.json\.invalid-/.test(name))).toHaveLength(1)
+    await store.write(tabs, 1)
+    expect((await store.take(true))?.documents).toEqual(tabs.documents)
+    store.restored()
+    await store.clear()
+    expect((await files()).filter(name => /\.invalid-/.test(name))).toHaveLength(1)
+    expect(await files()).not.toContain('previous.json')
+  })
+
+  it('keeps a cancelled close out of a reload, but for the next start', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 4)
+    await store.release(3)
+    expect(store.keptBy(4)).toBe(true)
+    // The page stays open and its user closes these tabs: a reload of this process must not bring them back.
+    await store.release(4)
+    expect(store.keptBy(4)).toBe(false)
+    expect(await store.take(false)).toBeUndefined()
+    // A process that dies before another close still reopens them next start.
+    expect((await new SessionStore(folder).take(true))?.documents).toEqual(tabs.documents)
+  })
+
+  it('removes the file of a cancelled close when it cannot move it, so a reload still does not reopen it', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 4)
+    vi.spyOn(jsonFile, 'replaceFile').mockRejectedValueOnce(new Error('Sharing violation.'))
+    await store.release(4)
+    expect(store.keptBy(4)).toBe(false)
+    expect(jsonFile.replaceFile).toHaveBeenCalled()
+    expect(await files()).not.toContain('session.json')
+    expect(await files()).not.toContain('previous.json')
   })
 
   const workspace = () => connectionWorkspaceSchema.parse({ version: 1, targets: [
@@ -205,6 +253,7 @@ describe('the hot exit session store', () => {
     // A run that crashed after restoring it: the next process's first page reopens it again, and text is never lost.
     const afterCrash = new SessionStore(folder)
     expect((await afterCrash.take(true))?.documents.map(document => document.name)).toEqual(['SQLQuery2.sql', 'Month end', 'orders.sql', 'value.xml'])
+    afterCrash.restored()
     // Its close keeps a new session in place of both.
     await afterCrash.write({ activeIndex: 0, documents: [tabs.documents[0]] }, 1)
     expect(await files()).toEqual(['session.json'])

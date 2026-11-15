@@ -1,4 +1,5 @@
-import { chmod, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
@@ -125,6 +126,8 @@ export class SessionStore {
   private prepared = false
   /** The page generation whose close kept the session, if any. */
   private kept: number | undefined
+  /** A take handed out files no page has acknowledged reopening (`restored`). */
+  private unrestored = false
   constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {}
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -144,23 +147,36 @@ export class SessionStore {
     this.prepared = true
   }
 
-  /**
-   * Keeps `session` for the next start, for `generation`'s close, replacing whatever was kept before. `unrestored`: this
-   * page never finished reopening what it took (the read failed, or the restore did not complete), so the files it would
-   * replace are set aside as quarantined copies (purged with AutoRecover's) instead of being overwritten or deleted.
-   */
-  write(session: SessionInput, generation: number, unrestored = false): Promise<void> {
+  /** Keeps `session` for the next start, for `generation`'s close, replacing whatever was kept before. */
+  write(session: SessionInput, generation: number): Promise<void> {
     return this.serial(async () => {
       const { bytes } = encodeSession(session, this.options)
       await this.prepare()
       // A failed restore must not allow a later close to replace the only copy we could not read or quarantine.
-      const current = await this.read(this.current), previous = await this.read(this.previous)
-      if (unrestored && current) await quarantine(this.current)
-      if (unrestored && previous) await quarantine(this.previous)
+      await this.setAsideUnrestored(await this.read(this.current), await this.read(this.previous))
       await writeBytesAtomic(this.current, bytes, { mode: 0o600 })
       await rm(this.previous, { force: true })
       this.kept = generation
     })
+  }
+
+  /** A page reopened what `take` handed it: its files are no longer the only copy of tabs nobody saw. */
+  restored(): void { this.unrestored = false }
+
+  /**
+   * A take that no page acknowledged (the read failed, or the restore stopped part-way) leaves the files as the only copy
+   * of tabs the user never saw. The first close after it sets them aside as quarantined copies, dated now so the purge
+   * keeps them for the full Keep AutoRecover information for, instead of overwriting or deleting them.
+   */
+  private async setAsideUnrestored(current: SessionRecord | undefined, previous: SessionRecord | undefined): Promise<void> {
+    if (!this.unrestored) return
+    for (const [record, path] of [[current, this.current], [previous, this.previous]] as const) {
+      if (!record) continue
+      const aside = `${path}.invalid-${randomUUID()}.json`, now = this.options.now?.() ?? new Date()
+      await rename(path, aside)
+      await utimes(aside, now, now).catch(() => {})
+    }
+    this.unrestored = false
   }
 
   /**
@@ -169,6 +185,7 @@ export class SessionStore {
    */
   take(previous: boolean): Promise<SessionRecord | undefined> {
     return this.serial(async () => {
+      this.unrestored = true
       const current = await this.read(this.current)
       if (current) {
         await this.read(this.previous)
@@ -179,11 +196,24 @@ export class SessionStore {
     })
   }
 
+  /**
+   * `generation` cancelled the close it kept a session for, and stays open. Its file moves to `previous.json`: a reload of
+   * this process (which takes only `session.json`) must not reopen tabs the user went on to close, while the next start
+   * still has it if the process dies before another close.
+   */
+  release(generation: number): Promise<void> {
+    return this.serial(async () => {
+      if (this.kept !== generation) return
+      // If the move fails the file must still not be reloaded: removing it is the fallback, and only then is the mark gone.
+      try { if (await this.read(this.current)) await replaceFile(this.current, this.previous) } catch { await rm(this.current, { force: true }) }
+      this.kept = undefined
+    })
+  }
+
   /** Deletes what was kept when the close leaves no session to reopen. */
   clear(): Promise<void> {
     return this.serial(async () => {
-      await this.read(this.current)
-      await this.read(this.previous)
+      await this.setAsideUnrestored(await this.read(this.current), await this.read(this.previous))
       await rm(this.current, { force: true })
       await rm(this.previous, { force: true })
       this.kept = undefined

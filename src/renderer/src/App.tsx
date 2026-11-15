@@ -36,7 +36,7 @@ import ConnectDialog from './ConnectDialog'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
 import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
-import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, type OpenedConnection } from './services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
@@ -93,11 +93,8 @@ export default function App() {
   // A close or reload drops the review as Cancel would, rather than be refused while its handoff is open.
   useEffect(() => {
     if (!detailsReview) return
-    return workbench.connections.yieldToCheckpoint(() => {
-      detailsReview.association?.abandon(true)
-      setDetailsReview(current => current === detailsReview ? undefined : current)
-    })
-  }, [detailsReview, workbench])
+    return yieldReviewToClose(detailsReview, () => setDetailsReview(current => current === detailsReview ? undefined : current))
+  }, [detailsReview])
   // The connected server whose Environment dialog is open.
   const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
