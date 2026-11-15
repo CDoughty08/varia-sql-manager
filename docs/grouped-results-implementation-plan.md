@@ -926,7 +926,7 @@ Outcome, accepted by the owner:
       - Narrow panes: the results toolbar folds by its own measured width (`toolbarFolds`, `fitFold`, `data-fold` words),
         not by window media queries, so a docked or popped-out pane folds as a narrow window does, whatever the fonts:
         Tabs, then tightening (the old 1,180 px rules), then Transposed, Headers and Compare, Sort text by, White space and
-        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). PR 18 replaced this: the field never narrows past its placeholder. The 1,440 px and 1,180 px media queries are gone.
+        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). PR 18 replaced this: the field keeps its whole placeholder until every group has folded. The 1,440 px and 1,180 px media queries are gone.
       - A new context menu, `output.tools` (**More results tools**, the toolbar's ⋯ after Close Results, target kind
         `resultsTools`, whose items run with the toolbar's `tabId` and no target), holds every tool: Results as Tabs, Go to
         Result…, Pivot…, Compare…, Transposed, Choose Headers…, Column Profile, Row Size, the White space and Sort text by
@@ -1123,10 +1123,13 @@ Outcome, accepted by the owner:
         - The search field: PR 15's box kept 160 px, but its count, arrows and Data or Columns took most of it, leaving
           the input about 32 px ("Se" at 1500 px) and about 12 px once Transposed and Compare folded. The field's least
           width is now its whole placeholder, set by the placeholder drawn unseen beside the input, so it follows fonts
-          and popouts; the box no longer gives up its width at any fold, and the groups fold sooner instead. Measured on
+          and popouts; the groups fold sooner instead, and only once all of them have folded (Show is in the fold) does the field
+          give up width, since in a 360 px popout the whole placeholder pushed ⋯ and Close Results past the clipped edge. Measured on
           Windows in a 1,024 px window, Sort text by now folds into ⋯ and White space stays with 34 px to spare; Linux's
-          wider fonts may fold White space too, so `results-smoke` 14b then makes its choices from the grid's menu. `grouped-results-smoke` checks the
-          placeholder fits in both modes, at 900 px and in the popout at 640 and 360 px.
+          wider fonts may fold White space too, so `results-smoke` 14b then makes its choices from the grid's menu. Only main's Linux 1,024 px run can take that
+          path in CI; it was run once locally with White space forced folded. `grouped-results-smoke` checks the
+          placeholder fits in both modes, at 900 px and in the popout at 640 and 360 px, and at 360 px that everything has
+          folded and the whole toolbar, ⋯ included, still fits.
         - The Pivot builder in a short pane: below about 180 px its footer note and Build Pivot were cut off. A container
           query on the builder (`pivot-panel`, at most 200 px tall) hides its explanations (`pivot-aside`), never its
           errors or waiting notes, so Build Pivot stays whole; `grouped-results-smoke` checks it at 120 px.

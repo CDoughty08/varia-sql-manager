@@ -2197,7 +2197,8 @@ try {
   await expect.poll(() => cellText(3, 2)).toBe('😀·astral')
   // A line break Spaces does not mark stays one line, as it shows when off.
   expect(await cellText(5, 2)).toBe('tab→line quote"\\')
-  if (whitespaceFolded) await fromGridMenu(/^Show All White Space/)
+  // Asked again: a pressed button is bold, so a group that only just fitted may have folded once Spaces was pressed.
+  if (whitespaceFolded || !(await whitespace.isVisible())) await fromGridMenu(/^Show All White Space/)
   else {
     await choice('Spaces').press('ArrowRight')
     await expect(choice('All')).toBeFocused()

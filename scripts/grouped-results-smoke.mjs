@@ -460,7 +460,10 @@ try {
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(360, 480) })
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
-  expect(await searchPlaceholderFit(popout)).toMatchObject({ fits: true })
+  // The whole toolbar, ⋯ and Close Results included: with every group folded the field gives up its placeholder's width
+  // rather than push them past the toolbar's clipped edge.
+  expect(await resultsToolbarFit(popout)).toMatchObject({ fits: true, fold: 'layout tight view sort space show' })
+  await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()

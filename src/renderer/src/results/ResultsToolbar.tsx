@@ -87,7 +87,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
  * How the results toolbar gives way in a narrow pane, in order: Tabs goes (it is in the ⋯ menu and the Window menu), the
  * groups tighten (no icons beside them, the search box's magnifier and Previous and Next go: Enter, Shift+Enter and F3 still
  * step), then Transposed, Headers and Compare, then Sort text by, White space, and the Show group. The search field never
- * narrows past its placeholder. Search, Close Results
+ * narrows past its placeholder until every group has folded; only then does it give up width. Search, Close Results
  * and ⋯ (which holds every tool) stay. The toolbar measures its own width, not the window's, so a pane docked beside the
  * editor or popped out into a window of its own folds as a narrow window does, whatever the fonts.
  */

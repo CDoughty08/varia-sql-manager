@@ -71,7 +71,7 @@ export const part = {
   resultsSearchIcon: '.results-search-icon',
   /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
   resultsSearchCount: '.results-search-count',
-  /** The results search box (input, count, Previous and Next, Data or Columns), whose field never narrows past its whole placeholder. */
+  /** The results search box (input, count, Previous and Next, Data or Columns), whose field keeps its whole placeholder until every group has folded. */
   resultsSearch: '.results-search',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',

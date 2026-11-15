@@ -861,8 +861,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
 .results-search-field { display: grid; flex: 1 1 0; }
 /* The placeholder drawn unseen in the field's one cell sets its least width (a flex item's automatic minimum), so the
-   placeholder always shows whole; the input itself has no width of its own. */
+   placeholder shows whole while any group is left to fold; the input itself has no width of its own. Once everything has
+   folded (Show, the last), the field narrows instead, so ⋯ and Close Results never run past the clipped edge. */
 .results-search-field::after { content: attr(data-placeholder); grid-area: 1 / 1; height: 0; visibility: hidden; white-space: pre; font-size: var(--varia-size-xs); }
+.results-toolbar[data-fold~="show"] .results-search-field::after { display: none; }
 .results-search input { grid-area: 1 / 1; width: 100%; min-width: 0; padding: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
 .results-search-count { flex-shrink: 0; font-size: var(--varia-size-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
