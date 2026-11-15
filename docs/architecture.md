@@ -296,7 +296,8 @@ being true.
 - A Pivot follows its Table's filters only through `PivotService.followGroup`, looked at in a microtask after a results
   publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer. It decides over the published run only
   (it waits while the grid shows a view not yet published), rebuilds through Update's path, and builds over each set of
-  filters at most once per run (`tried`), so a failure, a refusal or a cancel never loops. Whether a Pivot is shown is
+  filters at most once per run (`tried`; filters whose automatic build it gave up itself may be tried again), so a
+  failure, a refusal or a cancel never loops. Whether a Pivot is shown is
   `pivotShown`, a function of the run, the layout and the stack's collapsed entries, so every collapse change goes through
   `ResultsService.setCollapsed`, which publishes; do not mutate `TabViewState.collapsed` elsewhere. The threshold is
   `pivotFollow`, in one place.

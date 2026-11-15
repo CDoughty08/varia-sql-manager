@@ -934,10 +934,12 @@ Outcome, accepted by the owner:
         made again rebuilds; a user's Cancel counts the filters shown at that moment as tried, so the cancel is not undone
         at once by an automatic build over filters changed meanwhile. Every build that ends looks at the Pivot again, so a
         failed Build Pivot whose filters changed while it ran is followed then, not at the next unrelated publish. An
-        automatic build leaves the builder's error as it is (that failed Build Pivot's reason stays), is named by the
+        automatic build leaves a failed Build Pivot's reason in the builder (and clears an earlier automatic build's or
+        Update's, which it answers), is named by the
         filters of the view it actually reads, and its provenance says `followed`, so the Tabs layout does not select the
         Pivot for it (the user may have gone back to the Table since it started). `followGroup` decides nothing while the
-        grid shows a view the results have yet to publish (they publish on the next frame); that publish looks again.
+        grid shows a view the results have yet to publish (they publish on the next frame); that publish looks again. A
+        Cancel records the grid's newest view's filters as tried, published or not.
       - The rebuild is `PivotService.start` with the Pivot's own recipe, as Update: the Table's shown view held, one of
         the shared places with its retries, `addSet`'s atomic replacement, the draft untouched. Failure, refusal or a
         cancel from the caption keeps the old Pivot and its mark, and the toolbar says why with PR 10's sentences (nobody

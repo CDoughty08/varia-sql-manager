@@ -1713,6 +1713,74 @@ describe("a Pivot following its Table's filters", () => {
     expect(pivotOutOfDate(tab, tab.groups[0])).toBe(false)
   })
 
+  it("clears an automatic rebuild's or an Update's failure once the Pivot follows its filters, keeping only a failed Build Pivot's", async () => {
+    const f = await following()
+    const failure = 'There is not enough result memory to pivot these rows. Close other results and try again.'
+    const said = `${failure.replace(/\.$/, '')}, or close Pivot of Result 1 and build it again.`
+    // An automatic rebuild over F1 fails; the one over F2 builds: what F1's said goes.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', failure))
+    await f.show(f1)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe(said)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValueOnce(pivoted(901))
+    await f.show(f2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    // An Update over F3 fails (the Pivot collapsed, so it waited for the user); expanded over F4, it follows, and the
+    // Update's failure goes.
+    f.results.setCollapsed('t1', new Set([f.group().pivot!.key]))
+    const f3 = view(f.first, 3, [{ op: 'in', column: 0, rows: [4], nulls: false }])
+    await f.show(f3)
+    f3.pivot.mockRejectedValueOnce(new ResultError('TOO_LARGE', failure))
+    await f.pivot.update('t1', f.one)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBe(said)
+    const f4 = view(f.first, 4, [{ op: 'in', column: 0, rows: [5], nulls: false }])
+    f4.pivot.mockResolvedValueOnce(pivoted(902))
+    await f.show(f4)
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it("counts the grid's newest view as tried on a Cancel, even before the results publish it", async () => {
+    const clock = { ms: 0 }
+    const f = fixture({ frames: true, follow: { layout: () => 'stacked', onLayout: () => () => {} }, now: () => clock.ms })
+    const [first] = f.run(1)
+    f.flush()
+    const one = keyAt(f.results, 't1', 0)
+    f.pivot.open('t1', one)
+    vi.mocked(first.pivot).mockImplementationOnce(async () => pivoted(801, 3))
+    await f.pivot.run('t1')
+    f.flush()
+    await wait()
+    const showView = async (shown: ResultView, publish: boolean) => {
+      vi.mocked(first.sort).mockResolvedValueOnce(shown)
+      f.results.sortBy('t1', one, 0, 'ascending')
+      await settle()
+      if (publish) f.flush()
+      f.results.viewShown('t1', one, shown)
+      if (publish) f.flush()
+      await wait()
+    }
+    // F1 published: its rebuild runs. F2 shows in the grid, a frame before it publishes, and the user cancels then.
+    const f1 = view(first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    f1.pivot.mockImplementationOnce(() => new Promise(() => {}))
+    await showView(f1, true)
+    expect(f1.pivot).toHaveBeenCalledOnce()
+    const f2 = view(first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    f2.pivot.mockResolvedValue(pivoted(902))
+    await showView(f2, false)
+    f.pivot.cancel('t1', 1)
+    f.flush()
+    await wait()
+    f.flush()
+    await wait()
+    expect(f2.pivot).not.toHaveBeenCalled()
+    expect(pivotOutOfDate(f.results.getSnapshot().t1, f.results.getSnapshot().t1.groups[0])).toBe(true)
+  })
+
   it('follows nothing without a layout host, nor in a run that has no Pivot yet', async () => {
     // The checks that build no host: nothing follows.
     const { results, pivot, run } = fixture()

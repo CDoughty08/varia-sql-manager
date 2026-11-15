@@ -132,8 +132,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   /** New results other services are building for a tab's current run (comparisons), counted against its 1,000. */
   private readonly elsewhere: (tabId: string) => number
   /** Why each group's last build failed, by tab and ordinal: the builder shows it only while it is that group's, until
-   *  that group's draft is edited or it is built again. */
-  private readonly errors = new Map<string, Map<number, string>>()
+   *  that group's draft is edited or it is built again. `draft`: a Build Pivot of the builder's draft failed, which a
+   *  Pivot following its Table's filters (another recipe, its own) does not answer, so an automatic build keeps it. */
+  private readonly errors = new Map<string, Map<number, { readonly text: string; readonly draft: boolean }>>()
   /** Strips of pivots added whose sets the results have not shown yet (they publish them on the next frame), with the
    *  tab and run they were added to: a publish for another tab in between must not drop them. */
   private readonly fresh = new Map<string, { readonly tabId: string; readonly queryId: string }>()
@@ -285,7 +286,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     builds.delete(group.ordinal)
     // A user's build starts afresh; an automatic one leaves what the last build said (a Build Pivot of another recipe
     // that failed while the filters changed), so following the filters never hides why the user's build failed.
-    if (!auto) this.errors.get(tabId)?.delete(group.ordinal)
+    if (!auto || !this.errors.get(tabId)?.get(group.ordinal)?.draft) this.errors.get(tabId)?.delete(group.ordinal)
     const abort = new AbortController()
     // The rows as the grid shows them now: canPivot refused while a sort or filter was being built.
     const shown = this.results.sortOf(tabId, entry.key)?.view
@@ -356,7 +357,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       hold?.()
       if (this.running.get(tabId)?.get(item.ordinal) === item) {
         this.running.get(tabId)!.delete(item.ordinal)
-        if (error) this.fail(tabId, item.ordinal, error)
+        if (error) this.fail(tabId, item.ordinal, error, !item.update)
         // Update's caller, or a caption's Cancel, may not be looking at the builder: the toolbar says it too, while the run is still the one it
         // updated (a new run or a closed tab has nothing to say it about).
         if (error && (item.update || item.cancelled) && this.results.getSnapshot()[tabId]?.queryId === item.queryId) this.results.notify(tabId, error)
@@ -401,10 +402,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const build = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal)
     if (!build) return
     build.cancelled = true
-    // The user stopped it: the filters the Table shows now count as tried, so the cancel is not undone at once by an
-    // automatic build over filters changed while it ran (Update still asks for one).
+    // The user stopped it: the filters the Table's grid shows now (its own state, which may be a frame ahead of the
+    // published run) count as tried, so the cancel is not undone at once by an automatic build over filters changed while
+    // it ran (Update still asks for one).
     const tab = this.results.getSnapshot()[tabId]
-    if (tab?.queryId === build.queryId) this.tried.get(tabId)?.set(build.ordinal, { queryId: build.queryId, filters: filtersIdentity(shownFilters(tab, build.source)) })
+    if (tab?.queryId === build.queryId) this.tried.get(tabId)?.set(build.ordinal, { queryId: build.queryId, filters: filtersIdentity(this.results.sortOf(tabId, build.source)?.view?.filters ?? []) })
     build.abort.abort()
   }
 
@@ -425,10 +427,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (!same) this.publish({ ...current, building })
   }
 
-  private fail(tabId: string, ordinal: number, error: string): void {
+  private fail(tabId: string, ordinal: number, error: string, draft = true): void {
     let errors = this.errors.get(tabId)
     if (!errors) this.errors.set(tabId, errors = new Map())
-    errors.set(ordinal, error)
+    errors.set(ordinal, { text: error, draft })
   }
 
   /** The ordinal, while the run has a group of it that can be pivoted, or may yet return one. */
@@ -444,7 +446,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (ordinal === undefined) this.groups.delete(tabId)
     else this.groups.set(tabId, ordinal)
     const group = ordinal === undefined ? undefined : tab.groups.find(item => item.ordinal === ordinal)
-    const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)
+    const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)?.text
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
       open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
@@ -571,6 +573,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
    */
   private followGroup(tabId: string, tab: TabResults, group: ResultGroup, layout: ResultsLayout, collapsed: ReadonlySet<EntryKey>): void {
     const recipe = group.pivot?.pivot?.recipe
+    if (!recipe) return
     // A build already given up (superseded, cancelled) is no longer in flight here, though it stays listed until it settles.
     const build = this.running.get(tabId)?.get(group.ordinal), live = build?.queryId === tab.queryId && !build.abort.signal.aborted ? build : undefined
     // The grid's filters may have shown a newer view not yet published (results publish on the next frame): its publish

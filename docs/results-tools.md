@@ -87,7 +87,9 @@ back to Results or to the stacked layout). A newer filter change stops a rebuild
 newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
 marked, says why in the results toolbar, and is not tried again by itself for those filters in this run (Update still
 asks for it). A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
-clear what the builder says about a Build Pivot of yours that failed. A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
+clear what the builder says about a Build Pivot of yours that failed (it does clear what an earlier automatic rebuild or
+Update said). Like Update, it removes the Pivot's own filters, selection and scroll, and the toolbar says so, though you
+did not click anything. A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
 letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
 reach it.
 
