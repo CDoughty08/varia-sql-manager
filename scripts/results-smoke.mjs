@@ -1018,7 +1018,8 @@ try {
     await choose(join(saveDir, file))
     await cell(0, 0, of).click()
     await page.keyboard.press('Control+S')
-    await expect(notice).toHaveText(`Saved 5 rows to ${file}.`)
+    // N1 rows hold values the grid truncates, so the notice goes on to count them.
+    await expect(notice).toContainText(`Saved 5 rows to ${file}.`)
     expect(basename((await lastDialog()).defaultPath)).toMatch(expected)
   }
   // A save held after its first page shows its strip; Escape in the grid cancels it, and neither the file nor its
@@ -1040,7 +1041,7 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
   await page.keyboard.press('Escape')
   await expect(notice).toHaveText('Saving was cancelled. The file was not written.')
-  await expect.poll(files).toEqual(['w1.csv', 'w1.json', 'w1.txt'])
+  await expect.poll(files).toEqual(['result2.csv', 'totals1.csv', 'w1.csv', 'w1.json', 'w1.txt'])
   // Running the query again releases the result, but the save goes on with its strip and finishes the file.
   await choose(join(saveDir, 'kept.csv'))
   await cell(0, 0).click()
