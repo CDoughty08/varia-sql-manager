@@ -300,7 +300,7 @@ Profile, Row size and Pivot group. The search box keeps its whole placeholder ("
 names" while it searches column names): the groups fold instead, and only once all of them have folded does the field
 narrow, so **⋯** and **Close Results** stay in view. In a short pane the Pivot builder drops
 its explanations (such as "Building again replaces…") so **Build Pivot** stays whole. **⋯** (More results tools) at the
-toolbar's end, with **Close Results**, always shows and holds every tool: Results as Tabs, Go to Result…, Pivot…,
+toolbar's end, with **Close Results**, shows in any Results pane at least about 400 px wide and holds every tool: Results as Tabs, Go to Result…, Pivot…,
 Compare…, Transposed, Choose Headers… (while the grid is transposed), Column Profile, Row Size, Show Spaces and Tabs,
 Show All White Space, Sort Text by Characters or Bytes, and Close Results.
 

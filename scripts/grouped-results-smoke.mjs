@@ -469,12 +469,15 @@ try {
   // While White space shows, its chosen button is the toolbar's Tab stop; narrower still, it folds away with the stop and
   // ⋯ takes it, so Tab still reaches the toolbar.
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
-  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(360, 480) })
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
-  // The whole toolbar, ⋯ and Close Results included: with every group folded the field gives up its placeholder's width
-  // rather than push them past the toolbar's clipped edge.
-  expect((await resultsToolbarFit(popout)).fits).toBe(true)
+  const popoutWidth = width => application.evaluate(({ BrowserWindow }, width) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(width, 480) }, width)
+  // At 400 px the whole toolbar fits, ⋯ and Close Results included: once every group has folded the field gives up its
+  // placeholder's width rather than push them past the toolbar's clipped edge. (At 360 px the views, the status's least
+  // width and the pane menu leave the toolbar no more than it needs on Windows; wider fonts tip it over.)
+  await popoutWidth(400)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fits, { message: JSON.stringify(await resultsToolbarFit(popout)) }).toBe(true)
   await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
+  await popoutWidth(360)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()

@@ -1129,8 +1129,10 @@ Outcome, accepted by the owner:
           wider fonts may fold White space too, so `results-smoke` 14b then makes its choices from the grid's menu. Only main's Linux 1,024 px run can take that
           path in CI; it was run once locally with White space forced folded. `grouped-results-smoke` checks the
           placeholder fits in both modes at 1,500 px, and in the current mode at 900 px and in the popout at 640 px, that the toolbar folds again there when a
-          group grows inside it and unfolds when it shrinks back, and at 360 px that everything has folded and the whole toolbar, ⋯ included,
-          still fits. The fold now also watches the toolbar's own groups and any tool coming, going or pressed inside it, so
+          group grows inside it and unfolds when it shrinks back, at 400 px that the whole toolbar, ⋯ included,
+          fits, and at 360 px that everything has folded. At 360 px the view tabs, the status's least width (96 px) and the
+          pane menu leave the folded toolbar just the room it needs on Windows, and Linux's wider fonts tip it over, so ⋯
+          shows whole in a Results pane at least about 400 px wide. The fold now also watches the toolbar's own groups and any tool coming, going or pressed inside it, so
           growth inside a toolbar already as wide as its pane (Headers, a pressed choice turning bold, the count) folds it
           again, and Headers leaving a Show group it folded unfolds it.
         - The Pivot builder in a short pane: below about 180 px its footer note and Build Pivot were cut off. A container
@@ -1166,6 +1168,8 @@ Not in this work. Each is open; the entry that left it is named in brackets.
   is on screen in a popout or docked pane (PR 17).
 - A superseded automatic build is cancelled when the newer view publishes, not when it starts building (PR 17).
 - A selector for Column Profile and the Pivot builder in a narrow pane; both sit side by side today (PR 18).
+- A Results pane narrower than about 400 px: the status keeps 96 px, so the folded toolbar's ⋯ can be cut off; the
+  status could give way first (PR 18).
 - PR 1's memory-probe checks name byte counts; look at them again if packed pages change what a stored page charges
   (Result memory work alongside).
 
