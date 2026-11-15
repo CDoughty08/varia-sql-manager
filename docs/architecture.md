@@ -269,8 +269,9 @@ being true.
   policy runs (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`): the row stays open and the ingestion waits outside every lock
   (`WaitForRoomAsync`, `SqlService.WaitAndCommitAsync`, at most `RoomWaitMs` a wait, `SqlService.MaxRoomWaits` waits a row and `MaxRoomWaitMs` in all for the query; the rows committed before the waiting row are sealed only once it ends) while the policy packs, at once and
   at normal priority on the workers' gate (`Pack`'s `workers`, a page an item, sharing the threads fairly with other
-  result work), every complete result of 1 MiB or more not held that could make room for it, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (`ForRoom`, `MakeRoom`, `PackForRoom`: any query's
-  for the global budget, only its own when its own half is full; hidden first, then largest), then commits the same row again. With
+  result work), the complete results of 1 MiB or more not held that could make room for it, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (`ForRoom`, `MakeRoom`, `PackForRoom`: any query's
+  for the global budget, only its own when its own half is full; hidden first, then largest; one after another until no
+  query still waits, `StillWaited`), then commits the same row again. With
   nothing to pack the wait ends at once and the row is refused as before; a stop is never undone, since stored rows are
   a prefix of the rows read. The checks' stores leave packing off unless a check turns it on
   (`SqlService`'s `packHidden`), and their second pass packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a

@@ -6,7 +6,8 @@ The rule agreed with the owner still holds: results stay in memory and never spi
 **Status (2026-11-14):** every step of the [proposed PR order](#proposed-pr-order) is in. The product packs every
 complete result of 1 MiB or more that no window has shown for 5 seconds (stage 1, `ResultPacker`), and a shown one
 once it has been idle for 30 seconds (stage 2); fused reads cover every whole-result operation but a search through a
-sorted view and a transposed Copy or Save, and the Memory panel's Nerd metrics report the packed figures. See
+view far from its pages' order, a diff whose first result is read far from its pages' order, a transposed Copy or Save,
+and a pivot or extract refused its rooms, and the Memory panel's Nerd metrics report the packed figures. See
 [Stage 1 as built](#stage-1-as-built) and [Stage 2 as built](#stage-2-as-built) for where they differ from the design below.
 
 The first version of this page measured only what .NET 10 has (Brotli, Deflate, ZLib) and recommended Brotli. The
@@ -574,9 +575,9 @@ live, not held), once it is idle. Measured first, then each rule settled:
 - **Room for a query.** A query's row the budget refuses (its half or the global budget) no longer stops it while
   something could be packed (`ResultStore.CanMakeRoom`): the row stays open, the ingestion waits outside every lock
   (`WaitForRoomAsync`, up to 10 s a wait, 4 waits a row, 30 s in all for the query), and the policy packs, at once and at normal priority
-  on the workers' gate (`ViewSorter.Gate`, a page an item, so it shares the threads fairly with sorts and reads), every
-  complete result of 1 MiB or more not held that could make room: any query's for the global budget, only the query's own when its half is full,
-  hidden first, then largest. A user is waiting, so this ignores the idle delays, but never takes a result the user is
+  on the workers' gate (`ViewSorter.Gate`, a page an item, so it shares the threads fairly with sorts and reads), the
+  complete results of 1 MiB or more not held that could make room: any query's for the global budget, only the query's own when its half is full,
+  hidden first, then largest, one after another until no query still waits. A user is waiting, so this ignores the idle delays, but never takes a result the user is
   working with: a shown one with an open view (its screens would read packed pages with no room left for the cache), or
   one an operation unpacked and still uses (its next operation would need that room again and could be refused). The
   new query is truncated instead, as it was before. While a row waits, the rows committed before it are not yet sealed. With nothing to pack, or once the waits

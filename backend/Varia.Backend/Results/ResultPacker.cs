@@ -6,8 +6,8 @@ namespace Varia.Backend.Results;
 /// (<see cref="ResultVisibility"/>, from results.visibility). Stage 2: packs a shown one too once it has been idle for
 /// <see cref="VisibleIdleMs"/>: no read, operation, Copy or Save (a pin or lease of the set) and no whole unpack since,
 /// doubling the wait each time an operation has unpacked it (<see cref="MaxBackoff"/>), so a result in use is never packed
-/// and unpacked in a loop. Under budget pressure (a query's row refused, <see cref="MakeRoom"/>) it packs every complete
-/// result that could make room at once, on the results' shared workers. Never a result still storing rows, a live table,
+/// and unpacked in a loop. Under budget pressure (a query's row refused, <see cref="MakeRoom"/>) it packs complete results
+/// that could make room at once, one after another until no query still waits, on the results' shared workers. Never a result still storing rows, a live table,
 /// or one a read, operation or job holds (<see cref="ResultSetBuffer.Pack"/> refuses those and asks to be told when they end).
 /// </summary>
 /// <remarks>
@@ -229,7 +229,7 @@ internal sealed class ResultPacker : IDisposable
     /// packed against about 1 ms raw (measured), which an open view is meant to spare. Only when the budget has room for it, as an operation's
     /// unpack (<see cref="ResultSetBuffer.TryUnpackAll"/>, on the workers' gate, at normal priority since the user is
     /// looking at it); refused, its screens still read the packed pages. Never while a query waits for room, nor a result
-    /// held, nor while a query waits for room, and only with as much room again left over, so it never takes the room a
+    /// held, and only with as much room again left over, so it never takes the room a
     /// running query is about to need. It is not a use (<see cref="ResultSetBuffer.ViewUnpacks"/>): closing the view leaves
     /// the result's waits, and whether packing for room may take it, as they were.</summary>
     /// <param name="forRoom">This pass packed for a waiting query: leave the room to it.</param>
@@ -325,7 +325,7 @@ internal sealed class ResultPacker : IDisposable
     }
 
     /// <summary>Packs for the queries that asked for room since the last pass: every complete result not held that could make
-    /// room for them, hidden ones first and largest first, shown or not, idle or not, with no delay and whatever its size. A
+    /// room for them, hidden ones first and largest first, shown or not, idle or not, with no delay, though never one under <see cref="FloorBytes"/>. A
     /// query waits for it, so it runs at normal priority on the results' shared workers (<see cref="ViewSorter.Gate"/>),
     /// sharing them fairly with the other result work, and stops once no query asks again (each page's saving wakes the
     /// waits, which ask again while they still have no room). A read that ends between two pages does not stop it; one
