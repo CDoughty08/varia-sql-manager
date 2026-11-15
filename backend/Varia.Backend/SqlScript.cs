@@ -151,7 +151,8 @@ internal static class SqlScript
             }
         }
 
-        // The markers from start to stop, made relative to `origin`; those after stop wait for the next batch.
+        // The markers from start to stop, made relative to `origin`; those after stop wait for the next batch, and those
+        // before start (on a GO line, between GO and its count) are in no batch and name nothing.
         IReadOnlyList<ResultMarker> Take(int start, int stop, int origin)
         {
             if (markers is null) return [];
@@ -159,6 +160,7 @@ internal static class SqlScript
             foreach (var marker in markers)
                 if (marker.Offset >= stop) left.Add(marker);
                 else if (marker.Offset >= start) taken.Add(marker with { Offset = marker.Offset - origin, End = marker.End - origin });
+                else unbatched?.Add(marker);
             markers = left.Count == 0 ? null : left;
             return taken;
         }

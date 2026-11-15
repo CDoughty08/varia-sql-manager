@@ -697,6 +697,38 @@
         ],
         "unapplied": []
       }
+    },
+    {
+      "name": "a marker between GO and its count is in no batch: it is noted, not dropped",
+      "sql": "SELECT 1 AS a;\nGO /* #Name=\"x\" */ 3\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"x\" (line 2) is unused: no statement follows it in its batch."
+      ]
+    },
+    {
+      "name": "SET NOEXEC inside an IF applies no name: a GO 2 repetition starts with NOEXEC on",
+      "sql": "-- #Name=\"A\"\nSELECT 1 AS a;\nIF 1 = 1 BEGIN SET NOEXEC OFF; SELECT 9 AS z; SET NOEXEC ON; END\nGO 2",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"A\" (line 1) was not applied: a SET NOEXEC statement on line 3 in its batch can make SQL Server skip statements without an error."
+      ]
+    },
+    {
+      "name": "SET NOEXEC OFF inside an IF after an ON in an earlier batch applies no name",
+      "sql": "SET NOEXEC ON;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;\nIF 1 = 1 BEGIN SET NOEXEC OFF; SELECT 9 AS z; END",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"A\" (line 3) was not applied: a SET NOEXEC statement on line 5 in its batch"
+      ]
     }
   ]
 }

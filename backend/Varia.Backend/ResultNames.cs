@@ -154,19 +154,14 @@ internal static class ResultNames
         };
     }
 
-    /// <summary>Parses on a thread with a large stack; the caller may stop waiting (the parse then finishes by itself).</summary>
-    internal static Task<(TSqlFragment Fragment, int Errors)> ParseAsync(string text)
+    /// <summary>Runs a parse and the walks over its tree on a thread with a large stack; the caller may stop waiting (the work
+    /// then finishes by itself).</summary>
+    internal static Task<T> OnParseThreadAsync<T>(Func<T> work)
     {
-        var done = new TaskCompletionSource<(TSqlFragment, int)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            try
-            {
-                var parser = new TSql180Parser(initialQuotedIdentifiers: true);
-                using var reader = new StringReader(text);
-                var fragment = parser.Parse(reader, out var errors);
-                done.SetResult((fragment, errors.Count));
-            }
+            try { done.SetResult(work()); }
             catch (Exception error) { done.SetException(error); }
         }, ParseStackBytes) { IsBackground = true, Name = "Varia result names" };
         thread.Start();
@@ -188,11 +183,14 @@ internal sealed class ResultNamePlan
     private ResultNamePlan(IReadOnlyList<ResultNameSlot> slots, IReadOnlyDictionary<int, int> columns, IReadOnlyList<string> notes)
     {
         Slots = slots;
+        SlotAt = Enumerable.Range(0, slots.Count).ToDictionary(index => slots[index].Position);
         Columns = columns;
         Notes = notes;
     }
 
     public IReadOnlyList<ResultNameSlot> Slots { get; }
+    /// <summary>The index in <see cref="Slots"/> of the slot at each named place (no two slots share one).</summary>
+    public IReadOnlyDictionary<int, int> SlotAt { get; }
     public IReadOnlyDictionary<int, int> Columns { get; }
     public IReadOnlyList<string> Notes { get; }
 
@@ -209,14 +207,20 @@ internal sealed class ResultNamePlan
         // Before the parse as well as while waiting: a parse can finish before WaitAsync looks at the token.
         token.ThrowIfCancellationRequested();
         var firstLine = sourceStartLine + batch.StartLine - 1;
-        TSqlFragment? fragment;
-        int errors;
-        // A failure inside ScriptDom costs the batch its names, never the run.
-        try { (fragment, errors) = await ResultNames.ParseAsync(batch.Sql).WaitAsync(token).ConfigureAwait(false); }
-        catch (Exception error) when (error is not OperationCanceledException) { (fragment, errors) = (null, 1); }
-        if (errors > 0 || fragment is not TSqlScript script)
-            return new([], new Dictionary<int, int>(), [$"Result names in the batch starting on line {firstLine.ToString("N0", CultureInfo.InvariantCulture)} were not applied: the batch does not parse."]);
-        return Build(script.Batches.SelectMany(parsed => parsed.Statements).ToList(), markers, firstLine);
+        // The parse and the walk over its tree (which recurses as deeply) both run on the parse thread's large stack. A
+        // failure inside ScriptDom costs the batch its names, never the run.
+        ResultNamePlan? plan;
+        try
+        {
+            plan = await ResultNames.OnParseThreadAsync(() =>
+            {
+                using var reader = new StringReader(batch.Sql);
+                var fragment = new TSql180Parser(initialQuotedIdentifiers: true).Parse(reader, out var errors);
+                return errors.Count > 0 || fragment is not TSqlScript script ? null : Build(script.Batches.SelectMany(parsed => parsed.Statements).ToList(), markers, firstLine);
+            }).WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException) { plan = null; }
+        return plan ?? new([], new Dictionary<int, int>(), [$"Result names in the batch starting on line {firstLine.ToString("N0", CultureInfo.InvariantCulture)} were not applied: the batch does not parse."]);
     }
 
     /// <summary>The binding rule over a parsed batch's top-level statements (docs/named-result-sets-scope.md, Binding rule).</summary>
@@ -229,23 +233,30 @@ internal sealed class ResultNamePlan
         int Line(TSqlStatement statement) => firstLine + statement.StartLine - 1;
         string At(int index) => (classes[index].Kind == "statement" ? "a statement" : (classes[index].Kind is "IF" or "INSERT" or "UPDATE" or "EXEC" ? "an " : "a ") + classes[index].Kind + " statement")
             + " on line " + Line(statements[index]).ToString("N0", CultureInfo.InvariantCulture);
-        // A batch that turns NOEXEC, PARSEONLY or FMTONLY on or off: the statements before an OFF may have been skipped, so
-        // no name in it is applied, those before the SET statement included.
-        var skipping = Enumerable.Range(0, statements.Count).FirstOrDefault(index => statements[index] is PredicateSetStatement set && ResultNames.SkipsStatements(set) is not null, -1);
-        if (skipping >= 0)
-            return Refused(markers, $"was not applied: {At(skipping)} in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.");
+        // A batch that turns NOEXEC, PARSEONLY or FMTONLY on or off anywhere, in an IF or BEGIN … END too: the option outlives
+        // the batch, so a GO n repetition or a later batch or run may start with statements skipped without an error, until
+        // an OFF lets a later statement's set arrive in an earlier one's place. No name in such a batch is applied.
+        var skips = new SkippingSetFinder();
+        foreach (var statement in statements)
+        {
+            statement.Accept(skips);
+            if (skips.Found is not null) break;
+        }
+        if (skips.Found is { } found)
+            return Refused(markers, $"was not applied: a SET {ResultNames.SkipsStatements(found)} statement on line {(firstLine + found.StartLine - 1).ToString("N0", CultureInfo.InvariantCulture)} in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.");
         // The markers before each statement, in order; a marker inside a statement or after the last names nothing.
         var named = new List<ResultMarker>?[statements.Count];
+        // Markers and statements are both in text order, so one pass places them all.
+        var next = 0;
         foreach (var marker in markers)
         {
-            var index = 0;
-            while (index < statements.Count && statements[index].StartOffset + statements[index].FragmentLength <= marker.Offset) index++;
-            if (index == statements.Count) notes.Add(ResultNames.Note(marker, "is unused: no statement follows it in its batch."));
-            else if (statements[index].StartOffset < marker.End)
-                notes.Add(ResultNames.Note(marker, classes[index].Kind is "IF" or "WHILE" or "BEGIN … END" or "TRY … CATCH"
-                    ? $"was not applied: it is inside {At(index)}, where how often a statement runs is not known."
-                    : $"was not applied: it is inside {At(index)}, not before one."));
-            else (named[index] ??= []).Add(marker);
+            while (next < statements.Count && statements[next].StartOffset + statements[next].FragmentLength <= marker.Offset) next++;
+            if (next == statements.Count) notes.Add(ResultNames.Note(marker, "is unused: no statement follows it in its batch."));
+            else if (statements[next].StartOffset < marker.End)
+                notes.Add(ResultNames.Note(marker, classes[next].Kind is "IF" or "WHILE" or "BEGIN … END" or "TRY … CATCH"
+                    ? $"was not applied: it is inside {At(next)}, where how often a statement runs is not known."
+                    : $"was not applied: it is inside {At(next)}, not before one."));
+            else (named[next] ??= []).Add(marker);
         }
         var position = 0;
         int? blocker = null;
@@ -291,6 +302,17 @@ internal sealed class ResultNamePlan
     private static ResultNamePlan Refused(IEnumerable<ResultMarker> markers, string what) => new([], new Dictionary<int, int>(), [.. markers.Select(marker => ResultNames.Note(marker, what))]);
 }
 
+/// <summary>The first SET NOEXEC, PARSEONLY or FMTONLY statement in a statement, however deeply nested.</summary>
+internal sealed class SkippingSetFinder : TSqlFragmentVisitor
+{
+    public PredicateSetStatement? Found { get; private set; }
+
+    public override void Visit(PredicateSetStatement node)
+    {
+        if (Found is null && ResultNames.SkipsStatements(node) is not null) Found = node;
+    }
+}
+
 /// <summary>One batch execution's binding: counts its sets with columns (plans left out) and names those the plan placed,
 /// until something makes the count untrustworthy: an error (a statement that fails returns no set, so every count after it
 /// may be one off), a set with another column count than its statement selects, or SHOWPLAN or STATISTICS PROFILE text.</summary>
@@ -319,14 +341,10 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
             stopped = "a result set arrived that its batch's statements do not select (a trigger's, or STATISTICS PROFILE output), so the place of its result set is unknown";
             return null;
         }
-        for (var i = 0; i < applied.Length; i++)
-            if (plan.Slots[i].Position == at)
-            {
-                applied[i] = true;
-                lastApplied = i;
-                return plan.Slots[i].Name;
-            }
-        return null;
+        if (!plan.SlotAt.TryGetValue(at, out var slot)) return null;
+        applied[slot] = true;
+        lastApplied = slot;
+        return plan.Slots[slot].Name;
     }
 
     /// <summary>No later set of the batch execution is named (they are not kept).</summary>
@@ -345,11 +363,15 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
     public IEnumerable<string> Unapplied(bool errored, string? ended = null)
     {
         var reason = stopped ?? ended ?? (errored ? "an error earlier in its batch made the place of its result set unknown" : null);
+        // The statements (by their first set's place) that some name was applied to: one pass, however many names.
+        var reached = new HashSet<int>();
+        for (var i = 0; i < applied.Length; i++)
+            if (applied[i]) reached.Add(plan.Slots[i].First);
         for (var i = 0; i < applied.Length; i++)
         {
             if (applied[i]) continue;
             var slot = plan.Slots[i];
-            var some = Enumerable.Range(0, applied.Length).Any(other => applied[other] && plan.Slots[other].First == slot.First);
+            var some = reached.Contains(slot.First);
             yield return ResultNames.Note(slot, reason is not null ? "was not applied: " + reason + "."
                 : some ? "is unused: its statement returned fewer result sets than there are names." : "is unused: its statement returned no result set.");
         }

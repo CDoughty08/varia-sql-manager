@@ -147,6 +147,20 @@ internal static class ResultNameChecks
         try { await ResultNamePlan.BuildAsync(shallow, 1, cancelled.Token); }
         catch (OperationCanceledException) { stopped = true; }
         check(stopped, "a cancelled run stops waiting for its plan");
+        // Many names before one EXEC, repeated by GO n: placing and noting them is linear (once quadratic: 0.7 s an execution
+        // for 20,000 names). 100,000 names would take minutes quadratically; the bound only catches that.
+        const int many = 100_000;
+        var execText = new string(' ', many) + "EXEC sp_who;";
+        var execScript = (TSqlScript)new TSql180Parser(initialQuotedIdentifiers: true).Parse(new StringReader(execText), out _);
+        var manyMarkers = Enumerable.Range(0, many).Select(index => new ResultMarker(index, index + 1, 1, "n")).ToList();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var manyPlan = ResultNamePlan.Build([.. execScript.Batches[0].Statements], manyMarkers, 1);
+        var manyBinder = new ResultNameBinder(manyPlan);
+        manyBinder.Take(1, false, false, false);
+        var manyNotes = manyBinder.Unapplied(false).Count();
+        timer.Stop();
+        check(manyPlan.Slots.Count == many && manyNotes == many - 1 && timer.Elapsed < TimeSpan.FromSeconds(10),
+            $"placing, binding and noting {many:N0} names is linear: {timer.ElapsedMilliseconds} ms");
     }
 
     private static void Notes(Action<bool, string> check)
