@@ -100,6 +100,14 @@ export const shapes = {
  * Memory panel's Nerd metrics. `names=Open%20orders,,Totals` gives the sets, in order, the names a `#Name` marker would
  * (each URI-encoded, empty for none), as the real backend binds them. Returns undefined when the script has no directive.
  */
+/** A `names=` entry, decoded and held to the bounds a real name has (src/shared/ipc/descriptors.ts: 1 to 128 characters,
+ *  trimmed, none of its refused characters), so a smoke step that breaks them fails here, not in main's descriptor check. */
+function fakeName(encoded) {
+  let name
+  try { name = decodeURIComponent(encoded) } catch { throw new RangeError('A fake result name is not URI-encoded: ' + encoded) }
+  if (name.length > 128 || name.trim() !== name || /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/.test(name)) throw new RangeError('A fake result name breaks the bounds of a real one: ' + encoded)
+  return name
+}
 export function parseDirective(sql) {
   const match = /^--\s*varia-fake:(.*)$/m.exec(sql.split('\n', 1)[0])
   if (!match) return undefined
@@ -109,7 +117,7 @@ export function parseDirective(sql) {
     if (key === 'hold') directive.hold = true
     else if (key === 'messages' || key === 'errors') directive[key] = Number(value)
     else if (key === 'memory') directive.memory = Number(value)
-    else if (key === 'names') directive.names = value.split(',').map(name => decodeURIComponent(name))
+    else if (key === 'names') directive.names = value.split(',').map(fakeName)
     else if (key === 'packed') {
       directive.packed = Number(value)
       if (!(directive.packed >= 1 && directive.packed <= 20)) throw new RangeError('A packed ratio is 1 to 20: ' + value)

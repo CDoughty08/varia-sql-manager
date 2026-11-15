@@ -998,6 +998,9 @@ describe('named results as tabs', () => {
     draw()
     expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Differences: Result 1 → Result 2'])
     expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Differences: Result 1 → Result 2'])
+    // Only a tab that shows a name the query gave is capped and may end in an ellipsis (the fixture's comparison is made from
+    // Result 1, named here); the rest are laid out as before.
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null)).toEqual(['true', null, 'true', 'true'])
     // The name is the tab's text alone: the tab's widest is a theme metric and the text ends in an ellipsis there.
     expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
     expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
@@ -1032,7 +1035,8 @@ describe('named results as tabs', () => {
     expect(row.querySelector('.rt-picker-name')?.textContent).toBe(long)
     expect(row.querySelector('.rt-picker-number')?.textContent).toBe('Result 1')
     expect(row.getAttribute('aria-label')).toBe(`${long}, Result 1, Table`)
-    expect(all('.rt-picker-row')).toHaveLength(0)
+    // Text, never markup.
+    expect(row.querySelector('.rt-picker-name')!.children).toHaveLength(0)
   })
 })
 
@@ -1049,5 +1053,18 @@ describe('a named result\'s Pivot as tabs', () => {
     draw()
     expect(all('.rt-views .rs-caption-stale')[0].getAttribute('title')).toBe("Open orders's filters changed after this Pivot was built")
     expect(all<HTMLButtonElement>('button[aria-label="Update Pivot of Open orders"]')[0].getAttribute('title')).toBe('Build Pivot of Open orders again from Open orders as it is filtered now')
+  })
+})
+
+describe('a comparison of named results as tabs', () => {
+  it('cap a comparison made from a named result, with its whole title in the tooltip, and leave one of unnamed results as it was', () => {
+    const { results, draw, resultTabs, all } = fixture(['Open orders'])
+    const [, two, three] = results.getSnapshot().t1.sets
+    results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', [two.descriptor, three.descriptor].map(set => `${set.generation}:${set.resultId}`))
+    draw()
+    const tabs = resultTabs()
+    expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', null])
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual(['true', null])
   })
 })

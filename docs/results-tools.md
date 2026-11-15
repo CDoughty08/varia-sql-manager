@@ -223,9 +223,15 @@ is the one commands act on again. Pivots and comparisons are not rebuilt.
 ## Where a result's name shows
 
 A query names a result set with a marker comment before its statement, `/* #Name="Open orders" */` or
-`-- #Name="Open orders"` (docs/named-result-sets-scope.md has the rules). A named result shows its name wherever the
-results pane says "Result 2" for an unnamed one, and keeps its number beside it where two results of one name must be
-told apart. An unnamed result reads exactly as before, and naming one result never renumbers another.
+`-- #Name="Open orders"`. The comment holds the marker alone; `#Name` is matched in any case, the name is in double
+quotes (a quote inside it is doubled) and is 1 to 128 characters. It names the first result set of the next statement
+in the same batch; where that set cannot be known (after an `EXEC`, `IF` or `WHILE` in the batch, or inside a block)
+the name is not applied and Messages says why. The server sees an ordinary comment, so the script runs unchanged
+elsewhere.
+
+A named result shows its name wherever the results pane says "Result 2" for an unnamed one, and keeps its number
+beside it where two results of one name must be told apart. An unnamed result reads exactly as before, and naming one
+result never renumbers another.
 
 | Surface | A named result |
 | --- | --- |
@@ -239,13 +245,14 @@ told apart. An unnamed result reads exactly as before, and naming one result nev
 | Grid | Its accessible name starts "Open orders, Result 2 of 5, …", so a screen reader still hears the number. |
 | Column Profile, splitter, plans, copy and save strips, memory details | The name in place of "Result 2" ("Resize Open orders", "Open orders, plan 1"). |
 
-- A long name ends in an ellipsis: a result tab is at most `--varia-resultTab` wide (docs/themes/metrics.md), and a
-  caption's name gives way before its facts. The whole name stays in the tooltip and the accessible name.
+- A long name ends in an ellipsis: a tab that shows a name the query gave (a named result's, or a Pivot's or
+  comparison's made from one) is at most `--varia-resultTab` wide (docs/themes/metrics.md), and such a caption's name
+  gives way before its facts. The whole name stays in the tooltip and the accessible name. Tabs and captions of unnamed
+  results are as wide as their words, as before.
 - Two results of one name keep it: nothing is renamed or numbered in the pane, and lists carry each one's number
   ("Totals · Result 2" and "Totals · Result 5" in Go to Result, the Compare popover and the tooltips).
 - **Go to Result 1** to **8** count places in the row of tabs, whatever the results are called.
-- A Pivot's or a comparison's title is fixed when it is made: renaming the result in the query and running it again
-  does not change one that was kept.
+- A Pivot's or a comparison's title is fixed when it is made, from its result's name then.
 - Save Results As still suggests `{query}-Result2`; the name in the suggested file name comes later.
 - The query a first launch opens names its result ("Sample Query"), so the first run shows a name. A session that hot
   exit kept with the earlier text keeps it; that text is still treated as the untouched welcome query.

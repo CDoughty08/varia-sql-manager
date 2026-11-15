@@ -619,3 +619,15 @@ describe('named results in the stack', () => {
     expect(all('.rs-caption-name b')).toHaveLength(0)
   })
 })
+
+describe('named captions in the stack', () => {
+  it('let only a caption that shows a name the query gave shrink, its Pivot\'s too', () => {
+    const { results, draw, all } = fixture(['Open orders'])
+    results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }), 'Pivot of Open orders', ['1:1'])
+    draw()
+    const toggles = all<HTMLButtonElement>('.rs-caption-toggle')
+    expect(toggles.map(toggle => [toggle.textContent, toggle.dataset.named ?? null])).toEqual([
+      ['Open orders', 'true'], ['Pivot of Open orders', 'true'], ['Result 2', null], ['Result 3', null], ['Pivot of Result 3', null]
+    ])
+  })
+})

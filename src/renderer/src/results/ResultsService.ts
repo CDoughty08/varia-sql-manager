@@ -56,6 +56,11 @@ export const resultTitle = (entry: Named): string => queryName(entry) ?? entryNu
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
+/** Whether a slot shows a name the query gave: a named Table, or a Pivot or comparison made from a named result (its frozen
+ *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
+ *  unnamed result's are laid out exactly as they were before names. */
+export const slotNamed = (slot: Pick<ResultSlot, 'view' | 'entry' | 'sources'>): boolean =>
+  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== `Result ${source.number}`)
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)

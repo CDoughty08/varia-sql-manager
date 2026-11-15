@@ -1,7 +1,7 @@
 import { Emitter } from '../core/events'
 import type { Disposable } from '../core/types'
 import { formatCount } from '../results/status'
-import { entryName, entrySecondary, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, entrySecondary, pivotOutOfDate, slotNamed, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
 
 // The Tabs layout's navigation, without React: the top row's items, the view a group's tab selects, the next and previous
 // item and view (Next Result, Previous Result and their view commands), and the overflow picker's rows, filter and window
@@ -12,15 +12,19 @@ export { selectedEntry }
 
 /** One item of the top row: a group (its Table and Pivot) or a comparison. `number` is a named result's positional text
  *  ("Result 2"), for its tooltip; an unnamed result's name is already its number. */
-export interface TopItem { readonly key: EntryKey; readonly name: string; readonly number?: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
+export interface TopItem {
+  readonly key: EntryKey; readonly name: string; readonly number?: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot
+  /** It shows a name the query gave (`slotNamed`): its tab is capped at --varia-resultTab and ends in an ellipsis. */
+  readonly named?: true
+}
 /** The top row's items in the order drawn: the groups by ordinal, the comparisons after them. */
 export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopItem[] {
   return [
     ...tab.groups.map(group => {
       const number = entrySecondary(group.table.entry)
-      return { key: group.table.key, name: entryName(group.table.entry), ...number ? { number } : {}, group }
+      return { key: group.table.key, name: entryName(group.table.entry), ...number ? { number, named: true as const } : {}, group }
     }),
-    ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), comparison: slot }))
+    ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), ...slotNamed(slot) ? { named: true as const } : {}, comparison: slot }))
   ]
 }
 /** The view a group's tab selects: the one it last showed, its Pivot while it has one, else its Table. */
