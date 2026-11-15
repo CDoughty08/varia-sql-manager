@@ -194,6 +194,29 @@ internal static class ActionChecks
         check(ActionService.Plan(Delete(database, close: true, history: true), database, new(true, 0)).Select(plan => plan.Template)
                 .SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
             "an offline database has no sessions to close: its Delete runs no SINGLE_USER and nothing to restore");
+        // A Delete naming the database it read binds its DROP to it: the batch checks database_id and create_date right before the DROP,
+        // the dry run (and Script, which shows the same text) does not, and a binding fits no other template.
+        var read = new DatabaseIdentityDto(7, "2026-01-02T03:04:05.677");
+        var boundPlan = ActionService.Plan(Delete(database, close: true, history: true) with { Identity = read }, database, new(false, 0));
+        var boundDrop = boundPlan.Single(plan => plan.Template == ActionTemplate.DropBoundDatabase);
+        var boundBatch = ActionSql.Executable(ActionTemplate.DropBoundDatabase);
+        string Fits(PlannedStatement plan) { try { ActionSql.Checked(plan); return "accepted"; } catch (InvalidOperationException) { return "refused"; } }
+        check(boundPlan.Select(plan => plan.Template).SequenceEqual([ActionTemplate.SetSingleUser, ActionTemplate.DropBoundDatabase, ActionTemplate.DeleteBackupHistory, ActionTemplate.SetMultiUser])
+            && boundDrop.Bound == new DatabaseBinding(7, new DateTime(2026, 1, 2, 3, 4, 5, 677)) && boundDrop.Names.SequenceEqual(["AppData"])
+            && ActionService.ScriptText(boundPlan) == full && ActionService.StepTitle(ActionTemplate.DropBoundDatabase) == ActionService.StepTitle(ActionTemplate.DropDatabase)
+            && boundBatch.Contains("d.name = @p1 AND d.database_id = @id AND d.create_date = @created", StringComparison.Ordinal) && boundBatch.Contains("THROW 50010, ", StringComparison.Ordinal)
+            && boundBatch.IndexOf("IF NOT EXISTS", StringComparison.Ordinal) < boundBatch.IndexOf("EXEC @module", StringComparison.Ordinal)
+            && !ActionSql.Executable(ActionTemplate.DropBoundDatabase, dryRun: true).Contains("@created", StringComparison.Ordinal)
+            && ActionSql.LintExecutable(boundBatch, ActionTemplate.DropBoundDatabase).Count == 0
+            && ActionService.BoundOf(null) is null && ActionService.BoundOf(new(7, "2026-01-02T03:04:05")) is null
+            && Fits(new PlannedStatement(ActionTemplate.DropDatabase, "master", ["AppData"], Bound: new(7, DateTime.UnixEpoch))) == "refused"
+            && Fits(new PlannedStatement(ActionTemplate.DropBoundDatabase, "master", ["AppData"], Bound: new(0, DateTime.UnixEpoch))) == "refused"
+            && Fits(boundDrop) == "accepted",
+            "a Delete naming the database it read binds its DROP to that database_id and create_date in the DROP's own batch, scripts the same text, and a binding fits no other template");
+        // The lint catches a bound DROP whose name reaches the text or whose check reads a value it does not bind.
+        var boundMutations = new[] { boundBatch.Replace("QUOTENAME(@p1)", "@p1", StringComparison.Ordinal), boundBatch.Replace("@created", "@when", StringComparison.Ordinal) };
+        check(boundMutations.All(text => text != boundBatch && ActionSql.LintExecutable(text, ActionTemplate.DropBoundDatabase).Count > 0),
+            "the lint refuses a bound DROP DATABASE that runs its name unquoted or reads an unbound value");
         check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
             && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
             && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,

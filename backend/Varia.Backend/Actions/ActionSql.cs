@@ -21,8 +21,14 @@ internal enum ActionTemplate
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
     AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline, DropRestoring, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember, RenameLogin,
-    DropLogin, DropMappedUser, CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential
+    DropLogin, DropMappedUser, CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential,
+    DropBoundDatabase
 }
+
+/// <summary>The database a bound DROP DATABASE was planned for (<see cref="ActionTemplate.DropBoundDatabase"/>): the database_id and
+/// create_date Delete Object read. SQL Server checks both in the DROP's own batch, right before it, so a database that took the name
+/// after the preflight (while Varia's pools left it, or SET SINGLE_USER waited) is never dropped.</summary>
+internal sealed record DatabaseBinding(int Id, DateTime Created);
 
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
 /// checks them in the statement's own batch, waiting behind any change to the row, and rolls the DROP back when the name it quoted
@@ -47,7 +53,7 @@ internal enum StepKind { Main, Compensation, Cleanup }
 /// as true or false, from <see cref="ActionSql.Detach"/>; a partly restored database's name and its database_id as decimal digits,
 /// from <see cref="ActionSql.DropRestoring"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
 internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
-    Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null);
+    Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null, DatabaseBinding? Bound = null);
 
 /// <summary>All SQL of the action path, as constant text per template, kind and version band. DDL is built by SQL Server
 /// from that text: names reach it only as nvarchar(128) parameters (@db, @p1…) passed through QUOTENAME, or as a
@@ -130,6 +136,7 @@ internal static partial class ActionSql
         if (plan.Principal is { } bound && (!(Guarded(plan.Template) || BindingOf(plan.Template) is not null) || bound.Sid.Length is < 1 or > 85
             || (plan.Template == ActionTemplate.DropLogin || BindingOf(plan.Template)?.Login == true) != (bound.PrincipalId is not null && bound.Created is not null)))
             throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
+        if (plan.Bound is { } database && (plan.Template != ActionTemplate.DropBoundDatabase || database.Id < 1)) throw new InvalidOperationException("The database binding does not fit " + plan.Template + ".");
         return plan;
     }
 
@@ -163,7 +170,7 @@ internal static partial class ActionSql
             ActionTemplate.RenameObject => "EXEC sys.sp_rename @objname = " + Literal(Quote(names[0]) + "." + Quote(names[1])) + ", @newname = " + Literal(names[2]) + ", @objtype = N'OBJECT'",
             ActionTemplate.RenameDatabase => "ALTER DATABASE " + Quote(names[0]) + " MODIFY NAME = " + Quote(names[1]),
             ActionTemplate.SetSingleUser => "ALTER DATABASE " + Quote(names[0]) + " SET  SINGLE_USER WITH ROLLBACK IMMEDIATE",
-            ActionTemplate.DropDatabase => "DROP DATABASE " + Quote(names[0]),
+            ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase => "DROP DATABASE " + Quote(names[0]),
             ActionTemplate.DeleteBackupHistory => "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Literal(names[0]),
             // SMO writes two spaces after SET (probed by D1 and D3), and @skipchecks as a plain string.
             ActionTemplate.SetMultiUser => "ALTER DATABASE " + Quote(names[0]) + " SET  MULTI_USER",
@@ -236,6 +243,9 @@ internal static partial class ActionSql
             ActionTemplate.RenameDatabase => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' MODIFY NAME = ' + QUOTENAME(@p2);\n"),
             ActionTemplate.SetSingleUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE';\n"),
             ActionTemplate.DropDatabase => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"),
+            // The name is compared, never run; the id and create_date are bound values. The dry run (live checks) selects the DROP alone.
+            ActionTemplate.DropBoundDatabase => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"
+                + (dryRun ? "" : "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, " + NotTheDatabase + ", 1;\n")),
             ActionTemplate.DeleteBackupHistory => dryRun ? "SELECT @p1 AS database_name;" : "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = @p1;",
             ActionTemplate.SetMultiUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  MULTI_USER';\n"),
             ActionTemplate.SetRestrictedUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  RESTRICTED_USER';\n"),
@@ -276,6 +286,9 @@ internal static partial class ActionSql
         };
     }
 
+    /// <summary>Why a bound DROP DATABASE left a database alone: another database has taken the name since Delete Object read it.</summary>
+    internal const string NotTheDatabase = "N'The database is not the one Delete Object read: it was renamed, dropped or replaced since. It was not dropped. Close Delete Object and open it again.'";
+
     /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
     internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
 
@@ -313,6 +326,7 @@ internal static partial class ActionSql
     {
         ActionTemplate.DropMappedUser => ["@sid"],
         ActionTemplate.DropLogin => ["@sid", "@principal", "@created"],
+        ActionTemplate.DropBoundDatabase => ["@id", "@created"],
         _ => []
     };
 
@@ -599,8 +613,8 @@ internal static partial class ActionSql
         "N'SERVER ROLE'", "N'dbcreator'",
         // Detach's permission and the login kind its files note reads (Database, DetachInside).
         "N'db_owner'", "N'SQL LOGIN'",
-        // Restore Database's cleanup (DropRestoring).
-        NotRestoring,
+        // Restore Database's cleanup (DropRestoring), and a database's Delete bound to the database it read (DropBoundDatabase).
+        NotRestoring, NotTheDatabase,
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
         // Its guarded DROPs (PrincipalBinding).
@@ -635,7 +649,7 @@ internal static partial class ActionSql
     private static partial Regex NamedArgument();
     [GeneratedRegex(@"@p\d+")]
     private static partial Regex Placeholder();
-    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
+    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=WHERE d\.name = )@p1(?= AND d\.database_id = @id AND d\.create_date = @created\) THROW )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
     private static partial Regex QuotedPlaceholder();
     /// <summary>Builder batches' keyword text: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote,
     /// bracket, comment or line break can be written with it, and it comes only from an embedded catalogue.</summary>

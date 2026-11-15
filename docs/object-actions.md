@@ -145,7 +145,9 @@ Delete Object for a database also offers "Delete backup and restore history info
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation. OK names the database the dialog read (its database_id and create_date): a database renamed, dropped
 or replaced since, so that another now has the name, is refused before anything runs ("… is not the one Delete Object
-read"), rather than dropped on warnings and sessions the dialog never showed for it.
+read"; close the dialog and open it again), rather than dropped on warnings and sessions the dialog never showed for it.
+The DROP's own batch checks the identity again right before it, so a database that takes the name while Varia frees
+the database of its pooled sessions or SET SINGLE_USER waits is not dropped either.
 
 For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
 is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database

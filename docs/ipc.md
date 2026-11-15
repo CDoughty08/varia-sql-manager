@@ -384,7 +384,8 @@ in order and stop at the first failure. `rolledBack` marks a step that completed
 back (the table designer's Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for
 the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
 warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
-host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, login?, mappings? }`: for a database, the session count
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, identity?, login?, mappings? }`: for a database, `identity`
+(`{ id, created }`, its database_id and create_date) is the database read, which the Delete request names, and the session count
 (sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
 most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
 session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
@@ -662,6 +663,7 @@ spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then name
 (`##…##`, trailing spaces ignored; zod and `Validate` refuse such a target name as `INVALID_PARAMS` too) for every action,
 the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
 server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
+A database's `delete` takes `identity?: { id, created }` (refused on any other kind; optional, as for the other database actions), the database Delete Object's describe read: the execute preflight refuses another database with the name as `NOT_FOUND` before any DDL, and the DROP's own batch checks it again right before the DROP (50010, `NOT_FOUND`).
 A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity` (both refused on any other kind, and
 `dropMappedUsers` on any other action; `loginIdentity` required on `actions.execute`, by zod's `actionExecuteRequestSchema`
 and `Validate`, optional on `actions.script`), with `closeConnections` and `deleteHistory` absent or false. Its execute

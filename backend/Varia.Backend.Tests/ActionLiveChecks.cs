@@ -191,15 +191,6 @@ internal static class ActionLiveChecks
                 && target.Warnings.Contains(new ActionWarningDto(ActionService.SnapshotsWarning, true)) && target.Blockers!.Count <= 8,
                 "Delete Object lists a query tab's session in the database with its open transaction, counts it, and warns of the database's snapshot (session " + spid + "; listed "
                 + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, " + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.Error?.Message + ")");
-            // The describe names the database it read; a Delete naming another (one that took the name since) is refused before any DDL.
-            var read = await Exec("SELECT CONVERT(nvarchar(10), database_id) + N'|' + CONVERT(nvarchar(23), create_date, 126) FROM sys.databases WHERE name = " + Literal(compensated) + ";");
-            var identity = described.DeleteTarget?.Identity;
-            var stale = identity is null ? null : await client.Delete(database, close: true, history: true, identity: identity with { Created = "2000-01-01T00:00:00.000" });
-            var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(compensated) + ";")).Scalar == "1";
-            check(identity is not null && read.Scalar?.Split('|') is [var id, var created] && id == identity.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                && created.StartsWith(identity.Created[..19], StringComparison.Ordinal)
-                && stale is { Error.Code: "NOT_FOUND", Steps.Count: 0 } && stale.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal) && kept,
-                "Delete Object names the database it read, and a Delete naming another database is refused before any DDL, leaving the database (" + stale?.Error?.Code + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json); }
         // A query tab in master whose transaction wrote to the database: SINGLE_USER WITH ROLLBACK IMMEDIATE rolls it back too, so
@@ -275,9 +266,26 @@ internal static class ActionLiveChecks
                 await Exec("REVOKE VIEW SERVER PERFORMANCE STATE FROM " + login + ";\nREVOKE VIEW SERVER STATE FROM " + login + ";");
                 check(Unknown(denied), "and with VIEW SERVER STATE but VIEW SERVER PERFORMANCE STATE denied (" + denied.Error?.Code + " " + denied.Error?.Message + ")");
             }
-            var deleted = await client.Delete(database);
+            // The describe names the database it read, exactly as sys.databases has it. A Delete naming another create_date or id is refused
+            // by the preflight, and a DROP bound to another create_date is refused by its own batch past the preflight (DropBoundDatabase):
+            // nothing runs and the database stays. The Delete naming the database read deletes it.
+            var identity = described.DeleteTarget?.Identity;
+            string Count(DatabaseIdentityDto read) => "SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + " AND database_id = "
+                + read.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) + " AND create_date = CONVERT(datetime, " + Literal(read.Created) + ", 126);";
+            var exact = identity is not null && (await Exec(Count(identity))).Scalar == "1";
+            var staleCreated = identity is null ? null : await client.Delete(database, identity: identity with { Created = "2000-01-01T00:00:00.000" });
+            var staleId = identity is null ? null : await client.Delete(database, identity: identity with { Id = identity.Id + 100_000 });
+            var unbound = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
+                [new PlannedStatement(ActionTemplate.DropBoundDatabase, "master", [owned], Bound: new(identity.Id, new DateTime(2000, 1, 1)))], CancellationToken.None);
+            var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "1";
+            static bool Refused(ActionExecuteResult? result) => result is { Error.Code: "NOT_FOUND" } && result.Steps.All(step => step.Status != "done")
+                && result.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal);
+            check(exact && Refused(staleCreated) && staleCreated!.Steps.Count == 0 && Refused(staleId) && staleId!.Steps.Count == 0 && Refused(unbound) && kept,
+                "Delete Object names the database it read, and a Delete or a bound DROP naming another database (another create_date or id) drops nothing ("
+                + identity?.Created + "; " + staleCreated?.Error?.Code + ", " + staleId?.Error?.Code + ", " + unbound?.Error?.Code + " " + unbound?.Error?.Message + ")");
+            var deleted = await client.Delete(database, identity: identity);
             var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "0";
-            check(Done(deleted) && gone, "and deletes it (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
+            check(Done(deleted) && gone, "and deletes it, naming the database it read (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
         }
         finally
         {

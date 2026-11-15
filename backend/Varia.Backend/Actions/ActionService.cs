@@ -857,7 +857,7 @@ internal sealed partial class ActionService : IDisposable
         var row = subject.Row;
         // Another database has taken the name since Delete Object read it: its warnings, sessions and blockers were about the one it read.
         if (args.Action == "delete" && subject.Target.Kind == "database" && args.Identity is { } read && !IsDatabase(row, read))
-            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one Delete Object read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one Delete Object read: it was renamed, dropped or replaced since. Close Delete Object and open it again.");
         var system = subject.Target.Kind == "database" ? row.Bool("is_system") : row.Bool("is_ms_shipped");
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, args.Action))
@@ -1065,7 +1065,8 @@ internal sealed partial class ActionService : IDisposable
         var plan = new List<PlannedStatement>();
         var close = args.CloseConnections == true && facts?.Offline != true;
         if (close) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
-        plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
+        // With the identity Delete Object read, the DROP's own batch checks it is still that database (DropBoundDatabase).
+        plan.Add(BoundOf(args.Identity) is { } bound ? new(ActionTemplate.DropBoundDatabase, "master", [target.Name!], Bound: bound) : new(ActionTemplate.DropDatabase, "master", [target.Name!]));
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         // Due only when the DROP (main step 1) did not complete; a failed history delete after it leaves no database to restore.
         var restore = facts?.UserAccess switch { 0 => ActionTemplate.SetMultiUser, 2 => ActionTemplate.SetRestrictedUser, _ => (ActionTemplate?)null };
@@ -1073,6 +1074,11 @@ internal sealed partial class ActionService : IDisposable
             plan.Add(new(undo, "master", [target.Name!], StepKind.Compensation, Undoes: 0, When: statuses => statuses.Count < 2 || statuses[1] != "done"));
         return plan;
     }
+
+    /// <summary>The binding a request's identity gives a database's DROP, or null without one (Validate has checked its form).</summary>
+    internal static DatabaseBinding? BoundOf(DatabaseIdentityDto? identity) =>
+        identity is { Created: { } created } && DateTime.TryParseExact(created, "yyyy-MM-dd'T'HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var at) ? new(identity.Id, at) : null;
 
     /// <summary>A database's rename (D3c, spec 7). Closing the connections is SINGLE_USER WITH ROLLBACK IMMEDIATE on the action's own
     /// connection, which keeps the database until MODIFY NAME (critic A12), and then the original access back under the new name.
@@ -1122,7 +1128,7 @@ internal sealed partial class ActionService : IDisposable
     {
         ActionTemplate.DeleteBackupHistory => "Delete backup and restore history",
         ActionTemplate.SetSingleUser => "Close existing connections",
-        ActionTemplate.DropDatabase => "Drop the database",
+        ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase => "Drop the database",
         ActionTemplate.RenameDatabase or ActionTemplate.RenameObject or ActionTemplate.RenameLogin => "Rename",
         ActionTemplate.SetMultiUser => "Restore multi-user access",
         ActionTemplate.SetRestrictedUser => "Restore restricted user access",
@@ -1154,7 +1160,7 @@ internal sealed partial class ActionService : IDisposable
     };
 
     /// <summary>The templates whose statement needs its database (the first name) free of Varia's own idle sessions (critic A5).</summary>
-    private static bool NeedsFreeDatabase(ActionTemplate template) => template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase
+    private static bool NeedsFreeDatabase(ActionTemplate template) => template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase or ActionTemplate.RenameDatabase
         or ActionTemplate.DetachDatabase or ActionTemplate.SetOffline or ActionTemplate.SetOfflineRollback;
 
     /// <summary>Runs planned statements through runner v2 on the action's connection. Before the first main statement that needs
@@ -1326,8 +1332,8 @@ internal sealed partial class ActionService : IDisposable
             }
         }
         var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
-        // The database read, which OK names; none when its create_date cannot be written as the request's identity carries it.
-        var identity = DatabaseProperties.Iso(row.Raw("create_date")) is { } created ? new DatabaseIdentityDto(row.Int("database_id"), created) : null;
+        // The database read, which OK names; none when its create_date cannot be written as the request's identity carries it (Iso answers "").
+        var identity = DatabaseProperties.Iso(row.Raw("create_date")) is { Length: > 0 } created ? new DatabaseIdentityDto(row.Int("database_id"), created) : null;
         var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
             withTransaction, blockers, blockers is null ? null : more, note, tabs, Identity: identity);
         return new(deleted, 0);
@@ -1443,7 +1449,7 @@ internal sealed partial class ActionService : IDisposable
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, inUseAdvice, token, progress);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it. An offline
         // database keeps its name, so its connections keep it too and fail until it is back online, as in SSMS.
-        var changed = plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase);
+        var changed = plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase or ActionTemplate.RenameDatabase);
         if (changed) host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
         // SQL Server gives a renamed database a new create_date (sys.databases: "created or renamed"), so the documents that follow it
         // need its identity under the new name, or Database Properties' Apply would refuse it as another database.
@@ -1962,6 +1968,13 @@ internal sealed partial class ActionService : IDisposable
                 Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId!.Value);
                 Add(command, "@created", SqlDbType.DateTime, 0, bound.Created!.Value);
             }
+        }
+        // A bound DROP DATABASE never runs by its name alone either (its dry run selects the DROP and binds nothing).
+        if (statement.Template == ActionTemplate.DropBoundDatabase && !dryRun)
+        {
+            var database = statement.Bound ?? throw new InvalidOperationException("A bound DROP DATABASE needs the database it was planned for.");
+            Add(command, "@id", SqlDbType.Int, 0, database.Id);
+            Add(command, "@created", SqlDbType.DateTime, 0, database.Created);
         }
         return await ReadAllAsync(command, token);
     }
