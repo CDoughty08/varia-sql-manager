@@ -642,7 +642,7 @@ export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding;
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]
-/** Files main opened for the page (the command line, a second instance, macOS's open-file, a drop, Recent Files), with
+/** Files main opened for the page (File › Open, the command line, a second instance, macOS's open-file, a drop, Recent Files), with
  *  what could not be opened: at most 32 errors, each "name: message". */
 export interface OpenedFiles { files: OpenSqlFile[]; errors: string[] }
 /** A registered file another program changed or deleted (`varia:files-check`). */
@@ -819,7 +819,8 @@ export interface VariaApi {
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
-  openSqlFiles(): Promise<ApiResult<OpenSqlFile[]>>
+  /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
+  openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
   releaseSqlFile(fileId: string): Promise<ApiResult<void>>
   /** Shows an open query's saved file in the file manager; main looks its path up by id. */
