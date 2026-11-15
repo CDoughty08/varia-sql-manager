@@ -17,10 +17,13 @@ export const welcomeQueryText = '-- Connect this query to a server and press F5 
  *  restored tab's text, and it is still recognised as untouched, so analysing it is still skipped. */
 export const previousWelcomeQueryText = '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n'
 const welcomeTexts = [welcomeQueryText, previousWelcomeQueryText].map(text => ({ text, lines: text.split('\n').length - 1 }))
+const welcomeLength = (welcome: (typeof welcomeTexts)[number], length: number) => length >= welcome.text.length && length <= welcome.text.length + welcome.lines
+/** Whether a text of `length` characters could be that query, with LF or CRLF line ends: a caller holding a model reads
+ *  its text to compare only then. */
+export const mayBeWelcomeQuery = (length: number): boolean => welcomeTexts.some(welcome => welcomeLength(welcome, length))
 /** Whether `text` is still that query (or the one before it), whatever its line endings. Only a text whose length one of
- *  them could have, with LF or CRLF line ends, is compared. */
-export const isWelcomeQuery = (text: string): boolean => welcomeTexts.some(welcome =>
-  text.length >= welcome.text.length && text.length <= welcome.text.length + welcome.lines && text.replace(/\r\n/g, '\n') === welcome.text)
+ *  them could have is compared. */
+export const isWelcomeQuery = (text: string): boolean => welcomeTexts.some(welcome => welcomeLength(welcome, text.length) && text.replace(/\r\n/g, '\n') === welcome.text)
 /** A Monaco model for a document's text in its language ('sql', 'xml' or 'json'). */
 export type ModelFactory = (text: string, uri: string, language: string) => editor.ITextModel
 /** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */

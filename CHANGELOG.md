@@ -58,6 +58,7 @@
 ### Fixed
 
 - **Script As on Azure SQL Database and Managed Instance:** ledger tables and views now script on Azure SQL Database, where they were refused by mistake (SQL Server Management Objects keeps the LEDGER clause there), and on Managed Instance with Match script settings to source on (or a chosen version of SQL Server 2022 or later; an older chosen version still refuses them). On Managed Instance with Match script settings to source on, scripts target the engine version read from the instance rather than SQL Server 2014, which it reports as its version, so newer features are no longer left out.
+- **Mouse wheel after Transpose:** on a very large result (around 750,000 rows or more, fewer on high-DPI displays or when zoomed in), turning the grid transposed could stop the mouse wheel and trackpad from scrolling it, leaving only the scroll bar. The wheel now scrolls it, and grids redrawn this way are no longer kept in memory.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.
@@ -73,6 +74,7 @@
 - **Closing during reconnect:** closing the workbench, including Windows session end after crash recovery, settles automatic reconnect work before saving the tabs and server associations. Repeated failed connections no longer exhaust the pending-attempt allowance.
 - **View Dependencies during Disconnect:** pause metadata reads and retain the tree while teardown is in progress. A cancelled or failed disconnect restores explicit reads only for the same connection; stale replies and replacement connections cannot change the retained tree.
 - **Fused result reads:** release returned scratch buffers with their working-memory reservation, including before fallback unpacking.
+- **Result memory on a busy machine:** compressing a result after a sort, filter, value list or other operation that read it on several threads now frees its uncompressed pages at once, rather than once the busy threads catch up.
 - **Connection authentication:** initial SQL authentication uses a fresh physical session, and Entra connections preserve the configured Application Name. Cancelled or transient guarded opens no longer retire unrelated pooled sessions. Commands and pickers stop admitting new work while a server disconnects.
 - Clicking inside selected query text clears the selection and places the caret where you clicked.
 - **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
