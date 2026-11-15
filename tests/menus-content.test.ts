@@ -66,6 +66,8 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   fixture.connections.add(connectionInfo('server-r'), connectionOptions)
   fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, resultSets: [descriptor(1, { rowsRead: 1, rowsStored: 1, rowsAvailable: 1 }), descriptor(2, { index: 1, rowsRead: 1, rowsStored: 1, rowsAvailable: 1 })] } })
   await fixture.queries.execute()
+  // A grid's context menu is open, so its panel shows (Compare Results… is offered only then).
+  fixture.panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false })
   fixture.connections.remove('server-r')
   const entries = fixture.results.getSnapshot()[ran.id].sets.map(set => set.key)
   fixture.resultSelection.set(ran.id, { entry: entries[1], blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 0, column: 0 } }], active: { row: 0, column: 0 } })

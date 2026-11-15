@@ -1049,8 +1049,8 @@ export const commandCatalog = {
     title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid' && !outputGridBare" }]
   },
-  // Opens the Compare picker (CompareService) on the grid's Table, else the focused one: another group's Table of the run
-  // that shares a column is picked as the old side, the picker can swap them, and Compare adds their diff (results.diff) as
+  // Opens the Compare popover (CompareService) on the grid's Table, else the focused one: another group's Table of the run
+  // that shares a column is picked as the old side, the popover can swap them, and Compare adds their diff (results.diff) as
   // a comparison. Tables only: never a Pivot, a comparison, a plan set or a Peek grid. Every letter of "Compare…" had an access
   // key in the grid menu, so Copy Column Name takes y and Transpose n, leaving p for it.
   'output.compare': {

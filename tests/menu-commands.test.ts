@@ -619,6 +619,8 @@ describe('Query Output commands', () => {
     const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
     fixture.api.execute.mockResolvedValueOnce({ ok: true, value })
     await fixture.queries.execute()
+    // The run's results are on screen, as the layout reports once the Results panel shows.
+    fixture.panes.set({ ...fixture.panes.getSnapshot(), results: true })
     const doc = fakeDocument()
     /** The key of the run's result at `place`, which its grid carries and its targets name it by. */
     const key = (place = 0) => keyAt(fixture.results, tab.id, place)
@@ -801,7 +803,7 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.copy', stale)).toBe(false)
   })
   it('Pivot acts on a group from the menu, the palette and a key and never makes a pivot of a Pivot, and is off for comparisons, plan sets and Peek grids', async () => {
-    const { commands, results, resultClient, pivot, compare, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2, kind: 'executionPlan' })] })
+    const { commands, results, resultClient, pivot, compare, panes, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2, kind: 'executionPlan' })] })
     const builder = () => pivot.getSnapshot().tabs[tab.id]
     const build = async () => { pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
     const pivots = () => results.getSnapshot()[tab.id].sets.filter(set => set.descriptor.kind === 'pivot')
@@ -856,13 +858,23 @@ describe('Query Output commands', () => {
     expect(builder().source).toBe(key(1))
     expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compareWithPrevious', on('grid', { place })))).toEqual([false, true, false, false, false])
     // Compare… is offered for a Table another Table shares a column with, never for a Pivot, a plan set or a comparison;
-    // it opens the picker in the pivot builder's place, on the menu's grid.
+    // it opens the popover on the menu's grid, beside that grid (the toolbar passes its button as the anchor).
     expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compare', on('grid', { place })))).toEqual([true, true, false, false, false])
     expect(await commands.execute('output.compare', on('grid', { place: 0 }), 'menu')).toBe(true)
-    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1) })
-    expect(builder().open).toBe(false)
+    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1), anchor: 'grid' })
     expect(results.getSnapshot()[tab.id].focused).toBe(key(0))
-    // And Pivot… takes its place back.
+    // It is a popover, not the builder's slot: the builder stays open.
+    expect(builder().open).toBe(true)
+    // Drawn in the Results panel, it is not offered while that panel is hidden.
+    panes.set({ ...panes.getSnapshot(), results: false })
+    expect(commands.isEnabled('output.compare', on('grid', { place: 0 }))).toBe(false)
+    panes.set({ ...panes.getSnapshot(), results: true })
+    // The toolbar passes its button as the anchor, so the popover is drawn under it.
+    active.mockReturnValue(element('grid', 0).dom)
+    expect(await commands.execute('output.compare', { tabId: tab.id, anchor: {} as Element }, 'toolbar')).toBe(true)
+    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), anchor: 'toolbar' })
+    active.mockReturnValue(null)
+    // Pivot… closes it.
     expect(await commands.execute('output.pivot', on('grid', { place: 0 }), 'menu')).toBe(true)
     expect(compare.getSnapshot().pickers[tab.id]).toBeUndefined()
     // The toolbar names its tab: a grid focused in another tab is not the one it acts on.

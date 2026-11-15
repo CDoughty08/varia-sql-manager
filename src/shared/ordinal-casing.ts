@@ -2,7 +2,7 @@
  * Column names compared for a diff's pairing: case-insensitively as String.Equals(a, b, StringComparison.OrdinalIgnoreCase)
  * does, code point by code point, but through this one fixed table rather than an ICU's casing (every ICU, Node's,
  * Electron's and the operating system's that .NET uses, has its own Unicode version). The backend's ResultDiffer.Pairs
- * (OrdinalNames, which embeds this file), the Compare picker (src/renderer/src/results/compare-pairing.ts) and the fake
+ * (OrdinalNames, which embeds this file), the Compare popover (src/renderer/src/results/compare-pairing.ts) and the fake
  * backend (tests/fixtures/backend.mjs) all read it, so they pair the same columns on every platform. Each code point maps
  * to the one it compares as (its invariant upper case; ı and ſ keep their own). DiffChecks.OrdinalCasing checks it against
  * the runtime; VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test rewrites the block below from the runtime's casing.

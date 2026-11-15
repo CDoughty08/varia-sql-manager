@@ -6,7 +6,7 @@ import { pairColumns, sameName } from '../src/renderer/src/results/compare-pairi
 interface Case { readonly name: string; readonly left: readonly ResultColumn[]; readonly right: readonly ResultColumn[]; readonly pairs: readonly [number, number][] }
 const cases = (JSON.parse(readFileSync(new URL('./fixtures/compare-pairing/cases.json', import.meta.url), 'utf8')) as { cases: Case[] }).cases
 
-describe('Compare picker column pairing', () => {
+describe('Compare popover column pairing', () => {
   // DiffChecks.cs (SharedPairing) reads the same cases against ResultDiffer.Pairs, so the picker never promises a pairing
   // the backend would not make.
   it.each(cases.map(item => [item.name, item] as const))('pairs as the backend does: %s', (_name, item) => {
@@ -31,6 +31,15 @@ describe('Compare picker column pairing', () => {
     // A tone column is hidden, so never listed.
     expect(pairing.oldOnly).toEqual([{ index: 1, name: 'Hash', dataType: 'varbinary', otherType: 'char(64)' }, { index: 2, name: 'Note', dataType: 'nvarchar' }])
     expect(pairing.newOnly).toEqual([{ index: 1, name: 'Hash', dataType: 'char(64)', otherType: 'varbinary' }, { index: 2, name: 'Added', dataType: 'date' }])
+  })
+
+  it('marks a column left out only because its name repeats, whatever the types, and not one whose wire differs', () => {
+    const column = (name: string, dataType: string, wire: 'text' | 'binary' = 'text') => ({ name, dataType, wire, nullable: true })
+    // The first Id pairs with the bigint (both text); the second is left out because the name repeats, not for its type.
+    const pairing = pairColumns([column('Id', 'int'), column('Id', 'int'), column('Data', 'nvarchar')], [column('Id', 'bigint'), column('Data', 'varbinary', 'binary'), column('data', 'nvarchar')])
+    expect(pairing.oldOnly).toEqual([{ index: 1, name: 'Id', dataType: 'int', otherType: 'bigint', repeat: true }])
+    // The binary Data has no text column of its name left to pair with it on the old side, and is not a repeat there.
+    expect(pairing.newOnly).toEqual([{ index: 1, name: 'Data', dataType: 'varbinary', otherType: 'nvarchar' }])
   })
 
   it('compares names as OrdinalIgnoreCase does: by the casing table of .NET, length for length', () => {

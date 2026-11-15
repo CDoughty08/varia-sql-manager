@@ -849,6 +849,28 @@ Outcome, accepted by the owner:
         input is still loading (such a Table is simply not offered). A re-run releases the old results before any new
         one arrives, so the results view (the picker with it) is not drawn until the first set comes, and a keyboard focus
         inside it falls to the page, as it does from a grid; the picker's state waits in `CompareService` meanwhile.
+    - **Compare popover (after PR 16).** The owner found the side panel unintuitive and wordy and chose a popover from the
+      mocks in `prototypes/results-pane/compare-picker-options.html` (option B). `ComparePopover` replaces `ComparePanel`
+      and supersedes the side-panel and stay-open bullets above (`tests/compare-popover.test.ts`, `results-smoke` 14g):
+      - It opens beside its trigger, in that window: under the toolbar's Compare (which passes itself as the command's
+        `anchor`; the picker records `anchor: 'toolbar'`), else at the top right of the Table's grid. It no longer takes
+        the builder's slot, so Compare no longer closes the Pivot builder; Pivot… still closes the popover.
+      - Transient: Escape, Close and the close button close it and return the focus to the trigger (the button, else the
+        grid); the toolbar's Compare (`aria-expanded`), a press outside, its window losing the focus and the focus moving
+        out by key (not into another dialog) close it too (`output.compare` is offered only while the Results panel shows); it closes once its comparison is
+        shown (Compare or Show It), when the query runs again, when its Table closes, or with the results; also when it is
+        no longer drawn (its pane hidden, another document shown) and when its pane moves window (`windows.onDidAdopt`).
+        It is placed by `placePopover`, held inside the window and, on a grid, to the grid's part in view. The follow-into-
+        the-next-run, waiting and "no such Table" states are gone. A comparison running when it closes goes on, and its
+        failure goes to the toolbar.
+      - `CompareService` remembers, per tab, the choice made on each group (target group number and swap) and the last
+        exact-text choice, and offers them when the popover opens on that group, in this run or a later one, while the
+        target is offered. Only a pick, a swap, Exact text or Compare records; opening does not. Close Results keeps it;
+        the tab going (`ResultsService.release`) forgets it.
+      - Content says only what applies: no list with one target (just the two sides), an amber "N of M columns" on a
+        target with a column of either result left out (M counts a pair once), "Not compared" only when columns are left out (the pairing rule in its
+        ⓘ), the sorted-or-filtered warning only while it holds, the comparison's name in the Compare button's tooltip.
+        Enter on a target or Exact text compares.
 17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
     took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.
