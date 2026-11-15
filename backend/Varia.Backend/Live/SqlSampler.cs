@@ -144,9 +144,18 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 using var lease = await gates.WaitAsync(connectionId, SessionBudgetMs, token).ConfigureAwait(false);
                 if (lease is not null) permitted = await SessionAsync(token).ConfigureAwait(false);
             }
+            catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
+            {
+                // The subscription ended while it opened: as in SampleAsync, a connection that still answers goes back to the pool
+                // when the sampler is disposed, and one that does not is never pooled again.
+                if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop();
+                throw new OperationCanceledException(token);
+            }
             catch (SqlException) { Drop(); }
             catch (InvalidOperationException) { Drop(); }
-            catch (TimeoutException) { Drop(); }
+            // The connect's bound (never open: dropped) or the session probe's budget (kept when it still answers, so opening a view
+            // on a busy server never clears the pool the other views share; the first tick reads the session again).
+            catch (TimeoutException) { if (!await HeldAnswersAsync().ConfigureAwait(false)) Drop(); }
             catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { Drop(); }
         }
         opened = true;

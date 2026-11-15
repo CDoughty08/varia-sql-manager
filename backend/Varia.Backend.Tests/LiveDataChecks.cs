@@ -162,7 +162,10 @@ internal static class LiveDataChecks
         var ended = await Stop(overview);
         check(ended.Ended == "cancelled" && ended.Ticks >= 4 && service.Live.Gates.Busy == 0, "a cancelled view ends cancelled and holds no live gate");
 
-        await BudgetAsync(check, service, info.Id, Subscribe, Stop);
+        // When a session logged in: the same number with the same login time is the same session (SQL Server reuses numbers at once).
+        async Task<string?> LoginOf(int spid) => spid <= 0 ? null : (await Sql("SELECT CONVERT(nvarchar(30), s.login_time, 126) FROM sys.dm_exec_sessions AS s WHERE s.session_id = "
+            + spid.ToString(CultureInfo.InvariantCulture) + ";")).Scalar;
+        await BudgetAsync(check, service, info.Id, Subscribe, Stop, LatestSpid, LoginOf);
         await BlockedAsync(check, service, info.Id, json, Sql, Subscribe, Stop);
         await PermissionAsync(check, service, live, json, Sql, Subscribe);
     }
@@ -180,10 +183,11 @@ internal static class LiveDataChecks
     };
 
     /// <summary>A statement that runs past its budget without waiting on any lock (the test hook puts a WAITFOR first): the
-    /// budget cancels it as a TIMEOUT value, the connection is dropped and reopened (a new session in the tick), and the view
-    /// keeps ticking and holds no gate.</summary>
+    /// budget cancels it as a TIMEOUT value, the connection still answers so the view keeps its session (its pool is not
+    /// cleared), and the view keeps ticking and holds no gate.</summary>
     private static async Task BudgetAsync(Action<bool, string> check, SqlService service, string connectionId,
-        Func<string, int, (Task<LiveEnd> Task, LiveRecorder Recorder, string Id)> subscribe, Func<(Task<LiveEnd>, LiveRecorder, string), Task<LiveEnd>> stop)
+        Func<string, int, (Task<LiveEnd> Task, LiveRecorder Recorder, string Id)> subscribe, Func<(Task<LiveEnd>, LiveRecorder, string), Task<LiveEnd>> stop,
+        Func<LiveRecorder, int> latestSpid, Func<int, Task<string?>> loginOf)
     {
         var slow = true;
         service.Live.TestText = (_, text) => slow ? text.Replace(LiveSql.UncommittedPrologue, LiveSql.UncommittedPrologue + "WAITFOR DELAY '00:00:03';\n", StringComparison.Ordinal) : text;
@@ -197,16 +201,21 @@ internal static class LiveDataChecks
             check(timedOut && errors.Take(2).All(error => error is { Code: "TIMEOUT", Number: null, Terminal: false }) && errors[1].RetryInMs > errors[0].RetryInMs && view.Value.Recorder.Ticks.All(tick => tick.Samples.Count == 0),
                 "a statement that runs past its budget without waiting on a lock is cancelled at the budget as a TIMEOUT value (no error number), and the probe backs off: "
                 + string.Join(", ", errors.Take(2).Select(error => error.Code + " " + error.Number + " retry " + error.RetryInMs)));
+            var spidBefore = latestSpid(view.Value.Recorder);
+            var loginBefore = await loginOf(spidBefore);
             slow = false;
             var before = view.Value.Recorder.Ticks.Count;
             var recovered = await view.Value.Recorder.WaitAsync(recorder => recorder.Ticks.Skip(before).Any(tick => tick.Samples.Count > 0), 20_000);
             var after = view.Value.Recorder.Ticks.Skip(before).FirstOrDefault(tick => tick.Samples.Count > 0);
             // SqlClient ended each cancelled WAITFOR on the server, so the connection passes the clean-connection check and the view
-            // keeps its session: no tick names a new one, and no timeout cleared the pool the other views share.
-            check(recovered && after is { Spid: null, Samples: [{ Gap: "baseline" }] } && view.Value.Recorder.Opened is { Spid: > 0 }
-                && view.Value.Recorder.Ticks.All(tick => tick.Spid is null) && !view.Value.Task.IsCompleted,
+            // keeps its session: the one it held when the timeouts began, logged in at the same time, and no timeout cleared the pool
+            // the other views share. (Before, each timeout dropped the connection and the next tick opened a new session.)
+            var spidAfter = latestSpid(view.Value.Recorder);
+            var loginAfter = await loginOf(spidAfter);
+            check(recovered && after is { Samples: [{ Gap: "baseline" }] } && spidBefore > 0 && spidAfter == spidBefore && loginBefore is not null && loginAfter == loginBefore
+                && !view.Value.Task.IsCompleted,
                 "after a timeout the view keeps its session (the cancelled statement's connection still answers, so it is neither dropped nor its pool cleared) and samples again from a baseline: "
-                + string.Join(", ", view.Value.Recorder.Ticks.Select(tick => tick.Spid?.ToString(CultureInfo.InvariantCulture) ?? "-")));
+                + spidBefore + " " + loginBefore + " / " + spidAfter + " " + loginAfter);
         }
         finally
         {
