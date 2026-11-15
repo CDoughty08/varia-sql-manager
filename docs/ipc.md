@@ -1403,8 +1403,9 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   (8); and date, time, datetime2 and datetimeoffset bases are counted at scale 7. Its characters are those of the display
   text.
 - **Collation.** For char, varchar, text, nchar, nvarchar and ntext, the backend reads each column's collation from
-  SqlClient's metadata (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and
-  `.encoding`, checked against `_SqlMetaData.column`, the column's name). The char types count bytes with the encoding
+  SqlClient's metadata (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData` and its indexer's column metadata,
+  `TdsColumnMetadata` since SqlClient 7.1.2: its `collation`, `Encoding` and `CodePage`, each found as a field or a property,
+  checked against its `column`, the column's name). The char types count bytes with the encoding
   SqlClient itself decodes with, so a code page or UTF-8 byte count equals `DATALENGTH`; the n types are UTF-16 whatever
   their collation. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
   SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
@@ -3059,8 +3060,8 @@ formats SQL types. Every sample is a case in `tests/fixtures/sql-display.json`, 
 against SQL Server by the live type matrix. Reads use `CommandBehavior.SequentialAccess`, call `IsDBNull` first, and read
 each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
 its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
-whole value; json as UTF-8 bytes through `GetBytes`, decoded by the backend, since SqlClient 7.1.1's `GetChars` decodes
-json one byte per character and its `GetTextReader` throws when a read ends inside a multi-byte sequence). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
+whole value; json as UTF-8 bytes through `GetBytes`, decoded by the backend, since SqlClient 7.1.1's `GetChars` (7.1.2 lists no
+fix) decodes json one byte per character and its `GetTextReader` throws when a read ends inside a multi-byte sequence). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
 kept) are read past with a synchronous `Read` when their set has a long column, on a dedicated thread: that `Read` also
 waits for the server's next row (a lock, a slow plan), and on thread-pool threads a few such queries delayed every other
 request, cancels included, by seconds. Either way, nothing near a huge value's size is held, and a cancel stops it: left
