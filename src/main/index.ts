@@ -357,11 +357,16 @@ function openError(error: unknown): string {
 /**
  * Reads and registers files main was handed, never ones the page named: absolute paths to regular files, folders
  * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason",
- * and the rest still open (File › Open's selection too).
+ * and the rest still open (File › Open's selection too). With `folder`, a folder is reported with it instead (a macOS
+ * package the Open dialog returned).
  */
-function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
+function openPaths(paths: readonly string[], folder?: string): Promise<OpenedFiles> {
   const targets = files.targets()
-  return openEach(paths, path => openPath(path, targets), openFailure)
+  return openEach(paths, async path => {
+    const file = await openPath(path, targets)
+    if (!file && folder) throw new Error(folder)
+    return file
+  }, openFailure)
 }
 /** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
 async function openPath(path: string, targets: TargetCache = files.targets()): Promise<OpenSqlFile | undefined> {
@@ -1113,7 +1118,7 @@ app.whenReady().then(async () => {
     if (selected.canceled) return { files: [], errors: [] }
     if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
     // One file that cannot be read is reported by name; the others still open.
-    return openPaths(selected.filePaths)
+    return openPaths(selected.filePaths, 'It is a folder, not a file.')
   })
   handle('varia:files-save', async value => {
     const options = saveFileSchema.parse(value), kind = fileKinds[options.kind ?? 'sql']

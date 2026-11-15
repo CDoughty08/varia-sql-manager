@@ -653,7 +653,7 @@ describe('SQL file encodings and save hardening', () => {
     expect(launch).toContain('openPath(path, targets)')
     expect(body('async function openPath(')).toContain('files.read(path, { targets })')
     const dialog = main.slice(main.indexOf("title: 'Open SQL query'"), main.indexOf("handle('varia:files-save'"))
-    expect(dialog).toContain('return openPaths(selected.filePaths)')
+    expect(dialog).toContain('return openPaths(selected.filePaths,')
   })
 })
 

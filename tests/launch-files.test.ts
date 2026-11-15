@@ -147,7 +147,9 @@ describe('opening several files', () => {
   it('is what File › Open uses, so one unreadable file in a selection does not fail the others', () => {
     const source = readFileSync('src/main/index.ts', 'utf8')
     const handler = source.slice(source.indexOf("handle('varia:files-open'"), source.indexOf("handle('varia:files-save'"))
-    expect(handler).toContain('return openPaths(selected.filePaths)')
+    // A folder (a macOS package) is reported rather than skipped: Open said nothing at all for it otherwise.
+    expect(handler).toContain("return openPaths(selected.filePaths, 'It is a folder, not a file.')")
+    expect(source).toContain('if (!file && folder) throw new Error(folder)')
     expect(handler).not.toContain('Promise.all')
     expect(source).toMatch(/function openPaths\([^)]*\)[^{]*\{[^}]*openEach\(/)
   })

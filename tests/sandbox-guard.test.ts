@@ -136,7 +136,7 @@ describe('Chromium sandbox guard', () => {
     expect(main).toContain('open: openPaths,')
     const fileOpen = main.slice(main.indexOf("handle('varia:files-open'"), main.indexOf("handle('varia:files-save'"))
     expect(fileOpen).toContain('dialog.showOpenDialog(')
-    expect(fileOpen).toContain('return openPaths(selected.filePaths)')
+    expect(fileOpen).toContain('return openPaths(selected.filePaths,')
     expect(main.match(/launchFiles\.add\(/g)).toHaveLength(4)
     const handler = (start: string) => { const from = main.indexOf(start); expect(from, start).toBeGreaterThan(-1); return main.slice(from, from + 400) }
     for (const start of ["app.on('second-instance'", "app.on('open-file'", "ipcMain.on('varia:files-dropped'"]) expect(handler(start), start).toContain('launchFiles.add(')
