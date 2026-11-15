@@ -63,6 +63,9 @@ internal static class ResultNameLiveChecks
             var ended = await Run("SELECT 1 / 0 AS z;\nGO\n-- #Name=\"B\"\nSELECT 2 AS b;", stopOnError: true);
             check(ended.Status == "failed" && Notes(ended) is [var unreached] && unreached == "Result name \"B\" (line 3) was not applied: the run ended before its batch ran.",
                 "a script an error ends notes the names in the batches it did not run: " + Show(ended));
+            var endedRepeat = await Run("-- #Name=\"X\"\nSELECT 1 / 0 AS z;\nGO 3", stopOnError: true);
+            check(endedRepeat.Status == "failed" && Names(endedRepeat) == "X" && Notes(endedRepeat) is [var laterRepetitions]
+                && laterRepetitions == "Result name \"X\" (line 1) was not applied: the run ended before repetitions 2 to 3 ran.", "a script an error ends notes the repetitions it did not run: " + Show(endedRepeat));
 
             // GO 3: the batch is parsed once and each repetition's set is named.
             var repeated = await Run("-- #Name=\"Repeated\"\nSELECT 1 AS a;\nGO 3");

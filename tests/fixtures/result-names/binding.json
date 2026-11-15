@@ -740,6 +740,90 @@
         "\"Saved plan\" (line 1) was not applied: its batch names a column",
         "\"Stats\" (line 3) was not applied: its batch names a column"
       ]
+    },
+    {
+      "name": "a plan arriving where a SELECT * may have returned it stops naming: a table's column may be named like the plan column",
+      "sql": "SELECT * FROM #p;\n-- #Name=\"A\"\nSELECT 1 AS a;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            1,
+            "A"
+          ],
+          [
+            2,
+            "B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1,
+            "plan": true
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          null,
+          null,
+          null
+        ],
+        "unapplied": [
+          "\"A\" (line 2) was not applied: a result set shown as an execution plan arrived where a statement with * may have returned it",
+          "\"B\" (line 4) was not applied: a result set shown as an execution plan"
+        ]
+      }
+    },
+    {
+      "name": "a STATISTICS XML plan after a named set with known columns leaves the next name applied",
+      "sql": "-- #Name=\"A\"\nSELECT 1 AS a;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "A"
+          ],
+          [
+            1,
+            "B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          }
+        ],
+        "names": [
+          "A",
+          null,
+          "B",
+          null
+        ],
+        "unapplied": []
+      }
     }
   ]
 }

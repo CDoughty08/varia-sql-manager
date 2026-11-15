@@ -182,8 +182,9 @@ internal static class ResultNames
 /// known position's set must have, and the notes for names that cannot be applied, which Messages shows.</summary>
 internal sealed class ResultNamePlan
 {
-    private ResultNamePlan(IReadOnlyList<ResultNameSlot> slots, IReadOnlyDictionary<int, int> columns, IReadOnlyList<string> notes)
+    private ResultNamePlan(IReadOnlyList<ResultNameSlot> slots, IReadOnlyDictionary<int, int> columns, IReadOnlyList<string> notes, IReadOnlySet<int>? unsized = null)
     {
+        Unsized = unsized ?? new HashSet<int>();
         Slots = slots;
         SlotAt = Enumerable.Range(0, slots.Count).ToDictionary(index => slots[index].Position);
         Columns = columns;
@@ -194,6 +195,9 @@ internal sealed class ResultNamePlan
     /// <summary>The index in <see cref="Slots"/> of the slot at each named place (no two slots share one).</summary>
     public IReadOnlyDictionary<int, int> SlotAt { get; }
     public IReadOnlyDictionary<int, int> Columns { get; }
+    /// <summary>The places of One statements whose column count the text does not say (a *, a FOR clause): a set from a table
+    /// with SQL Server's plan column can arrive there and be shown as a plan, though the parse counts it.</summary>
+    public IReadOnlySet<int> Unsized { get; }
     public IReadOnlyList<string> Notes { get; }
 
     /// <summary>The plan for a batch; null when it holds no well-formed marker, in which case it is not parsed.</summary>
@@ -235,6 +239,7 @@ internal sealed class ResultNamePlan
         var notes = new List<string>();
         var slots = new List<ResultNameSlot>();
         var columns = new Dictionary<int, int>();
+        var unsized = new HashSet<int>();
         var classes = statements.Select(ResultNames.Classify).ToList();
         int Line(TSqlStatement statement) => firstLine + statement.StartLine - 1;
         string At(int index) => (classes[index].Kind == "statement" ? "a statement" : (classes[index].Kind is "IF" or "INSERT" or "UPDATE" or "EXEC" ? "an " : "a ") + classes[index].Kind + " statement")
@@ -284,6 +289,7 @@ internal sealed class ResultNamePlan
             if (kind == StatementClass.One)
             {
                 if (count is { } known) columns[position] = known;
+                else unsized.Add(position);
                 if (own.Count > 0) slots.Add(new(position, own[0].Name!, own[0].Line, true, position));
                 foreach (var marker in own.Skip(1)) notes.Add(ResultNames.Note(marker, "is unused: its statement returns one result set, which an earlier name takes."));
                 position++;
@@ -302,7 +308,7 @@ internal sealed class ResultNamePlan
             }
             for (var k = 0; k < own.Count; k++) slots.Add(new(position + k, own[k].Name!, own[k].Line, false, position));
         }
-        return new(slots, columns, notes);
+        return new(slots, columns, notes, unsized);
     }
 
     private static ResultNamePlan Refused(IEnumerable<ResultMarker> markers, string what) => new([], new Dictionary<int, int>(), [.. markers.Select(marker => ResultNames.Note(marker, what))]);
@@ -337,7 +343,14 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
     internal string? Take(int fieldCount, bool showplanText, bool isPlan, bool errored)
     {
         lastApplied = -1;
-        if (isPlan) return null;
+        // A plan is left out of the count, but one at a place where a SELECT * may have returned a set in the plan column
+        // may be that SELECT's own set: the places after it are then unknown.
+        if (isPlan)
+        {
+            if (stopped is null && plan.Unsized.Contains(position))
+                stopped = "a result set shown as an execution plan arrived where a statement with * may have returned it, so the place of its result set is unknown";
+            return null;
+        }
         if (stopped is null && errored) stopped = "an error earlier in its batch made the place of its result set unknown";
         if (stopped is null && showplanText) stopped = "SHOWPLAN or STATISTICS PROFILE output in its batch made the place of its result set unknown";
         var at = position++;
@@ -384,6 +397,12 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
         }
     }
 
+    /// <summary>The notes for a batch's names in repetitions the run ended before (first to last, 1-based; 1 to 1 when it
+    /// runs once and never ran).</summary>
+    internal static IEnumerable<string> Unrun(ResultNamePlan plan, int first, int last, bool repeated) =>
+        plan.Slots.Select(slot => ResultNames.Note(slot, "was not applied: the run ended before "
+            + (!repeated ? "its batch ran." : first == last ? $"repetition {first.ToString("N0", CultureInfo.InvariantCulture)} ran." : $"repetitions {first.ToString("N0", CultureInfo.InvariantCulture)} to {last.ToString("N0", CultureInfo.InvariantCulture)} ran.")));
+
     /// <summary>SHOWPLAN_TEXT and SHOWPLAN_ALL sets start with StmtText, STATISTICS PROFILE's with Rows, Executes, StmtText: each
     /// statement then adds sets the parse cannot count.</summary>
     internal static bool IsShowplanText(DbDataReader reader) =>
@@ -398,12 +417,19 @@ internal sealed class ResultNameNotes(Action<string> add)
 {
     private readonly HashSet<string> seen = new(StringComparer.Ordinal);
     private int suppressed;
+    private const int MaxCounted = 4096;
+
+    /// <summary>The notes kept to tell repeats, at most <see cref="ResultNames.MaxNotes"/> + 4,096.</summary>
+    internal int Kept => seen.Count;
 
     public void Add(string note)
     {
-        if (!seen.Add(note)) return;
-        if (seen.Count <= ResultNames.MaxNotes) add(note);
-        else suppressed++;
+        // Past the cap a note is counted; only the first few thousand are kept to tell repeats, since a GO n run can make
+        // millions of distinct ones (past that, a repeat may be counted twice).
+        if (seen.Count < ResultNames.MaxNotes) { if (seen.Add(note)) add(note); return; }
+        if (seen.Contains(note)) return;
+        if (seen.Count < ResultNames.MaxNotes + MaxCounted) seen.Add(note);
+        suppressed++;
     }
 
     public void Finish()

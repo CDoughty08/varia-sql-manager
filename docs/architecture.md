@@ -171,7 +171,8 @@ being true.
   SQL Server skip its statements without an error, nor does one whose text names SQL Server's plan column (a set in it is
   shown as a plan and left out of the count). While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
   that fails returns no set), at a set whose column count its statement does not select, and at SHOWPLAN or STATISTICS
-  PROFILE text, and when the result budget keeps no more sets. A name not applied (also one a cancel, timeout or ended
+  PROFILE text, at a plan set where a statement with * (whose columns could include the plan column) stood, and when
+  the result budget keeps no more sets. A name not applied (also one a cancel, timeout or ended
   script never reached, in a later batch too; a GO n repetition's notes name it) is an informational Messages line quoting the name and its line, never an error and
   never logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name` carries it; a name never
   changes a result's identity, which stays its ordinal.

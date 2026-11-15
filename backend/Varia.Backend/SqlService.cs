@@ -1134,6 +1134,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The batches whose plans are made (their notes out); those after them that the run never reached are noted in finally.
         var plannedBatches = 0;
         var pendingRepetition = 0;
+        // The next repetition of the last planned batch to start, and whether the batch loop began (a refused or failed
+        // request says nothing about names).
+        var nextRepetition = 1;
+        var namesBegun = false;
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1282,6 +1286,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             connection.FireInfoMessageEventOnUserErrors = true;
             if (args.IncludeClientStatistics) statistics = new(connection);
             foreach (var marker in unbatched.Where(marker => marker.Name is not null)) nameNotes.Add(ResultNames.Unbatched(marker));
+            namesBegun = true;
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
@@ -1293,6 +1298,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     foreach (var note in namePlan.Notes) nameNotes.Add(note);
                 }
                 plannedBatches = b + 1;
+                nextRepetition = 1;
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -1301,6 +1307,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
                     pendingNames = names;
                     pendingRepetition = batch.RepeatCount > 1 ? iteration : 0;
+                    nextRepetition = iteration + 1;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1555,9 +1562,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         finally
         {
             if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived", pendingRepetition)) nameNotes.Add(note);
-            for (var b = plannedBatches; b < batches.Count; b++)
-                foreach (var marker in batches[b].Markers ?? [])
-                    if (marker.Name is not null) nameNotes.Add(ResultNames.Note(marker, "was not applied: the run ended before its batch ran."));
+            if (namesBegun)
+            {
+                // The planned batch's repetitions that never started, then the batches never reached.
+                if (plannedBatches > 0 && namePlans[plannedBatches - 1] is { Slots.Count: > 0 } lastPlan && nextRepetition <= batches[plannedBatches - 1].RepeatCount)
+                    foreach (var note in ResultNameBinder.Unrun(lastPlan, nextRepetition, batches[plannedBatches - 1].RepeatCount, batches[plannedBatches - 1].RepeatCount > 1)) nameNotes.Add(note);
+                for (var b = plannedBatches; b < batches.Count; b++)
+                    foreach (var marker in batches[b].Markers ?? [])
+                        if (marker.Name is not null) nameNotes.Add(ResultNames.Note(marker, "was not applied: the run ended before its batch ran."));
+            }
             nameNotes.Finish();
             // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
             statisticsSample = statistics?.Finish();

@@ -172,6 +172,10 @@ internal static class ResultNameChecks
         notes.Finish();
         check(shown.Count == 21 && shown[19] == "note 19" && shown[20] == "… and 5 more notes about result names.",
             "a run says each note once, at most 20 of them, then counts the rest: " + string.Join(" / ", shown.Skip(18)));
+        // A GO n run can make millions of distinct notes: past the cap they are counted, and only a bounded number kept.
+        var flood = new ResultNameNotes(_ => { });
+        for (var i = 0; i < 200_000; i++) flood.Add("flood " + i);
+        check(flood.Kept <= ResultNames.MaxNotes + 4096, $"notes past the cap are counted, not all kept: {flood.Kept:N0} kept");
     }
 
     private static void Readers(Action<bool, string> check)
@@ -204,6 +208,10 @@ internal static class ResultNameChecks
         ended.Take(1, false, false, false);
         check(ended.Unapplied(true, "its batch stopped before its result set arrived").ToList() is [var cut, _] && cut == "Result name \"Refused\" (line 3) was not applied: its batch stopped before its result set arrived.",
             "names a batch never reached are noted with why it ended");
+        // Repetitions a stopped run never started are noted, once for the run of them.
+        check(ResultNameBinder.Unrun(budget, 2, 3, true).First() == "Result name \"Kept\" (line 1) was not applied: the run ended before repetitions 2 to 3 ran."
+            && ResultNameBinder.Unrun(budget, 3, 3, true).First().EndsWith("before repetition 3 ran.", StringComparison.Ordinal)
+            && ResultNameBinder.Unrun(budget, 1, 1, false).First().EndsWith("before its batch ran.", StringComparison.Ordinal), "names in repetitions a stopped run never started are noted");
         // A GO n repetition's notes name it: another repetition may have applied the same name.
         check(new ResultNameBinder(budget).Unapplied(true, null, 2).First() == "Result name \"Kept\" (line 1, repetition 2) was not applied: an error earlier in its batch made the place of its result set unknown.",
             "a repetition's notes say which repetition");
