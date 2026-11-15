@@ -156,7 +156,8 @@ internal sealed partial class SessionActions
     {
         var statements = ActivitySql.Statements("activity.details", render).ToDictionary(statement => statement.Id, StringComparer.Ordinal);
         var connection = host.MonitorConnection(args.ConnectionId);
-        // A connection cancelled or broken mid-statement never goes back to the pool for a live view to pick up.
+        // A connection cancelled or broken mid-statement goes back to the pool for a live view to pick up only when it passes the
+        // clean-connection check (finally, below); otherwise its pool is cleared.
         var healthy = false;
         try
         {

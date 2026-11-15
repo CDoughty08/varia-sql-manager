@@ -208,7 +208,7 @@ internal static class LiveDataChecks
             var recovered = await view.Value.Recorder.WaitAsync(recorder => recorder.Ticks.Skip(before).Any(tick => tick.Samples.Count > 0), 20_000);
             var after = view.Value.Recorder.Ticks.Skip(before).FirstOrDefault(tick => tick.Samples.Count > 0);
             // SqlClient ended each cancelled WAITFOR on the server, so the connection passes the clean-connection check and the view
-            // keeps its session: the one it held when the timeouts began, logged in at the same time, and no timeout cleared the pool
+            // keeps its session: the one it held after the timeouts, logged in at the same time, and no timeout cleared the pool
             // the other views share. (Before, each timeout dropped the connection and the next tick opened a new session.)
             var spidAfter = latestSpid(view.Value.Recorder);
             var loginAfter = await loginOf(spidAfter);

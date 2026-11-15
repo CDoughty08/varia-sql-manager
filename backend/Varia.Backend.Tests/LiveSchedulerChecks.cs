@@ -840,8 +840,11 @@ internal static class LiveSchedulerChecks
             catch (OperationCanceledException) { connectEnd = "cancelled"; }
 
             var scripted = new ScriptedOpenHost(id);
-            // One gate in the backend, held here: the scripted connect returns without opening anything (no server is reached), and
-            // the sample then waits for the gate. Keeping an open connection after such a cancel would need a server, so it is not
+            var connected = false;
+            scripted.Open = (_, _) => { connected = true; return Task.CompletedTask; };
+            // One gate in the backend, held here: the scripted connect returns at once without opening anything (no server is
+            // reached), and the sample then waits for the gate, which nothing releases: a sample that has connected and not
+            // completed is waiting for it. Keeping an open connection after such a cancel would need a server, so it is not
             // checked here.
             var gates = new LiveGates(2, 1, scripted.IsConnected);
             using var held = await gates.WaitAsync(id, 1000, CancellationToken.None);
@@ -849,8 +852,7 @@ internal static class LiveSchedulerChecks
             await waiting.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
             using var closing = new CancellationTokenSource();
             var waited = waiting.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), 10_000, 2000)], closing.Token);
-            SpinWait.SpinUntil(() => waited.IsCompleted, 300);
-            var stillWaiting = !waited.IsCompleted;
+            var stillWaiting = connected && !waited.IsCompleted;
             closing.Cancel();
             string gateEnd;
             try { await waited.WaitAsync(TimeSpan.FromSeconds(15)); gateEnd = "sampled"; }

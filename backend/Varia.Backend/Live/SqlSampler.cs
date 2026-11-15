@@ -383,6 +383,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     private async Task<LiveProbeError?> CatalogFailureAsync(string probe, int budgetMs, CancellationToken token)
     {
         SqlConnection? server = null;
+        // The state statement was sent: only then can a cancel have cut one short (before it, nothing on the connection is dirty).
+        var sent = false;
         try
         {
             server = host.PoolConnection(connectionId, null, LiveConnections.SsisSuffix);
@@ -393,6 +395,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             }
             using var lease = await gates.WaitAsync(connectionId, budgetMs, token).ConfigureAwait(false);
             if (lease is null) return null;
+            sent = true;
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
             budget.CancelAfter(budgetMs);
             await using var command = server.CreateCommand();
@@ -407,8 +410,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
             // As in SampleAsync: the cancel in SqlClient's words ends the subscription cancelled, and a connection cancelled
-            // mid-statement goes back to no pool unless it still answers.
-            if (server is not null && !await LiveConnections.AnswersAsync(server).ConfigureAwait(false))
+            // mid-statement goes back to no pool unless it still answers; one cancelled before it sent anything clears nothing.
+            if (server is not null && sent && !await LiveConnections.AnswersAsync(server).ConfigureAwait(false))
             {
                 PoolClears++;
                 try { SqlConnection.ClearPool(server); }
@@ -639,8 +642,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         return (snapshots, appends, full);
     }
 
-    /// <summary>Gives the connection back: to the pool when it is healthy (idle), and never to it when it broke or was cancelled
-    /// mid-statement (its pool is cleared, so no other view picks it up).</summary>
+    /// <summary>Gives the connection back: to the pool when it is healthy (idle, never opened, or a cancelled statement's that passed
+    /// the clean-connection check), and never to it when it broke or failed that check (its pool is cleared, so no other view
+    /// picks it up).</summary>
     private void Drop(bool baseline = false, bool healthy = false)
     {
         // After a lost connection, which may have reached another server (a failover), rates start again.
