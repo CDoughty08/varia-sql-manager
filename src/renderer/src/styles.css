@@ -853,9 +853,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"], .results-segments button[aria-expanded="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 /* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
-   panel, never below what the box holds, so its buttons never run under the groups after it; past that the toolbar clips
-   its last groups. A narrow window (a 1024-wide display) drops the groups' icons, the box's magnifier and its Previous and
-   Next (Enter, Shift+Enter, F3 and Shift+F3 still step), and tightens the buttons, so every group fits while the box is empty. */
+   pane, down to what keeps a few words of text readable; then the toolbar folds (ResultsToolbar's toolbarFolds, by the
+   toolbar's own width, so a narrow docked or popped-out pane folds as a narrow window does): Tabs goes, the groups tighten
+   (their icons, the box's magnifier and its Previous and Next go; Enter, Shift+Enter, F3 and Shift+F3 still step), then
+   Transposed, Headers and Compare, Sort text by, White space and the Show group go. The ⋯ menu holds them all. */
 .results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
 .results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
 .results-search input { flex: 1 1 0; width: 0; min-width: 32px; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
@@ -863,23 +864,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
-@media (max-width: 1180px) {
-  .output-toolbar { gap: 4px; }
-  .output-views button { padding: 0 6px; }
-  .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
-  /* A 1024-wide window (CI's displays) fits every group with Linux's wider fonts: the box gives up its width first. */
-  .results-toolbar { gap: 1px; padding-left: 6px; }
-  .results-segments button { padding: 0 3px; }
-  .results-segments button.results-icon-toggle { padding: 0 3px; }
-  .results-search { padding-left: 4px; }
-  .results-search input { min-width: 12px; }
-  /* Transposed and its Headers, and Compare, give way too: they are also in the grid's menu and the palette. */
-  .results-toolbar .results-transpose, .results-toolbar .results-compare { display: none; }
-}
-/* Tabs gives way first, being also in the palette and the Window menu: with every group shown the toolbar fills a
-   1280-wide window on Windows to the pixel and overflows it with Linux's wider fonts, putting its last group under the
-   status. */
-@media (max-width: 1440px) { .results-toolbar .results-layout { display: none; } }
+.results-toolbar:not([data-fold~="show"]) .results-search { min-width: 160px; }
+.results-toolbar[data-fold~="layout"] .results-layout { display: none; }
+.output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
+.output-toolbar:has(> .results-toolbar[data-fold~="tight"]) .output-views button { padding: 0 6px; }
+.results-toolbar[data-fold~="tight"] { gap: 1px; padding-left: 6px; }
+.results-toolbar[data-fold~="tight"] .results-toolbar-label, .results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
+.results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle { padding: 0 3px; }
+.results-toolbar[data-fold~="tight"] .results-search { padding-left: 4px; }
+.results-toolbar[data-fold~="tight"] .results-search input { min-width: 12px; }
+.results-toolbar[data-fold~="view"] .results-transpose, .results-toolbar[data-fold~="view"] .results-compare,
+.results-toolbar[data-fold~="sort"] .results-sort, .results-toolbar[data-fold~="space"] .results-space, .results-toolbar[data-fold~="show"] .results-show { display: none; }
 .job-strip, .op-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip, .output-toolbar > .op-strip { flex-shrink: 1; min-width: 72px; }
