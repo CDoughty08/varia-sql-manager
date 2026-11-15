@@ -6,7 +6,7 @@ result. Comparisons sit beside the groups and keep their own snapshots.
 
 Revision 10 (2026-11-15), the closing revision: the work is delivered. All eighteen PRs and the spike are merged: PR 0
 (the spike), #411, #413 and #429, #441, #442, #430 and #443, #448, #449, #452, #450, #465, #476, #474, #467, #494, #509,
-#466, #493 and PR 18 (Integration, see its entry). Beside them landed named result sets (#502, #504, #503, which PR 15
+#466, #493 and #520 (PR 18, Integration). Beside them landed named result sets (#502, #504, #503, which PR 15
 builds on), the Compare popover (#490), Pivot filters compared by value (#487) and the result memory work below. It
 follows the owner's decisions, three independent reviews against the code, the orientation spike's findings, what each
 PR found when it merged, and the [pivot performance findings](pivot-performance-findings.md). Each merged PR's entry
@@ -1091,7 +1091,7 @@ Outcome, accepted by the owner:
         Update); a machine with few cores, Linux and macOS measured against the 250 ms condition; a Pivot shown in a
         popout or a docked pane counts by the same model, not by what is on screen (`ResultVisibilityService` knows the
         latter, for the backend's packing).
-18. **Integration.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
+18. **Integration. Merged as #520.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
     - **What PR 18 settled or left** (`tests/results-caption.test.ts`' naming lint holds its one new check):
       - Removed: the smoke locators `comparisonGrids` and `transposedGrid` (`scripts/fixtures/ui.mjs`), which no suite
