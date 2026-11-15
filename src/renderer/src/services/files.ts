@@ -13,7 +13,8 @@ export interface FileServiceOptions {
   /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
   readonly autoReload?: () => boolean
   /** Hot exit (Restore open queries on startup): the tabs a close keeps instead of asking, or undefined while it is off. */
-  readonly hotExit?: () => KeptSession | undefined
+  /** What hot exit keeps. `final` is false for the close's first look, before its prompts can still cancel it. */
+  readonly hotExit?: (final?: boolean) => KeptSession | undefined
 }
 /** The file banner: an error, or a warning that changes nothing (a file whose line endings were mixed). */
 export interface FileSnapshot { readonly error: string; readonly kind: 'error' | 'warning' }
@@ -341,7 +342,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       const refuse = () => { const reason = refusal(); if (reason) throw new Error(reason) }
       refuse()
       // Hot exit keeps the tabs it can instead of asking about them; the rest (a designer, a tab past its caps) still ask.
-      const keepSession = this.api.keepSession, kept = keepSession ? this.options.hotExit?.()?.kept : undefined
+      const keepSession = this.api.keepSession, kept = keepSession ? this.options.hotExit?.(false)?.kept : undefined
       if (kept) requireKeptPins(this.documents.getSnapshot().documents, kept)
       // Each document's revision as approved: a text document's model version, a designer's own revision.
       const approved = new Map<string, number>()
