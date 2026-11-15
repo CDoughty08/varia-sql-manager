@@ -112,7 +112,7 @@ describe('live subscriptions through main', () => {
     try {
       await mkdir(join(control, 'hold'))
       await writeFile(join(control, 'hold', 'live.subscribe'), '')
-      const { supervisor, port } = await workbench(undefined, { control })
+      const { supervisor, port } = await workbench<WorkerPort>(undefined, { control })
       port.send({ t: 'live', rid: 1, generation: 1, params: params({ tickMs: 20 }) })
       await expect.poll(async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).includes('"live.subscribe"')).toBe(true)
       port.send({ t: 'cancel', rid: 1 })
