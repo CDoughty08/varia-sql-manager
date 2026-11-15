@@ -37,7 +37,8 @@ export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
 }
-/** An entry's name: its label when Varia made it ("Pivot of Result 3"), else "Result N" by its number. */
+/** An entry's name: its label (the query's #Name for an original result, or Varia's name for one it made, "Pivot of
+ *  Result 3"), else "Result N" by its number. */
 export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? `Result ${entry.number}`
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
@@ -1274,7 +1275,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // Sets arrive in order, so the place is almost always the end.
     let at = run.sets.length
     while (at > 0 && (run.sets[at - 1].descriptor.index - descriptor.index || run.sets[at - 1].descriptor.resultId - descriptor.resultId) > 0) at--
-    const entry: ResultSetEntry = { key: this.mint(), ordinal: descriptor.index + 1, number: descriptor.index + 1, descriptor, handle }
+    // The query's own name for the set (a #Name marker) labels it as Varia's names label the entries it makes.
+    const entry: ResultSetEntry = { key: this.mint(), ordinal: descriptor.index + 1, number: descriptor.index + 1, descriptor, handle, ...descriptor.name === undefined ? {} : { label: descriptor.name } }
     run.numbered = Math.max(run.numbered, entry.number)
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)

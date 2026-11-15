@@ -1,0 +1,33 @@
+{
+  "about": "The characters a result name may not hold (docs/named-result-sets-scope.md, Syntax): C0 and C1 controls, line and paragraph separators, bidirectional marks, embeddings, overrides and isolates, and the BOM, as inclusive UTF-16 code unit ranges. The backend's ResultNames.IsRefused (ResultNameChecks.cs) and the descriptor schema's refusedResultNameChars (tests/result-name-descriptor.test.ts) are each checked against every code unit here. The marker scan collapses a tab with other white space instead of refusing it, so no name it produces holds one.",
+  "ranges": [
+    [
+      0,
+      31
+    ],
+    [
+      127,
+      159
+    ],
+    [
+      1564,
+      1564
+    ],
+    [
+      8206,
+      8207
+    ],
+    [
+      8232,
+      8238
+    ],
+    [
+      8294,
+      8297
+    ],
+    [
+      65279,
+      65279
+    ]
+  ]
+}

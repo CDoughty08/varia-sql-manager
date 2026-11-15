@@ -159,6 +159,23 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Named result sets (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` marker
+  comment names the next top-level statement's first result set in its batch. The user's SQL is still sent unchanged: a
+  marker is a comment to the server, found by `SqlScript.Parse`'s own masking (so one in a string, a quoted name or a
+  nested comment is not a marker). Only a batch with a well-formed marker is parsed, once before its first execution
+  however often `GO n` repeats it, by ScriptDom on a thread of its own with a large stack, and only within
+  `ResultNames.MaxParseChars` and `MaxParenDepth`: ScriptDom's recursion can overflow a normal stack and end the process.
+  Each top-level statement is classed None, One or Unknown; a name binds by position (the batch execution's sets with
+  columns, plans left out) only where every statement before it is known, an Unknown statement's names only when nothing
+  after it can return a set; a batch that sets NOEXEC, PARSEONLY or FMTONLY anywhere (nested too) applies none, since an earlier ON can make
+  SQL Server skip its statements without an error, nor does one whose text names SQL Server's plan column (a set in it is
+  shown as a plan and left out of the count). While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
+  that fails returns no set), at a set whose column count its statement does not select, and at SHOWPLAN or STATISTICS
+  PROFILE text, at a plan set where a statement with * (whose columns could include the plan column) stood, and when
+  the result budget keeps no more sets. A name not applied (also one a cancel, timeout or ended
+  script never reached, in a later batch too; a GO n repetition's notes name it) is an informational Messages line quoting the name and its line, never an error and
+  never logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name` carries it; a name never
+  changes a result's identity, which stays its ordinal.
 - Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
   the grids `ResultGrid` registers (one shared ResizeObserver per window, PaneService for the dock's `visibility:
   hidden` tabs, document visibility, no timers), as the whole set when it changes and again each time the backend

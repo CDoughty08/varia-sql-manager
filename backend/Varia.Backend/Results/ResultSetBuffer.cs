@@ -127,6 +127,8 @@ internal sealed class ResultSetBuffer
     public int BatchNumber { get; }
     public int Iteration { get; }
     public string Kind { get; }
+    /// <summary>The query's name for this set (a #Name marker, ResultNames.cs); null when it has none.</summary>
+    public string? ResultName { get; init; }
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
     /// <summary>Each column's byte rule (ColumnPlan's; a live table's text counts as UTF-16).</summary>
@@ -972,7 +974,7 @@ internal sealed class ResultSetBuffer
         {
             var reason = Truncated;
             return new ResultDescriptor(ResultId, Index, BatchNumber, Iteration, Kind, Columns, RowsRead, rowsStored, rowsAvailable, bytesStored, truncatedCells,
-                state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete);
+                state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete, ResultName);
         }
     }
 

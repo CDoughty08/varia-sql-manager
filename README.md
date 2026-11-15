@@ -67,6 +67,9 @@ On Ubuntu 24.04 and later, AppArmor may block the unprivileged user namespaces n
 2. Open a new query, write SQL, and select **Execute** or press **F5**. A selection runs instead of the full document.
 3. Inspect the results and messages, or browse and script objects in Object Explorer.
 
+A comment such as `/* #Name="Open orders" */` just before a statement names its result, which the results pane then
+shows instead of "Result 2"; see [Result grid tools](docs/results-tools.md) for where a name applies.
+
 The Execute button says **Execute selection** with its line range when text is selected. Click inside the selection
 to clear it and place the caret there. **Entire query** means the whole document will run.
 Hold **Ctrl** and scroll the mouse wheel over the editor to make the text larger or smaller in all editor tabs for this

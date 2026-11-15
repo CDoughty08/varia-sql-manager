@@ -1111,7 +1111,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
         // Validate the whole script before opening a session or submitting any SQL.
         List<SqlBatch> batches;
-        try { batches = SqlScript.Parse(args.Sql, args.StartLine); }
+        var unbatched = new List<ResultMarker>();
+        try { batches = SqlScript.Parse(args.Sql, args.StartLine, unbatched); }
         catch
         {
             queries.TryRemove(new(args.QueryId, running));
@@ -1125,6 +1126,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The error that ended the script, which can end the session before managed SNI's asynchronous close updates its state.
         SqlException? ended = null;
         var messages = new QueryMessages(events.Message);
+        // Named result sets (ResultNames.cs): each batch's plan is made before its first execution; notes go to Messages.
+        var nameNotes = new ResultNameNotes(text => messages.Add(text));
+        var namePlans = new ResultNamePlan?[batches.Count];
+        // The running batch execution's binder until its notes are out; one an exception ended reports them in finally.
+        ResultNameBinder? pendingNames = null;
+        // The batches whose plans are made (their notes out); those after them that the run never reached are noted in finally.
+        var plannedBatches = 0;
+        var pendingRepetition = 0;
+        // The next repetition of the last planned batch to start, and whether the batch loop began (a refused or failed
+        // request says nothing about names).
+        var nextRepetition = 1;
+        var namesBegun = false;
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1274,15 +1287,29 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             connection.FireInfoMessageEventOnUserErrors = true;
             if (args.IncludeClientStatistics) statistics = new(connection);
+            foreach (var marker in unbatched.Where(marker => marker.Name is not null)) nameNotes.Add(ResultNames.Unbatched(marker));
+            namesBegun = true;
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
                 var batch = batches[b];
+                // Parsed once, however often GO n repeats the batch; a batch without a marker is not parsed.
+                if (batch.Markers is { Count: > 0 } && await ResultNamePlan.BuildAsync(batch, args.StartLine, token) is { } namePlan)
+                {
+                    namePlans[b] = namePlan;
+                    foreach (var note in namePlan.Notes) nameNotes.Add(note);
+                }
+                plannedBatches = b + 1;
+                nextRepetition = 1;
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
                     events.Progress(completed, totalBatches, batchNumber, iteration);
                     var raisedBefore = Raised();
+                    var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
+                    pendingNames = names;
+                    pendingRepetition = batch.RepeatCount > 1 ? iteration : 0;
+                    nextRepetition = iteration + 1;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1335,16 +1362,21 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                             var built = ColumnPlan.From(current, prefix);
                                             return (built, built.IsPlan, built.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes);
                                         }, token);
+                                        // Every set with columns is counted, kept or not; once sets are no longer kept, none is named.
+                                        string? name = null;
+                                        if (fate is ResultSetTally.Fate.Overflow or ResultSetTally.Fate.Oversize) names?.Stop("the run kept no more result sets");
+                                        else name = names?.Take(reader, fate == ResultSetTally.Fate.Open && plan!.IsPlan, Raised() != raisedBefore);
                                         if (fate == ResultSetTally.Fate.Open)
                                         {
-                                            if (store.Open(budget, sets.Count, batchNumber, iteration, plan!.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
+                                            if (store.Open(budget, sets.Count, batchNumber, iteration, plan!.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths, name: name) is { } opened)
                                             {
-                                                descriptorBytes += plan.DescriptorBytes;
+                                                // A name's bytes count with the columns', toward the summary's bound.
+                                                descriptorBytes += plan.DescriptorBytes + (name is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(name) + 8);
                                                 currentSet = opened;
                                                 sets.Add(opened);
                                                 events.Opened(opened);
                                             }
-                                            else { tally.Refused(); plan = null; }
+                                            else { tally.Refused(); plan = null; names?.Refused(); }
                                         }
                                         unkept = fate == ResultSetTally.Fate.Unkept;
                                     }
@@ -1478,6 +1510,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
+                    if (names is not null) foreach (var note in names.Unapplied(failed, null, batch.RepeatCount > 1 ? iteration : 0)) nameNotes.Add(note);
+                    pendingNames = null;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
                     if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
                     if (failed) firstError ??= (batchNumber, iteration);
@@ -1533,6 +1567,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         finally
         {
+            if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived", pendingRepetition)) nameNotes.Add(note);
+            if (namesBegun)
+            {
+                // The planned batch's repetitions that never started, then the batches never reached.
+                if (plannedBatches > 0 && namePlans[plannedBatches - 1] is { Slots.Count: > 0 } lastPlan && nextRepetition <= batches[plannedBatches - 1].RepeatCount)
+                    foreach (var note in ResultNameBinder.Unrun(lastPlan, nextRepetition, batches[plannedBatches - 1].RepeatCount, batches[plannedBatches - 1].RepeatCount > 1)) nameNotes.Add(note);
+                for (var b = plannedBatches; b < batches.Count; b++)
+                    foreach (var marker in batches[b].Markers ?? [])
+                        if (marker.Name is not null) nameNotes.Add(ResultNames.Note(marker, "was not applied: the run ended before its batch ran."));
+            }
+            nameNotes.Finish();
             // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
             statisticsSample = statistics?.Finish();
             watch.Stop();
