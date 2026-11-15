@@ -1,6 +1,6 @@
 # Varia SQL Manager
 
-SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 11 sidecar
+SSMS-style SQL Server workbench. Electron 45 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 11 sidecar
 (Microsoft.Data.SqlClient 7.1, SMO 181) speaks length-prefixed MessagePack frames (protocol v2) over stdio. It is not a
 VS Code fork.
 
