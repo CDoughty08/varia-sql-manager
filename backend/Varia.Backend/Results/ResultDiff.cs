@@ -182,10 +182,11 @@ internal sealed class RowAccess
                 var page = access.PageOf(row, out _);
                 var stored = access.pages[page];
                 if (access.Keeps(page) || stored.Set?.Raw(stored) is not null) continue;
-                // A page read again straight after, or one its batch already lists, is read from that batch again
-                // (PageAhead.TryRead).
-                var listed = uses.Count > 0 && uses[^1] == page;
-                for (var u = uses.Count - uses.Count % batch; u < uses.Count && !listed; u++) listed = uses[u] == page;
+                // A page the batch of the last one listed already lists is read from that batch again (PageAhead.TryRead
+                // looks back over the batch being read), even once that batch is full: listed again, the reader would
+                // never reach it, and would stop reading ahead.
+                var listed = false;
+                for (var u = uses.Count == 0 ? 0 : (uses.Count - 1) / batch * batch; u < uses.Count && !listed; u++) listed = uses[u] == page;
                 if (listed) continue;
                 if (uses.Count == cap) break;
                 uses.Add(page);

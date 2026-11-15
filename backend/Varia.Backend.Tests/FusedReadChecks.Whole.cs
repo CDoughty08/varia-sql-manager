@@ -271,8 +271,10 @@ internal static partial class FusedReadChecks
         var nearUnpacked = near.Store.PackingSnapshot().PagesUnpacked - nearBefore;
         var nearPages = PageCount(near.Left) + PageCount(near.Right);
         check(nearActual.Model == nearExpected.Model && SamePages(nearActual.Unified, nearExpected.Unified) && !nearStages.Unpacked && near.Left.HasPacked && nearUnpacked <= 5L * nearPages
-            && nearStages.WrittenAhead + nearStages.WrittenBehind <= nearPages + 2L * PageAhead.Batch,
-            "a diff whose second result reads the first from two pages at a time, alternately, gives what it gives unpacked, stays fused and unpacks each page a few times (its unified result's writer about once): " + nearUnpacked + " for " + nearPages + ", " + (nearStages.WrittenAhead + nearStages.WrittenBehind) + " writing");
+            // A batch lists each page once, so the two pages read alternately across its end are listed again in the next.
+            && nearStages.WrittenAhead + nearStages.WrittenBehind <= nearPages * (PageAhead.Batch + 2L) / PageAhead.Batch + 2L * PageAhead.Batch && nearStages.WrittenBehind <= 2L * PageAhead.Batch,
+            "a diff whose second result reads the first from two pages at a time, alternately, gives what it gives unpacked, stays fused and unpacks each page a few times (its unified result's writer about once, nearly all ahead): "
+            + nearUnpacked + " for " + nearPages + ", " + nearStages.WrittenAhead + " ahead and " + nearStages.WrittenBehind + " by the writer");
 
         // A reader that goes back and forth between two packed pages has each unpacked ahead once: a page its batch lists
         // is not listed again.
