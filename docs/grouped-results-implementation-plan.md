@@ -827,7 +827,7 @@ Outcome, accepted by the owner:
     - **What PR 14 settled or left** (`tests/results-tabs.test.ts` holds its checks, the 1,000-result picker among them;
       `tests/bench/grid.bench.ts` its benchmark, `node.grid.resultPicker.opsPerSecond`; `scripts/grouped-results-smoke.mjs`
       its interface steps):
-      - `queryResults.grid.layout` defaults to `tabs`. A saved `stacked` stays. The suites that read stacked captions were
+      - `queryResults.grid.layout` defaults to `tabs`. A saved `tabs` stays; `stacked` was never saved while it was the default (the settings store drops defaults), so earlier Stacked choices become Tabs. The suites that read stacked captions were
         already pinned (PR 13); `grid-bench` and `pivot-bench` now pin Stacked too. The grouped-results suite's first step
         starts on Tabs and turns it off and on.
       - The overflow picker (`ResultsPicker`, logic in `grid/result-picker.ts`) replaces PR 13's "+N" counts. A button at

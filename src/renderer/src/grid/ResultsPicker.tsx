@@ -150,7 +150,9 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   const named = shown[active] && active >= from && active < end
   const optionId = (place: number) => `${id}option-${place}`
   // `data-results-picker`: the focus here counts as the Results pane's for its keys (`resultsFocus`).
-  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" data-results-picker="" style={place ?? { visibility: 'hidden' }} onBlur={leave}>
+  // A press anywhere in it but the filter box leaves the focus there, so its keys keep working.
+  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" data-results-picker="" style={place ?? { visibility: 'hidden' }} onBlur={leave}
+    onMouseDown={event => { if (event.target !== input.current) event.preventDefault() }}>
     <label className="rt-picker-head">
       <Icon name="search" />
       <input ref={input} type="text" role="combobox" value={query} placeholder="Go to a result, view or comparison" aria-label="Filter results, views and comparisons"

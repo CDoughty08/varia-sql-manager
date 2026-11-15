@@ -335,7 +335,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     pickerFrom.current = undefined
     if (!restore) return
     if (from?.isConnected && from !== from.ownerDocument.body) from.focus({ preventScroll: true })
-    else if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })
+    // Where it was opened from may be hidden now (the pane folded while it was open): then as if it had gone.
+    if (from && from.ownerDocument.activeElement === from) return
+    if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })
     else (overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
   }
   // With no rows of tabs drawn (the shortest pane), the grid shown takes the focus in a tab's place.

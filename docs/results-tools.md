@@ -122,8 +122,8 @@ Once one is closed it reads "Result 1 (closed)": the comparison copied what it c
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); a
-choice you saved before stays. In a window 1,440 pixels wide or narrower
+groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); turn
+it off to go back to Stacked. In a window 1,440 pixels wide or narrower
 the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)

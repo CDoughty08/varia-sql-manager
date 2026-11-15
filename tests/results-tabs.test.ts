@@ -597,6 +597,22 @@ describe('the Tabs layout in a short pane', () => {
       editor.remove()
       press('Escape')
       expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Or where it was opened from cannot take the focus back (hidden by the fold, here disabled): the grid too.
+      const button = document.createElement('button')
+      document.body.append(button)
+      button.focus()
+      act(() => { pickerRequests.request('t1') })
+      button.disabled = true
+      press('Escape')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      button.remove()
+      // A press on the picker outside its filter box (its footer, say) leaves the focus in the box, so its keys still work.
+      act(() => { pickerRequests.request('t1') })
+      const down = (target: Element) => { const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); act(() => { target.dispatchEvent(event) }); return event.defaultPrevented }
+      expect(down(document.querySelector('.rt-picker-foot')!)).toBe(true)
+      expect(down(input())).toBe(false)
+      press('Escape')
+      expect(picker()).toBeNull()
     } finally {
       if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
       else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
