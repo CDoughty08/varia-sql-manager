@@ -59,6 +59,7 @@
 
 ### Fixed
 
+- **Script As on Azure SQL Database and Managed Instance:** ledger tables and views now script on Azure SQL Database, where they were refused by mistake (SQL Server Management Objects keeps the LEDGER clause there), and on Managed Instance with Match script settings to source on (or a chosen version of SQL Server 2022 or later; an older chosen version still refuses them). On Managed Instance with Match script settings to source on, scripts target the engine version read from the instance rather than SQL Server 2014, which it reports as its version, so newer features are no longer left out.
 - **Mouse wheel after Transpose:** on a very large result (around 750,000 rows or more, fewer on high-DPI displays or when zoomed in), turning the grid transposed could stop the mouse wheel and trackpad from scrolling it, leaving only the scroll bar. The wheel now scrolls it, and grids redrawn this way are no longer kept in memory.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
