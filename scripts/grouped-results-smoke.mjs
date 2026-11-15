@@ -1,7 +1,9 @@
-// Grouped results drawn as tabs (queryResults.grid.layout = tabs) against the fake backend's synthetic result sets: the
-// results toolbar's Tabs toggle, a row of result tabs with one grid mounted, a result's view tabs once it has a Pivot,
-// each view keeping its selection across switches, Find Next selecting the tab that holds the match, closing from the tabs
-// with the focus moving on, a row of more tabs than fit scrolling to the selected one, the Messages strip opening beside the two rows of tabs, and Stacked again from the palette.
+// Grouped results drawn as tabs (queryResults.grid.layout = tabs, the default) against the fake backend's synthetic result
+// sets: the results toolbar's Tabs toggle, a row of result tabs with one grid mounted, a result's view tabs once it has a
+// Pivot, each view keeping its selection across switches, Find Next selecting the tab that holds the match, closing from
+// the tabs with the focus moving on, a row of more tabs than fit scrolling to the selected one, the overflow picker and
+// Go to Result…, Next and Previous Result, the Messages strip opening beside the two rows of tabs, and Stacked again from
+// the palette.
 // results-smoke.mjs covers the stacked layout and pins it. No assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -9,8 +11,8 @@ import { join, resolve } from 'node:path'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel,
-  resultTabs, tabClose, toolbarButton, viewTab, viewTabs
+  anyResultGrid, backendReady, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -61,11 +63,18 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await enlargeOutput(page)
 
-  // 1. Stacked is the default; the results toolbar's Tabs turns tabs on and the setting keeps it.
+  // 1. Tabs is the default; the results toolbar's Tabs turns it off and on, and the setting keeps it.
   await run('-- varia-fake: sets=W1*100,N1*10,W1*20')
+  await expect(resultTabs(page)).toHaveCount(1)
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'true')
+  // Three tabs fit: no overflow button.
+  await expect(resultsOverflow(page)).toHaveCount(0)
+  await show('Tabs').click()
+  await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
+  await expect.poll(() => page.evaluate(() => window.varia.getSettings().then(result => result.value.values['queryResults.grid.layout']))).toBe('stacked')
   await expect(page.locator(part.resultStack)).toHaveCount(1)
   await expect(anyResultGrid(page)).toHaveCount(3)
-  await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
   // Every group of the toolbar fits, its last one (with Tabs) clear of the status after it; report geometry and fonts if not.
   const toolsLayout = await show('Tabs').evaluate(button => {
     const tools = button.closest('[role="toolbar"]'), right = tools.getBoundingClientRect().right
@@ -179,6 +188,64 @@ try {
   await resultTab(page, 'Result 29').press('Home')
   await expect(resultTab(page, 'Result 1')).toBeInViewport({ ratio: 1 })
   console.log('Grouped results checks: a row of more tabs than fit scrolls to keep the selected tab in view.')
+
+  // The overflow button counts the tabs not in view and opens the picker: a filter box over every view; Enter shows the
+  // row picked and puts the focus on its tab, scrolled into view. Escape gives the focus back to the button.
+  await expect(resultsOverflow(page)).toBeVisible()
+  await expect(resultsOverflow(page)).toHaveText(/^\+\d+$/)
+  const hiddenCount = Number((await resultsOverflow(page).textContent()).slice(1))
+  expect(hiddenCount).toBeGreaterThan(0)
+  expect(hiddenCount).toBeLessThan(30)
+  await resultsOverflow(page).click()
+  await expect(resultsPicker(page)).toBeVisible()
+  await expect(resultsPickerFilter(page)).toBeFocused()
+  await expect(resultsPicker(page)).toContainText('30 views: 30 results')
+  await expect(resultsPickerOption(page, 'Result 1, Table')).toHaveAttribute('aria-selected', 'true')
+  await page.screenshot({ path: resolve('artifacts', 'grouped-results-picker-dark.png') })
+  await menu('theme.mode.light')
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
+  await page.screenshot({ path: resolve('artifacts', 'grouped-results-picker-light.png') })
+  await menu('theme.mode.dark')
+  await expect(resultsPicker(page)).toBeVisible()
+  await resultsPickerFilter(page).fill('27')
+  await expect(resultsPicker(page).getByRole('option')).toHaveCount(1)
+  await page.keyboard.press('Enter')
+  await expect(resultsPicker(page)).toHaveCount(0)
+  await expect(resultTab(page, 'Result 27')).toHaveAttribute('aria-selected', 'true')
+  await expect(resultTab(page, 'Result 27')).toBeFocused()
+  await expect(resultTab(page, 'Result 27')).toBeInViewport({ ratio: 1 })
+  await resultsOverflow(page).click()
+  await expect(resultsPickerOption(page, 'Result 27, Table')).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
+  await expect(resultsPicker(page)).toHaveCount(0)
+  await expect(resultsOverflow(page)).toBeFocused()
+  // Window › Go to Result… opens it too, from the editor; a click on a row shows it.
+  await textbox().focus()
+  await menu('output.goToResult')
+  await expect(resultsPickerFilter(page)).toBeFocused()
+  await resultsPickerFilter(page).fill('result 3')
+  await resultsPickerOption(page, 'Result 3, Table').click()
+  await expect(resultsPicker(page)).toHaveCount(0)
+  await expect(resultTab(page, 'Result 3')).toHaveAttribute('aria-selected', 'true')
+  console.log('Grouped results checks: the overflow button counts the tabs out of view and opens a picker that filters every view and shows the one picked; Go to Result… opens it from the editor.')
+
+  // Next and Previous Result, Ctrl+Alt+Page Down and Up, from a grid: the grid of the result shown takes the focus; and
+  // from the editor, whose text keeps the focus.
+  await gridCell(resultGrid(page, 'Result 3'), 1, 0).click()
+  await page.keyboard.press('Control+Alt+PageDown')
+  await expect(resultTab(page, 'Result 4')).toHaveAttribute('aria-selected', 'true')
+  await expect(resultGrid(page, 'Result 4')).toBeFocused()
+  await page.keyboard.press('Control+Alt+PageUp')
+  await page.keyboard.press('Control+Alt+PageUp')
+  await expect(resultTab(page, 'Result 2')).toHaveAttribute('aria-selected', 'true')
+  await expect(resultGrid(page, 'Result 2')).toBeFocused()
+  await textbox().focus()
+  await page.keyboard.press('Control+Alt+PageUp')
+  await page.keyboard.press('Control+Alt+PageUp')
+  await expect(resultTab(page, 'Result 30')).toHaveAttribute('aria-selected', 'true')
+  await expect(resultTab(page, 'Result 30')).toBeInViewport({ ratio: 1 })
+  await expect(textbox()).toBeFocused()
+  console.log('Grouped results checks: Next and Previous Result step through the tabs from a grid and from the editor, wrapping round.')
   // Stacked from the last result's grid: the stack opens at that result, so its grid takes the focus back; and Tabs again.
   await resultTab(page, 'Result 1').press('End')
   await gridCell(resultGrid(page, 'Result 30'), 1, 0).click()

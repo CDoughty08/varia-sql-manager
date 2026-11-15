@@ -5,6 +5,7 @@ import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
 import { entryOf, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
+import { pickerRequests, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -141,6 +142,23 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const key = target?.entry ?? tab?.focused
     return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
+  /** The query whose Tabs layout Next Result, its view commands and Go to Result act on: the focused output's, else the
+   *  active query's; while results show as tabs and it has a result to show. */
+  const tabsRun = (args?: CommandArgs) => {
+    const tabId = searchTab(args), tab = tabId ? results.getSnapshot()[tabId] : undefined
+    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs' ? { tabId, tab } : undefined
+  }
+  /** Selects the view `step` names in the Tabs layout, showing the Results view if Messages or another output panel had its place. */
+  const stepTabs = (step: typeof stepResult, delta: number) => ({
+    when: (args?: CommandArgs) => { const run = tabsRun(args); return !!run && step(run.tab, delta) !== undefined },
+    run: (args?: CommandArgs) => {
+      const run = tabsRun(args), key = run && step(run.tab, delta)
+      if (!run || key === undefined) return
+      results.setView(run.tabId, 'results')
+      panes.select('results')
+      results.focusEntry(run.tabId, key)
+    }
+  })
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   const registrations = [
@@ -325,6 +343,21 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
     commands.register('output.toggleResultsTabs', { run: toggleLayout }),
+    commands.register('output.nextResult', stepTabs(stepResult, 1)),
+    commands.register('output.previousResult', stepTabs(stepResult, -1)),
+    commands.register('output.nextResultView', stepTabs(stepView, 1)),
+    commands.register('output.previousResultView', stepTabs(stepView, -1)),
+    commands.register('output.goToResult', {
+      when: args => !!tabsRun(args),
+      run: args => {
+        const run = tabsRun(args)
+        if (!run) return
+        // The picker is in the Results view's tab row; a layout drawn once the view shows takes the request then.
+        results.setView(run.tabId, 'results')
+        panes.select('results')
+        pickerRequests.request(run.tabId)
+      }
+    }),
     commands.register('output.toggleRowSize', { run: () => settings.toggle('queryResults.grid.rowSize') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

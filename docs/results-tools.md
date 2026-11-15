@@ -122,7 +122,8 @@ Once one is closed it reads "Result 1 (closed)": the comparison copied what it c
 
 The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Stacked stays the default for now. In a window 1,440 pixels wide or narrower
+groups one at a time instead of stacked. Tabs is the default (it was Stacked until the overflow picker below existed); a
+choice you saved before stays. In a window 1,440 pixels wide or narrower
 the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the palette and the Window menu still switch the layout.
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
@@ -151,8 +152,25 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
 - When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
   view whenever the selection changes and fades the edge that hides tabs.
-- A run of more than 64 results draws 64 result tabs around the selected one, with a count of those before and after;
-  the arrow keys, Home, End and Find Next reach the rest. A picker that lists them all comes with Tabs becoming the default.
+- When some tabs are out of view, a button at the end of the row counts them ("+12") and opens the overflow picker: a
+  themed list of every result, each Pivot indented under its result, and the comparisons, with a filter box that keeps
+  the focus. Type words of a name ("27", "pivot 3"; every word must match), move with Up, Down, Page Up and Page Down,
+  and press Enter or click a row to show it; its tab takes the focus, scrolled into view. Escape gives the focus back to
+  the button, or to where Go to Result… was run from; a press outside or the focus leaving closes it. Results arriving
+  or closing while it is open keep the row you moved to. It opens at the view shown, which it marks, and a Pivot
+  that is out of date says so. The list draws only the rows in view, so a run of 1,000 results costs a screenful of rows
+  (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (command palette, Window menu)
+  opens it from anywhere, even when every tab fits.
+- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up) select the next or previous result or comparison,
+  wrapping round; a result shows the view it showed last. **Next Result View** and **Previous Result View**
+  (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other text boxes, where Monaco's column selection keeps
+  them) switch between the selected result's Table and Pivot. They work from a grid, whose focus moves to the grid
+  shown, from a focused tab, whose focus follows, and from the editor, which keeps it. They are for Tabs; in Stacked
+  they are unavailable.
+
+![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
+
+![The same in the Light theme](images/results-picker-light.png)
 - Peek's rows are never drawn as tabs.
 
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,

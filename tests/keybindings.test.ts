@@ -214,8 +214,10 @@ describe('default keybindings', () => {
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
     // Alt+Down in a grid opens the header funnel's popover for the active cell's column.
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows']
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows']
+    // Ctrl+Alt+Page Down and Up step through the results' tabs, with Shift through a result's views.
+    const resultTabs = ['output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView']
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...resultTabs]
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...resultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']

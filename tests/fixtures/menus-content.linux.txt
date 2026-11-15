@@ -134,7 +134,8 @@ Window
   S&how Results Pane  Ctrl+R [x]  ++++
   Panel &Tabs [ ]  ++++
   &Client Statistics  ++++
-  Results as Ta&bs [ ]  ++++
+  Results as Ta&bs [x]  ++++
+  &Go to Result…  ----
   ---
   &Next Query  Ctrl+Tab  ----
   &Previous Query  Ctrl+Shift+Tab  ----

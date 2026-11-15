@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (316)
+## Commands (321)
 
 ### File
 
@@ -191,6 +191,11 @@ keys it uses are listed below.
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs |
+| Next Result | `output.nextResult` | Ctrl+Alt+PageDown | Ctrl+Alt+PageDown | ⌃⌥⇟ | `resultsTabs && hasResultSets` | — |
+| Previous Result | `output.previousResult` | Ctrl+Alt+PageUp | Ctrl+Alt+PageUp | ⌃⌥⇞ | `resultsTabs && hasResultSets` | — |
+| Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
+| Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
+| Go to Result… | `output.goToResult` | — | — | — | `resultsTabs && hasResultSets` | Window › Go to Result… |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
@@ -592,6 +597,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
 | `1_panes` | **C**lient Statistics | `window.statistics` | Always |
 | `1_panes` | Results as Ta**b**s | `output.toggleResultsTabs` | Always |
+| `1_panes` | **G**o to Result… | `output.goToResult` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |

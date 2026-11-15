@@ -69,7 +69,7 @@ always shows the source's current rows.
   Collapse, splitters and bounded mounting stay. Splitter weights are kept per entry: a new item takes the mean of the
   existing weights and a closed item's weight is removed, so the others keep their heights.
 - The choice is a setting (`queryResults.grid.layout`), a toolbar toggle and a command; switching keeps every view's state.
-  Default: Stacked until the overflow picker exists, then Tabs (PR 14).
+  Default: Tabs since PR 14 (Stacked until the overflow picker existed).
 - While a run streams in Tabs, the first group is selected and stays selected; a tab the user picks stays picked.
 - Find Next onto a match in another group or view selects that tab and view in Tabs, then reveals the match.
 - Tab overflow opens a picker listing every group, view and comparison: a virtualized themed list (a run can hold 1,000
@@ -783,7 +783,7 @@ Outcome, accepted by the owner:
         retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
       - Without the overflow picker, a run of more than `gridLimits.resultTabsDrawn` (64) results draws a window of 64
         result tabs around the selected one with "+N" counts either side; arrow keys and Find Next reach the rest. PR 14
-        replaces the counts with the picker. Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
+        replaced the counts with the picker (its notes, below). Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
         sideways (the wheel too) with no scroll bar and fades a clipped edge. It brings the selected tab into view, clear
         of the fade (`revealLeft`), when the selection or the window moves and when the strip is resized (`observeResize`,
         so in a popout too), never on a plain redraw, so a strip the user scrolled stays put. Comparisons are tabs in the same row, after the groups, with a "Comparison"
@@ -818,6 +818,53 @@ Outcome, accepted by the owner:
         makes Tabs the default, should add the layout there.
 14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
+    - **What PR 14 settled or left** (`tests/results-tabs.test.ts` holds its checks, the 1,000-result picker among them;
+      `tests/bench/grid.bench.ts` its benchmark, `node.grid.resultPicker.opsPerSecond`; `scripts/grouped-results-smoke.mjs`
+      its interface steps):
+      - `queryResults.grid.layout` defaults to `tabs`. A saved `stacked` stays. The suites that read stacked captions were
+        already pinned (PR 13); `grid-bench` and `pivot-bench` now pin Stacked too. The grouped-results suite's first step
+        starts on Tabs and turns it off and on.
+      - The overflow picker (`ResultsPicker`, logic in `grid/result-picker.ts`) replaces PR 13's "+N" counts. A button at
+        the end of the result row (`.rt-overflow`, "+12") counts the items without a tab shown whole: those outside the
+        drawn window and those the strip scrolls out of view or cuts. It is shown only when that count is above zero, as the
+        mock has it, and it toggles the picker. The picker is a themed popover in the anchor's window (a portal, placed by
+        the Compare popover's `placePopover`, so popouts work): a filter box (a combobox that keeps the focus, with
+        `aria-activedescendant`), a virtual listbox of one row per view in the order drawn (a result's Table, its Pivot
+        indented under it and marked when out of date, then comparisons), and a footer with the counts. It draws the rows
+        in view and two either side (`pickerWindow`), 22 px rows (`--varia-row`, so `.rt-picker-row` joined
+        `densityUse.row`), at most 10 shown. The filter keeps rows holding every word typed ("3 piv"). Up, Down, Page Up and
+        Page Down move the active row; Enter or a click shows the view and gives its result's tab the focus once the drawn
+        window has moved; Escape gives the focus back to the button, or to where Go to Result… ran from (the editor, a
+        grid); a press outside, the focus leaving, the window losing the focus or the pane moving windows closes it. It
+        opens at the view shown (`aria-current`; the active row is the selected option). A new filter starts again there;
+        the run changing underneath keeps the active row. Its row height is read from `--varia-row`, so a denser or
+        roomier density keeps the list's maths right.
+      - The row still draws at most `gridLimits.resultTabsDrawn` (64) tabs around the selected one, so the DOM stays
+        bounded at 1,000 results; the picker, the arrow keys, Home, End, Find Next and the commands reach the rest. The
+        result row's `role="tablist"` moved from `.rt-results` onto `.rt-strip`, so the button is not inside a tablist.
+      - Commands (`output.*`, catalogue and generated pages regenerated): **Next Result** and **Previous Result**
+        (Ctrl+Alt+Page Down and Up, no `when`, so they work from the editor too, as Ctrl+Page Down and Up step through
+        queries), **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up with
+        `!textInputFocus`: Monaco binds those keys to column selection on Windows, recorded in the Monaco allowlist), and
+        **Go to Result…** (no key; Window menu, after Results as Tabs, access key G). Each needs `resultsTabs &&
+        hasResultSets`, so in Stacked they are unavailable. A focused tab that unmounts as the selection moves (another
+        result's view tabs, the drawn window moving) hands the focus to the tab now selected in its row. Next and Previous Result wrap round, and a result shows the
+        view it showed last; the view commands cycle the selected result's Table and Pivot and are unavailable on a
+        comparison or a result without a Pivot. They select through `focusEntry`, show the Results view and its panel, and
+        leave the focus where it was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused
+        tab's moves to the tab now selected in its row. The four step commands have no menu placement (`menus.test.ts`
+        lists them with the keyboard-only commands). Go to Result… waits up to two seconds for a layout not drawn yet (`pickerRequests`), then lapses, so a layout
+        drawn much later never opens the picker by surprise.
+      - Getting Started: the results guide has a new section, Move between results, on the tabs, the picker, the commands
+        and the layout setting, with live references.
+      - Inherited from PR 13: the grouped-results suite's CI seconds were already measured (4 s Linux, 6 s Windows), and the
+        Pivot view tab's out-of-date dot was already drawn (`rt-dot`), so neither needed work here.
+      - Departures from the mock: the picker's button reads "+N" and a chevron, without the mock's count of every item;
+        the Pivot row reads "Pivot" under its result rather than repeating the result's name; no keyboard shortcut opens the
+        picker (the button is a Tab stop in the result row, after the tabs).
+      - Left: Stacked has no Next or Previous Result (they would need the stack to reveal and focus the next item, which
+        `revealFocused` only does at mount); the 1,440 px Tabs button cutoff, narrow and short panes, Save names and
+        popouts stay PR 15's.
 15. **Save names, narrow and short panes, popouts.**
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
     - **What PR 16 settled or left** (`tests/results-compare.test.ts`, `tests/compare-pairing.test.ts`,

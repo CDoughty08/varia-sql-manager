@@ -34,11 +34,11 @@ export const guideCatalog = {
   },
   results: {
     title: 'Work with query results', summary: 'Sort and filter returned rows, select cells and copy with confidence.',
-    keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection'],
-    sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
-    related: ['run-query'], commands: [{ id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
-    settings: ['queryResults.grid.includeColumnHeaders', 'queryResults.grid.discardResults'], gestures: ['grid.addToSelection'],
-    sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/shared/settings/query-results.ts', 'backend/Varia.Backend/Results/ResultPacker.cs']
+    keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection', 'tabs', 'stacked', 'layout', 'pivot', 'comparison'],
+    sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'layout', title: 'Move between results' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
+    related: ['run-query'], commands: [{ id: 'output.nextResult', context: 'workbench' }, { id: 'output.previousResult', context: 'workbench' }, { id: 'output.goToResult', context: 'workbench' }, { id: 'output.toggleResultsTabs', context: 'workbench' }, { id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
+    settings: ['queryResults.grid.layout', 'queryResults.grid.includeColumnHeaders', 'queryResults.grid.discardResults'], gestures: ['grid.addToSelection'],
+    sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/renderer/src/grid/ResultsTabs.tsx', 'src/renderer/src/grid/ResultsPicker.tsx', 'src/shared/settings/query-results.ts', 'backend/Varia.Backend/Results/ResultPacker.cs']
   }
 } as const satisfies Record<string, GuideMetadata>
 export type GuideId = keyof typeof guideCatalog

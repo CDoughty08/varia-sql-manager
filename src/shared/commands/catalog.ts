@@ -1107,6 +1107,30 @@ export const commandCatalog = {
     title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
     toggled: 'resultsTabs', menus: [{ menu: 'window', group: '1_panes', order: 9, title: 'Results as Tabs', mnemonic: 'b' }]
   },
+  // Moving through the Tabs layout without the mouse, from the grid or the editor: the next or previous result or
+  // comparison tab (a result's tab shows the view it last showed), the selected result's other view (Table and Pivot), and
+  // the overflow picker that lists every view. Ctrl+Alt+Page Down and Up, as Ctrl+Page Down and Up step through queries;
+  // with Shift for views, except where text has the focus (Monaco's column selection there).
+  'output.nextResult': {
+    title: 'Next Result', category: 'Query', keywords: ['tab', 'result', 'next', 'switch', 'group', 'comparison', 'grid'], precondition: 'resultsTabs && hasResultSets',
+    unavailableHint: 'Show results as tabs, with results to step through.', keybindings: [{ key: 'ctrl+alt+pagedown', allowRepeat: true }]
+  },
+  'output.previousResult': {
+    title: 'Previous Result', category: 'Query', keywords: ['tab', 'result', 'previous', 'switch', 'group', 'comparison', 'grid'], precondition: 'resultsTabs && hasResultSets',
+    unavailableHint: 'Show results as tabs, with results to step through.', keybindings: [{ key: 'ctrl+alt+pageup', allowRepeat: true }]
+  },
+  'output.nextResultView': {
+    title: 'Next Result View', category: 'Query', keywords: ['tab', 'view', 'pivot', 'table', 'next', 'switch', 'grid'], precondition: 'resultsTabs && hasResultSets',
+    unavailableHint: 'Show results as tabs and build a Pivot of the result first.', keybindings: [{ key: 'ctrl+alt+shift+pagedown', when: '!textInputFocus', allowRepeat: true }]
+  },
+  'output.previousResultView': {
+    title: 'Previous Result View', category: 'Query', keywords: ['tab', 'view', 'pivot', 'table', 'previous', 'switch', 'grid'], precondition: 'resultsTabs && hasResultSets',
+    unavailableHint: 'Show results as tabs and build a Pivot of the result first.', keybindings: [{ key: 'ctrl+alt+shift+pageup', when: '!textInputFocus', allowRepeat: true }]
+  },
+  'output.goToResult': {
+    title: 'Go to Result…', category: 'Query', icon: 'search', keywords: ['tab', 'result', 'overflow', 'picker', 'list', 'find', 'pivot', 'comparison', 'jump'], precondition: 'resultsTabs && hasResultSets',
+    unavailableHint: 'Show results as tabs, with results to go to.', menus: [{ menu: 'window', group: '1_panes', order: 10, mnemonic: 'g' }]
+  },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
     toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }]
