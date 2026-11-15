@@ -888,7 +888,7 @@ try {
     await setClipboard('')
     await writeFile(join(control, 'hold', 'results.copy'), '')
     await page.keyboard.press('Control+C')
-    await expect(jobProgress(page)).toContainText('Copying…')
+    await expect(jobProgress(page)).toContainText('Copying Result 1…')
     await rm(join(control, 'hold', 'results.copy'))
     await expect.poll(async () => (await clipboard()).split(eol).length, { timeout: 60000 }).toBe(200_000)
     await expect(jobProgress(page)).toHaveCount(0)

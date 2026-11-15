@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -387,15 +387,53 @@ describe('results service', () => {
     expect(await service.copy('t1', keyAt(service, 't1', 0), false)).toBe('These results are no longer available because the SQL backend restarted.')
     expect(api.copyResults).not.toHaveBeenCalled()
   })
-  it("labels a named result's save by its name and keeps the positional suggested file name until save names land", async () => {
+  it("labels a named result's save by its name and suggests a file named after it", async () => {
     const { api, service, tab, flush } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, name: 'Open orders' })]) })
     api.saveResults.mockReturnValueOnce(new Promise(() => {}))
     void service.saveAs('t1', keyAt(service, 't1', 1), 'SQLQuery1')
-    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ suggestedName: 'SQLQuery1-Result2' }))
+    // Nothing else of the run makes the same file name, so the name stands alone, with no suffix for main to keep.
+    expect(api.saveResults.mock.lastCall?.[0]).toMatchObject({ suggestedName: 'SQLQuery1-Open orders' })
+    expect(api.saveResults.mock.lastCall?.[0]).not.toHaveProperty('suggestedSuffix')
     flush()
     expect(tab().jobs).toEqual([expect.objectContaining({ kind: 'save', label: 'Open orders, Result 2' })])
+  })
+  it('names saves by view: a Pivot after its Table, comparisons by the order made, and numbers beside names that collide', async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { name: 'Totals' }), descriptor(2, { index: 1 }), descriptor(3, { index: 2, name: 'totals' }), descriptor(4, { index: 3, name: '???' })]) })
+    const pivot = service.addSet('t1', descriptor(801, { index: 2, kind: 'pivot' }), 'Pivot of totals (Result 3)', ['1:3'])!
+    const first = service.addSet('t1', descriptor(901, { index: 0, kind: 'diff' }), 'Differences: Totals (Result 1) → Result 2', ['1:1', '1:2'])!
+    const second = service.addSet('t1', descriptor(902, { index: 0, kind: 'diff' }), 'Differences: Result 2 → totals (Result 3)', ['1:2', '1:3'])!
+    flush()
+    const names = async (...keys: string[]) => {
+      api.saveResults.mockClear()
+      for (const key of keys) await service.saveAs('t1', key, 'SQLQuery1')
+      return api.saveResults.mock.calls.map(([request]) => [request.suggestedName, request.suggestedSuffix])
+    }
+    const key = (number: number) => tab().sets.find(set => set.number === number)!.key
+    // "Totals" and "totals" make one file name on Windows and macOS, so both keep their numbers; "???" leaves nothing to
+    // read and is named by its number.
+    expect(await names(key(1), key(2), key(3), key(4), pivot, first, second)).toEqual([
+      ['SQLQuery1-Totals-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-totals-Result3', '-Result3'], ['SQLQuery1-Result4', '-Result4'],
+      ['SQLQuery1-totals-Result3-Pivot', '-Result3-Pivot'], ['SQLQuery1-Differences1', '-Differences1'], ['SQLQuery1-Differences2', '-Differences2']
+    ])
+    // A comparison keeps its number when an earlier one closes, and the next takes a new one.
+    service.removeEntry('t1', first)
+    const third = service.addSet('t1', descriptor(903, { index: 0, kind: 'diff' }), 'Differences: Totals (Result 1) → Result 2', ['1:1', '1:2'])!
+    flush()
+    expect(await names(second, third)).toEqual([['SQLQuery1-Differences2', '-Differences2'], ['SQLQuery1-Differences3', '-Differences3']])
+    // With Result 3 closed, Result 1's name no longer collides.
+    service.removeEntry('t1', key(3))
+    flush()
+    expect(await names(key(1))).toEqual([['SQLQuery1-Totals', undefined]])
+    // A copy's strip names a Pivot or a comparison by its own name, never by the number the derived entry was given.
+    api.copyResults.mockReturnValue(new Promise(() => {}))
+    service.setSelection('t1', second, selectAll(second))
+    void service.copy('t1', second, false)
+    flush()
+    expect(tab().jobs.at(-1)).toMatchObject({ kind: 'copy', label: 'Differences: Result 2 → totals (Result 3)' })
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
@@ -407,7 +445,7 @@ describe('results service', () => {
     api.saveResults.mockReturnValueOnce(pending.promise)
     const saving = service.saveAs('t1', keyAt(service, 't1', 1), 'SQLQuery1')
     // The renderer names the result and suggests a name; main asks for the path and remembers the last format.
-    expect(api.saveResults).toHaveBeenCalledWith({ jobId: 'job-1', generation: 1, resultId: 2, suggestedName: 'SQLQuery1-Result2' })
+    expect(api.saveResults).toHaveBeenCalledWith({ jobId: 'job-1', generation: 1, resultId: 2, suggestedName: 'SQLQuery1-Result2', suggestedSuffix: '-Result2' })
     flush()
     expect(tab().jobs).toEqual([expect.objectContaining({ jobId: 'job-1', kind: 'save', entry: keyAt(service, 't1', 1), label: 'Result 2', rowsDone: 0, rowsTotal: 5, visible: false })])
     // While the dialog is open there is no strip, however long it stays open, and Escape has nothing to cancel.
@@ -651,21 +689,12 @@ describe('results service', () => {
     expect(await service.openValue('t1', keyAt(service, 't1', 0), 0, 0)).toEqual({ opened: true })
     expect(handle.getCell).toHaveBeenCalledTimes(2)
   })
-  it('suggests a save name main accepts, however long the tab\'s name', () => {
-    const name = 'n'.repeat(200)
-    expect(suggestedName(name, 3)).toBe('n'.repeat(120) + '-Result3')
-    expect(suggestedName(name, 3)).toHaveLength(128)
-    expect(suggestedName('SQLQuery1', 1)).toBe('SQLQuery1-Result1')
-    // Never cut between the halves of a surrogate pair.
-    const astral = 'a'.repeat(119) + '😀'.repeat(10)
-    expect(suggestedName(astral, 3)).toBe('a'.repeat(119) + '-Result3')
-  })
   it('passes the shortened name to main for a long tab name', async () => {
     const { api, service } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
     await service.saveAs('t1', keyAt(service, 't1', 0), 'x'.repeat(200))
-    expect(api.saveResults.mock.lastCall?.[0].suggestedName).toHaveLength(128)
+    expect(api.saveResults.mock.lastCall?.[0]).toMatchObject({ suggestedName: 'x'.repeat(120) + '-Result1', suggestedSuffix: '-Result1' })
   })
   it('reads out a selection only when its size changes, and every copy\'s outcome', () => {
     const { service, timers, tab } = fixture()
@@ -818,10 +847,11 @@ describe('results service entry keys', () => {
     service.viewShown('t1', keys[2], sorted)
     copying.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
     await copied
-    // Names follow the entry: Result 3 and the pivot save under the numbers they had.
+    // Names follow the entry: Result 3 saves under its number, and its Pivot under its Table's with -Pivot, not the number
+    // the derived entry was given.
     await service.saveAs('t1', keys[2], 'SQLQuery1')
     await service.saveAs('t1', keys[3], 'SQLQuery1')
-    expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.viewId])).toEqual([[3, 'SQLQuery1-Result3', 9], [803, 'SQLQuery1-Result4', undefined]])
+    expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.viewId])).toEqual([[3, 'SQLQuery1-Result3', 9], [803, 'SQLQuery1-Result3-Pivot', undefined]])
     // A result made afterwards takes the next number, not the pivot's, stands with the group it was made from, and has
     // no share of the stack yet.
     const added = service.addSet('t1', descriptor(801, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', ['1:1'])
@@ -1161,7 +1191,7 @@ describe('results service sorting', () => {
     await service.copy('t1', key, true)
     expect(api.copyResults).toHaveBeenLastCalledWith({ jobId: expect.any(String), generation: 1, resultId: 1, headers: true, parts: [{ rows: [[1, 2]], columns: [[0, 1]] }], transposed: true, headerColumn: 1 })
     await service.saveAs('t1', key, 'SQLQuery1')
-    expect(api.saveResults).toHaveBeenLastCalledWith({ jobId: expect.any(String), generation: 1, resultId: 1, suggestedName: 'SQLQuery1-Result1', transposed: true, headerColumn: 1 })
+    expect(api.saveResults).toHaveBeenLastCalledWith({ jobId: expect.any(String), generation: 1, resultId: 1, suggestedName: 'SQLQuery1-Result1-Transposed', suggestedSuffix: '-Result1-Transposed', transposed: true, headerColumn: 1 })
     // Through the grid's sorted view, and without a header column once it is not one of the result's.
     handle.sort.mockResolvedValueOnce(fakeView(handle, 7, [{ column: 0, descending: true, mode: 'value' }]))
     service.sortBy('t1', key, 0, 'descending')

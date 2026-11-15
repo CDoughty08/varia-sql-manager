@@ -29,7 +29,8 @@ interface Props { pane: OutputPaneId; tabId: string; query: boolean; connected: 
 function jobText(job: ResultJob): string {
   const percent = job.rowsTotal > 0 ? Math.min(100, Math.floor(job.rowsDone / job.rowsTotal * 100)) : 0
   const done = `${percent}% (${formatCount(job.rowsDone)} of ${formatCount(job.rowsTotal)} ${job.columns ? 'columns' : 'rows'})`
-  return job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}… ${done}` : `Copying… ${done}`
+  // A save names its file, which carries the view's name (save-names.ts); a copy names the view the same way.
+  return job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}… ${done}` : `Copying ${job.label}… ${done}`
 }
 
 /** The run summary, from the run's state; elapsed time ticks while it runs. SSMS's sentence is its tooltip. A run that ended

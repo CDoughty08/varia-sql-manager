@@ -17,6 +17,7 @@ import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, typ
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
+import { sameFileName, saveName, type SaveSubject } from './save-names'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -134,6 +135,9 @@ export interface ResultSlot {
   readonly sources: readonly SourceRef[]
   /** A Pivot's provenance, from its latest build. */
   readonly pivot?: PivotProvenance
+  /** A comparison's place among the run's comparisons in the order made, fixed for its life ('Differences2' in a saved
+   *  file's name, even after the first was closed). */
+  readonly made?: number
 }
 /**
  * An original result and what was made of it: named by its `ordinal` ("Result 3"), with the batch it came from, its Table,
@@ -346,7 +350,7 @@ export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCod
 export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
 /** What the service keeps of a slot beside its entry. */
-interface SlotRecord { readonly view: ViewKind; readonly group?: number; readonly revision: number; readonly sources: readonly SourceRef[]; readonly pivot?: PivotProvenance }
+interface SlotRecord { readonly view: ViewKind; readonly group?: number; readonly revision: number; readonly sources: readonly SourceRef[]; readonly pivot?: PivotProvenance; readonly made?: number }
 interface Run {
   readonly tabId: string
   readonly queryId: string
@@ -369,6 +373,8 @@ interface Run {
   readonly entries: Map<EntryKey, ResultSetEntry>
   /** The highest number an entry of the run was given: a derived entry takes the next. */
   numbered: number
+  /** How many comparisons the run made: a comparison is numbered by the next, for its saved file's name. */
+  compared: number
   /** `sets` is held by a published snapshot, so the next change copies it first. */
   setsPublished: boolean
   readonly rowsRead: Map<number, number>
@@ -454,14 +460,6 @@ const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: s
 function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
   const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').trim().slice(0, 100)
   return name || kindInfo[kind].blankName
-}
-/** Save Results As's suggested name, '{tab}-Result{n}' for the entry numbered `number`, cut to the length main accepts
- *  (never inside a surrogate pair). */
-export function suggestedName(baseName: string, number: number): string {
-  const suffix = `-Result${number}`
-  let end = Math.min(baseName.length, wire.jobs.suggestedName - suffix.length)
-  if (end > 0 && end < baseName.length && /[\ud800-\udbff]/.test(baseName[end - 1])) end--
-  return baseName.slice(0, end) + suffix
 }
 
 /**
@@ -567,7 +565,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.views.set(tabId, emptyView())
     const run: Run = {
       tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
-      queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
+      queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true
     }
@@ -924,7 +922,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (parts.length === 0) return undefined
     this.cancelRunning(this.copying)
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.copying = running
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
@@ -967,13 +965,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     let saved!: () => void
     const done = new Promise<void>(resolve => { saved = resolve })
-    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number), ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
+    const suggested = saveName(baseName, this.saveSubject(run, set, !!turned))
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggested.name, ...suggested.suffix ? { suggestedSuffix: suggested.suffix } : {}, ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running); saved() }
     if (this.disposed) return undefined
     if (result.ok) {
@@ -987,6 +986,25 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }
     return result.code && saveSentences.has(result.code) ? result.error : 'Could not save the results: ' + result.error
+  }
+
+  /** What a copy's or save's strip calls the view: a Table by its result's title ("Totals, Result 3", "Result 3"), a Pivot
+   *  or comparison by its own name ("Pivot of Result 3", "Differences: Result 1 → Result 3"), never by the number a derived
+   *  entry was given. */
+  private jobLabel(run: Run, set: ResultSetEntry): string {
+    return run.slots.get(set.key)?.view === 'table' ? resultTitle(set) : entryName(set)
+  }
+
+  /** What Save Results As names the entry's file after (save-names.ts): a Table or Pivot by its group's result (its number,
+   *  and its name when the query gave one, numbered too when another result's name makes the same file name), a
+   *  comparison by its place among the run's comparisons. */
+  private saveSubject(run: Run, set: ResultSetEntry, transposed: boolean): SaveSubject {
+    const record = run.slots.get(set.key)
+    if (record?.view === 'comparison') return { view: 'comparison', number: record.made ?? 1 }
+    const table = record?.view === 'pivot' ? run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'table' && slot.group === record.group }) : set
+    const number = table?.number ?? record?.sources[0]?.number ?? set.number, name = table ? queryName(table) : undefined
+    const collides = name !== undefined && run.sets.some(other => other !== table && run.slots.get(other.key)?.view === 'table' && sameFileName(queryName(other), name))
+    return { view: record?.view === 'pivot' ? 'pivot' : 'table', number, ...name === undefined ? {} : { name }, ...collides ? { collides } : {}, ...transposed ? { transposed } : {} }
   }
 
   /**
@@ -1418,7 +1436,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
-    run.slots.set(entry.key, { view, ...group === undefined ? {} : { group }, revision: 1, sources: refs, ...o.pivot ? { pivot: o.pivot } : {} })
+    run.slots.set(entry.key, { view, ...group === undefined ? {} : { group }, revision: 1, sources: refs, ...o.pivot ? { pivot: o.pivot } : {}, ...view === 'comparison' ? { made: ++run.compared } : {} })
     run.shape = undefined
     this.settleDerived(run, key, descriptor)
     run.emptied = false
