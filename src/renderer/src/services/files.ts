@@ -99,7 +99,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   }
   async open(): Promise<void> {
     const target = this.documents.active
-    await this.perform(async () => { await this.openFiles({ files: unwrap(await this.api.openSqlFiles()), errors: [] }, target) })
+    await this.perform(async () => { await this.openFiles(unwrap(await this.api.openSqlFiles()), target) })
   }
   /** File › Recent Files: one entry, by the id main gave its path. */
   async openRecent(id: string): Promise<void> {

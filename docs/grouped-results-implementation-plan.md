@@ -895,6 +895,45 @@ Outcome, accepted by the owner:
     button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and
     the results toolbar's search box is squeezed in a narrow window. PR 14 folds Tabs' rows of tabs in a short pane
     (`tabsFold`); what else a short pane hides (the mock's 330 px rules) is still this PR's.
+    - **What PR 15 settled or left** (stacked on the named results surfaces PR, #503; `tests/save-names.test.ts`,
+      `tests/results-service.test.ts`, `tests/results-jobs.test.ts`, `tests/results-toolbar-fold.test.ts`,
+      `tests/menu-targets.test.ts` and `scripts/grouped-results-smoke.mjs` steps 9 and 10 hold its checks):
+      - Save names (`src/renderer/src/results/save-names.ts`): `{tab}-Result2`, `{tab}-Result2-Pivot` (a Pivot by its
+        Table's number, not the number its derived entry was given), `{tab}-Differences1` (a comparison by its place among
+        the run's comparisons in the order made, `ResultSlot.made`, kept when an earlier one closes), `-Transposed` after a
+        Table or Pivot drawn so. A named result's name stands where its number was (`{tab}-Open orders`,
+        `{tab}-Open orders-Pivot`), per the named results scope. Its number stays beside it (`{tab}-Totals-Result3`)
+        when another Table of the run has a name that makes the same file name (case aside, after refused characters
+        become `_`), when the name is a tail another entry's file takes by its number or name (`#Result2` beside an
+        unnamed Result 2, `Totals-Pivot` beside the Pivot of Totals; `saveTails`), or when the name was cut at 64
+        characters; trailing dots go, and a name of nothing but refused characters, dots or spaces is named by its number. The renderer bounds the whole to main's 128 UTF-16 units and to 235 UTF-8 bytes (main's 240 less
+        `.json`), cutting the tab's name first, then the result's, between code points, so main never cuts it.
+      - Main keeps the whole suffix: the save request gained `suggestedSuffix` (it ends `suggestedName`; zod refuses one
+        that does not), which `sanitizeFileName` never cuts; a request without one keeps a `-Result{n}` it ends in. The
+        unsafe characters and the byte limit moved to `src/shared/file-names.ts` so both sides read one list.
+      - Job strips: a copy's strip names the view ("Copying Pivot of Result 2… 40%"), a Table by `resultTitle`, a Pivot or
+        comparison by its own name; a save's strip already named its file.
+      - Narrow panes: the results toolbar folds by its own measured width (`toolbarFolds`, `fitFold`, `data-fold` words),
+        not by window media queries, so a docked or popped-out pane folds as a narrow window does, whatever the fonts:
+        Tabs, then tightening (the old 1,180 px rules), then Transposed, Headers and Compare, Sort text by, White space and
+        the Show group. The search box keeps 160 px while Tabs folds and the groups tighten, and gives up its width once Transposed and Compare fold, before any other group goes (CI's 1024 px displays need it). The 1,440 px and 1,180 px media queries are gone.
+      - A new context menu, `output.tools` (**More results tools**, the toolbar's ⋯ after Close Results, target kind
+        `resultsTools`, whose items run with the toolbar's `tabId` and no target), holds every tool: Results as Tabs, Go to
+        Result…, Pivot…, Compare…, Transposed, Choose Headers…, Column Profile, Row Size, the White space and Sort text by
+        choices and Close Results. It is always shown, so Show Results as Tabs is reachable from the toolbar at any width.
+        This stands in for the mock's per-view Actions menu: the view's actions stay in the results toolbar (PR 13).
+      - Long names in narrow panes: #503's `--varia-resultTab` cap and caption rules hold at 900 px with a 128-character
+        name (the tab cut with the next tab beside it, the view row, the caption and the Go to Result row fitting across);
+        nothing new was needed.
+      - Short panes: PR 14's fold already gives the grid its header and two rows; the toolbar stays one row. The mock's
+        other 330 px rules have no counterpart to hide: its facts row is the view row's facts, which fold one drops, and
+        its plain strip is a comparison's second note, which the app writes on the comparison's one strip line. So nothing
+        more hides.
+      - Popouts: a popped-out Results panel shows the same names, tooltips and accessible names (it draws the same
+        components), its toolbar folds to the popout's width (`observeResize` follows the element's window), and ⋯ opens
+        its menu in that window. Popout window titles name no result, as the scope says.
+      - Left for PR 18: the review of Dark and Light, docked, floating and popped out at narrow and short sizes; the
+        grouped-results suite's CI seconds after steps 9 and 10.
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
     **Merged as #466.** Changed since: #489 fixed Compare failing on results matched by whole rows (the answer has no
     `key` member then), and #490 turned the picker into a popover beside what opened it, from the options mocked in
