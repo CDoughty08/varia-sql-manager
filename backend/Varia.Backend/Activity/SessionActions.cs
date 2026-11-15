@@ -55,6 +55,9 @@ internal sealed partial class SessionActions
     /// as long as its budget allows (C-critic G12).</summary>
     internal int DetailsBudgetMs { get; set; }
     internal int KillBudgetMs { get; set; }
+    private int poolClears;
+    /// <summary>How many times Details cleared the monitor's pool (the checks read it: ClearPool itself cannot be seen offline).</summary>
+    internal int PoolClears => Volatile.Read(ref poolClears);
     internal int GateWaitMs { get; set; } = 5_000;
     /// <summary>The BUSY answers: the live gates are shared with every live view, the kill gates with this window's kills
     /// (one per connection, two in all).</summary>
@@ -156,11 +159,18 @@ internal sealed partial class SessionActions
     {
         var statements = ActivitySql.Statements("activity.details", render).ToDictionary(statement => statement.Id, StringComparer.Ordinal);
         var connection = host.MonitorConnection(args.ConnectionId);
-        // A connection cancelled or broken mid-statement never goes back to the pool for a live view to pick up.
+        // A connection cancelled or broken mid-statement goes back to the pool for a live view to pick up only when it passes the
+        // clean-connection check (finally, below); otherwise its pool is cleared.
         var healthy = false;
+        // The open finished: only then can anything have been sent.
+        var opened = false;
         try
         {
-            try { await host.OpenAsync(connection, token).ConfigureAwait(false); }
+            try
+            {
+                await host.OpenAsync(connection, token).ConfigureAwait(false);
+                opened = true;
+            }
             catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY")
             {
                 return new(args.SessionId, "unknown", watch.ElapsedMilliseconds, Error: ActivityErrors.SignIn(error));
@@ -292,10 +302,16 @@ internal sealed partial class SessionActions
         }
         finally
         {
+            // Cancelled (at the budget, or by the request) before the open finished, nothing was sent: nothing to clear. A read
+            // cancelled after it leaves a connection that may still be clean: one that answers goes back to the pool. Either way a
+            // slow Details never clears the pool the live views share; a failed open or a broken connection still clears it.
+            if (!healthy && !opened && token.IsCancellationRequested) healthy = true;
+            else if (!healthy) healthy = await LiveConnections.AnswersAsync(connection).ConfigureAwait(false);
             if (!healthy)
             {
+                Interlocked.Increment(ref poolClears);
                 try { SqlConnection.ClearPool(connection); }
-                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+                catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
             }
             await connection.DisposeAsync().ConfigureAwait(false);
         }

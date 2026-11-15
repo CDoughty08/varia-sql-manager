@@ -126,5 +126,7 @@ export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: 
 /** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
  *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
 export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()
-/** varia:results-save. The name only suggests the file; the path comes from main's save dialog. */
-export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)
+/** varia:results-save. The name only suggests the file; the path comes from main's save dialog. `suggestedSuffix`, the end
+ *  of the name that tells results apart ('-Result2-Pivot'), is kept whole when main shortens the name. */
+export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), suggestedSuffix: z.string().min(1).max(limits.jobs.suggestedName).optional(), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)
+  .refine(request => request.suggestedSuffix === undefined || request.suggestedName.endsWith(request.suggestedSuffix), 'The suffix ends the suggested name.')

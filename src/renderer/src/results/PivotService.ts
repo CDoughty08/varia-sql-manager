@@ -373,8 +373,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       hold?.()
       // A cancel the builder or toolbar already words (a Pivot kept) is said once, by them.
       ticket.end(done ? 'done' : item.cancelled && error === undefined ? 'cancelled' : 'dropped')
-      if (this.running.get(tabId)?.get(item.ordinal) === item) {
-        this.running.get(tabId)!.delete(item.ordinal)
+      const builds = this.running.get(tabId)
+      if (builds?.get(item.ordinal) === item) {
+        builds.delete(item.ordinal)
+        if (builds.size === 0) this.running.delete(tabId)
         // A failed Build Pivot's reason stays in the builder until the user acts: an automatic build's failure goes only to
         // the toolbar. A cancel is not the draft's failure, so a later build over the Pivot's recipe clears what it said.
         const keeps = item.auto !== undefined && !!this.errors.get(tabId)?.get(item.ordinal)?.draft

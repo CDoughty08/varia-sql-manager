@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { IconId } from '../../../shared/icons'
+import { observeResize } from '../core/windows'
 import Icon from '../Icon'
 
 interface Props {
@@ -22,9 +23,10 @@ export default function SearchPopover({ label, title, icon, active, compact, chi
     const invoker = button.current, popover = panel.current
     const query = invoker?.closest<HTMLElement>('.object-search-query')
     if (!invoker || !popover || !query) return
-    const box = invoker.getBoundingClientRect(), bounds = query.getBoundingClientRect(), style = getComputedStyle(query)
+    // Its own window's: the pane may be in a popout.
+    const own = invoker.ownerDocument, box = invoker.getBoundingClientRect(), bounds = query.getBoundingClientRect(), style = (own.defaultView ?? window).getComputedStyle(query)
     if (!box.width || !bounds.width) { popover.hidePopover(); return }
-    const inset = 8, gap = 4, viewport = document.documentElement
+    const inset = 8, gap = 4, viewport = own.documentElement
     const width = Math.min(bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), compact ? 280 : 360, viewport.clientWidth - inset * 2)
     popover.style.width = `${Math.max(0, width)}px`
     const left = compact ? bounds.right - parseFloat(style.paddingRight) - width : bounds.left + parseFloat(style.paddingLeft)
@@ -38,17 +40,19 @@ export default function SearchPopover({ label, title, icon, active, compact, chi
     const popover = panel.current
     if (!open || !popover?.matches(':popover-open')) return
     place()
+    const own = popover.ownerDocument, view = own.defaultView ?? window
     // Toggle events are queued. If focus has already left the invoker, opening must not take it back.
-    if (document.activeElement === button.current) {
+    if (own.activeElement === button.current) {
       const first = popover.querySelector<HTMLElement>('input:checked') ?? popover.querySelector<HTMLElement>('input') ?? popover.querySelector<HTMLElement>('button')
       first?.focus()
     }
-    const observer = new ResizeObserver(place)
     const query = button.current?.closest('.object-search-query')
-    if (query) observer.observe(query)
-    window.addEventListener('resize', place)
-    document.addEventListener('scroll', place, true)
-    return () => { observer.disconnect(); window.removeEventListener('resize', place); document.removeEventListener('scroll', place, true) }
+    // From the pane's own window: one made by the main window never fires for an element in a popout.
+    const observer = query ? observeResize(query, place) : undefined
+    // The window the pane is in, which is a popout's once it is popped out.
+    view.addEventListener('resize', place)
+    own.addEventListener('scroll', place, true)
+    return () => { observer?.dispose(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
   }, [open])
   return <>
     <button ref={button} type="button" className={compact ? 'icon-button object-search-popover-button' : 'object-search-filter-button object-search-type-button'}

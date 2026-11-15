@@ -68,21 +68,24 @@ export function windowOf(node: Node): Window & typeof globalThis {
 /**
  * A ResizeObserver from the window `element` is in. A window's observers see only what its own rendering lays out, so
  * one made by the main window never fires for an element in a popout; this one is made again in the element's window
- * whenever content moves between windows, and reports once after each move.
+ * whenever content moves between windows, and reports once after each move. Several elements share one observer; they
+ * are in one window (the first's).
  */
-export function observeResize(element: Element, callback: () => void): Disposable {
+export function observeResize(elements: Element | readonly Element[], callback: () => void): Disposable {
+  const watched = Array.isArray(elements) ? elements as readonly Element[] : [elements as Element], element = watched[0]
   let owner: Window | undefined, observer: ResizeObserver | undefined
   const bind = () => {
+    if (!element) return
     const target = windowOf(element)
     if (target === owner && observer) return
     observer?.disconnect()
     owner = target
     if (typeof target.ResizeObserver !== 'function') return
     observer = new target.ResizeObserver(() => callback())
-    observer.observe(element)
+    for (const one of watched) observer.observe(one)
   }
   bind()
-  const adoption = windows.onDidAdopt(() => { const moved = owner !== undefined && owner !== windowOf(element); bind(); if (moved) callback() })
+  const adoption = windows.onDidAdopt(() => { const moved = owner !== undefined && !!element && owner !== windowOf(element); bind(); if (moved) callback() })
   return { dispose: () => { adoption.dispose(); observer?.disconnect(); observer = undefined } }
 }
 

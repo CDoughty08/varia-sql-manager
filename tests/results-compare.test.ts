@@ -510,3 +510,31 @@ describe('a comparison\'s source links', () => {
     expect(compareSources(tab(), [{ ...slot().sources[1], set: '1:12345' }])).toEqual([{ name: 'Result 3' }])
   })
 })
+
+describe('a comparison given up or gone', () => {
+  it('adds nothing and releases the diff when Cancel comes after the backend answered', async () => {
+    const { client, compare, run, tab, handle } = fixture()
+    const keys = run(2)
+    // The backend's answer is already on its way when Cancel is pressed: the diff ignores the abort.
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const comparing = compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    compare.cancel('t1', keys[0], keys[1], false)
+    answer.resolve({ descriptor: descriptor(991, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await expect(comparing).resolves.toBeUndefined()
+    expect(tab().comparisons).toHaveLength(0)
+    expect(compare.getSnapshot().info.size).toBe(0)
+    await settle()
+    expect(client.released()).toContain(991)
+  })
+
+  it('forgets a comparison\'s details once no run shows it, without waiting for the next comparison', async () => {
+    const { compare, results, run } = fixture()
+    const keys = run(2)
+    await compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    expect(compare.getSnapshot().info.size).toBe(1)
+    results.release('t1')
+    expect(compare.getSnapshot().info.size).toBe(0)
+  })
+})

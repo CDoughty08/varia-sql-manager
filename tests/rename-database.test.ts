@@ -237,9 +237,9 @@ describe('Rename of a database (D3c)', () => {
     // Renamed, but the access could not be restored: the windows follow, and the error says the rename happened.
     commands.clearError()
     api.executeObjectAction.mockResolvedValueOnce(failure([{ status: 'done', title: 'Close existing connections' }, { status: 'done', title: 'Rename' }, { status: 'failed', title: 'Restore multi-user access' },
-      { status: 'failed', title: 'Restore multi-user access', compensates: true }], 'SQL_ERROR', 'Failed. Then "Restore multi-user access" failed.'))
+      { status: 'failed', title: 'Restore multi-user access', compensates: true }], 'SQL_ERROR', 'Failed. Then "Restore multi-user access" failed: Lock request time out period exceeded.'))
     await actions.commitRename(node(), 'Sales')
-    expect(commands.getSnapshot().error).toBe('AppData was renamed to Sales, but: Failed. Then "Restore multi-user access" failed.')
+    expect(commands.getSnapshot().error).toBe('AppData was renamed to Sales, but: Failed. Then "Restore multi-user access" failed: Lock request time out period exceeded.')
     expect(documents.get(tabs.first.id)?.database).toBe('Sales')
   })
   it('retitles a Database Properties document on that server, which Properties on the renamed database then finds', async () => {
