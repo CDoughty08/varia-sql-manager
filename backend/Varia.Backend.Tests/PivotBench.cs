@@ -8,7 +8,8 @@ namespace Varia.Backend.Tests;
 
 /// <summary>The pivot benchmark, run by hand (docs/pivot-performance-findings.md holds what it measured):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --pivot-bench [--budget-gib N]
-/// [--only name,name] [--max-rows N] [--view-rows N]</c>. Synthetic results (every cell a function of its row number) pivoted as results.pivot does, one factor
+/// [--only name,name] [--max-rows N] [--view-rows N] [--packed]</c>. <c>--packed</c> packs each threshold case's source (as a hidden
+/// result is packed) and times only the host method, which reads it fused. Synthetic results (every cell a function of its row number) pivoted as results.pivot does, one factor
 /// changed at a time: row volume, group cardinality, shape, value types, recipe and source view, then parallel builds,
 /// cancellation and a refusal. Each case reports its first build and the median and slowest of the warm ones, split into the
 /// stages of <c>SqlService.PivotAsync</c> (reservation, sort keys, grouping, aggregation, distinct counts, output shape, output
@@ -179,6 +180,33 @@ internal static class PivotBench
         return sample;
     }
 
+    /// <summary>A packed source timed through the host method alone (results.pivot reads it fused); the first build, then up to seven more.</summary>
+    private static void PackedCase(string dimension, string id, string detail, ResultStore store, ResultSetBuffer set, SqlService service, object hostArgs)
+    {
+        var parameters = JsonSerializer.SerializeToElement(hostArgs, HostChecks.Json);
+        var times = new List<double>();
+        string? refused = null;
+        var watch = Stopwatch.StartNew();
+        while (times.Count < 8 && (times.Count < 4 || watch.Elapsed.TotalSeconds < 20))
+        {
+            var started = Stopwatch.GetTimestamp();
+            try
+            {
+                var answer = (ResultsPivotResult)service.DispatchAsync("results.pivot", parameters, HostChecks.Json).GetAwaiter().GetResult();
+                times.Add(Ms(Stopwatch.GetTimestamp() - started));
+                store.Release([answer.Descriptor.ResultId]);
+            }
+            catch (RequestException refusal) { refused = refusal.Code; break; }
+        }
+        var description = set.Describe();
+        var warm = times.Skip(1).ToArray();
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            dimension, id, detail, packed = true, stillPacked = set.HasPacked, sourceRows = description.RowsStored, sourceBytes = description.BytesStored, refused,
+            firstMs = times.Count == 0 ? 0 : Round(times[0]), hostMedianMs = warm.Length == 0 ? 0 : Round(Median(warm)), maxMs = warm.Length == 0 ? 0 : Round(warm.Max())
+        }));
+    }
+
     private static double Median(IEnumerable<double> values)
     {
         var sorted = values.Order().ToArray();
@@ -187,6 +215,7 @@ internal static class PivotBench
     private static double Round(double value) => Math.Round(value, value < 10 ? 2 : 1);
 
     private static string[]? only;
+    private static bool packed;
     private static long maxRows = long.MaxValue;
     /// <summary>Whether --only (names separated by commas) asks for a case, by its id or its dimension.</summary>
     private static bool Wanted(string dimension, string id = "") =>
@@ -197,6 +226,7 @@ internal static class PivotBench
     {
         if (!Wanted(dimension, id)) return;
         GC.Collect();
+        if (set.HasPacked && service is not null && hostArgs is not null) { PackedCase(dimension, id, detail, store, set, service, hostArgs); return; }
         var first = Once(store, set, spec, order);
         var warm = new List<Sample>();
         var watch = Stopwatch.StartNew();
@@ -256,8 +286,9 @@ internal static class PivotBench
             if (args[i] == "--view-rows") viewRows = long.Parse(args[i + 1], CultureInfo.InvariantCulture);
             if (args[i] == "--max-rows") maxRows = long.Parse(args[i + 1], CultureInfo.InvariantCulture);
         }
+        packed = args.Contains("--packed");
         // The store as the backend sizes it: half the global budget a query. No memory-load check, so a busy machine refuses nothing.
-        var store = new ResultStore(budgetGib << 30, budgetGib << 29);
+        var store = new ResultStore(budgetGib << 30, budgetGib << 29) { Packing = packed ? PagePacking.OnRequest : ResultStore.DefaultPacking };
         using var service = new SqlService(store);
         Console.WriteLine(JsonSerializer.Serialize(new
         {
@@ -344,6 +375,7 @@ internal static class PivotBench
             {
                 if (!Wanted("threshold", "threshold-" + rows + "-" + name)) return;
                 var set = Fill(store, rows, columns);
+                if (packed) set.Pack();
                 Go("threshold", "threshold-" + rows + "-" + name, label + detail, set, spec);
                 store.Release([set.ResultId]);
             }
