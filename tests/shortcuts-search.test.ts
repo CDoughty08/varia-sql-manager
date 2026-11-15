@@ -22,7 +22,8 @@ describe('Shortcuts search', () => {
     expect([hasToken('a @unbound', 'unbound'), hasToken('a @unboundx', 'unbound')]).toEqual([true, false])
   })
   it('matches every word against title, id, category and key label', () => {
-    expect(found('new query file')).toEqual(['file.new'])
+    expect(found('new query file')).toEqual(['file.new', 'query.newSpHelp', 'query.newSpWho', 'query.newSpLock'])
+    expect(found('new query file sp_who')).toEqual(['query.newSpWho'])
     expect(found('file.new')).toContain('file.new')
     // Words match labels as shown: Ctrl+N is New Query's, and Next Bookmark's Ctrl+K Ctrl+N has it too.
     expect(found('ctrl+n')).toEqual(['file.new', 'edit.nextBookmark'])
@@ -40,7 +41,7 @@ describe('Shortcuts search', () => {
     expect(showsKind(parseShortcutQuery('@kind:mouse'), 'mouse')).toBe(true)
     expect(showsKind(parseShortcutQuery('@kind:key'), 'mouse')).toBe(false)
     // A token the box does not know (or is still being typed) filters nothing.
-    expect(found('@sco new query file')).toEqual(['file.new'])
+    expect(found('@sco new query file')).toEqual(['file.new', 'query.newSpHelp', 'query.newSpWho', 'query.newSpLock'])
   })
   it('lists a modified command\'s changed shortcut under @modified, and counts the chips', () => {
     const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.new', key: 'mod+n', remove: true }])

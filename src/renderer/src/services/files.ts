@@ -64,11 +64,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     try { await this.documents.runTask(action) }
     catch (error) { this.reportError(error instanceof Error ? error.message : 'The file operation failed.') }
   }
-  /** A new query on the active query's connection, or on `connectionId` and `database`. */
-  newFile(connectionId?: string, database?: string): void {
+  /** A new query holding `sql` on the active query's connection, or on `connectionId` and `database`. */
+  newFile(connectionId?: string, database?: string, sql = ''): void {
     if (!this.canRun()) return
     this.clearError()
-    this.documents.newQuery('', undefined, connectionId, database)
+    this.documents.newQuery(sql, undefined, connectionId, database)
   }
   private async releaseUnclaimed(files: readonly SqlFile[]): Promise<void> {
     const owned = new Set(this.documents.getSnapshot().documents.map(document => document.file?.id))
