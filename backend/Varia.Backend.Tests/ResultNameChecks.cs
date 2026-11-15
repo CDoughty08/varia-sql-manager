@@ -204,6 +204,9 @@ internal static class ResultNameChecks
         ended.Take(1, false, false, false);
         check(ended.Unapplied(true, "its batch stopped before its result set arrived").ToList() is [var cut, _] && cut == "Result name \"Refused\" (line 3) was not applied: its batch stopped before its result set arrived.",
             "names a batch never reached are noted with why it ended");
+        // A GO n repetition's notes name it: another repetition may have applied the same name.
+        check(new ResultNameBinder(budget).Unapplied(true, null, 2).First() == "Result name \"Kept\" (line 1, repetition 2) was not applied: an error earlier in its batch made the place of its result set unknown.",
+            "a repetition's notes say which repetition");
     }
 
     private static void Descriptor(Action<bool, string> check)

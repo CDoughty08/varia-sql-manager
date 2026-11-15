@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Globalization;
 using System.Text;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using Varia.Backend.Results;
 
 namespace Varia.Backend;
 
@@ -171,7 +172,8 @@ internal static class ResultNames
     private static string Quote(string name) => "\"" + name + "\"";
     private static string Number(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
     internal static string Note(ResultMarker marker, string what) => $"Result name {Quote(marker.Name!)} (line {Number(marker.Line)}) {what}";
-    internal static string Note(ResultNameSlot slot, string what) => $"Result name {Quote(slot.Name)} (line {Number(slot.Line)}) {what}";
+    internal static string Note(ResultNameSlot slot, string what, int repetition = 0) =>
+        $"Result name {Quote(slot.Name)} (line {Number(slot.Line)}{(repetition > 0 ? ", repetition " + Number(repetition) : "")}) {what}";
     /// <summary>The note for a marker in a run of comments that is no batch.</summary>
     internal static string Unbatched(ResultMarker marker) => Note(marker, "is unused: no statement follows it in its batch.");
 }
@@ -204,6 +206,10 @@ internal sealed class ResultNamePlan
             return Refused(markers, $"was not applied: its batch is longer than {ResultNames.MaxParseChars.ToString("N0", CultureInfo.InvariantCulture)} characters.");
         if (batch.ParenDepth > ResultNames.MaxParenDepth)
             return Refused(markers, "was not applied: its batch nests parentheses too deeply to place it.");
+        // A set in that column is shown as a plan and left out of the count, though the parse counts its SELECT: every later
+        // set would take the name before it. The text is searched, so a dynamic SQL string that selects one counts too.
+        if (batch.Sql.Contains(ColumnPlan.ShowplanColumn, StringComparison.OrdinalIgnoreCase))
+            return Refused(markers, $"was not applied: its batch names a column \"{ColumnPlan.ShowplanColumn}\", whose sets are shown as plans and not counted.");
         // Before the parse as well as while waiting: a parse can finish before WaitAsync looks at the token.
         token.ThrowIfCancellationRequested();
         var firstLine = sourceStartLine + batch.StartLine - 1;
@@ -360,7 +366,8 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
 
     /// <summary>The notes for this execution's names that no set took.</summary>
     /// <param name="ended">Why the batch execution ended early (a cancel, or an error that ends the script), if it did.</param>
-    public IEnumerable<string> Unapplied(bool errored, string? ended = null)
+    /// <param name="repetition">The GO n repetition (0 when the batch runs once), which its notes name: another may have applied the name.</param>
+    public IEnumerable<string> Unapplied(bool errored, string? ended = null, int repetition = 0)
     {
         var reason = stopped ?? ended ?? (errored ? "an error earlier in its batch made the place of its result set unknown" : null);
         // The statements (by their first set's place) that some name was applied to: one pass, however many names.
@@ -373,7 +380,7 @@ internal sealed class ResultNameBinder(ResultNamePlan plan)
             var slot = plan.Slots[i];
             var some = reached.Contains(slot.First);
             yield return ResultNames.Note(slot, reason is not null ? "was not applied: " + reason + "."
-                : some ? "is unused: its statement returned fewer result sets than there are names." : "is unused: its statement returned no result set.");
+                : some ? "is unused: its statement returned fewer result sets than there are names." : "is unused: its statement returned no result set.", repetition);
         }
     }
 

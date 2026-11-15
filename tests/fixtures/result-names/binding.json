@@ -729,6 +729,17 @@
       "notes": [
         "\"A\" (line 3) was not applied: a SET NOEXEC statement on line 5 in its batch"
       ]
+    },
+    {
+      "name": "a SELECT aliased to the plan column is shown as a plan and not counted, so no name in its batch is applied",
+      "sql": "-- #Name=\"Saved plan\"\nSELECT CAST(N'<ShowPlanXML/>' AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];\n-- #Name=\"Stats\"\nSELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Saved plan\" (line 1) was not applied: its batch names a column",
+        "\"Stats\" (line 3) was not applied: its batch names a column"
+      ]
     }
   ]
 }

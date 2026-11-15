@@ -1131,6 +1131,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var namePlans = new ResultNamePlan?[batches.Count];
         // The running batch execution's binder until its notes are out; one an exception ended reports them in finally.
         ResultNameBinder? pendingNames = null;
+        // The batches whose plans are made (their notes out); those after them that the run never reached are noted in finally.
+        var plannedBatches = 0;
+        var pendingRepetition = 0;
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1289,6 +1292,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     namePlans[b] = namePlan;
                     foreach (var note in namePlan.Notes) nameNotes.Add(note);
                 }
+                plannedBatches = b + 1;
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -1296,6 +1300,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     var raisedBefore = Raised();
                     var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
                     pendingNames = names;
+                    pendingRepetition = batch.RepeatCount > 1 ? iteration : 0;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1492,7 +1497,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
-                    if (names is not null) foreach (var note in names.Unapplied(failed)) nameNotes.Add(note);
+                    if (names is not null) foreach (var note in names.Unapplied(failed, null, batch.RepeatCount > 1 ? iteration : 0)) nameNotes.Add(note);
                     pendingNames = null;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
                     if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
@@ -1549,7 +1554,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         finally
         {
-            if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived")) nameNotes.Add(note);
+            if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived", pendingRepetition)) nameNotes.Add(note);
+            for (var b = plannedBatches; b < batches.Count; b++)
+                foreach (var marker in batches[b].Markers ?? [])
+                    if (marker.Name is not null) nameNotes.Add(ResultNames.Note(marker, "was not applied: the run ended before its batch ran."));
             nameNotes.Finish();
             // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
             statisticsSample = statistics?.Finish();
