@@ -46,7 +46,7 @@ describe('dependency floors', () => {
   // Monaco's sanitiser the way the renderer build does and read the version that ships.
   describe('the DOMPurify Monaco bundles', () => {
     const shipped = async (plugins: Plugin[]) => {
-      const built = await build({ configFile: false, logLevel: 'silent', plugins, build: { write: false, minify: true, rollupOptions: { input: 'node_modules/monaco-editor/esm/vs/base/browser/domSanitize.js', preserveEntrySignatures: 'strict' } } })
+      const built = await build({ configFile: false, logLevel: 'silent', plugins, build: { write: false, minify: true, rolldownOptions: { input: 'node_modules/monaco-editor/esm/vs/base/browser/domSanitize.js', preserveEntrySignatures: 'strict' } } })
       return [built].flat().flatMap(result => 'output' in result ? result.output : []).flatMap(chunk => chunk.type === 'chunk' ? domPurifyVersions(chunk.code) : [])
     }
     it('is the installed package, at or above its floor, in place of the vendored copy', async () => {
@@ -63,6 +63,10 @@ describe('dependency floors', () => {
       const refused = shipped([checkOnly])
       if (vendored[0] === lock.packages['node_modules/dompurify'].version) await expect(refused).resolves.toEqual(vendored)
       else await expect(refused).rejects.toThrow(`ships DOMPurify ${vendored[0]}`)
+    }, 120_000)
+    it('refuses a bundle in which it reads no DOMPurify version, rather than passing without checking', async () => {
+      const built = build({ configFile: false, logLevel: 'silent', plugins: [patchedDomPurify()], build: { write: false, minify: true, rolldownOptions: { input: 'src/shared/csp.ts' } } })
+      await expect(built).rejects.toThrow('names no DOMPurify version')
     }, 120_000)
     it('is in the plugins of the renderer build', () => {
       expect(readFileSync('electron.vite.config.ts', 'utf8')).toMatch(/renderer: \{\s+plugins: \[[^\]]*patchedDomPurify\(\)/)

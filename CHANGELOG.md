@@ -56,6 +56,7 @@
 - **Results:** two operations on results at once (two sorts, a sort and a pivot, a pivot beside a column profile) now share the processor cores, so the second no longer runs on what the first leaves: two pivots started together both finish a little later than one alone would, instead of one taking three times as long.
 - **Results:** search in results, highlights' row matching and Compare Results use several processor cores too, and filtering for duplicates or listing a column's values no longer sorts every row when the column holds few different values.
 - **Results:** a pivot's Distinct Count is many times faster on large results (about 4 seconds down to a fraction of a second for 4 million rows), and Compare Results' matching and a column's value list with many different values now use several processor cores as well.
+- **Build toolchain:** the app is built with Vite 8 (Rolldown and its minifier), electron-vite 6 and @vitejs/plugin-react 6. The build check that refuses a renderer bundle shipping any DOMPurify other than the patched one now also reads Vite 8's minified output.
 
 ### Fixed
 

@@ -58,7 +58,13 @@ try {
   await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('visible')
   await connect()
   const id = await live('subscribeSynthetic', { tickMs: 100 })
-  await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics'))?.length ?? 0).toBeGreaterThanOrEqual(5)
+  // A rare Windows CI timeout here (no samples at all) left nothing to go on: on failure, say what the view was doing.
+  await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics'))?.length ?? 0).toBeGreaterThanOrEqual(5).catch(async error => {
+    const view = await live('snapshot', id).catch(reason => String(reason))
+    const owner = await page.evaluate(() => ({ visibility: document.visibilityState, focused: document.hasFocus() })).catch(reason => String(reason))
+    console.error('Synthetic view after the timeout:', JSON.stringify({ view, frames: await live('frames', id).catch(() => undefined), owner }))
+    throw error
+  })
 
   step = 'draw'
   const key = await live('mountChart', id, { series: [1], style: 'area', max: 100, labels: 'axes', spanMs: 10_000 })

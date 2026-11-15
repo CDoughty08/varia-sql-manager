@@ -120,8 +120,10 @@ try {
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
   expect(await page.evaluate(() => {
     const style = getComputedStyle(document.documentElement)
-    return { xs: style.getPropertyValue('--varia-size-xs').trim(), fast: style.getPropertyValue('--varia-motion-fast').trim(), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
-  })).toEqual({ xs: '11px', fast: '0ms', reduced: true })
+    // The production stylesheet is minified, which may spell a zero duration 0s rather than the source's 0ms.
+    const fast = style.getPropertyValue('--varia-motion-fast').trim()
+    return { xs: style.getPropertyValue('--varia-size-xs').trim(), fastZero: /^0m?s$/.test(fast), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
+  })).toEqual({ xs: '11px', fastZero: true, reduced: true })
   expect(await statusBar(page).evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
   expect(await statusBarEdge()).toBe('1px solid rgb(38, 42, 49)')
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())

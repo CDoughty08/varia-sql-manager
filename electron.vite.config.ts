@@ -12,8 +12,8 @@ export const cspMeta: Plugin = {
 }
 
 const vendoredDomPurify = /\/monaco-editor\/esm\/vs\/base\/browser\/dompurify\/dompurify\.js$/
-// DOMPurify's own statement of its version, as written, bundled or minified.
-const domPurifyVersion = /\.version\s*=\s*["'](\d+\.\d+\.\d+)["'][,;]\s*[\w$]+\.removed\s*=\s*\[\]/g
+// DOMPurify's own statement of its version, as written, bundled or minified (Vite 8's minifier quotes it with backticks).
+const domPurifyVersion = /\.version\s*=\s*["'`](\d+\.\d+\.\d+)["'`][,;]\s*[\w$]+\.removed\s*=\s*\[\]/g
 
 /** The versions of every DOMPurify copy in `code`. */
 export const domPurifyVersions = (code: string) => [...code.matchAll(domPurifyVersion)].map(match => match[1])
@@ -21,7 +21,9 @@ export const domPurifyVersions = (code: string) => [...code.matchAll(domPurifyVe
 /**
  * Monaco sanitises markdown (hovers, suggestion details) with a DOMPurify it vendors, 3.4.15 in Monaco 0.57, which no
  * package.json override reaches. This resolves that file to the installed dompurify package (the same 3.x API; package.json
- * and tests/dependency-floors.test.ts hold its version), and refuses a bundle that ships any other copy.
+ * and tests/dependency-floors.test.ts hold its version), and refuses a bundle that ships any other copy, or in which it reads no
+ * copy at all: the renderer always ships Monaco's sanitiser, so finding none means the version pattern no longer matches the
+ * minifier's output (as when Vite 8 began quoting it with backticks) and the check would otherwise pass without checking.
  */
 export function patchedDomPurify(): Plugin {
   const installed = () => (JSON.parse(readFileSync('node_modules/dompurify/package.json', 'utf8')) as { version: string }).version
@@ -39,11 +41,14 @@ export function patchedDomPurify(): Plugin {
     },
     generateBundle(_, bundle) {
       const expected = installed()
+      let found = 0
       for (const [file, chunk] of Object.entries(bundle)) {
         if (chunk.type !== 'chunk') continue
-        const other = domPurifyVersions(chunk.code).filter(version => version !== expected)
+        const versions = domPurifyVersions(chunk.code), other = versions.filter(version => version !== expected)
+        found += versions.length
         if (other.length) this.error(`${file} ships DOMPurify ${other.join(', ')}, not the installed ${expected}.`)
       }
+      if (!found) this.error('The bundle names no DOMPurify version, so the DOMPurify check cannot run: the version pattern in electron.vite.config.ts no longer matches the built code, or the renderer no longer bundles the sanitiser Monaco uses.')
     }
   }
 }
@@ -51,7 +56,7 @@ export function patchedDomPurify(): Plugin {
 export default defineConfig({
   main: {},
   preload: {
-    build: { rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }
+    build: { rolldownOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }
   },
   renderer: {
     plugins: [react(), cspMeta, patchedDomPurify()],
