@@ -77,7 +77,7 @@
       ]
     },
     {
-      "name": "JSON typing: a number of more than 15 significant digits is a string, which no reader parsing numbers to doubles can round",
+      "name": "JSON typing: a number of more than 15 significant digits is a string, whose digits no reader parsing numbers to doubles can change",
       "columns": [
         {"name": "whole", "dataType": "decimal(38,0)", "wire": "text"},
         {"name": "fine", "dataType": "decimal(38,18)", "wire": "text"},

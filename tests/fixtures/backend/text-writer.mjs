@@ -12,7 +12,7 @@ const encoder = new TextEncoder()
 const bytes = text => encoder.encode(text)
 const numberTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
 const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
-// A JSON number keeps its value through a double (how most readers parse one) at 15 significant digits or fewer.
+// A JSON number keeps its digits through a double (how most readers parse one) at 15 significant digits or fewer.
 const keepsValue = text => text.split(/[eE]/)[0].replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 15
 const hexDigits = bytes('0123456789ABCDEF')
 const B = { tab: 9, lf: 10, cr: 13, quote: 34, comma: 44, backslash: 92 }

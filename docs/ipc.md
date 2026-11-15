@@ -2014,7 +2014,7 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits (which any reader parsing numbers as doubles keeps exactly), otherwise a string, so one column can hold both; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits (which a reader parsing numbers as doubles reads back as the same digits), otherwise a string, so one column can hold both; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 

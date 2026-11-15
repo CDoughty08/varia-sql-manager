@@ -433,9 +433,10 @@ internal sealed class ResultTextWriter
         return i == text.Length;
     }
 
-    /// <summary>Whether a JSON number keeps its value through a double, which is how most JSON readers parse one (JavaScript's
-    /// JSON.parse, a fraction in Python, spreadsheets): one of 15 significant digits or fewer does (DBL_DIG). A bigint,
-    /// decimal, numeric or money value with more is written as a string instead, so no reader rounds it.</summary>
+    /// <summary>Whether a JSON number keeps its digits through a double, which is how most JSON readers parse one (JavaScript's
+    /// JSON.parse, a fraction in Python, spreadsheets): one of 15 significant digits or fewer reads back as the same digits
+    /// (DBL_DIG). A bigint, decimal, numeric or money value with more is written as a string instead, whose digits no reader
+    /// can change.</summary>
     public static bool KeepsValue(ReadOnlySpan<byte> number)
     {
         int digits = 0, first = -1, last = -1;
