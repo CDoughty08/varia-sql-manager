@@ -1091,7 +1091,7 @@ Outcome, accepted by the owner:
         Update); a machine with few cores, Linux and macOS measured against the 250 ms condition; a Pivot shown in a
         popout or a docked pane counts by the same model, not by what is on screen (`ResultVisibilityService` knows the
         latter, for the backend's packing).
-18. **Integration. Merged as #520.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
+18. **Integration. Delivered as #520.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
     - **What PR 18 settled or left** (`tests/results-caption.test.ts`' naming lint holds its one new check):
       - Removed: the smoke locators `comparisonGrids` and `transposedGrid` (`scripts/fixtures/ui.mjs`), which no suite
