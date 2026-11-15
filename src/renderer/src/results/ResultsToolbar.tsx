@@ -106,7 +106,8 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
     if (mode === current) return
     const command = choices.find(choice => choice.mode === mode)?.command ?? choices.find(choice => choice.mode === current)?.command
-    if (command) void commands.execute(command, undefined, 'toolbar')
+    // The toolbar's own tab, which a refused Sort Text By tells why (the toolbar is no output view focusedOutput finds).
+    if (command) void commands.execute(command, { tabId }, 'toolbar')
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return

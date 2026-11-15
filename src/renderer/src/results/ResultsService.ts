@@ -1508,16 +1508,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const cancel = () => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
       run.sorting.delete(index)
-      ticket?.end('cancelled')
+      // Cancelling while the view kept was built from the rows that had arrived, and they are all in now, keeps a view
+      // nothing builds again (refreshSorts skipped it while this ran): the notice says so, as Save Results As does.
+      const partial = !!current?.view && current.stale && set.handle.getSnapshot().state === 'complete'
+      ticket?.end(partial ? { cancelled: `${action === 'sort' ? 'Sort' : 'Filter'} cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.` } : 'cancelled')
       controller.abort()
       this.keepLastView(tabId, run, index, set)
     }
-    // Cancelling the rebuild of a view built from the rows that had arrived keeps that view, which nothing builds again.
-    const partial = !!current?.view && current.stale && set.handle.getSnapshot().state === 'complete'
-    ticket = this.operations.begin(tabId, {
-      kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel,
-      ...partial ? { cancelled: `${action === 'sort' ? 'Sort' : 'Filter'} cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.` } : {}
-    })
+    ticket = this.operations.begin(tabId, { kind: action, target: entryName(set), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })
     controller.signal.addEventListener('abort', () => ticket?.end('dropped'), { once: true })
     // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
     // backend built it cannot take the shown view with it.

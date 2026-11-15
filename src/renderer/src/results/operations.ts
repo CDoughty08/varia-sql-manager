@@ -53,9 +53,10 @@ export interface OperationTicket {
   end(outcome?: OperationOutcome): void
 }
 
-export type OperationOutcome = 'done' | 'cancelled' | 'dropped'
+/** How it ended; a cancel that kept something other than the previous view says what, in place of its kind's sentence. */
+export type OperationOutcome = 'done' | 'cancelled' | 'dropped' | { readonly cancelled: string }
 
-interface Entry { operation: ResultOperation; readonly cancel: () => void; readonly cancelled?: string; show?: unknown; hide?: unknown; shownAt?: number }
+interface Entry { operation: ResultOperation; readonly cancel: () => void; show?: unknown; hide?: unknown; shownAt?: number }
 
 const nouns: Readonly<Record<OperationKind, { readonly doing: string; readonly done: string; readonly cancelled: string }>> = {
   sort: { doing: 'Sorting', done: 'Sorted', cancelled: 'Sort cancelled. The grid kept its previous order.' },
@@ -97,14 +98,12 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
     this.now = o.now ?? (() => Date.now())
   }
 
-  /** Starts tracking an operation; `cancel` stops it (the strip's Cancel, Escape in the grid). `cancelled` replaces the
-   *  kind's sentence for a cancel that keeps something other than the previous view. */
-  begin(tabId: string, o: { kind: OperationKind; target: string; entry?: EntryKey; column?: number; cancel: () => void; cancelled?: string }): OperationTicket {
+  /** Starts tracking an operation; `cancel` stops it (the strip's Cancel, Escape in the grid). */
+  begin(tabId: string, o: { kind: OperationKind; target: string; entry?: EntryKey; column?: number; cancel: () => void }): OperationTicket {
     const id = ++this.next, at = this.now()
     const entry: Entry = {
       operation: { id, tabId, kind: o.kind, target: o.target, ...o.entry === undefined ? {} : { entry: o.entry }, ...o.column === undefined || o.column < 0 ? {} : { column: o.column }, shown: false, ending: false, startedAt: at, updatedAt: at, pulse: 0 },
-      cancel: o.cancel,
-      ...o.cancelled === undefined ? {} : { cancelled: o.cancelled }
+      cancel: o.cancel
     }
     entry.show = this.timers.setTimeout(() => this.show(entry), g.operationShowDelayMs)
     this.entries.set(id, entry)
@@ -206,9 +205,10 @@ export class ResultOperations extends SnapshotStore<Readonly<Record<string, TabO
 
   private end(entry: Entry, outcome: OperationOutcome): void {
     const { tabId, kind } = entry.operation
+    const cancelled = outcome === 'cancelled' ? '' : typeof outcome === 'object' ? outcome.cancelled : undefined
     this.timers.clearTimeout(entry.show)
     // A cancel is said even before the operation showed: the user asked for it.
-    if (outcome === 'cancelled') { const said = entry.cancelled ?? nouns[kind].cancelled; this.announce(tabId, said); this.notice(tabId, said) }
+    if (cancelled !== undefined) { const said = cancelled || nouns[kind].cancelled; this.announce(tabId, said); this.notice(tabId, said) }
     else if (outcome === 'done' && entry.operation.shown) this.announce(tabId, nouns[kind].done)
     const left = entry.shownAt === undefined ? 0 : g.operationMinShownMs - (this.now() - entry.shownAt)
     if (left <= 0 || outcome !== 'done') {

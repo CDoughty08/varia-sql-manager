@@ -123,7 +123,7 @@ describe('result operations', () => {
 
   it('says what a cancel kept when it was not the previous view', () => {
     const { operations, tab } = fixture()
-    const ticket = operations.begin('t1', { kind: 'filter', target: 'Result 1', entry: e1, cancel: () => ticket.end('cancelled'), cancelled: 'Kept the rows that had arrived.' })
+    const ticket = operations.begin('t1', { kind: 'filter', target: 'Result 1', entry: e1, cancel: () => ticket.end({ cancelled: 'Kept the rows that had arrived.' }) })
     operations.cancel('t1', ticket.id)
     expect(tab()?.notice).toBe('Kept the rows that had arrived.')
   })

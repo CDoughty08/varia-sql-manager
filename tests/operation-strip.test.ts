@@ -59,6 +59,15 @@ describe('operation strip', () => {
     act(() => { cancel.click() })
     expect(cancel.isConnected).toBe(false)
     expect(document.activeElement).toBe(grid)
+    // A Cancel the user left before its operation ended gives nothing: the focus stays where they put it.
+    const next = operations.begin('a', { kind: 'filter', target: 'Result 1', entry: 'e1' as EntryKey, cancel: () => {} })
+    tick(g.operationShowDelayMs)
+    const again = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel filter, Result 1"]')!
+    act(() => { again.focus() })
+    act(() => { again.blur() })
+    act(() => { next.end('dropped') })
+    expect(again.isConnected).toBe(false)
+    expect(document.activeElement).not.toBe(grid)
     act(() => root.unmount())
     grid.remove()
   })

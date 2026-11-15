@@ -1956,6 +1956,25 @@ describe('results service busy state', () => {
     expect(await service.saveAs('t1', key, 'SQLQuery1')).toBe('The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.')
   })
 
+  it('decides what a cancel kept when it is cancelled: rows that all came in during a sort leave the partial view', async () => {
+    const { service, client, flush, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsAvailable: 1 }) })
+    flush()
+    const handle = client.handle(1)!, key = keyAt(service, 't1', 0)
+    handle.sort.mockResolvedValueOnce(fakeView(handle, 1, [{ column: 1, descending: false, mode: 'value' }], false))
+    service.sortBy('t1', key, 1, 'ascending')
+    await settle()
+    // Sorted again while rows still arrive; the set completes during that sort (refreshSorts leaves a running one alone).
+    handle.sort.mockReturnValueOnce(deferred<ResultView>().promise)
+    service.sortBy('t1', key, 1, 'descending')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1) })
+    handle.snapshot = { ...handle.snapshot, state: 'complete' }
+    timers.advance(300)
+    service.operations.cancel('t1', service.operations.getSnapshot().t1!.items[0]!.id)
+    expect(service.operations.getSnapshot().t1?.notice).toBe('Sort cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.')
+  })
+
   it('cancels with the strip or Escape, keeping the previous view and saying so; a failure drops the operation silently', async () => {
     const { service, handle, key, ops, flush, tab, timers } = busy()
     const first = fakeView(handle, 1, [{ column: 0, descending: false, mode: 'value' }])

@@ -20,7 +20,8 @@ export default function OperationStrip({ tabId }: { tabId: string }) {
   // The display clock for the elapsed time, as the run summary's; progress itself comes only from the backend.
   const now = useTicker(shown.some(item => !item.ending))
   // A Cancel that goes while it has the keyboard focus (pressed, or its operation ended) gives the focus to the grid that
-  // last had it, as Escape in the search box does, not to the page. Chromium may not blur an element it removes, so each
+  // last had it, as Escape in the search box does, not to the page; one the user left first (a blur while it is still in
+  // the page) gives nothing. Chromium may not blur an element it removes, so each
   // commit looks for the button.
   const anchor = useRef<HTMLSpanElement>(null), focused = useRef<HTMLButtonElement | null>(null)
   useLayoutEffect(() => {
@@ -34,7 +35,7 @@ export default function OperationStrip({ tabId }: { tabId: string }) {
   })
   return <>
     {shown.map(item => <Strip key={item.id} item={item} now={now} cancel={() => results.operations.cancel(tabId, item.id)}
-      onFocus={button => { focused.current = button }} />)}
+      onFocus={button => { focused.current = button }} onBlur={button => { if (focused.current === button && button.isConnected) focused.current = null }} />)}
     {state?.notice && <div className="op-strip op-notice">{state.notice}</div>}
     <Announcer key={tabId} anchor={anchor} text={state?.announcement ?? ''} announced={state?.announced ?? 0} />
   </>
@@ -47,7 +48,7 @@ function Announcer({ anchor, text, announced }: { anchor: React.Ref<HTMLSpanElem
   return <span ref={anchor} className="visually-hidden" aria-live="polite" data-announced={announced}>{announced > shownAt ? text : ''}</span>
 }
 
-function Strip({ item, now, cancel, onFocus }: { item: ResultOperation; now: number; cancel: () => void; onFocus: (button: HTMLButtonElement) => void }) {
+function Strip({ item, now, cancel, onFocus, onBlur }: { item: ResultOperation; now: number; cancel: () => void; onFocus: (button: HTMLButtonElement) => void; onBlur: (button: HTMLButtonElement) => void }) {
   const name = `${operationNoun(item.kind)} ${item.target}`, phase = item.ending ? 'Done' : phaseText(item.phase)
   const elapsed = Math.max(now, item.updatedAt) - item.startedAt
   const percent = item.percent
@@ -61,6 +62,6 @@ function Strip({ item, now, cancel, onFocus }: { item: ResultOperation; now: num
     {percent !== undefined && <span className="op-percent">{percent}%</span>}
     {!item.ending && elapsed >= g.operationElapsedMs && <span className="op-elapsed">{formatElapsed(elapsed)}</span>}
     {!item.ending && <button type="button" aria-label={`${cancelNames[item.kind]}, ${item.target}`} title="Cancel (Esc in the grid)" onClick={cancel}
-      onFocus={event => onFocus(event.currentTarget)}>Cancel</button>}
+      onFocus={event => onFocus(event.currentTarget)} onBlur={event => onBlur(event.currentTarget)}>Cancel</button>}
   </div>
 }
