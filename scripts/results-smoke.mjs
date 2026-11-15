@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -1889,14 +1889,18 @@ try {
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Yellow', exact: true }).click()
   await expect(grid().locator(gridPart.highlightedRow)).toHaveCount(1)
-  // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transposed; the grid's menu has it too.
+  // A toolbar too narrow for every tool (Windows CI's display) folds Transposed into ⋯; the grid's menu has it too. Headers
+  // appearing beside it may fold both away once there, so Headers is then chosen from the grid's menu as well.
+  const headersTool = name => resultsToolbar(page).getByRole('button', { name: `Headers: ${name}`, exact: true })
   const byToolbar = await show('Transposed').isVisible()
   if (byToolbar) {
     await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'false')
     await show('Transposed').click()
-    await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'true')
-    await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: Row number', exact: true })).toBeVisible()
+    // Headers shows beside it, or there was no room for it and Transposed and Headers folded into ⋯ (the toolbar still fits).
+    await expect.poll(async () => await headersTool('Row number').isVisible() || /\bview\b/.test((await resultsToolbarFit(page)).fold)).toBe(true)
+    expect((await resultsToolbarFit(page)).fits).toBe(true)
   } else await (await transposeMenu(cell(0, 0), 'Transposed', 'menuitemcheckbox')).click()
+  const headersByToolbar = byToolbar && await headersTool('Row number').isVisible()
   await expect(turned()).toHaveCount(1)
   // Still the run's one grid: the result's cells by their own row and column, its columns named down the frozen column.
   await expect(anyResultGrid(page)).toHaveCount(1)
@@ -1926,11 +1930,11 @@ try {
   await (await transposeMenu(nameCell('name'), 'Using Column as Headers')).click()
   await expect(grid().getByRole('columnheader', { name: new RegExp(`^${firstName}`) })).toHaveCount(1)
   await expect(drawnHeader('Row 1')).toHaveCount(0)
-  if (byToolbar) await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true })).toBeVisible()
+  if (headersByToolbar) await expect(headersTool('name')).toBeVisible()
   // The header column is still drawn as a row.
   await expect(transposedCell(grid(), 0, 1)).toHaveText(firstName)
   // Choose Headers lists Row number and the columns, on the current one; Row number brings "Row N" back.
-  if (byToolbar) await resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true }).click()
+  if (headersByToolbar) await headersTool('name').click()
   else await (await transposeMenu(transposedCell(grid(), 0, 0), 'Choose Headers…')).click()
   await expect(quickInputActive(page)).toContainText('name')
   await quickInputRows(page).filter({ hasText: 'Row number' }).click()
@@ -2561,7 +2565,7 @@ try {
   await page.keyboard.press('Escape')
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 1')).toBeFocused()
-  // The toolbar's Compare gives way below 1180px (a CI runner's window can be narrower), so the window is made wide enough.
+  // The toolbar folds Compare into ⋯ when it is narrow (a CI runner's window can be), so the window is made wide enough.
   await resize(1280, 800)
   const compareTool = resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })
   await compareTool.click()

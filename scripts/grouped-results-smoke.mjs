@@ -450,11 +450,12 @@ try {
   expect((await resultsToolbarFit(popout)).fits).toBe(true)
   expect(await searchPlaceholderFit(popout)).toMatchObject({ fits: true })
   // A group growing from inside a toolbar already as wide as its pane (Headers appearing, a pressed choice turning bold;
-  // here 400 px, past what the search box can give) folds it again rather than push ⋯ past its clipped edge.
-  const grown = resultsToolbar(popout).getByRole('group', { name: 'White space', exact: true }), before = (await resultsToolbarFit(popout)).fold
-  expect(before).not.toMatch(/\bspace\b/)
+  // here the Show group, which folds last, by 400 px, past what the search box can give) folds it again rather than push ⋯
+  // past its clipped edge, and unfolds it when the group shrinks back.
+  const grown = resultsToolbar(popout).getByRole('group', { name: 'Show', exact: true }), before = (await resultsToolbarFit(popout)).fold
+  expect(before).not.toMatch(/\bshow\b/)
   await grown.evaluate(group => { const wide = group.ownerDocument.createElement('span'); wide.dataset.smokeGrowth = ''; wide.style.cssText = 'display: inline-block; width: 400px'; group.append(wide) })
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
   expect((await resultsToolbarFit(popout)).fits).toBe(true)
   await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
   await resultsToolbar(popout).evaluate(tools => tools.querySelector('[data-smoke-growth]').remove())
