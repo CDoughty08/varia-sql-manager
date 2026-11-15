@@ -26,6 +26,7 @@ internal static class WorkerGateChecks
     {
         Shares(check);
         Unstarted(check);
+        Dropped(check);
         QueuedFirst(check);
         Refused(check);
         Crowded(check);
@@ -101,6 +102,32 @@ internal static class WorkerGateChecks
         lease.Dispose();
         check(open == (4, 4, 3) && closed == (1, 1, 0) && late == (false, 1, 1) && gate.Busy == 0,
             "a step's owner never waits for workers the thread pool has not run: closing gives their threads back, and they do nothing when they run: " + open + " " + closed + " " + late);
+    }
+
+    private static void Dropped(Action<bool, string> check)
+    {
+        // Workers taken back when their step closed stay in the thread pool's queue until a thread reaches them, long after
+        // the step on a busy machine. They hold nothing the step's body captured: a read's raw pages stayed reachable from
+        // them, so packing its result freed nothing until the pool caught up (FusedReadChecks.SnapshotKeepsNoBodies).
+        var queued = new List<IThreadPoolWorkItem>();
+        var gate = new Gate(() => 4, queued.Add);
+        WeakReference captured;
+        using (var lease = gate.Take(4)) captured = RunCapturing(lease);
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        var freed = !captured.IsAlive;
+        foreach (var item in queued) item.Execute();
+        check(queued.Count == 3 && freed && gate.Busy == 0,
+            "workers still queued when their step ends hold nothing its body or state captured, so a read's pages are freed while the thread pool is busy: " + queued.Count + " queued, freed " + freed);
+        GC.KeepAlive(queued);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference RunCapturing(Gate.Lease lease)
+    {
+        var page = new byte[4096];
+        var sum = 0;
+        lease.For(16, () => page, (index, own) => sum += own[index], CancellationToken.None);
+        return new WeakReference(page);
     }
 
     private static void QueuedFirst(Action<bool, string> check)

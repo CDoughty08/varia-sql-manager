@@ -285,6 +285,7 @@ internal static partial class ViewSorter
                 step.Work(owner: true);
                 Close();
                 done.Wait();
+                step.Drop();
                 step.Failure?.Throw();
             }
 
@@ -324,6 +325,19 @@ internal static partial class ViewSorter
         {
             private int next, failed;
             public ExceptionDispatchInfo? Failure;
+            // Workers the owner's Close took back stay in the thread pool's queue until a thread reaches them, which on a
+            // busy machine is long after the step ended; they then do nothing (Begin). The step lets go of its body and
+            // state when it ends, so those queued items no longer hold what the body captured: a read's pages (whose raw
+            // bytes packing would free), its rooms, its keys.
+            private Func<TState>? state = state;
+            private Action<int, TState>? body = body;
+
+            /// <summary>Lets go of the body and state once every worker has stopped (the owner's Done).</summary>
+            public void Drop()
+            {
+                state = null;
+                body = null;
+            }
 
             public override void Execute()
             {
@@ -349,10 +363,10 @@ internal static partial class ViewSorter
                         if (index >= items) return;
                         if (!made)
                         {
-                            own = state();
+                            own = state!();
                             made = true;
                         }
-                        body(index, own);
+                        body!(index, own);
                     }
                 }
                 catch (Exception error)

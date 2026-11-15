@@ -1528,7 +1528,8 @@ itself by view position.
     one of its runs ends, which for a profile that started first is about when it ends.
   - A failure or cancellation stops the step's workers at their next item and is rethrown, as itself, once they have
     all stopped; every thread is back when the step returns. Workers still queued to the thread pool when a step closes
-    are given back at once (the owner never waits for a starved pool to run them), a lease over its share hands back a
+    are given back at once (the owner never waits for a starved pool to run them) and, once the step returns, hold
+    nothing its body captured (a read's raw pages stay freeable by packing while the pool is busy), a lease over its share hands back a
     queued worker before a running one, and a worker the thread pool refuses is taken back as if never granted.
   - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
     lowering it takes effect at the workers' next items, raising it at the next such event.
