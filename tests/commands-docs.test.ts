@@ -45,7 +45,7 @@ describe('generated command documentation', () => {
       const title = (id: SubmenuId) => submenus[id].dynamicTitle === 'scriptAs' ? 'Script … as' : submenus[id].title
       for (const id of submenuIds.filter(id => submenus[id].placements.some(placement => placement.menu === menu))) expect(section.replaceAll('**', ''), `${menu}: ${id}`).toContain(`| ${title(id)} › | Submenu: `)
     })
-    for (const menu of contextMenuIds) expect(menus).toMatch(new RegExp(`#### .* \\(\`${menu.replace('.', '\\.')}\`\\)\n\nRight-click `))
+    for (const menu of contextMenuIds) expect(menus).toMatch(new RegExp(`#### .* \\(\`${menu.replace('.', '\\.')}\`\\)\n\n(Right-c|C)lick `))
     expect(menus).toContain('| `z_quit` | E**x**it | `window.close` | Windows only |')
     expect(menus).toContain('| `z_quit` | **Q**uit | `window.close` | Linux only |')
     expect(menus).toContain('| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == \'server\' \\|\\| explorerNode == \'background\'` |')

@@ -425,7 +425,8 @@ export type ResultsFormat = 'csv' | 'tsv' | 'json'
 export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[]; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export.
  *  `transposed` and `headerColumn` are as a copy's. */
-export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; viewId?: number; transposed?: boolean; headerColumn?: number }
+/** `suggestedSuffix` ends `suggestedName` and tells results apart ('-Result2-Pivot'): main never cuts it when it shortens the name. */
+export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; suggestedSuffix?: string; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** `rows`: the result's rows written. `partial`: the set was still open, so open-ended selections ended at the rows stored
  *  then. `capped`: the rows a transposed copy or save left out, for lying past the rows a transposed grid draws (0 otherwise). */
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean; capped: number }

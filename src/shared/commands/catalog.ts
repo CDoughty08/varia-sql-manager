@@ -951,7 +951,7 @@ export const commandCatalog = {
   'output.closeResults': {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy',
     unavailableHint: 'There are no results to close, or the query is still running.',
-    menus: [{ menu: 'output.context', group: 'z_close', order: 2, mnemonic: 'l', when: "outputView != 'live' && !outputGridBare" }]
+    menus: [{ menu: 'output.context', group: 'z_close', order: 2, mnemonic: 'l', when: "outputView != 'live' && !outputGridBare" }, { menu: 'output.tools', group: 'z_close', order: 1, mnemonic: 'l' }]
   },
   // Closes the view the grid shows (ResultsService.removeEntry): a Table closes its group, its Pivot with it; a Pivot or a
   // comparison closes alone.
@@ -963,11 +963,11 @@ export const commandCatalog = {
   // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
   'output.showSpaces': {
     title: 'Show Spaces and Tabs in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'spaces', 'tabs', 'grid'], toggled: 'resultsWhitespaceSpaces',
-    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'b', when: "outputView == 'grid' || outputView == 'live'" }]
+    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'b', when: "outputView == 'grid' || outputView == 'live'" }, { menu: 'output.tools', group: '4_text', order: 1, title: 'Show Spaces and Tabs', mnemonic: 's' }]
   },
   'output.showAllWhitespace': {
     title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
-    toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid' || outputView == 'live'" }]
+    toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid' || outputView == 'live'" }, { menu: 'output.tools', group: '4_text', order: 2, title: 'Show All White Space', mnemonic: 'w' }]
   },
   // Sorting a grid (results.view): the menu's column, else the active cell's. Sort replaces the grid's sort; Then Sort adds
   // the column as a further key. A header's sort button does the same with a click, and Shift+click (grid.addSortKey).
@@ -1060,10 +1060,10 @@ export const commandCatalog = {
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {
-    title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'
+    title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars', menus: [{ menu: 'output.tools', group: '4_text', order: 3, title: 'Sort Text by Characters', mnemonic: 'r' }]
   },
   'output.sortTextByBytes': {
-    title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
+    title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes', menus: [{ menu: 'output.tools', group: '4_text', order: 4, title: 'Sort Text by Bytes', mnemonic: 'y' }]
   },
   // Highlights (results PR 8): the selected rows of a grid whose result has every row take a colour, kept on each row by its
   // identity (a unique key column, else the whole row) through sorts and re-runs. Highlight Rows uses the last colour
@@ -1111,13 +1111,13 @@ export const commandCatalog = {
   // key in the grid menu, so Copy Column Name takes y and Transpose n, leaving p for it.
   'output.compare': {
     title: 'Compare Results…', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result', 'table', 'pick', 'swap'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 9, title: 'Compare…', mnemonic: 'p', when: "outputView == 'grid' && !outputGridBare" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 9, title: 'Compare…', mnemonic: 'p', when: "outputView == 'grid' && !outputGridBare" }, { menu: 'output.tools', group: '2_view', order: 2, title: 'Compare…', mnemonic: 'c' }]
   },
   // Opens the pivot builder on the grid's group (PivotService); Build Pivot there shows the pivot (results.pivot) under
   // the group's Table, in place of the Pivot it had. Offered for a Table or its Pivot, never for a Peek grid.
   'output.pivot': {
     title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 10, when: "outputView == 'grid' && !outputGridBare" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 10, when: "outputView == 'grid' && !outputGridBare" }, { menu: 'output.tools', group: '2_view', order: 1, title: 'Pivot…', mnemonic: 'p' }]
   },
   // A group's Pivot is out of date once its Table's filters differ from those its last build read; Update builds it again
   // from its own recipe over the Table as filtered now, replacing it atomically (the old one stays until the new one is
@@ -1135,7 +1135,7 @@ export const commandCatalog = {
   // Choose Headers picks that column, or row numbers again, from a list.
   'output.transpose': {
     title: 'Transpose Results', category: 'Query', icon: 'transpose', keywords: ['transpose', 'transposed', 'rotate', 'swap', 'flip', 'columns', 'rows', 'record', 'grid', 'result', 'orientation'], toggled: 'resultsGridTransposed',
-    menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 1, title: 'Transposed', mnemonic: 't', when: 'outputGridTransposable' }]
+    menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 1, title: 'Transposed', mnemonic: 't', when: 'outputGridTransposable' }, { menu: 'output.tools', group: '2_view', order: 3, title: 'Transposed', mnemonic: 't' }]
   },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'],
@@ -1147,7 +1147,7 @@ export const commandCatalog = {
   },
   'output.transposeChooseHeaders': {
     title: 'Choose Headers for Transposed Results…', category: 'Query', icon: 'transpose', keywords: ['transpose', 'transposed', 'headers', 'names', 'column', 'row', 'number', 'grid'],
-    menus: [{ menu: 'output.transposeMenu', group: '2_headers', order: 2, title: 'Choose Headers…', mnemonic: 'c', when: 'outputGridTransposable' }]
+    menus: [{ menu: 'output.transposeMenu', group: '2_headers', order: 2, title: 'Choose Headers…', mnemonic: 'c', when: 'outputGridTransposable' }, { menu: 'output.tools', group: '2_view', order: 4, title: 'Choose Headers…', mnemonic: 'h', when: 'resultsGridTransposed' }]
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']
@@ -1155,12 +1155,12 @@ export const commandCatalog = {
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
-    toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }]
+    toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 1, title: 'Column Profile', mnemonic: 'f' }]
   },
   // The results toolbar's layout toggle (queryResults.grid.layout): every result stacked, or one at a time under tabs.
   'output.toggleResultsTabs': {
     title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
-    toggled: 'resultsTabs', menus: [{ menu: 'window', group: '1_panes', order: 9, title: 'Results as Tabs', mnemonic: 'b' }]
+    toggled: 'resultsTabs', menus: [{ menu: 'window', group: '1_panes', order: 9, title: 'Results as Tabs', mnemonic: 'b' }, { menu: 'output.tools', group: '1_layout', order: 1, title: 'Results as Tabs', mnemonic: 'b' }]
   },
   // Moving through the Tabs layout without the mouse, from the grid or the editor: the next or previous result or
   // comparison tab (a result's tab shows the view it last showed), the selected result's other view (Table and Pivot), and
@@ -1226,11 +1226,11 @@ export const commandCatalog = {
   },
   'output.goToResult': {
     title: 'Go to Result…', category: 'Query', icon: 'search', keywords: ['tab', 'result', 'overflow', 'picker', 'list', 'find', 'pivot', 'comparison', 'jump'], precondition: 'resultsTabs && hasResultSets',
-    unavailableHint: 'Show results as tabs, with results to go to.', keybindings: [{ key: 'mod+shift+o' }], menus: [{ menu: 'window', group: '1_panes', order: 10, mnemonic: 'g' }]
+    unavailableHint: 'Show results as tabs, with results to go to.', keybindings: [{ key: 'mod+shift+o' }], menus: [{ menu: 'window', group: '1_panes', order: 10, mnemonic: 'g' }, { menu: 'output.tools', group: '1_layout', order: 2, mnemonic: 'g' }]
   },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
-    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }]
+    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 2, title: 'Row Size', mnemonic: 'z' }]
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
