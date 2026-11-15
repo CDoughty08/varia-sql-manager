@@ -259,3 +259,29 @@ describe('saved profile startup reconnect preference', () => {
     expect(view.documents.get(siblingId)).toMatchObject({ connectionId: undefined, targetId, attachWanted: false, database: 'Archive' })
   })
 })
+
+describe('Reset and the form environment', () => {
+  const type = async (input: HTMLInputElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  it('forgets the environment the user set before Reset, so typing that server again shows and keeps its saved label', async () => {
+    const saved: ConnectionProfile = { id: id(9), options: { ...connectionDefaults('win32'), server: 'sql-prod-01', environment: 'Production' }, favorite: false, registered: false }
+    const view = await mount(undefined, { profiles: [saved] })
+    const server = () => view.host.querySelector<HTMLInputElement>('#connect-server')!
+    const environment = () => view.host.querySelector<HTMLSelectElement>('#connect-environment')!
+    await type(server(), 'sql-prod-01')
+    await act(async () => view.button('Custom Properties').click())
+    expect(environment().value).toBe('Production')
+    await act(async () => { environment().value = 'Staging'; environment().dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => view.button('Reset').click())
+    // Typed again after Reset, the server shows its saved label once more, and Connect does not claim the form set one.
+    await type(server(), 'sql-prod-01')
+    expect(environment().value).toBe('Production')
+    await act(async () => view.button('Connect').click())
+    expect(view.api.connect).toHaveBeenCalledTimes(1)
+    expect(view.api.connect.mock.calls[0]?.[1]).not.toHaveProperty('setsEnvironment')
+  })
+})
