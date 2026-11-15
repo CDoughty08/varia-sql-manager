@@ -429,6 +429,11 @@ try {
   await expect(resultsToolsMenu(popout).getByRole('menuitemcheckbox', { name: 'Results as Tabs', exact: true })).toHaveAttribute('aria-checked', 'true')
   await popout.keyboard.press('Escape')
   await expect(resultsToolsMenu(popout)).toHaveCount(0)
+  // Narrower still, White space folds away with the toolbar's Tab stop, and ⋯ takes it, so Tab still reaches the toolbar.
+  await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '-1')
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(420, 480) })
+  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/\bspace\b/)
+  await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
   await popoutDockButton(popout).click()
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()
   console.log('Grouped results checks: popped out, Results shows the same names, and its toolbar folds to the width of the popout with ⋯ opening there.')

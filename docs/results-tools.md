@@ -283,9 +283,10 @@ the view the same way ("Copying Pivot of Result 2… 40%"):
 
 - A name keeps its number beside it when the name alone would not tell the file apart: another result of the run has a
   name that makes the same file name (case aside, as Windows and macOS compare file names: "Totals" and "totals" save as
-  `SQLQuery1-Totals-Result1` and `SQLQuery1-totals-Result3`), or the name was cut.
+  `SQLQuery1-Totals-Result1` and `SQLQuery1-totals-Result3`), the name is what another result's file is called anyway
+  (a result named "Result2" beside an unnamed Result 2, "Totals-Pivot" beside the Pivot of "Totals"), or the name was cut.
 - A name takes at most 64 characters of the file name; a longer one is cut there and numbered. Characters no file name
-  may hold (`\ / : * ? " < > |`) become `_`; a name of nothing else is named by its number instead.
+  may hold (`\ / : * ? " < > |`) become `_`, and trailing dots go; a name of nothing else is named by its number instead.
 - The whole stays within what Windows, Linux and macOS allow (128 characters, and 240 bytes with the extension): a long
   query tab name gives way first, then the result's name, never the part that tells results apart (`-Result2-Pivot`).
 

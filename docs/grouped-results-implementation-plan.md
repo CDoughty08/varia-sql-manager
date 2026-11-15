@@ -904,8 +904,9 @@ Outcome, accepted by the owner:
         Table or Pivot drawn so. A named result's name stands where its number was (`{tab}-Open orders`,
         `{tab}-Open orders-Pivot`), per the named results scope. Its number stays beside it (`{tab}-Totals-Result3`)
         when another Table of the run has a name that makes the same file name (case aside, after refused characters
-        become `_`) or the name was cut at 64 characters; a name of nothing but refused characters, dots or spaces is named
-        by its number. The renderer bounds the whole to main's 128 UTF-16 units and to 235 UTF-8 bytes (main's 240 less
+        become `_`), when the name is a tail another entry's file takes by its number or name (`#Result2` beside an
+        unnamed Result 2, `Totals-Pivot` beside the Pivot of Totals; `saveTails`), or when the name was cut at 64
+        characters; trailing dots go, and a name of nothing but refused characters, dots or spaces is named by its number. The renderer bounds the whole to main's 128 UTF-16 units and to 235 UTF-8 bytes (main's 240 less
         `.json`), cutting the tab's name first, then the result's, between code points, so main never cuts it.
       - Main keeps the whole suffix: the save request gained `suggestedSuffix` (it ends `suggestedName`; zod refuses one
         that does not), which `sanitizeFileName` never cuts; a request without one keeps a `-Result{n}` it ends in. The

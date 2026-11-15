@@ -94,6 +94,8 @@ export function fitFold(overflows: (fold: number) => boolean, most: number = too
 }
 /** The `data-fold` words for folding that far ('layout tight view'), which styles.css hides and tightens by. */
 export const foldWords = (fold: number): string => toolbarFolds.slice(0, fold).join(' ')
+/** Whether ⋯ is the toolbar's Tab stop: once folding that far hides White space, whose chosen button is the stop. */
+export const moreIsTabStop = (fold: number): boolean => fold > toolbarFolds.indexOf('space')
 
 /**
  * Folds the toolbar to its width (`fitFold`) whenever it, its head or what shares the head changes size: the pane resized,
@@ -109,18 +111,22 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     const fit = () => {
       const fold = fitFold(trial => { element.dataset.fold = foldWords(trial); return element.scrollWidth > element.clientWidth + 0.5 })
       element.dataset.fold = foldWords(fold)
+      // Once White space folds away its chosen button, the toolbar's Tab stop, goes with it: ⋯ takes the stop. React
+      // never sets the button's tabIndex again (its prop does not change), so this stays until the next fold.
+      const more = element.querySelector<HTMLButtonElement>('.results-more')
+      if (more) more.tabIndex = moreIsTabStop(fold) ? 0 : -1
     }
     fit()
-    let watched: { dispose(): void }[] = []
+    let watched: { dispose(): void } | undefined
     const watch = () => {
-      for (const one of watched) one.dispose()
-      watched = [head, ...head.children].map(child => observeResize(child, fit))
+      watched?.dispose()
+      watched = observeResize([head, ...head.children], fit)
     }
     watch()
     const view = head.ownerDocument.defaultView
     const added = view ? new view.MutationObserver(() => { watch(); fit() }) : undefined
     added?.observe(head, { childList: true })
-    return () => { added?.disconnect(); for (const one of watched) one.dispose() }
+    return () => { added?.disconnect(); watched?.dispose() }
   }, [])
   return useCallback((element: HTMLDivElement | null) => { toolbar.current = element }, [])
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildMenuModel, contextMenuIds } from '../src/shared/commands/menus'
-import { fitFold, foldWords, toolbarFolds } from '../src/renderer/src/results/ResultsToolbar'
+import { fitFold, foldWords, moreIsTabStop, toolbarFolds } from '../src/renderer/src/results/ResultsToolbar'
+import { jobText } from '../src/renderer/src/results/OutputPane'
 import { argsFor, menuForTarget } from '../src/renderer/src/menus/targets'
 
 describe('results toolbar in a narrow pane', () => {
@@ -13,6 +14,9 @@ describe('results toolbar in a narrow pane', () => {
     expect(toolbarFolds).toEqual(['layout', 'tight', 'view', 'sort', 'space', 'show'])
     expect(foldWords(0)).toBe('')
     expect(foldWords(3)).toBe('layout tight view')
+    // White space holds the toolbar's Tab stop; once it folds away, ⋯ takes the stop, so the toolbar stays reachable.
+    expect(toolbarFolds.map((_, fold) => moreIsTabStop(fold + 1))).toEqual([false, false, false, false, true, true])
+    expect(moreIsTabStop(0)).toBe(false)
   })
   it('keeps every tool in reach from the ⋯ menu, Show Results as Tabs first, acting on the toolbar\'s query', () => {
     expect(contextMenuIds).toContain('output.tools')
@@ -25,5 +29,10 @@ describe('results toolbar in a narrow pane', () => {
         'output.toggleColumnProfile', 'output.toggleRowSize', '-', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', '-', 'output.closeResults'
       ])
     }
+  })
+  it("keeps a job's progress apart from its name, so a long name never hides it", () => {
+    const job = { jobId: 'j', kind: 'copy', entry: 'e', label: 'x'.repeat(128), rowsDone: 37, rowsTotal: 100, startedAt: 0, visible: true } as const
+    expect(jobText(job)).toEqual({ what: `Copying ${'x'.repeat(128)}…`, done: '37% (37 of 100 rows)' })
+    expect(jobText({ ...job, kind: 'save', fileName: 'w1.csv' }).what).toBe('Saving w1.csv…')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fileNamePart, sameFileName, saveName, saveNameLimits } from '../src/renderer/src/results/save-names'
+import { fileNamePart, nameMeetsOthers, sameFileName, saveName, saveNameLimits, saveTails } from '../src/renderer/src/results/save-names'
 import { sanitizeFileName } from '../src/main/file-names'
 
 const bytes = (text: string) => new TextEncoder().encode(text).length
@@ -34,6 +34,9 @@ describe('Save Results As names', () => {
       expect(saveName('SQLQuery1', { view: 'table', number: 4, name })).toEqual({ name: 'SQLQuery1-Result4', suffix: '-Result4' })
     expect(fileNamePart('***')).toBeUndefined()
     expect(fileNamePart(' x? ')).toBe('x_')
+    // Trailing dots go, as Windows drops them: 'Totals.' would otherwise suggest 'SQLQuery1-Totals..csv'.
+    expect(fileNamePart('Totals. .')).toBe('Totals')
+    expect(file('SQLQuery1', { view: 'table', number: 1, name: 'Totals.' }, 'csv')).toBe('SQLQuery1-Totals.csv')
     // A Windows device name as the result's name is safe after the tab's name; only a file that starts with one is not.
     expect(file('SQLQuery1', { view: 'table', number: 1, name: 'CON' }, 'csv')).toBe('SQLQuery1-CON.csv')
   })
@@ -43,6 +46,21 @@ describe('Save Results As names', () => {
     expect(sameFileName('Totals', 'Totals 2')).toBe(false)
     expect(sameFileName('???', '***')).toBe(false)
     expect(sameFileName(undefined, 'Totals')).toBe(false)
+  })
+  it("knows a name that is another entry's file, by its number or its name", () => {
+    expect(saveTails({ view: 'table', number: 2 })).toEqual(['result2', 'result2-transposed'])
+    expect(saveTails({ view: 'pivot', number: 1, name: 'Totals' })).toEqual(['result1-pivot', 'totals-pivot', 'totals-result1-pivot', 'result1-pivot-transposed', 'totals-pivot-transposed', 'totals-result1-pivot-transposed'])
+    expect(saveTails({ view: 'comparison', number: 3 })).toEqual(['differences3'])
+    // '#Result2' beside an unnamed Result 2, '#Differences1' beside the first comparison, 'Totals-Pivot' beside the Pivot of
+    // Totals, 'Totals-Transposed' beside Totals drawn transposed: each would suggest the other's file.
+    expect(nameMeetsOthers({ view: 'table', number: 1, name: 'result2' }, [{ view: 'table', number: 2 }])).toBe(true)
+    expect(nameMeetsOthers({ view: 'table', number: 1, name: 'Differences1' }, [{ view: 'comparison', number: 1 }])).toBe(true)
+    expect(nameMeetsOthers({ view: 'table', number: 2, name: 'Totals-Pivot' }, [{ view: 'pivot', number: 1, name: 'Totals' }])).toBe(true)
+    expect(nameMeetsOthers({ view: 'table', number: 2, name: 'Totals-Transposed' }, [{ view: 'table', number: 1, name: 'Totals' }])).toBe(true)
+    expect(nameMeetsOthers({ view: 'table', number: 4, name: 'Totals-Result1' }, [{ view: 'table', number: 1, name: 'Totals' }])).toBe(true)
+    // Its own Pivot, and names that only look alike, do not.
+    expect(nameMeetsOthers({ view: 'table', number: 1, name: 'Totals' }, [{ view: 'pivot', number: 1, name: 'Totals' }, { view: 'table', number: 2, name: 'Totals 2' }])).toBe(false)
+    expect(nameMeetsOthers({ view: 'comparison', number: 1 }, [{ view: 'table', number: 1, name: 'Differences1' }])).toBe(false)
   })
   it('bounds a 128-character name: cut to its limit and numbered, the tab giving way first', () => {
     const long = 'Open orders awaiting approval by the regional finance team before the end of the quarter, by region and by month'.padEnd(128, '!')

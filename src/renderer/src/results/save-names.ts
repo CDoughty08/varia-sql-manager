@@ -38,17 +38,36 @@ function longest(text: string, fit: (kept: string) => boolean): string {
 
 /**
  * A result's name as a file name holds it: each character no file name may hold becomes `_` (as main's sanitizeFileName
- * does), spaces are kept. Undefined when nothing of the name would be left to read: all of it refused characters, dots or
- * spaces, so the file is named by the result's number instead.
+ * does), spaces are kept, and trailing dots go (Windows drops them, and before the extension they would read '..csv').
+ * Undefined when nothing of the name would be left to read: all of it refused characters, dots or spaces, so the file is
+ * named by the result's number instead.
  */
 export function fileNamePart(name: string | undefined): string | undefined {
-  const cleaned = name?.replace(unsafeFileNameChars, '_').trim()
+  const cleaned = name?.replace(unsafeFileNameChars, '_').trim().replace(/[. ]+$/, '')
   return cleaned && /[^_.\s]/u.test(cleaned) ? cleaned : undefined
 }
 /** Whether two results' names make the same file name: case aside, since Windows and macOS file names ignore it. */
 export const sameFileName = (a: string | undefined, b: string | undefined): boolean => {
   const x = fileNamePart(a), y = fileNamePart(b)
   return x !== undefined && y !== undefined && x.toLowerCase() === y.toLowerCase()
+}
+
+/** The tails (after `{tab}-`, case aside) a subject's file may take: by its number, by its name, or by both, drawn
+ *  transposed or not. Two entries whose tails meet would suggest one file. */
+export function saveTails(subject: SaveSubject): string[] {
+  if (subject.view === 'comparison') return [`differences${subject.number}`]
+  const extra = subject.view === 'pivot' ? '-pivot' : '', name = fileNamePart(subject.name)?.toLowerCase(), numbered = `result${subject.number}${extra}`
+  return ['', '-transposed'].flatMap(turned => [numbered + turned, ...name === undefined ? [] : [`${name}${extra}${turned}`, `${name}-${numbered}${turned}`]])
+}
+/** Whether `subject`'s name, as a file would hold it, is a tail another entry's file may take ('Result2' beside an
+ *  unnamed Result 2, 'Totals-Pivot' beside the Pivot of Totals, 'Totals-Result1' beside a numbered Totals), so it keeps
+ *  its number. */
+export function nameMeetsOthers(subject: SaveSubject, others: readonly SaveSubject[]): boolean {
+  if (subject.view === 'comparison') return false
+  const name = fileNamePart(subject.name)?.toLowerCase()
+  if (name === undefined) return false
+  const extra = subject.view === 'pivot' ? '-pivot' : '', mine = [name + extra, name + extra + '-transposed']
+  return others.some(other => saveTails(other).some(tail => mine.includes(tail)))
 }
 
 /**

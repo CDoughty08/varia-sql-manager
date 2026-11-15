@@ -17,7 +17,7 @@ import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, typ
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
-import { sameFileName, saveName, type SaveSubject } from './save-names'
+import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -999,12 +999,24 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  and its name when the query gave one, numbered too when another result's name makes the same file name), a
    *  comparison by its place among the run's comparisons. */
   private saveSubject(run: Run, set: ResultSetEntry, transposed: boolean): SaveSubject {
+    const subject = this.namingOf(run, set)
+    if (subject.view === 'comparison') return subject
+    const table = subject.table, name = subject.name
+    // Two tables whose names make one file name both keep their numbers, and so do their Pivots; so does a name that is a
+    // tail another entry's file takes by its number or its name (`#Result2` beside an unnamed Result 2).
+    const collides = name !== undefined && (run.sets.some(other => other !== table && run.slots.get(other.key)?.view === 'table' && sameFileName(queryName(other), name))
+      || nameMeetsOthers(subject, run.sets.filter(other => other !== set).map(other => this.namingOf(run, other))))
+    return { view: subject.view, number: subject.number, ...name === undefined ? {} : { name }, ...collides ? { collides } : {}, ...transposed ? { transposed } : {} }
+  }
+
+  /** An entry as Save Results As names it, before collisions: a Table or Pivot by its group's Table, a comparison by its
+   *  place among the run's comparisons. */
+  private namingOf(run: Run, set: ResultSetEntry): SaveSubject & { table?: ResultSetEntry } {
     const record = run.slots.get(set.key)
     if (record?.view === 'comparison') return { view: 'comparison', number: record.made ?? 1 }
     const table = record?.view === 'pivot' ? run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'table' && slot.group === record.group }) : set
     const number = table?.number ?? record?.sources[0]?.number ?? set.number, name = table ? queryName(table) : undefined
-    const collides = name !== undefined && run.sets.some(other => other !== table && run.slots.get(other.key)?.view === 'table' && sameFileName(queryName(other), name))
-    return { view: record?.view === 'pivot' ? 'pivot' : 'table', number, ...name === undefined ? {} : { name }, ...collides ? { collides } : {}, ...transposed ? { transposed } : {} }
+    return { view: record?.view === 'pivot' ? 'pivot' : 'table', number, ...name === undefined ? {} : { name }, ...table ? { table } : {} }
   }
 
   /**

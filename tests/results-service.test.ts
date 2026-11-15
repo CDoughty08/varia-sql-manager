@@ -435,6 +435,17 @@ describe('results service', () => {
     flush()
     expect(tab().jobs.at(-1)).toMatchObject({ kind: 'copy', label: 'Differences: Result 2 → totals (Result 3)' })
   })
+  it("keeps the number of a name that is another entry's file: '#Result2' beside an unnamed Result 2", async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { name: 'Result2' }), descriptor(2, { index: 1 }), descriptor(3, { index: 2, name: 'Differences1' }), descriptor(4, { index: 3, name: 'Open orders.' })]) })
+    service.addSet('t1', descriptor(901, { index: 0, kind: 'diff' }), 'Differences: Result2 (Result 1) → Result 2', ['1:1', '1:2'])
+    flush()
+    for (const number of [1, 2, 3, 4]) await service.saveAs('t1', tab().sets.find(set => set.number === number)!.key, 'SQLQuery1')
+    expect(api.saveResults.mock.calls.map(([request]) => [request.suggestedName, request.suggestedSuffix])).toEqual([
+      ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
+    ])
+  })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
     const saved: unknown[] = []
