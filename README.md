@@ -101,8 +101,9 @@ Certificate validation is enabled by default. For a trusted server with a self-s
 
 Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palette. See the [command reference](docs/commands.md) for shortcuts and available commands.
 SSMS's default query shortcuts (Alt+F1 `sp_help`, Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`) are palette commands instead:
-**New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock** open a new query on the current
-connection with the `EXEC` call, ready to run with **F5**. Ctrl+1 to Ctrl+9 pick query tabs and results.
+**New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock** open a new query on the connection
+and database New Query would use, holding the `EXEC` call, ready to run with **F5**. `sp_lock` is deprecated and does
+not exist in Azure SQL Database; query `sys.dm_tran_locks` there. Ctrl+1 to Ctrl+9 pick query tabs and results.
 
 Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
 app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).
