@@ -98,6 +98,8 @@ being true.
   receipts and acknowledges them through the bounded main-only IPC. `docs/connection-ownership.md` describes main's
   authentication, receipt, checkpoint and pruning contracts. Replacement pages reconcile obsolete pins against their
   trusted saved workspace while protecting current live/pending/delivered owners, including late credential settlement.
+  A disk restore pins Windows/Entra accounts only when `connection-workspace-seal.ts`'s OS-key HMAC proves main wrote
+  them; an unproven silent target never reconnects in the background.
 - Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
   targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
   validate that pinned principal before caller SQL. Entra uses target-private token-callback pool keys while preserving

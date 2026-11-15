@@ -380,8 +380,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
-    hotExit: () => api.hotExit ? keptSession(documents, id => connections.get(id)?.server, {
-      pinnedOnly: !settings.get('environment.documents.hotExit'), connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady()
+    hotExit: (final = true) => api.hotExit ? keptSession(documents, id => connections.get(id)?.server, {
+      pinnedOnly: !settings.get('environment.documents.hotExit'), connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady(final)
     }) : undefined
   })
   const recentFiles = new RecentFilesService(api)

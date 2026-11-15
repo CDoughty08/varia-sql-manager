@@ -7,7 +7,8 @@ import { StartupReconnectService, type StartupReconnectAttempt, type StartupReco
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const record = (value: number, patch: Partial<PersistedConnectionTarget> = {}): PersistedConnectionTarget => ({
   id: id(value), options: { server: 'sql-prod', database: 'Sales', authentication: 'windows', trustServerCertificate: false },
-  details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true, ...patch
+  details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
+  expectedPrincipal: { provider: 'sqlServer', authentication: patch.options?.authentication ?? 'windows', id: 'DOMAIN\\alex' }, ...patch
 })
 const credential = { profileId: id(90), revision: id(91) }
 const saved = (value: number) => record(value, {
@@ -30,6 +31,12 @@ function fixture(records: readonly PersistedConnectionTarget[], globalDefault = 
 }
 
 describe('startup reconnect scheduling', () => {
+  it('skips a target without its previous account, which main would refuse in the background', () => {
+    const { service, attempts } = fixture([record(1, { expectedPrincipal: undefined }), record(2)])
+    service.start(1)
+    expect(attempts.map(attempt => attempt.target.id)).toEqual([id(2)])
+  })
+
   it('defaults on and describes the global preference in Options', () => {
     expect(defaultSettings['environment.connections.autoReconnect']).toBe(true)
     expect(settingDef('environment.connections.autoReconnect')).toMatchObject({ page: 'environment.connections', type: 'boolean' })
