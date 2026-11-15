@@ -294,7 +294,8 @@ on a machine other sessions shared; `orders` packs 2.05 times.
 - **A diff in about its pages' order holds 35 to 89 MiB instead of both results' growth** (1 and 4.2 GiB) and costs
   13 to 27 % more time than rehydrating both. The comparison reads the first result in the second's order through a few
   kept pages a run (`LeftSlots`), and the unified result, written on one thread, has each side's pages unpacked ahead on
-  the workers (two batches of rooms, taken only from memory the budget can spare). Without that the writer unpacked
+  the workers (two batches of rooms, taken only from memory the budget can spare and given back when it has none).
+  Without that the writer unpacked
   every page itself on one thread, and the in-order diff took 1.62 s at 1 GiB and 6.6 s at 4 GiB.
 - **A diff whose first result is read far from its pages' order unpacks that result in place**, as before, after
   counting the unpacks its order would cost (`ResultDiffer.Local`: past four a page). It holds what unpacking the first

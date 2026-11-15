@@ -162,7 +162,8 @@ internal sealed class RowAccess
         /// <summary>Packed pages this reader has unpacked.</summary>
         public long Unpacked => packed.Unpacked + AheadUnpacked;
         /// <summary>Packed pages unpacked ahead (<see cref="Ahead"/>).</summary>
-        public long AheadUnpacked => ahead?.Unpacked ?? 0;
+        public long AheadUnpacked => aheadBefore + (ahead?.Unpacked ?? 0);
+        private long aheadBefore;
         /// <summary>Packed pages this thread unpacked itself.</summary>
         public long Behind => packed.Unpacked;
 
@@ -202,6 +203,16 @@ internal sealed class RowAccess
             lengths = stored.Lengths;
             if (ahead is not null && ahead.TryRead(page, out var view)) return view;
             return packed.Read(stored);
+        }
+
+        /// <summary>Gives the rooms unpacked ahead back once the budget has no spare memory left, so the rows being written
+        /// get the room they would have had without them; this reader then unpacks its pages itself.</summary>
+        public void YieldAhead()
+        {
+            if (ahead is null || rooms!.Set.HasSpare) return;
+            ahead.Dispose();
+            aheadBefore += ahead.Unpacked;
+            ahead = null;
         }
 
         public void Dispose()
@@ -731,6 +742,9 @@ internal static class UnifiedDiff
             {
                 if (++counter == 1 << 10) { counter = 0; token.ThrowIfCancellationRequested(); }
                 if (!shown[k]) continue;
+                // Before each row, not each thousand: one row can be up to a page.
+                leftReader.YieldAhead();
+                rightReader.YieldAhead();
                 var entry = model.Entries[k];
                 var cells = model.CellsOf(entry);
                 var stored = entry.Kind switch

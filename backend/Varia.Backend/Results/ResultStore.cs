@@ -381,6 +381,15 @@ internal sealed partial class ResultStore
     /// <param name="checkSystem">Whether to ask the system's memory load too. By default as working memory is asked
     /// (<see cref="WorkCheckBytes"/> or more): what is taken in small pieces (a sort key's pages) asks once for every
     /// that much taken, so a busy machine does not lose a few kilobytes that make a sort many times faster.</param>
+    /// <summary>Whether both budgets are still short of the eighth <see cref="TryReserveSpare"/> leaves free: once either
+    /// reaches it, memory taken as spare is better given back to the operation's own work.</summary>
+    public bool HasSpare(QueryBudget query)
+    {
+        var budget = Volatile.Read(ref figures);
+        var limit = Math.Min(budget.Query, query.MaxBytes);
+        return query.UsedBytes <= limit - limit / 8 && UsedBytes <= budget.Global - budget.Global / 8;
+    }
+
     public bool TryReserveSpare(QueryBudget query, long bytes, bool? checkSystem = null)
     {
         var budget = Volatile.Read(ref figures);

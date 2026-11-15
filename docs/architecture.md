@@ -275,7 +275,8 @@ being true.
   the first result in place instead (`TryUnpackAll`; refused, `TOO_LARGE`). The unified result is written on one
   thread, so each side's packed pages are unpacked ahead on the workers in the order the writer reads them
   (`PageAhead`, two batches of rooms, as a pivot's in-order pass, taken only from memory the budget can spare,
-  `TryReserveSpare`; without it the writer unpacks them itself). Rooms ask the system's memory load once for
+  `TryReserveSpare`, and given back once the budget reaches the eighth it leaves free, `HasSpare`, so the output keeps
+  its room; without them the writer unpacks pages itself). Rooms ask the system's memory load once for
   every `WorkCheckBytes` they take together, so many small rooms are refused under load as one large reservation would
   be. A distinct snapshot keeps its result's pages, not their bytes (`KeptPages`): its later reads and value searches go
   in row order through one `ReadRoom`, each page unpacked once, and it never holds page bytes after the result is packed

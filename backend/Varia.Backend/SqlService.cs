@@ -1893,9 +1893,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         // A view whose order is far from its pages' (a sort) would unpack a page for most rows it reads fused, so a packed
         // result is unpacked first then, its pages charged; in base order or near it, the search reads it fused.
-        if (view is not null && set.HasPacked && !ResultSearcher.Local(pages, view.Order)) await Unpack(ResultSearcher.TooLarge, token, set);
+        // Counted once: after an unpack nothing is packed, so the search reads its pages as they are either way.
+        if (view is not null && set.HasPacked && !ResultSearcher.Local(pages, view.Order, token)) await Unpack(ResultSearcher.TooLarge, token, set);
         var stopped = ResultSearcher.Stopped(store, set, view);
-        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
+        var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped, local: true), token), ResultSearcher.TooLarge);
         // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
         if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
         if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
@@ -1987,7 +1988,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            snapshot = await UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, set);
+            snapshot = await LowMemoryAware(UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, set), ViewSorter.DistinctTooLarge);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
             // Cancelled once built: nobody waits for it, so it is not kept.
@@ -2077,7 +2078,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!store.TryReserveWork(set.Budget, working + kept))
             throw TooLarge(RowIdentity.TooLarge);
         (int Column, bool Unique, bool Approximate, long[] Ids) built;
-        try { built = await UntilReleased(work => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, work), token, set); }
+        try { built = await LowMemoryAware(UntilReleased(work => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, work), token, set), RowIdentity.TooLarge); }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -2201,6 +2202,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
     /// because the machine is short of memory, which closing results here may not cure.</summary>
     private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
+
+    /// <summary>An operation refused inside (a room, a column extract) answers as one refused before it began: the
+    /// low-memory sentence while the machine is short of memory, its own sentence otherwise.</summary>
+    private async Task<T> LowMemoryAware<T>(Task<T> operation, string sentence)
+    {
+        try { return await operation; }
+        catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == sentence) { throw TooLarge(sentence); }
+    }
 
     internal const string LowMemory = "The computer is low on memory, so there is no room to do this now. Close other programs or other results and try again.";
 

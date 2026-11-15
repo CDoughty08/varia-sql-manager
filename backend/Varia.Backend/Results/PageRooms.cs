@@ -138,6 +138,10 @@ internal sealed class RoomReader(PageRooms? rooms, int columns, int slots = 1) :
     /// <summary>Packed pages this reader has unpacked.</summary>
     public long Unpacked { get; private set; }
 
+    /// <summary>For checks: run between asking whether a page is packed and reading it, where another operation may unpack
+    /// it in place.</summary>
+    internal Action? BeforeRead { get; init; }
+
     /// <summary>A page, as sealed. Read only while its set is pinned.</summary>
     public PageView Read(StoredPage page)
     {
@@ -156,7 +160,11 @@ internal sealed class RoomReader(PageRooms? rooms, int columns, int slots = 1) :
         var room = held[slot] ??= rooms.Rent();
         // Not the old page's any more, whether or not the new one unpacks.
         kept[slot] = null;
-        set.Read(page, room.Bytes);
+        // Another operation may have unpacked the page in place since Raw was asked (pins allow it): then Read answers
+        // the page's own array, read as a sealed page is, and the room keeps nothing.
+        BeforeRead?.Invoke();
+        var body = set.Read(page, room.Bytes);
+        if (!ReferenceEquals(body, room.Bytes)) return PageView.Parse(body, columns, scratch);
         var view = PageView.Parse(room.Bytes.AsSpan(0, page.Length), columns, room.Layout);
         kept[slot] = page;
         blobStarts[slot] = view.BlobStart;
@@ -182,7 +190,8 @@ internal sealed class RoomReader(PageRooms? rooms, int columns, int slots = 1) :
 /// batch while the reader reads the one before, as a pivot's in-order pass does (<see cref="ViewSorter.PageSource.InOrder"/>).
 /// Its two batches of rooms only make the read faster, so they are taken together from memory the budget can spare
 /// (<see cref="ResultSetBuffer.TryReserveSpare"/>) or not at all (<see cref="TryStart"/> answers null and the reader
-/// unpacks its pages itself): they never take room the operation's own output needs. <see cref="TryRead"/> serves the
+/// unpacks its pages itself), and the reader gives them back once the budget reaches that free eighth
+/// (<see cref="ResultSetBuffer.HasSpare"/>), so the operation's own output keeps the room it would have had. <see cref="TryRead"/> serves the
 /// page being read, the pages of its batch already reached, and the next one listed; any other page is the caller's to
 /// read (false). Disposing it waits for a
 /// batch still being unpacked and gives the rooms back.</summary>
@@ -253,7 +262,9 @@ internal sealed class PageAhead : IDisposable
         threads.For(count, k =>
         {
             var page = pages[uses[from + k]];
-            set.Read(page, bytes[into, k]);
+            // A page unpacked in place meanwhile answers its own array: copied, so the batch reads like any other.
+            var body = set.Read(page, bytes[into, k]);
+            if (!ReferenceEquals(body, bytes[into, k])) body.AsSpan(0, page.Length).CopyTo(bytes[into, k]);
             blobStarts[into, k] = PageView.Parse(bytes[into, k].AsSpan(0, page.Length), columns, layouts[into, k]).BlobStart;
         }, token);
         Interlocked.Add(ref unpacked, count);

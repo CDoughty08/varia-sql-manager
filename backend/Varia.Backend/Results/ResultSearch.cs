@@ -59,7 +59,7 @@ internal static class ResultSearcher
     /// outcome is the one a single pass gives.</summary>
     /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
-    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool? local = null)
     {
         var columns = set.Wires.Count;
         using var pin = set.Pin();
@@ -77,8 +77,9 @@ internal static class ResultSearcher
         long From(int run) => rows * run / runs;
         // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
         // reads base order or a view near it). Through a view far from its pages' order (Local) SqlService unpacks the result
-        // first; a caller that did not reads its pages through the set's accessor and its cache, as before fused reads.
-        using var rooms = view is not null && !Local(pages, view.Order) ? null : PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
+        // first (and passes what it found as local); a caller that did not reads its pages through the set's accessor and its
+        // cache, as before fused reads.
+        using var rooms = view is not null && !(local ?? Local(pages, view.Order, token)) ? null : PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
         if (rooms is not null) slots = Math.Min(slots, PackedSlots);
         void Read(int run)
@@ -269,7 +270,7 @@ internal static class ResultSearcher
     /// <see cref="PackedSlots"/> direct-mapped slots, at most <see cref="UnpacksPerPage"/> unpacks a packed page (rows past
     /// the pages skipped). A filter of a result in its own order is; a sort is not. Counted from the row numbers alone, and
     /// stopped once past the allowance. The caller holds the set's pin.</summary>
-    public static bool Local(StoredPage[] pages, int[] order)
+    public static bool Local(StoredPage[] pages, int[] order, CancellationToken token = default)
     {
         var starts = new long[pages.Length];
         var packed = new bool[pages.Length];
@@ -285,8 +286,10 @@ internal static class ResultSearcher
         Span<int> held = stackalloc int[PackedSlots];
         held.Fill(-1);
         long unpacks = 0;
+        var counter = 0;
         foreach (var row in order)
         {
+            if (++counter == 1 << 16) { counter = 0; token.ThrowIfCancellationRequested(); }
             if (row >= rows) continue;
             var index = Array.BinarySearch(starts, (long)row);
             if (index < 0) index = ~index - 1;

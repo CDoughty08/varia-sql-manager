@@ -24,6 +24,124 @@ internal static partial class FusedReadChecks
         }
         CancelledWhole(check);
         RefusedWhole(check);
+        UnpackedMeanwhile(check);
+        LowMemoryWhole(check);
+        using (ViewSorter.WorkersHere(4)) AheadGivesWay(check);
+    }
+
+    /// <summary>Column 3 of every row of a page, as text.</summary>
+    private static string Cells(PageView view)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var row = 0; row < view.Rows; row++) text.Append(System.Text.Encoding.UTF8.GetString(view.Span(3, row))).Append('|');
+        return text.ToString();
+    }
+
+    /// <summary>A packed page another operation unpacks in place (pins allow it) after a fused reader asked whether it is
+    /// packed reads as the page's own bytes, never a room's stale ones.</summary>
+    private static void UnpackedMeanwhile(Action<bool, string> check)
+    {
+        var raw = PairOf(false, false);
+        string[] expected;
+        using (raw.Left.Pin()) expected = [.. raw.Left.SealedSnapshot().Select(page => Cells(PageView.Parse(page.Body(), raw.Left.Wires.Count)))];
+
+        // A reader's room: the first page read fills it, the second (unpacked meanwhile) must not be read from it.
+        var pair = PairOf(true, false);
+        using (pair.Left.Pin())
+        {
+            var pages = pair.Left.SealedSnapshot();
+            var columns = pair.Left.Wires.Count;
+            using var rooms = PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", "refused"))!;
+            var unpack = false;
+            using var reader = new RoomReader(rooms, columns) { BeforeRead = () => { if (unpack) { unpack = false; pair.Left.TryUnpackAll(); } } };
+            var first = Cells(reader.Read(pages[0]));
+            unpack = true;
+            var second = Cells(reader.Read(pages[1]));
+            var third = Cells(reader.Read(pages[2]));
+            check(first == expected[0] && second == expected[1] && third == expected[2] && !pair.Left.HasPacked,
+                "a fused reader reads a page unpacked in place between its check and its read as the page's own rows");
+        }
+
+        // Pages unpacked ahead: a batch unpacked after the result was unpacked in place reads the pages' own rows.
+        var ahead = PairOf(true, false);
+        using (ahead.Left.Pin())
+        {
+            var pages = ahead.Left.SealedSnapshot();
+            var columns = ahead.Left.Wires.Count;
+            using var one = ViewSorter.WorkersHere(1);
+            using var reader = PageAhead.TryStart(ahead.Left, pages, [.. Enumerable.Range(0, pages.Length)], pages.Max(page => page.Length), columns, CancellationToken.None)!;
+            ahead.Left.TryUnpackAll();
+            var same = true;
+            for (var i = 0; i < pages.Length; i++) same &= reader.TryRead(i, out var view) && Cells(view) == expected[i];
+            check(same && !ahead.Left.HasPacked, "pages unpacked ahead after their result was unpacked in place read as the pages' own rows");
+        }
+    }
+
+    /// <summary>Through the service, a distinct list, row identities and a search refused room inside the operation answer
+    /// the low-memory sentence while the computer is short of memory, as a refusal before the operation does.</summary>
+    private static void LowMemoryWhole(Action<bool, string> check)
+    {
+        var low = false;
+        var store = new ResultStore(256L << 20, 256L << 20, () => (low ? 100 : 0, 50)) { Packing = PagePacking.OnRequest };
+        var set = Filled(store, "low whole", Rows);
+        set.Pack();
+        using var service = new SqlService(store);
+        var filler = store.BeginQuery("filler");
+        string? Asked(string method, object args, long room)
+        {
+            store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - room, false, out _);
+            try { service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+            finally { store.Return(filler, filler.UsedBytes); }
+        }
+        var asks = new (string Method, object Args, long Room, string Sentence)[]
+        {
+            ("results.distinct", new { resultId = set.ResultId, column = 3 }, ViewSorter.DistinctWorkingBytes(Rows) + 1024, ViewSorter.DistinctTooLarge),
+            ("results.identify", new { resultId = set.ResultId, by = "auto" }, RowIdentity.WorkingBytes(Rows) + 8L * Rows + ResultStore.ViewOverhead + 1024, RowIdentity.TooLarge),
+            ("results.search", new { resultId = set.ResultId, text = "word7", fromRow = 0, maxMatches = 10 }, 1024, ResultSearcher.TooLarge),
+        };
+        foreach (var ask in asks)
+        {
+            var budget = Asked(ask.Method, ask.Args, ask.Room);
+            low = true;
+            var pressed = Asked(ask.Method, ask.Args, ask.Room);
+            low = false;
+            check(budget == "TOO_LARGE: " + ask.Sentence && pressed == "TOO_LARGE: " + SqlService.LowMemory && set.HasPacked,
+                ask.Method + " of a packed result refused room inside names the budget, or the computer's memory when that is low: " + budget + " | " + pressed);
+        }
+    }
+
+    /// <summary>A unified diff's rooms unpacked ahead are spare memory: once its rows reach the eighth spare memory leaves
+    /// free they are given back, so rows that fit without them are written.</summary>
+    private static void AheadGivesWay(Action<bool, string> check)
+    {
+        var pair = PairOf(true, true, bytes: 64L << 20);
+        var model = ResultDiffer.Compare(pair.Left, pair.Left.SealedSnapshot(), pair.Right, pair.Right.SealedSnapshot(), false, CancellationToken.None);
+        var filler = pair.Store.BeginQuery("filler");
+        (long Rows, long Bytes, DiffStages Stages) Written(long free)
+        {
+            var into = pair.Store.Open(pair.Left.Budget, 1, 1, 1, "diff", UnifiedDiff.Columns(pair.Right, model), UnifiedDiff.Wires(pair.Right, model), lengths: UnifiedDiff.Lengths(pair.Right, model), derived: true)!;
+            if (free > 0) pair.Store.TryReserve(filler, pair.Store.GlobalBytes - pair.Store.UsedBytes - free, false, out _);
+            var before = pair.Store.UsedBytes;
+            var stages = new DiffStages();
+            UnifiedDiff.Write(into, pair.Left, pair.Left.SealedSnapshot(), pair.Right, pair.Right.SealedSnapshot(), model, -1, CancellationToken.None, ResultDiffer.TooLarge, stages);
+            var written = (into.RowsAvailable, pair.Store.UsedBytes - before, stages);
+            pair.Store.Return(filler, filler.UsedBytes);
+            pair.Store.Release([into.ResultId]);
+            return written;
+        }
+        var roomy = Written(0);
+        long pageLength;
+        using (pair.Left.Pin()) pageLength = Math.Max(pair.Left.SealedSnapshot().Max(page => (long)page.Length), pair.Right.SealedSnapshot().Max(page => (long)page.Length));
+        var batch = Math.Min(PageAhead.Batch, PageCount(pair.Left));
+        var aheadBytes = 2L * batch * pageLength;
+        // Room for both sides' rooms ahead past the eighth, and for the rows only once they are given back.
+        var eighth = pair.Store.GlobalBytes / 8;
+        var free = Math.Max(eighth + 2 * aheadBytes + 2 * pageLength, roomy.Bytes + 2 * pageLength + 4 * ResultStore.ReserveStep);
+        var tight = Written(free);
+        check(free - 2 * aheadBytes < roomy.Bytes && tight.Rows == roomy.Rows && tight.Stages.WrittenAhead > 0 && tight.Stages.WrittenBehind > 0,
+            "a unified diff gives its rooms unpacked ahead back once its rows reach the budget's last eighth, and writes every row: "
+            + tight.Rows + " of " + roomy.Rows + ", " + roomy.Bytes + " bytes of rows, " + free + " free, " + aheadBytes + " a side ahead, eighth " + eighth);
     }
 
     private static readonly int[] Kept500 = [.. Enumerable.Range(0, Rows).Where(row => row % 500 != 7), .. Enumerable.Range(Rows, 40)];
@@ -277,8 +395,6 @@ internal static partial class FusedReadChecks
         check(sortedFound == Found(raw, rawSorted, "word12", 500, false) && packed.HasPacked,
             "a search through a sorted view of a packed result, unpacked by nobody first, finds what it finds unpacked and leaves it packed: "
             + (store.PackingSnapshot().PagesUnpacked - sortedBefore) + " pages unpacked");
-        {
-        }
     }
 
 
