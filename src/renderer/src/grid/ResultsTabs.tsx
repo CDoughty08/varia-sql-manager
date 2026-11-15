@@ -383,8 +383,10 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       {shown.map((item, place) => {
         const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
+        // A named result's tooltip has its whole name (the tab may cut it short) and its number; a comparison's, its name.
+        const tip = [item.number ? `${item.name} · ${item.number}` : item.comparison ? item.name : '', batch].filter(Boolean).join(' · ')
         return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined}>
-          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={batch || undefined}
+          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined}
             aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => select(item.group ? groupView(item.group) : item.key)}>
             {item.group?.planSet && <Icon name="execution-plan" />}{item.comparison && <Icon name="git-compare" />}<span className="rt-name">{item.name}</span>
           </button>
@@ -413,7 +415,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
         })}
       </div> : <span className="rt-view-label"><Icon name="git-compare" />Comparison</span>}
       <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} />
-      {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} stale={stale} running={running} refocus={refocusView} />}
+      {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={entryName(group.table.entry)} stale={stale} running={running} refocus={refocusView} />}
       <FilterChips tabId={tabId} entry={selected} name={selectedName} sort={sort} refocus={refocusView} />
       <SaveView tabId={tabId} entry={selected} name={selectedName} />
     </div>

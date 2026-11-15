@@ -99,6 +99,12 @@ export const indicators = {
   progressThin: { px: 2, use: 'The bar along the top of a results grid while an operation over its result runs, and the ring on its column\'s sort button.' }
 } as const
 
+/** `--varia-<name>`, in px: the widest some surfaces that show user text grow before the text ends in an ellipsis; the
+ *  whole text stays in their tooltip and accessible name. */
+export const widths = {
+  resultTab: { px: 240, use: 'A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound.' }
+} as const
+
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
 export interface DensityMetrics {
   /** `--varia-header`: the title bar. */
@@ -161,6 +167,7 @@ export function metricVariables(density: Density = defaultDensity): Readonly<Rec
     '--varia-motion-ease': motionEasing,
     ...Object.fromEntries(Object.entries(glyphSizes).map(([name, glyph]) => [`--varia-glyph-${name}`, px(glyph.px)])),
     ...Object.fromEntries(Object.entries(indicators).map(([name, indicator]) => [`--varia-${name}`, px(indicator.px)])),
+    ...Object.fromEntries(Object.entries(widths).map(([name, width]) => [`--varia-${name}`, px(width.px)])),
     ...densityVariables(density)
   }
 }
@@ -234,6 +241,10 @@ export function renderMetricDocs(): string {
     '## Indicators',
     '',
     table(['Token', 'px', 'Use'], Object.entries(indicators).map(([name, indicator]) => [`\`--varia-${name}\``, indicator.px, indicator.use])),
+    '',
+    '## Widths',
+    '',
+    table(['Token', 'px', 'Use'], Object.entries(widths).map(([name, width]) => [`\`--varia-${name}\``, width.px, width.use])),
     '',
     '## Bars and rows',
     '',

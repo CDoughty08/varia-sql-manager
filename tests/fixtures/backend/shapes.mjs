@@ -97,7 +97,8 @@ export const shapes = {
  * file hold/query.execute exists; `truncated=queryBudget` (or another TruncationReason) reports each set as having stopped
  * keeping rows for that reason, having read twice the rows it kept. `packed=2.4` reports every kept set but the first as
  * compressed at that ratio in results.memory's detail (the second unpacking when there are three or more), for the
- * Memory panel's Nerd metrics. Returns undefined when the script has no directive.
+ * Memory panel's Nerd metrics. `names=Open%20orders,,Totals` gives the sets, in order, the names a `#Name` marker would
+ * (each URI-encoded, empty for none), as the real backend binds them. Returns undefined when the script has no directive.
  */
 export function parseDirective(sql) {
   const match = /^--\s*varia-fake:(.*)$/m.exec(sql.split('\n', 1)[0])
@@ -108,6 +109,7 @@ export function parseDirective(sql) {
     if (key === 'hold') directive.hold = true
     else if (key === 'messages' || key === 'errors') directive[key] = Number(value)
     else if (key === 'memory') directive.memory = Number(value)
+    else if (key === 'names') directive.names = value.split(',').map(name => decodeURIComponent(name))
     else if (key === 'packed') {
       directive.packed = Number(value)
       if (!(directive.packed >= 1 && directive.packed <= 20)) throw new RangeError('A packed ratio is 1 to 20: ' + value)
@@ -126,5 +128,7 @@ export function parseDirective(sql) {
       }
     } else throw new RangeError('Unknown fake directive: ' + token)
   }
+  directive.names?.forEach((name, index) => { if (name && directive.sets[index]) directive.sets[index].name = name })
+  delete directive.names
   return directive
 }

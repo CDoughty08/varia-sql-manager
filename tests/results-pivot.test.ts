@@ -31,10 +31,10 @@ function fixture(o: { frames?: boolean; jobs?: DerivedJobs; follow?: PivotFollow
   const flush = () => { for (const frame of queued.splice(0)) frame() }
   let next = 1
   /** Runs a query of `count` complete sets of `columns`; `finish: false` leaves it running. */
-  const run = (count: number, o: { finish?: boolean; queryId?: string; columns?: ResultColumn[] } = {}) => {
+  const run = (count: number, o: { finish?: boolean; queryId?: string; columns?: ResultColumn[]; names?: Record<number, string> } = {}) => {
     const queryId = o.queryId ?? 'q1'
     results.begin('t1', queryId)
-    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns: o.columns ?? columns }))
+    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns: o.columns ?? columns, ...o.names?.[index] ? { name: o.names[index] } : {} }))
     for (const value of values) client.emit(queryId, { type: 'resultSet.opened', descriptor: value })
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
@@ -216,6 +216,24 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
     pivot.open('t1', sets[2].key)
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: table, draft: { rows: [0] } })
+  })
+
+  it("names the builder's source, the Pivot and what it says by a named Table's name, and an unnamed one's by its number", async () => {
+    const { results, pivot, run } = fixture()
+    run(2, { names: { 0: 'Open orders' } })
+    const named = keyAt(results, 't1', 0), unnamed = keyAt(results, 't1', 1)
+    pivot.open('t1', unnamed)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: unnamed, sourceName: 'Result 2' })
+    pivot.open('t1', named)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: named, sourceName: 'Open orders' })
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    await settle()
+    const made = results.getSnapshot().t1.sets[1]
+    // The title is frozen when made, from the Table's name then.
+    expect(made.label).toBe('Pivot of Open orders')
+    expect(pivot.getSnapshot().info.get(setKey(made.descriptor))).toMatchObject({ sourceLabel: 'Open orders' })
+    expect(results.getSnapshot().t1.groups[0].pivot!.sources).toEqual([expect.objectContaining({ name: 'Open orders', number: 1 })])
   })
 
   it('makes no pivot of a Pivot, a comparison or a plan set, and none in a bare run', async () => {

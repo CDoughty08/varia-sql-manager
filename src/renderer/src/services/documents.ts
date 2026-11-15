@@ -10,10 +10,17 @@ import type { Disposable } from '../core/types'
 import { gridLimits } from '../grid/constants'
 
 export const documentUri = (id: string): string => `varia-sql://query/${id}`
-/** The query a first launch opens. */
-export const welcomeQueryText = '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n'
-/** Whether `text` is still that query, whatever its line endings. */
-export const isWelcomeQuery = (text: string): boolean => text.length >= welcomeQueryText.length && text.length <= welcomeQueryText.length + 8 && text.replace(/\r\n/g, '\n') === welcomeQueryText
+/** The query a first launch opens. It names its result with a `#Name` marker, so the first run shows a named result
+ *  (docs/named-result-sets-scope.md, The default query). */
+export const welcomeQueryText = '-- Connect this query to a server and press F5 to execute.\n-- A #Name comment names the result that follows it.\n\n/* #Name="Sample Query" */\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n'
+/** The welcome query before it named its result. A session that hot exit kept with it keeps that text, as it keeps every
+ *  restored tab's text, and it is still recognised as untouched, so analysing it is still skipped. */
+export const previousWelcomeQueryText = '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n'
+const welcomeTexts = [welcomeQueryText, previousWelcomeQueryText].map(text => ({ text, lines: text.split('\n').length - 1 }))
+/** Whether `text` is still that query (or the one before it), whatever its line endings. Only a text whose length one of
+ *  them could have, with LF or CRLF line ends, is compared. */
+export const isWelcomeQuery = (text: string): boolean => welcomeTexts.some(welcome =>
+  text.length >= welcome.text.length && text.length <= welcome.text.length + welcome.lines && text.replace(/\r\n/g, '\n') === welcome.text)
 /** A Monaco model for a document's text in its language ('sql', 'xml' or 'json'). */
 export type ModelFactory = (text: string, uri: string, language: string) => editor.ITextModel
 /** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */

@@ -37,9 +37,25 @@ export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
 }
+type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> }
+// One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
+// and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
+/** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
+ *  are told apart by it. */
+export const entryNumber = (entry: Pick<ResultSetEntry, 'number'>): string => `Result ${entry.number}`
+/** The name the query gave an original result with a `#Name` marker, if it gave one. A Pivot's or a comparison's
+ *  descriptor never carries one. */
+export const queryName = (entry: Named): string | undefined => entry.descriptor?.name || undefined
 /** An entry's name: its label (the query's #Name for an original result, or Varia's name for one it made, "Pivot of
  *  Result 3"), else "Result N" by its number. */
-export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? `Result ${entry.number}`
+export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? entryNumber(entry)
+/** An original result's own title where its number named it before names existed (its splitter, its plans, its copy and
+ *  save jobs, the Column Profile, a comparison's columns not compared): the query's name for it, else "Result N". Unlike
+ *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
+export const resultTitle = (entry: Named): string => queryName(entry) ?? entryNumber(entry)
+/** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
+ *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
+export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
@@ -589,7 +605,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (snapshot.state !== 'complete') continue
         available += snapshot.rowsAvailable
         for (let row = 0; row < snapshot.rowsAvailable && sources.length < retainedPlanLimits.documentsPerRun; row++) {
-          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.number}, row ${row + 1}`,
+          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.number}${queryName(entry) ? ` (${queryName(entry)})` : ''}, row ${row + 1}`,
             captureType: entry.capturedPlan ? 'actual' : 'query-returned', batchNumber: descriptor.batchNumber, iteration: descriptor.iteration,
             generation: descriptor.generation, resultId: descriptor.resultId, row, incomplete: snapshot.incomplete,
             read: async signal => {
@@ -876,7 +892,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (parts.length === 0) return undefined
     this.cancelRunning(this.copying)
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.copying = running
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
@@ -919,7 +935,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     let saved!: () => void
     const done = new Promise<void>(resolve => { saved = resolve })
-    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: resultTitle(set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]

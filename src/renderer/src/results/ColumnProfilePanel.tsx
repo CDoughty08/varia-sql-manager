@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import { ResultError, type OperationProgressListener, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
-import { entryOf, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
+import { entryOf, filtersIdentity, resultTitle, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
 
@@ -128,7 +128,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     const wanted = columnKey ? columnKey.split(',').map(Number) : []
     // The toolbar's strip and the grid's bar show it; their Cancel (or Escape in the grid) stops it, keeping the cards it has.
     let cancelled = false, outcome: 'done' | 'dropped' = 'dropped'
-    const ticket = results.operations.begin(tabId, { kind: 'profile', target: `Result ${entry!.number}`, entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
+    const ticket = results.operations.begin(tabId, { kind: 'profile', target: resultTitle(entry!), entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
     const parts = wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]
     void (async () => {
       try {
@@ -164,7 +164,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     return () => { abort.abort(); done() }
   }, [results, tabId, base, held, filters, settled, columnKey, retry])
   const shown = profiles && profiles.base === base && profiles.of.filters === filters ? profiles : undefined
-  const name = entry ? `Result ${entry.number}` : ''
+  const name = entry ? resultTitle(entry) : ''
   const facts = shown?.rows === undefined ? '' : `${formatCount(shown.rows)} ${plural(shown.rows, 'row')}${shown.complete ? '' : ' so far'}`
   const sizes = rowSizeText(shown?.rowBytes)
   return <aside className="profile-panel" aria-label="Column profile" aria-busy={shown?.loading || undefined}>

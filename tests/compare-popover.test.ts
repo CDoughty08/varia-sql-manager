@@ -29,7 +29,7 @@ const made = (index: number): DiffAnswer => ({ descriptor: descriptor(900 + inde
 const drawnFixtures = new Set<() => void>()
 afterEach(() => { for (const unmount of drawnFixtures) unmount(); drawnFixtures.clear() })
 
-function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; open?: number } = {}) {
+function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; open?: number; names?: Record<number, string> } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
@@ -39,7 +39,7 @@ function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; 
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
   const compare = new CompareService(results, { jobs: new DerivedJobs({ timers: timers.timers }) })
   results.begin('t1', 'q1')
-  const values = Array.from({ length: o.count ?? 2 }, (_, index) => descriptor(index + 1, { index, ...o.columns?.[index] ? { columns: o.columns[index] } : {} }))
+  const values = Array.from({ length: o.count ?? 2 }, (_, index) => descriptor(index + 1, { index, ...o.columns?.[index] ? { columns: o.columns[index] } : {}, ...o.names?.[index] ? { name: o.names[index] } : {} }))
   for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })
   void results.finish('t1', 'q1', { summary: summaryOf(values) })
   const keys = results.getSnapshot().t1.sets.map(set => set.key)
@@ -471,5 +471,30 @@ describe('Compare popover placement', () => {
   })
   it('stays inside a window narrower than the card', () => {
     expect(placePopover({ ...base, width: 250, cardWidth: 234, anchor: box(200, 10, 224, 34), trigger: true }).left).toBe(8)
+  })
+})
+
+describe('Compare popover with named results', () => {
+  it('lists each target by its name with its number as secondary text, so two of one name are told apart', () => {
+    const view = fixture({ count: 4, open: 3, names: { 0: 'Totals', 2: 'Totals' } })
+    expect(view.popover()?.querySelector('h2')?.textContent).toBe('Compare Result 4 with')
+    const targets = [...view.popover()!.querySelectorAll<HTMLLabelElement>('.compare-target')]
+    expect(targets.map(target => target.querySelector('.compare-target-name')?.textContent)).toEqual(['Totals', 'Result 2', 'Totals'])
+    expect(targets.map(target => target.querySelector('.compare-target-number')?.textContent ?? null)).toEqual(['Result 1', null, 'Result 3'])
+    expect(targets[0].querySelector('.compare-target-name')?.getAttribute('title')).toBe('Totals · Result 1')
+    expect(targets[1].querySelector('.compare-target-name')?.getAttribute('title')).toBeNull()
+    view.unmount()
+  })
+  it('titles a comparison of a named result by its name, frozen when made', async () => {
+    const view = fixture({ names: { 0: 'Open orders' } })
+    expect(view.popover()?.querySelector('[aria-label="Old side"]')?.textContent).toContain('Open orders')
+    vi.mocked(view.handle(view.keys[0]).diff).mockResolvedValueOnce(made(2))
+    await act(async () => { view.button('Compare')!.click() })
+    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve() })
+    const diff = view.results.getSnapshot().t1.sets.at(-1)!
+    expect(diff.label).toBe('Differences: Open orders → Result 2')
+    const info = view.compare.getSnapshot().info.get(`${diff.descriptor.generation}:${diff.descriptor.resultId}`)
+    expect(info && [info.leftName, info.rightName]).toEqual(['Open orders', 'Result 2'])
+    view.unmount()
   })
 })

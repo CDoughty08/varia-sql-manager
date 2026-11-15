@@ -1,7 +1,7 @@
 import { Emitter } from '../core/events'
 import type { Disposable } from '../core/types'
 import { formatCount } from '../results/status'
-import { entryName, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, entrySecondary, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
 
 // The Tabs layout's navigation, without React: the top row's items, the view a group's tab selects, the next and previous
 // item and view (Next Result, Previous Result and their view commands), and the overflow picker's rows, filter and window
@@ -10,12 +10,16 @@ import { entryName, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGro
 
 export { selectedEntry }
 
-/** One item of the top row: a group (its Table and Pivot) or a comparison. */
-export interface TopItem { readonly key: EntryKey; readonly name: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
+/** One item of the top row: a group (its Table and Pivot) or a comparison. `number` is a named result's positional text
+ *  ("Result 2"), for its tooltip; an unnamed result's name is already its number. */
+export interface TopItem { readonly key: EntryKey; readonly name: string; readonly number?: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot }
 /** The top row's items in the order drawn: the groups by ordinal, the comparisons after them. */
 export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopItem[] {
   return [
-    ...tab.groups.map(group => ({ key: group.table.key, name: entryName(group.table.entry), group })),
+    ...tab.groups.map(group => {
+      const number = entrySecondary(group.table.entry)
+      return { key: group.table.key, name: entryName(group.table.entry), ...number ? { number } : {}, group }
+    }),
     ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), comparison: slot }))
   ]
 }
@@ -60,12 +64,17 @@ export function stepView(tab: Run, delta: number): EntryKey | undefined {
 }
 
 /** One row of the picker: a group's Table, its Pivot (indented under it), or a comparison. `text` is what the filter
- *  matches, in lower case: the row's whole name ("pivot of result 3") and its kind. */
+ *  matches, in lower case: the row's whole name ("pivot of result 3"), a named result's number, and its kind. */
 export interface PickerRow {
   readonly key: EntryKey
-  /** What the row shows: "Result 3", "Pivot" (under its result) or the comparison's name. */
+  /** What the row shows: "Result 3" or the query's name for it ("Open orders"), "Pivot" (under its result) or the
+   *  comparison's name. */
   readonly name: string
-  /** The row's accessible name: "Result 3, Table", "Pivot of Result 3", "Differences: Result 1 → Result 2, Comparison". */
+  /** A named result's positional text ("Result 3"), shown after its name as secondary text: two results of one name are
+   *  told apart by it. */
+  readonly number?: string
+  /** The row's accessible name: "Result 3, Table", "Open orders, Result 3, Table", "Pivot of Result 3",
+   *  "Differences: Result 1 → Result 2, Comparison". */
   readonly label: string
   /** Beside the name, muted: Table, Plan set, Out of date (a Pivot) or Comparison. */
   readonly detail: string
@@ -76,11 +85,12 @@ export interface PickerRow {
 export function pickerRows(tab: Pick<TabResults, 'groups' | 'comparisons' | 'sorts'>): PickerRow[] {
   const rows: PickerRow[] = []
   for (const group of tab.groups) {
-    const name = entryName(group.table.entry), detail = group.planSet ? 'Plan set' : 'Table'
-    rows.push({ key: group.table.key, name, label: `${name}, ${detail}`, detail, kind: group.planSet ? 'plan' : 'table', text: `${name} ${detail}`.toLowerCase() })
+    const name = entryName(group.table.entry), detail = group.planSet ? 'Plan set' : 'Table', number = entrySecondary(group.table.entry)
+    const named = number ? `${name}, ${number}` : name, words = number ? `${name} ${number}` : name
+    rows.push({ key: group.table.key, name, ...number ? { number } : {}, label: `${named}, ${detail}`, detail, kind: group.planSet ? 'plan' : 'table', text: `${words} ${detail}`.toLowerCase() })
     if (group.pivot) {
       const stale = pivotOutOfDate(tab, group), label = `Pivot of ${name}`
-      rows.push({ key: group.pivot.key, name: 'Pivot', label: stale ? `${label}, out of date` : label, detail: stale ? 'Out of date' : '', kind: 'pivot', text: `${label}${stale ? ' out of date' : ''}`.toLowerCase() })
+      rows.push({ key: group.pivot.key, name: 'Pivot', label: stale ? `${label}, out of date` : label, detail: stale ? 'Out of date' : '', kind: 'pivot', text: `${label}${number ? ` ${number}` : ''}${stale ? ' out of date' : ''}`.toLowerCase() })
     }
   }
   for (const slot of tab.comparisons) {

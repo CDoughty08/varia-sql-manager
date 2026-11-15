@@ -44,7 +44,7 @@ function source(rows: number, columns: number) {
 const descriptor = (handle: ResultHandle): ResultDescriptor => ({ generation: 1, resultId: 1, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [...handle.columns], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'complete', incomplete: false } as unknown as ResultDescriptor)
 const cells = (a: [number, number], b: [number, number] = a): GridSelection => ({ entry: 'e1', active: { row: b[0], column: b[1] }, blocks: [{ kind: 'cells', anchor: { row: a[0], column: a[1] }, focus: { row: b[0], column: b[1] } }] })
 
-function mount(o: { rows: number; columns: number; widths?: readonly number[] }) {
+function mount(o: { rows: number; columns: number; widths?: readonly number[]; resultName?: string; resultNumber?: number; resultCount?: number }) {
   const made = source(o.rows, o.columns)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
@@ -54,7 +54,7 @@ function mount(o: { rows: number; columns: number; widths?: readonly number[] })
   const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, ...o.widths ? { widths: Float64Array.from(o.widths) } : {} }
   const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn()
   const view = new GridView({
-    root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', resultNumber: 1, resultCount: 1, platform: 'win32',
+    root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', resultNumber: o.resultNumber ?? 1, resultCount: o.resultCount ?? 1, ...o.resultName ? { resultName: o.resultName } : {}, platform: 'win32',
     onSelection, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue, onSort, onFilter: () => {}
   })
   /** The reads answered and the frame after them painted. */
@@ -195,5 +195,20 @@ describe('the grid\'s seams', () => {
       expect(service.targetFor(header)!.target, Object.keys(update)[0]).toMatchObject({ column: 3 })
     }
     grid.view.dispose()
+  })
+})
+
+describe("the grid's accessible name", () => {
+  it("starts with a named result's name, then its number, and with the number alone when it has none", async () => {
+    const named = mount({ rows: 5, columns: 3, resultName: 'Open orders', resultNumber: 2, resultCount: 5 })
+    await named.frame()
+    expect(named.root.getAttribute('aria-label')).toMatch(/^Open orders, Result 2 of 5, /)
+    named.view.dispose()
+    named.root.remove()
+    const unnamed = mount({ rows: 5, columns: 3, resultNumber: 2, resultCount: 5 })
+    await unnamed.frame()
+    expect(unnamed.root.getAttribute('aria-label')).toMatch(/^Result 2 of 5, /)
+    unnamed.view.dispose()
+    unnamed.root.remove()
   })
 })

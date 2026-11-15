@@ -27,14 +27,14 @@ export const guideCatalog = {
   },
   'run-query': {
     title: 'Run your first query', summary: 'Create a query, choose its database and understand what Execute runs.',
-    keywords: ['SQL', 'selection', 'execute', 'editor', 'font', 'zoom', 'messages', 'cancel'],
+    keywords: ['SQL', 'selection', 'execute', 'editor', 'font', 'zoom', 'messages', 'cancel', 'name', '#Name'],
     sections: [{ id: 'new', title: 'Open a query' }, { id: 'execute', title: 'Choose what runs' }, { id: 'read', title: 'Read the outcome' }],
     related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: ['editor.wheelZoom'],
-    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts', 'src/renderer/src/editor/create-editor.ts']
+    sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/documents.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts', 'src/renderer/src/editor/create-editor.ts']
   },
   results: {
     title: 'Work with query results', summary: 'Sort and filter returned rows, select cells and copy with confidence.',
-    keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection', 'tabs', 'stacked', 'layout', 'pivot', 'comparison'],
+    keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection', 'tabs', 'stacked', 'layout', 'pivot', 'comparison', 'name', '#Name'],
     sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'layout', title: 'Move between results' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
     related: ['run-query'], commands: [{ id: 'output.nextResult', context: 'workbench' }, { id: 'output.previousResult', context: 'workbench' }, { id: 'output.goToResult', context: 'workbench' }, { id: 'output.goToResult1', context: 'resultsGrid' }, { id: 'output.goToLastResult', context: 'resultsGrid' }, { id: 'output.toggleResultsTabs', context: 'workbench' }, { id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
     settings: ['queryResults.grid.layout', 'queryResults.grid.includeColumnHeaders', 'queryResults.grid.discardResults'], gestures: ['grid.addToSelection'],

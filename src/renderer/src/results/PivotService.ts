@@ -92,9 +92,9 @@ interface Built { readonly result: ResultsPivotResult; readonly filters: readonl
 const recipeSpec = (recipe: PivotProvenance['recipe']): PivotSpec =>
   ({ rows: [...recipe.rows], ...recipe.column === undefined ? {} : { column: recipe.column }, values: recipe.values.map(value => ({ ...value })) }) as PivotSpec
 /** What the builder says when the user cancels a build while the group shows a Pivot, which stays. */
-const cancelledText = (group: Pick<ResultGroup, 'ordinal' | 'pivot'>) => `Building was cancelled, so ${pivotName(group)} still shows its last build.`
-/** "Pivot of Result 2": how the builder names a group's Pivot. */
-const pivotName = (group: Pick<ResultGroup, 'ordinal' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : `Pivot of Result ${group.ordinal}`
+const cancelledText = (group: Pick<ResultGroup, 'table' | 'pivot'>) => `Building was cancelled, so ${pivotName(group)} still shows its last build.`
+/** "Pivot of Result 2", "Pivot of Open orders": how the builder names a group's Pivot. */
+const pivotName = (group: Pick<ResultGroup, 'table' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : `Pivot of ${entryName(group.table.entry)}`
 
 /** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a comparison or a plan set. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
@@ -470,7 +470,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const building = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)?.text
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
-      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
+      open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: group ? entryName(group.table.entry) : `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live,
       ...live?.queued ? { queued: live.queued } : {}, ...failed ? { error: failed } : {}
     }

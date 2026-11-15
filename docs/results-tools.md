@@ -220,6 +220,36 @@ The Results tab's badge counts the query's own results, not their Pivots or comp
 After a re-run the results come back in the same order under the same names, and the result whose grid was last used
 is the one commands act on again. Pivots and comparisons are not rebuilt.
 
+## Where a result's name shows
+
+A query names a result set with a marker comment before its statement, `/* #Name="Open orders" */` or
+`-- #Name="Open orders"` (docs/named-result-sets-scope.md has the rules). A named result shows its name wherever the
+results pane says "Result 2" for an unnamed one, and keeps its number beside it where two results of one name must be
+told apart. An unnamed result reads exactly as before, and naming one result never renumbers another.
+
+| Surface | A named result |
+| --- | --- |
+| Result tab (Tabs) | The name. Its tooltip has the whole name and the number ("Open orders · Result 2"). |
+| Caption (Stacked) | The name, with "Result 2" first among its facts; the tooltip has the whole name and the number. |
+| View tabs | Table and Pivot, as before; their accessible names use the name ("Views of Open orders", "Pivot of Open orders"). |
+| Pivot | "Pivot of Open orders", in its title, the builder's source, "Out of date" and Update's tooltip ("Build Pivot of Open orders again from Open orders as it is filtered now"). |
+| Comparison | "Differences: Open orders → Result 3", its strip's links and the columns not compared ("Price (Open orders)"); a closed source reads "Open orders (closed)". |
+| Compare popover | Each result by its name, with "Result 2" beside it. |
+| Go to Result and the overflow picker | The name with "Result 2" beside it; the filter matches either ("open", "result 2"). |
+| Grid | Its accessible name starts "Open orders, Result 2 of 5, …", so a screen reader still hears the number. |
+| Column Profile, splitter, plans, copy and save strips, memory details | The name in place of "Result 2" ("Resize Open orders", "Open orders, plan 1"). |
+
+- A long name ends in an ellipsis: a result tab is at most `--varia-resultTab` wide (docs/themes/metrics.md), and a
+  caption's name gives way before its facts. The whole name stays in the tooltip and the accessible name.
+- Two results of one name keep it: nothing is renamed or numbered in the pane, and lists carry each one's number
+  ("Totals · Result 2" and "Totals · Result 5" in Go to Result, the Compare popover and the tooltips).
+- **Go to Result 1** to **8** count places in the row of tabs, whatever the results are called.
+- A Pivot's or a comparison's title is fixed when it is made: renaming the result in the query and running it again
+  does not change one that was kept.
+- Save Results As still suggests `{query}-Result2`; the name in the suggested file name comes later.
+- The query a first launch opens names its result ("Sample Query"), so the first run shows a name. A session that hot
+  exit kept with the earlier text keeps it; that text is still treated as the untouched welcome query.
+
 ## Peek's rows
 
 Peek's top rows are drawn bare: the grid alone, with no caption, close button, results toolbar or side panels. (A

@@ -7,7 +7,7 @@ import { windows } from '../core/windows'
 import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
-import { entryName, entryOf, type ResultSetEntry, type TabResults } from './ResultsService'
+import { entryName, entryOf, entrySecondary, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
@@ -252,9 +252,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           {targets.map(target => {
             // Columns of either result left out: "2 of 3 columns" counts both results' columns, a pair once.
             const paired = target.pairing.pairs.length, all = paired + target.pairing.oldOnly.length + target.pairing.newOnly.length
+            // A named result's number follows its name, so two results of one name are told apart.
+            const number = entrySecondary(target.entry)
             return <label key={target.entry.key} className={picker.target === target.entry.key ? 'compare-target picked' : 'compare-target'}>
               <input type="radio" name={ids + 'target'} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
-              <span className="compare-target-name">{entryName(target.entry)}</span>
+              <span className="compare-target-name" {...number ? { title: `${entryName(target.entry)} · ${number}` } : {}}>{entryName(target.entry)}</span>
+              {number && <small className="compare-target-number">{number}</small>}
               {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
               <small>{rows(target.entry)}</small>
             </label>

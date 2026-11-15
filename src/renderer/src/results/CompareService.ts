@@ -4,7 +4,7 @@ import { pairColumns, type ColumnPairing } from './compare-pairing'
 import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
-import { entryName, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
+import { entryName, entryOf, resultLimits, resultTitle, setKey, slotOf } from './ResultsService'
 import { formatCount } from './status'
 
 /** What a diff set compared, for its grid's strip. */
@@ -15,6 +15,9 @@ export interface CompareInfo {
   /** The numbers the compared results are named by ("Result 3"). */
   readonly leftNumber: number
   readonly rightNumber: number
+  /** What the compared results were called when they were compared ("Open orders", "Result 3"), frozen as the title is. */
+  readonly leftName?: string
+  readonly rightName?: string
   /** The column whose values matched rows; undefined when whole rows did. */
   readonly key: string | undefined
   readonly exact: boolean
@@ -330,7 +333,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (key === undefined) return undefined
       done = true
       const info: CompareInfo = {
-        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
+        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: resultTitle(from), rightName: resultTitle(to), key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
       // Only diffs some run still shows are kept.
@@ -412,15 +415,18 @@ export function compareSources(tab: TabResults | undefined, sources: readonly So
   })
 }
 
+/** The two compared results' names as they were when compared, "Result N" for a comparison made before names. */
+const sideNames = (info: CompareInfo): [string, string] => [info.leftName ?? `Result ${info.leftNumber}`, info.rightName ?? `Result ${info.rightNumber}`]
+
 /** What a diff grid's strip says after its two inputs: how rows matched, the counts, soft differences, the columns left
  *  out, and that the inputs' filters and sorts were not applied. */
 export function compareDetails(info: CompareInfo): string {
   const by = info.key ? `rows matched by ${info.key}` : 'whole rows matched'
-  const { leftNumber, rightNumber } = info
+  const [leftName, rightName] = sideNames(info)
   const parts = [`${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
   if (info.soft > 0) parts.push(`${count(info.soft, 'value differs', 'values differ')} only by collation (case or trailing spaces), underlined.`)
   if (info.approximate) parts.push('Long values were compared by the part these results keep, so a difference past it does not show.')
-  const others = [...info.leftOnly.map(name => `${name} (Result ${leftNumber})`), ...info.rightOnly.map(name => `${name} (Result ${rightNumber})`)]
+  const others = [...info.leftOnly.map(name => `${name} (${leftName})`), ...info.rightOnly.map(name => `${name} (${rightName})`)]
   if (others.length > 0) parts.push(`Not compared: ${others.join(', ')}.`)
   parts.push('Filters and sorts on the inputs were not applied.')
   return parts.join(' ')
@@ -428,6 +434,6 @@ export function compareDetails(info: CompareInfo): string {
 
 /** The whole strip as text (its tooltip, and what a screen reader reads): the inputs, a closed one so marked, then the details. */
 export function compareText(info: CompareInfo, sources?: readonly CompareSource[]): string {
-  const names = sources?.length === 2 ? sources.map(source => source.entry === undefined ? `${source.name} (closed)` : source.name) : [`Result ${info.leftNumber}`, `Result ${info.rightNumber}`]
+  const names = sources?.length === 2 ? sources.map(source => source.entry === undefined ? `${source.name} (closed)` : source.name) : sideNames(info)
   return `${names[0]} → ${names[1]}, ${compareDetails(info)}`
 }

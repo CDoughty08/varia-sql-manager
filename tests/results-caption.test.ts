@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
+import { entryName, entryNumber, entrySecondary, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
 const filter = { filter: { op: 'notNull', column: 0 }, label: 'id is not NULL' }
@@ -23,5 +24,21 @@ describe('a result caption\'s row count', () => {
 
   it('drops "so far" once nothing more arrives: a rebuild that failed, or a set lost or released mid-stream', () => {
     for (const state of ['complete', 'lost', 'released']) expect(rowsFact({ rowsAvailable: 100, state }, { applied: [filter], view: view(20, 60, false) })).toBe('20 of 60 rows')
+  })
+})
+
+describe("a result's name and its number", () => {
+  // As ResultsService makes them: an original result the query named carries the name as its label too.
+  const named = { number: 2, label: 'Open orders', descriptor: { name: 'Open orders' } }
+  const unnamed = { number: 2, descriptor: {} }
+  const pivot = { number: 4, label: 'Pivot of Open orders', descriptor: {} }
+  it('names a named result by its name and keeps its number apart', () => {
+    expect([entryName(named), entryNumber(named), entrySecondary(named), resultTitle(named), queryName(named)]).toEqual(['Open orders', 'Result 2', 'Result 2', 'Open orders', 'Open orders'])
+  })
+  it('names an unnamed result by its number, exactly as before names', () => {
+    expect([entryName(unnamed), entryNumber(unnamed), entrySecondary(unnamed), resultTitle(unnamed), queryName(unnamed)]).toEqual(['Result 2', 'Result 2', undefined, 'Result 2', undefined])
+  })
+  it('names a Pivot by its frozen title, with no number beside it, and titles it by its own number where results are numbered', () => {
+    expect([entryName(pivot), entrySecondary(pivot), resultTitle(pivot)]).toEqual(['Pivot of Open orders', undefined, 'Result 4'])
   })
 })

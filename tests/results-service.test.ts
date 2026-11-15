@@ -387,6 +387,16 @@ describe('results service', () => {
     expect(await service.copy('t1', keyAt(service, 't1', 0), false)).toBe('These results are no longer available because the SQL backend restarted.')
     expect(api.copyResults).not.toHaveBeenCalled()
   })
+  it("labels a named result's save by its name and keeps the positional suggested file name until save names land", async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, name: 'Open orders' })]) })
+    api.saveResults.mockReturnValueOnce(new Promise(() => {}))
+    void service.saveAs('t1', keyAt(service, 't1', 1), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ suggestedName: 'SQLQuery1-Result2' }))
+    flush()
+    expect(tab().jobs).toEqual([expect.objectContaining({ kind: 'save', label: 'Open orders' })])
+  })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
     const saved: unknown[] = []

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { maxQueryPlanDocuments } from '../../../shared/plans'
 import { limits } from '../../../shared/ipc/wire/protocol'
-import type { ResultSetEntry } from '../results/ResultsService'
+import { resultTitle, type ResultSetEntry } from '../results/ResultsService'
 import PlanViewer from './PlanViewer'
 import { orderPlanEntries, type PlanSource } from './sources'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -25,7 +25,7 @@ export default function ResultPlans({ queryId, tabId, plans, order, live, visibl
       for (let row = 0; row < snapshot.rowsAvailable && sources.length < maxXmlSources; row++) {
         sources.push({
           entry, row, result: { generation, resultId }, key: `${generation}:${resultId}:${row}`, batchLabel, batchNumber, iteration,
-          label: entry.capturedPlan ? `Plan ${entry.number}${batchLabel ? ` · ${batchLabel}` : ''}` : `Result ${entry.number}, plan ${row + 1}`,
+          label: entry.capturedPlan ? `Plan ${entry.number}${batchLabel ? ` · ${batchLabel}` : ''}` : `${resultTitle(entry)}, plan ${row + 1}`,
           read: async (signal: AbortSignal) => {
             const value = await entry.handle.getCell(row, 0, { signal })
             if (value.truncated) throw new Error('This plan was truncated while storing query results. Open its plan document to read the available XML.')

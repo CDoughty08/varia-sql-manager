@@ -1,5 +1,6 @@
 import type { ResultMemoryDetail, ResultMemoryEntry } from '../../../shared/contracts'
 import { formatCount } from './status'
+import { entryName } from './ResultsService'
 
 const GiB = 1073741824, MiB = 1048576
 export type BytesFormat = (value: number) => string
@@ -113,13 +114,14 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   }
 }
 
-/** A result's name in Biggest results: its query tab and Results caption ("Query 3 · Result 1") when a tab shows it. */
-export function resultNames(tabs: Readonly<Record<string, { readonly sets: readonly { readonly descriptor: { readonly generation: number; readonly resultId: number }; readonly label?: string; readonly number: number }[] }>>,
+/** A result's name in Biggest results: its query tab and Results caption ("Query 3 · Result 1", "Query 3 · Open orders")
+ *  when a tab shows it. */
+export function resultNames(tabs: Readonly<Record<string, { readonly sets: readonly { readonly descriptor: { readonly generation: number; readonly resultId: number; readonly name?: string }; readonly label?: string; readonly number: number }[] }>>,
   documentName: (tabId: string) => string | undefined, generation: number | undefined): (entry: ResultMemoryEntry) => string {
   const names = new Map<number, string>()
   for (const [tabId, tab] of Object.entries(tabs)) {
     const document = documentName(tabId)
-    for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, `${document ? document + ' · ' : ''}${set.label ?? `Result ${set.number}`}`)
+    for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, `${document ? document + ' · ' : ''}${entryName(set)}`)
   }
   return entry => names.get(entry.resultId) ?? (entry.live ? 'Live view table' : 'Unlisted result')
 }

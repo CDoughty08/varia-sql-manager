@@ -93,6 +93,11 @@ describe('result diffs', () => {
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
     expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
     expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
+    // A named result is called by its name, frozen when compared; one compared before names reads by its number.
+    expect(compareText({ ...info, leftName: 'Open orders', leftOnly: ['Old'], rightOnly: ['New'] })).toBe('Open orders → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Not compared: Old (Open orders), New (Result 3). Filters and sorts on the inputs were not applied.')
+    expect(compareText({ ...info, leftName: 'Open orders' }, [{ name: 'Open orders' }, { name: 'Result 3', entry: three.key }])).toMatch(/^Open orders \(closed\) → Result 3, /)
+    const { leftName: _left, rightName: _right, ...before } = info
+    expect(compareText(before)).toMatch(/^Result 2 → Result 3, /)
   })
 
   it('compares nothing while the query runs, says why a comparison failed, and keeps only diffs a run still shows', async () => {

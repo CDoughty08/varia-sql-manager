@@ -126,6 +126,9 @@ export interface GridViewOptions {
   /** The number the result is named by, and how many the run shows: "Result 2 of 3". */
   readonly resultNumber: number
   readonly resultCount: number
+  /** The name the query gave the result (a `#Name` marker), which comes before its number: "Open orders, Result 2 of 3".
+   *  Set once: a re-execute mounts a new grid for the new result. */
+  readonly resultName?: string
   /** The grid's name, which its accessible label starts with (a live grid's "Sessions"); "Result N of M" otherwise. */
   readonly label?: string
   readonly platform: Platform
@@ -1982,7 +1985,7 @@ export class GridView {
   /** The grid's own ARIA: counts change at most once a second while rows stream in. */
   private aria(state: string, rows: number): void {
     const open = state === 'open'
-    const name = this.o.label ?? `Result ${this.o.resultNumber} of ${this.resultCount}`, drawnColumns = this.drawnColumns(rows)
+    const name = this.o.label ?? `${this.o.resultName ? this.o.resultName + ', ' : ''}Result ${this.o.resultNumber} of ${this.resultCount}`, drawnColumns = this.drawnColumns(rows)
     const label = this.rotated ? transposedLabel(name, rows, this.columns, drawnColumns, open) : gridLabel(name, rows, this.columns, open)
     if (label === this.ariaLabel) return
     const now = performance.now()
