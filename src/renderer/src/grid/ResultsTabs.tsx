@@ -297,9 +297,11 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
   const foldRef = useRef(fold)
   foldRef.current = fold
-  useEffect(() => {
+  // Measured before the first paint too: each run draws a new layout, which would show both rows for a frame, then fold.
+  useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
+    setFold(tabsFold(root.clientHeight))
     const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight)))
     return () => observer.dispose()
   }, [!selected])
@@ -314,7 +316,12 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const pickerFrom = useRef<HTMLElement | undefined>(undefined)
   useEffect(() => {
     // Opened by a request (Go to Result…), Escape gives the focus back to where it was, the editor or a grid.
-    const open = () => { const active = rootRef.current?.ownerDocument.activeElement; pickerFrom.current = active instanceof HTMLElement ? active : undefined; setPicking(true) }
+    // Asked again while it is open (the focus is in it), it keeps where it was opened from.
+    const open = () => {
+      const active = rootRef.current?.ownerDocument.activeElement
+      if (!(active instanceof HTMLElement && active.closest('[data-results-picker]'))) pickerFrom.current = active instanceof HTMLElement ? active : undefined
+      setPicking(true)
+    }
     if (pickerRequests.take(tabId)) open()
     const requests = pickerRequests.subscribe(requested => { if (requested === tabId && pickerRequests.take(tabId)) open() })
     return () => requests.dispose()
@@ -328,11 +335,20 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     pickerFrom.current = undefined
     if (!restore) return
     if (from?.isConnected && from !== from.ownerDocument.body) from.focus({ preventScroll: true })
+    else if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })
     else (overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
   }
+  // With no rows of tabs drawn (the shortest pane), the grid shown takes the focus in a tab's place.
+  const panelGrid = () => rootRef.current?.querySelector<HTMLElement>('.rt-panel [data-result-grid]')
   // A view picked: shown, and the focus goes to its result's tab once the window drawn has moved to it.
   const pick = (key: EntryKey) => {
     setPicking(false)
+    if (foldRef.current === 'none') {
+      // The grid of the view picked takes the focus: at once when it is the one shown, else once it is drawn.
+      if (key === selected?.key) panelGrid()?.focus({ preventScroll: true })
+      else { gridFocus.current = true; select(key) }
+      return
+    }
     select(key)
     const item = topItems(results.getSnapshot()[tabId] ?? tab).find(top => top.key === key || top.group?.pivot?.key === key)
     focusTab.current = item?.key

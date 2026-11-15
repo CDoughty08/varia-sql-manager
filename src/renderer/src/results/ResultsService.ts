@@ -446,6 +446,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The tabs with a result set a grid can show (`hasResultSets`), which Find and Save Results As need: an emptied run that
    *  keeps captured plans is in `context` but not here. It publishes only when that set of tabs changes. */
   readonly resultSets: ExternalStore<Readonly<Record<string, true>>> = this.setsStore
+  private readonly steppableStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs with two or more results or comparisons to step through (`multipleResults`): the browser tab keys in the
+   *  results pane act on results only then, and fall through to query tabs otherwise. */
+  readonly steppable: ExternalStore<Readonly<Record<string, true>>> = this.steppableStore
   private readonly turnedStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedOrientation>>> { set(value: Readonly<Record<string, FocusedOrientation>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
@@ -1180,6 +1184,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.controllers.clear()
     this.contextStore.clear()
     this.setsStore.clear()
+    this.steppableStore.clear()
     this.turnedStore.clear()
     this.clearListeners()
   }
@@ -1769,15 +1774,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** `hasResults` per tab: a set or captured plan the backend still holds, in results neither closed nor lost with the
    *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, plan sets and comparisons). */
   private updateContext(): void {
-    const results: Record<string, true> = {}, sets: Record<string, true> = {}
+    const results: Record<string, true> = {}, sets: Record<string, true> = {}, steppable: Record<string, true> = {}
     for (const [tabId, run] of this.runs) {
       if (run.status === 'closed' || run.status === 'lost') continue
       const grids = run.sets.some(held)
       if (grids) sets[tabId] = true
+      // The Tabs layout's top row: each result (its Pivot is under it) and each comparison.
+      if (!run.bare && run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length > 1) steppable[tabId] = true
       if (grids || run.planSets.some(held)) results[tabId] = true
     }
     publishTabs(this.contextStore, results)
     publishTabs(this.setsStore, sets)
+    publishTabs(this.steppableStore, steppable)
   }
 
   private snapshotOf(run: Run): TabResults {

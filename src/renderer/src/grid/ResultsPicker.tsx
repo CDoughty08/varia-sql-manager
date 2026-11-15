@@ -77,7 +77,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   }, [shown])
   useLayoutEffect(() => { activeKey.current = shown[active]?.key }, [active])
 
-  // Placed under its anchor, right-aligned, else above it; clamped to the window. Again on resize and scroll.
+  // Placed under its anchor, right-aligned, else above it; clamped to the window. Again when the window or the anchor
+  // changes size; an anchor with no size left (its pane hidden, Ctrl+R) closes the picker.
   const measure = useRef<() => void>(() => {})
   measure.current = () => {
     const target = anchor(), element = card.current
@@ -92,8 +93,14 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     if (!element || !view) return
     const again = () => measure.current()
     const resized = observeResize(element, () => setViewHeight(element.clientHeight))
+    const target = anchor()
+    const moved = target && observeResize(target, () => {
+      const rect = target.getBoundingClientRect()
+      if (!target.isConnected || (rect.width === 0 && rect.height === 0)) onClose(false)
+      else again()
+    })
     view.addEventListener('resize', again)
-    return () => { resized.dispose(); view.removeEventListener('resize', again) }
+    return () => { resized.dispose(); moved?.dispose(); view.removeEventListener('resize', again) }
   }, [host])
   // In: the filter box takes the focus once the picker is placed (until then it is hidden, and a hidden box cannot take
   // it); its window comes forward when the picker opened from another one's palette.
@@ -141,7 +148,8 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
   // The active row is named only while it is drawn (a wheel can scroll it away).
   const named = shown[active] && active >= from && active < end
   const optionId = (place: number) => `${id}option-${place}`
-  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" style={place ?? { visibility: 'hidden' }} onBlur={leave}>
+  // `data-results-picker`: the focus here counts as the Results pane's for its keys (`resultsFocus`).
+  return createPortal(<div ref={card} className="rt-picker" role="dialog" aria-label="Go to Result" data-results-picker="" style={place ?? { visibility: 'hidden' }} onBlur={leave}>
     <label className="rt-picker-head">
       <Icon name="search" />
       <input ref={input} type="text" role="combobox" value={query} placeholder="Go to a result, view or comparison" aria-label="Filter results, views and comparisons"

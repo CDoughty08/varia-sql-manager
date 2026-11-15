@@ -150,6 +150,13 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
   const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
+  /** Shows the Results view and its panel: its tab when Messages or another output panel has its group, and the panel
+   *  itself, opened again, when the user closed it. */
+  const showResults = (tabId: string) => {
+    results.setView(tabId, 'results')
+    if (panes.location('results') === 'closed') void commands.execute('window.results', undefined, 'toolbar')
+    else panes.select('results')
+  }
   /** Selects the view `pick` names, showing the Results view if Messages or another output panel had its place; Stacked
    *  scrolls it into view (and the focus with it, from a grid), Tabs shows it. The view commands are Tabs' only: Stacked
    *  shows a Table and its Pivot together. */
@@ -158,8 +165,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     run: (args?: CommandArgs) => {
       const run = resultsRun(args, onlyTabs), key = run && pick(run.tab)
       if (!run || key === undefined) return
-      results.setView(run.tabId, 'results')
-      panes.select('results')
+      showResults(run.tabId)
       results.focusEntry(run.tabId, key)
       if (!tabs()) stackReveals.request(run.tabId, key)
     }
@@ -360,8 +366,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const run = tabsRun(args)
         if (!run) return
         // The picker is in the Results view's tab row; a layout drawn once the view shows takes the request then.
-        results.setView(run.tabId, 'results')
-        panes.select('results')
+        showResults(run.tabId)
         pickerRequests.request(run.tabId)
       }
     }),

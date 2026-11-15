@@ -161,11 +161,13 @@ the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the
   that is out of date says so. The list draws only the rows in view, so a run of 1,000 results costs a screenful of rows
   (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (Ctrl+Shift+O, ⇧⌘O on macOS;
   command palette, Window menu) opens it from anywhere, even when every tab fits.
-- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up from anywhere; also Ctrl+Page Down and Up while
-  the focus is in the results pane, on Windows and Linux) select the next or previous result or comparison, wrapping
-  round; a result shows the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9,
-  ⌘ on macOS, while the focus is in the results pane) pick one as a browser's keys pick a tab; outside the results pane
-  the same keys pick query tabs (Go to Query 1 to 8, Go to Last Query), and Ctrl+Page Down and Up step through queries.
+- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up from anywhere; also Ctrl+Page Down and Up in the
+  Results pane, on Windows and Linux) select the next or previous result or comparison, wrapping round; a result shows
+  the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9, ⌘ on macOS, in the
+  Results pane) pick one as a browser's keys pick a tab. "In the Results pane" means the focus is in it or in the
+  overflow picker and the query has two or more results or comparisons; otherwise, Messages and the plan included, the
+  same keys pick query tabs (Go to Query 1 to 8, Go to Last Query) and Ctrl+Page Down and Up step through queries. A
+  closed Results pane opens again for these commands and Go to Result….
   **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other
   text boxes, where Monaco's column selection keeps them) switch between the selected result's Table and Pivot. They work
   from a grid, whose focus moves to the grid shown, from a focused tab, whose focus follows, and from the editor, which

@@ -514,52 +514,52 @@ export const commandCatalog = {
   },
   'document.next': {
     title: 'Next Query', category: 'View', precondition: 'multipleDocuments', unavailableHint: secondQuery,
-    keybindings: [{ key: 'ctrl+tab', allowRepeat: true }, { win: 'ctrl+pagedown', linux: 'ctrl+pagedown', when: "activePanel != 'output'", allowRepeat: true }],
+    keybindings: [{ key: 'ctrl+tab', allowRepeat: true }, { win: 'ctrl+pagedown', linux: 'ctrl+pagedown', when: '!resultsFocus || !multipleResults', allowRepeat: true }],
     menus: [{ menu: 'window', group: '2_documents', order: 1, mnemonic: 'n' }]
   },
   'document.previous': {
     title: 'Previous Query', category: 'View', precondition: 'multipleDocuments', unavailableHint: secondQuery,
-    keybindings: [{ key: 'ctrl+shift+tab', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', when: "activePanel != 'output'", allowRepeat: true }],
+    keybindings: [{ key: 'ctrl+shift+tab', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', when: '!resultsFocus || !multipleResults', allowRepeat: true }],
     menus: [{ menu: 'window', group: '2_documents', order: 2, mnemonic: 'p' }]
   },
-  // A browser's Ctrl+1 to Ctrl+9 (⌘ on macOS): the query tab at that place in tab order, Ctrl+9 the last. In the output panes
-  // the same keys pick results (output.goToResult*). Browser tab keys took them from SSMS's query shortcuts (Ctrl+1 sp_who,
+  // A browser's Ctrl+1 to Ctrl+9 (⌘ on macOS): the query tab at that place in tab order, Ctrl+9 the last. In the Results pane,
+  // while its query has two or more results, the same keys pick results (output.goToResult*). Browser tab keys took them from SSMS's query shortcuts (Ctrl+1 sp_who,
   // Ctrl+2 sp_lock), whose procedures can come back as palette commands.
   'document.goToQuery1': {
     title: 'Go to Query 1', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+1', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+1', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery2': {
     title: 'Go to Query 2', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+2', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+2', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery3': {
     title: 'Go to Query 3', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+3', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+3', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery4': {
     title: 'Go to Query 4', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+4', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+4', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery5': {
     title: 'Go to Query 5', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+5', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+5', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery6': {
     title: 'Go to Query 6', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+6', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+6', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery7': {
     title: 'Go to Query 7', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+7', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+7', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToQuery8': {
     title: 'Go to Query 8', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+8', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+8', when: '!resultsFocus || !multipleResults' }]
   },
   'document.goToLastQuery': {
     title: 'Go to Last Query', category: 'View', keywords: ['tab', 'query', 'editor', 'jump', 'switch', 'end'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+9', when: "activePanel != 'output'" }]
+    keybindings: [{ key: 'mod+9', when: '!resultsFocus || !multipleResults' }]
   },
   // VS Code's Move Editor Left/Right keys; the query tab menu's items move the tab it was opened for.
   'document.moveLeft': {
@@ -1150,54 +1150,55 @@ export const commandCatalog = {
   // comparison tab (a result's tab shows the view it last showed), the selected result's other view (Table and Pivot), and
   // the overflow picker that lists every view. Ctrl+Alt+Page Down and Up, as Ctrl+Page Down and Up step through queries;
   // with Shift for views, except where text has the focus (Monaco's column selection there).
-  // Browser tab keys for results while the focus is in the output panes (Ctrl+Page Down and Up, Ctrl+1 to Ctrl+9, the last
-  // for the last result), and for queries everywhere else (document.*); Ctrl+Alt+Page Down and Up step results from anywhere.
+  // Browser tab keys for results while the focus is in the Results pane or its picker and the query has two or more results
+  // (Ctrl+Page Down and Up, Ctrl+1 to Ctrl+9, the last for the last result), and for queries otherwise (document.*), so
+  // Messages and the plan keep the query keys; Ctrl+Alt+Page Down and Up step results from anywhere.
   // They act on both layouts: Stacked scrolls the result into view.
   'output.nextResult': {
     title: 'Next Result', category: 'Query', keywords: ['tab', 'result', 'next', 'switch', 'group', 'comparison', 'grid'], precondition: 'hasResultSets',
     unavailableHint: 'Run a query with more than one result to step through.',
-    keybindings: [{ key: 'ctrl+alt+pagedown', allowRepeat: true }, { win: 'ctrl+pagedown', linux: 'ctrl+pagedown', when: "activePanel == 'output'", allowRepeat: true }]
+    keybindings: [{ key: 'ctrl+alt+pagedown', allowRepeat: true }, { win: 'ctrl+pagedown', linux: 'ctrl+pagedown', when: 'resultsFocus && multipleResults', allowRepeat: true }]
   },
   'output.previousResult': {
     title: 'Previous Result', category: 'Query', keywords: ['tab', 'result', 'previous', 'switch', 'group', 'comparison', 'grid'], precondition: 'hasResultSets',
     unavailableHint: 'Run a query with more than one result to step through.',
-    keybindings: [{ key: 'ctrl+alt+pageup', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', when: "activePanel == 'output'", allowRepeat: true }]
+    keybindings: [{ key: 'ctrl+alt+pageup', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', when: 'resultsFocus && multipleResults', allowRepeat: true }]
   },
   'output.goToResult1': {
     title: 'Go to Result 1', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with a result first.', keybindings: [{ key: 'mod+1', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with a result first.', keybindings: [{ key: 'mod+1', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult2': {
     title: 'Go to Result 2', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 2 results first.', keybindings: [{ key: 'mod+2', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 2 results first.', keybindings: [{ key: 'mod+2', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult3': {
     title: 'Go to Result 3', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 3 results first.', keybindings: [{ key: 'mod+3', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 3 results first.', keybindings: [{ key: 'mod+3', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult4': {
     title: 'Go to Result 4', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 4 results first.', keybindings: [{ key: 'mod+4', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 4 results first.', keybindings: [{ key: 'mod+4', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult5': {
     title: 'Go to Result 5', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 5 results first.', keybindings: [{ key: 'mod+5', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 5 results first.', keybindings: [{ key: 'mod+5', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult6': {
     title: 'Go to Result 6', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 6 results first.', keybindings: [{ key: 'mod+6', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 6 results first.', keybindings: [{ key: 'mod+6', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult7': {
     title: 'Go to Result 7', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 7 results first.', keybindings: [{ key: 'mod+7', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 7 results first.', keybindings: [{ key: 'mod+7', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult8': {
     title: 'Go to Result 8', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with 8 results first.', keybindings: [{ key: 'mod+8', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with 8 results first.', keybindings: [{ key: 'mod+8', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToLastResult': {
     title: 'Go to Last Result', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'end', 'grid'], precondition: 'hasResultSets',
-    unavailableHint: 'Run a query with results first.', keybindings: [{ key: 'mod+9', when: "activePanel == 'output'" }]
+    unavailableHint: 'Run a query with results first.', keybindings: [{ key: 'mod+9', when: 'resultsFocus && multipleResults' }]
   },
   'output.nextResultView': {
     title: 'Next Result View', category: 'Query', keywords: ['tab', 'view', 'pivot', 'table', 'next', 'switch', 'grid'], precondition: 'resultsTabs && hasResultSets',

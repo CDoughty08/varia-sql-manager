@@ -851,10 +851,12 @@ Outcome, accepted by the owner:
       - Commands (catalogue and generated pages regenerated). Owner review on PR 494 chose browser tab keys over SSMS's
         query shortcuts (Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`; those can come back as palette commands that open a query):
         - **Next Result** and **Previous Result**: Ctrl+Alt+Page Down and Up from anywhere (the editor too), and Ctrl+Page
-          Down and Up while the focus is in an output pane (`activePanel == 'output'`; Windows and Linux, as Next and
-          Previous Query have them). Next and Previous Query keep Ctrl+Tab everywhere and Ctrl+Page Down and Up elsewhere.
+          Down and Up in the Results pane (`resultsFocus && multipleResults`: the focus in the Results pane or its picker,
+          and two or more results or comparisons; Windows and Linux, as Next and Previous Query have them). Next and
+          Previous Query keep Ctrl+Tab everywhere and Ctrl+Page Down and Up otherwise, so Messages, the plan and a query
+          with one result keep the query keys.
         - **Go to Result 1** to **8** and **Go to Last Result** (`output.goToResult1`…, `output.goToLastResult`): Ctrl/⌘+1
-          to 9 in an output pane; elsewhere the same keys run **Go to Query 1** to **8** and **Go to Last Query**
+          to 9 under the same condition; otherwise the same keys run **Go to Query 1** to **8** and **Go to Last Query**
           (`document.goToQuery1`…, in tab order across editor groups), as a browser's do. The id rule allows a trailing
           place number.
         - **Next Result View** and **Previous Result View**: Ctrl+Alt+Shift+Page Down and Up with `!textInputFocus` (Monaco
@@ -863,7 +865,7 @@ Outcome, accepted by the owner:
         - **Go to Result…**: Ctrl/⌘+Shift+O (VS Code's Go to Symbol; Ctrl+Alt+letters are reserved for AltGr), Window
           menu after Results as Tabs, access key G; Tabs only.
         - All need `hasResultSets`. Next and Previous Result and Go to Result N work in Stacked too: they select through
-          `focusEntry` and `stackReveals` asks the stack to open the view if collapsed and scroll to it, as Find Next does;
+          `focusEntry`, open a closed Results pane again (`window.results`), and `stackReveals` asks the stack to open the view if collapsed and scroll to it, as Find Next does;
           its grid takes the focus once mounted when the focus was in the stack. In Tabs they leave the focus where it
           was, except that a grid's focus moves to the grid shown (PR 13's hand-off) and a focused tab's moves to the tab
           now selected in its row, also when that tab unmounted (another result's view tabs, the drawn window moving).
@@ -876,6 +878,10 @@ Outcome, accepted by the owner:
         banner. `tabsFold` keeps the grid's header and two rows: the rows of tabs share one row (`data-fold="one"`, the
         facts left to the status line), then go (`data-fold="none"`, the grid alone, as Stacked's one set gives up its
         caption; a tab that had the focus hands it to the grid). `backend-smoke` runs its short-pane step on Tabs (no Stacked pin).
+        The fold is measured before the first paint, so a new run in a short pane never shows both rows for a frame; in
+        the shortest pane the picker is placed under the top of the layout, and a pick or Escape gives the grid the focus
+        in a tab's place. The picker follows its anchor's size and closes when the anchor goes (Ctrl+R hides the pane);
+        Go to Result… asked again while it is open keeps where it was first opened from for Escape.
       - Getting Started: the results guide has a new section, Move between results, on the tabs, the picker, the commands
         and the layout setting, with live references.
       - Inherited from PR 13: the grouped-results suite's CI seconds were already measured (4 s Linux, 6 s Windows), and the

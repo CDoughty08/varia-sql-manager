@@ -559,9 +559,65 @@ describe('the Tabs layout in a short pane', () => {
     // The results pane at its 100 px minimum, under its toolbar: the grid alone.
     expect(tabsFold(64, 10)).toBe('none')
   })
+
+  it('fold before the first paint, and in the shortest pane give the grid the focus from the picker, picked or closed', () => {
+    const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rt-root') ? 64 : 0 } })
+    try {
+      const { results, two, draw, all } = fixture()
+      draw()
+      // Folded already when first drawn: no frame with both rows.
+      expect(all('.rt-root')[0].getAttribute('data-fold')).toBe('none')
+      const picker = () => document.querySelector<HTMLElement>('.rt-picker')
+      const input = () => document.querySelector<HTMLInputElement>('.rt-picker input')!
+      const press = (key: string) => act(() => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+      // Opened from the shown grid; Enter on another result: its grid, drawn in the old one's place, takes the focus.
+      act(() => { all('[data-grid]')[0].focus() })
+      act(() => { pickerRequests.request('t1') })
+      press('ArrowDown')
+      press('Enter')
+      draw()
+      expect(picker()).toBeNull()
+      expect(results.getSnapshot().t1.focused).toBe(two)
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Enter on the view shown: its grid takes the focus at once.
+      act(() => { pickerRequests.request('t1') })
+      press('Enter')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Asked for again while open, Escape still gives the focus back to where it was first opened from.
+      const editor = document.createElement('textarea')
+      document.body.append(editor)
+      editor.focus()
+      act(() => { pickerRequests.request('t1') })
+      act(() => { pickerRequests.request('t1') })
+      press('Escape')
+      expect(document.activeElement).toBe(editor)
+      // Escape with nowhere to go back to: the grid, not a hidden tab.
+      act(() => { pickerRequests.request('t1') })
+      editor.remove()
+      press('Escape')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+    } finally {
+      if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    }
+  })
 })
 
 describe('moving through the results as tabs', () => {
+  it('count a query as steppable (multipleResults) from its second result or comparison, never its Pivot', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    results.begin('t1', 'q1')
+    void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1, rows), descriptor(2, { index: 1, ...rows })]) })
+    expect(results.steppable.getSnapshot().t1).toBe(true)
+    results.begin('t2', 'q2')
+    void results.finish('t2', 'q2', { summary: summaryOf([descriptor(3, rows)]) })
+    results.addSet('t2', descriptor(804, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])
+    expect(results.steppable.getSnapshot().t2).toBeUndefined()
+  })
+
   it('step through the results and comparisons, and through a result\'s views, wrapping round', () => {
     const { results, one, two, three, pivot, diff } = fixture()
     const tab = () => results.getSnapshot().t1
@@ -775,6 +831,18 @@ describe('the results tabs commands', () => {
     try {
       const { commands, settings, tab, one, two, pivot, diff, shown } = f
       expect(shown()).toBe(one)
+      // Two results and a comparison: the browser tab keys in the results pane are the results'.
+      expect(f.results.steppable.getSnapshot()[tab.id]).toBe(true)
+      // The Results panel closed (the fixture's panels all start closed): a step opens it again; open, its tab is selected.
+      expect(f.host.reveal).not.toHaveBeenCalled()
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(f.host.reveal).toHaveBeenLastCalledWith('results', { raise: true })
+      const select = vi.spyOn(f.panes, 'select')
+      f.panes.set(f.panes.getSnapshot(), { ...Object.fromEntries(['explorer', 'editor', 'results', 'messages', 'plan', 'statistics'].map(id => [id, 'closed'])), results: 'grid' } as never)
+      vi.mocked(f.host.reveal).mockClear()
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(select).toHaveBeenLastCalledWith('results')
+      expect(f.host.reveal).not.toHaveBeenCalled()
       expect(commands.isEnabled('output.nextResultView')).toBe(true)
       await commands.execute('output.nextResult', undefined, 'keybinding')
       expect(shown()).toBe(two)
