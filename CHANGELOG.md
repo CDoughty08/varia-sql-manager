@@ -57,6 +57,8 @@
 
 ### Fixed
 
+- **Save Results As JSON:** a bigint, decimal, numeric or money value of more than 15 significant digits (such as a `decimal(38,0)` key or a bigint above 2^53) is now written as a JSON string, so readers that parse numbers as doubles, JavaScript and spreadsheets among them, no longer round it. Values of 15 digits or fewer are still JSON numbers, and CSV and tab-delimited text are unchanged.
+- **Results memory after FOR XML and FOR JSON:** joining a large FOR XML or FOR JSON value no longer leaves buffers of up to 4 MB held outside result memory after the result is closed.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.

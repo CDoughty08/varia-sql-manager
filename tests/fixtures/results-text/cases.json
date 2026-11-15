@@ -37,7 +37,7 @@
       "save": [
         {"format": "csv", "headers": true, "nullText": "empty", "expected": "\ufeffid,(No column name),note,note,bytes,flag,amount,ratio,big\r\n1,plain,\"a,b\",x,0x00FF,1,12.50,1E+20,9007199254740993\r\n2,,\"say \"\"hi\"\"\",\"\",,0,-0.50,3.14159265358979,-1\r\n3,\"\",\"l1\r\nl2\nl3\rl4\tt\",\ufeffbom,0x,,,1E-05,0\r\n4,😀 é \ufffd,back\\slash \u0001 \u2028 \u2029,cut pre,0x0A0B,1,0.00,0,12\r\n", "rows": 4, "truncatedCells": 2},
         {"format": "tsv", "headers": true, "nullText": "NULL", "expected": "\ufeffid\t(No column name)\tnote\tnote\tbytes\tflag\tamount\tratio\tbig\r\n1\tplain\ta,b\tx\t0x00FF\t1\t12.50\t1E+20\t9007199254740993\r\n2\tNULL\tsay \"hi\"\t\tNULL\t0\t-0.50\t3.14159265358979\t-1\r\n3\t\tl1 l2 l3 l4 t\t\ufeffbom\t0x\tNULL\tNULL\t1E-05\t0\r\n4\t😀 é \ufffd\tback\\slash \u0001 \u2028 \u2029\tcut pre\t0x0A0B\t1\t0.00\t0\t12\r\n", "rows": 4, "truncatedCells": 2},
-        {"format": "json", "headers": true, "nullText": "NULL", "expected": "[\n{\"id\":1,\"Column2\":\"plain\",\"note\":\"a,b\",\"note_2\":\"x\",\"bytes\":\"0x00FF\",\"flag\":true,\"amount\":12.50,\"ratio\":1E+20,\"big\":9007199254740993},\n{\"id\":2,\"Column2\":null,\"note\":\"say \\\"hi\\\"\",\"note_2\":\"\",\"bytes\":null,\"flag\":false,\"amount\":-0.50,\"ratio\":3.14159265358979,\"big\":-1},\n{\"id\":3,\"Column2\":\"\",\"note\":\"l1\\r\\nl2\\nl3\\rl4\\tt\",\"note_2\":\"\ufeffbom\",\"bytes\":\"0x\",\"flag\":null,\"amount\":null,\"ratio\":1E-05,\"big\":0},\n{\"id\":4,\"Column2\":\"😀 é \ufffd\",\"note\":\"back\\\\slash \\u0001 \\u2028 \\u2029\",\"note_2\":\"cut pre\",\"bytes\":\"0x0A0B\",\"flag\":true,\"amount\":0.00,\"ratio\":0,\"big\":12}\n]\n", "rows": 4, "truncatedCells": 2},
+        {"format": "json", "headers": true, "nullText": "NULL", "expected": "[\n{\"id\":1,\"Column2\":\"plain\",\"note\":\"a,b\",\"note_2\":\"x\",\"bytes\":\"0x00FF\",\"flag\":true,\"amount\":12.50,\"ratio\":1E+20,\"big\":\"9007199254740993\"},\n{\"id\":2,\"Column2\":null,\"note\":\"say \\\"hi\\\"\",\"note_2\":\"\",\"bytes\":null,\"flag\":false,\"amount\":-0.50,\"ratio\":3.14159265358979,\"big\":-1},\n{\"id\":3,\"Column2\":\"\",\"note\":\"l1\\r\\nl2\\nl3\\rl4\\tt\",\"note_2\":\"\ufeffbom\",\"bytes\":\"0x\",\"flag\":null,\"amount\":null,\"ratio\":1E-05,\"big\":0},\n{\"id\":4,\"Column2\":\"😀 é \ufffd\",\"note\":\"back\\\\slash \\u0001 \\u2028 \\u2029\",\"note_2\":\"cut pre\",\"bytes\":\"0x0A0B\",\"flag\":true,\"amount\":0.00,\"ratio\":0,\"big\":12}\n]\n", "rows": 4, "truncatedCells": 2},
         {"format": "csv", "headers": false, "nullText": "NULL", "expected": "\ufeff1,plain,\"a,b\",x,0x00FF,1,12.50,1E+20,9007199254740993\r\n2,NULL,\"say \"\"hi\"\"\",\"\",NULL,0,-0.50,3.14159265358979,-1\r\n3,\"\",\"l1\r\nl2\nl3\rl4\tt\",\ufeffbom,0x,NULL,NULL,1E-05,0\r\n4,😀 é \ufffd,back\\slash \u0001 \u2028 \u2029,cut pre,0x0A0B,1,0.00,0,12\r\n", "rows": 4, "truncatedCells": 2},
         {"format": "tsv", "headers": true, "nullText": "empty", "expected": "\ufeffid\t(No column name)\tnote\tnote\tbytes\tflag\tamount\tratio\tbig\r\n1\tplain\ta,b\tx\t0x00FF\t1\t12.50\t1E+20\t9007199254740993\r\n2\t\tsay \"hi\"\t\t\t0\t-0.50\t3.14159265358979\t-1\r\n3\t\tl1 l2 l3 l4 t\t\ufeffbom\t0x\t\t\t1E-05\t0\r\n4\t😀 é \ufffd\tback\\slash \u0001 \u2028 \u2029\tcut pre\t0x0A0B\t1\t0.00\t0\t12\r\n", "rows": 4, "truncatedCells": 2},
         {"format": "tsv", "headers": true, "nullText": "NULL", "transposed": true, "expected": "\ufeffColumn\tRow 1\tRow 2\tRow 3\tRow 4\r\nid\t1\t2\t3\t4\r\n(No column name)\tplain\tNULL\t\t😀 é �\r\nnote\ta,b\tsay \"hi\"\tl1 l2 l3 l4 t\tback\\slash \u0001    \r\nnote\tx\t\t\ufeffbom\tcut pre\r\nbytes\t0x00FF\tNULL\t0x\t0x0A0B\r\nflag\t1\t0\tNULL\t1\r\namount\t12.50\t-0.50\tNULL\t0.00\r\nratio\t1E+20\t3.14159265358979\t1E-05\t0\r\nbig\t9007199254740993\t-1\t0\t12\r\n", "rows": 4, "truncatedCells": 2, "capped": 0},
@@ -74,6 +74,28 @@
       ],
       "save": [
         {"format": "json", "headers": true, "nullText": "NULL", "rows": 1, "truncatedCells": 0, "expected": "[\n{\"tiny\":255,\"small\":-32768,\"num\":123.45,\"cash\":1.00,\"petty\":-2.50,\"single\":3.402823E+38,\"odd\":\"NaN\",\"flag\":\"yes\",\"variant\":\"42\",\"day\":\"2026-10-08\",\"node\":\"0x58\",\"Column13\":1,\"Column13_2\":2,\"dup\":3,\"dup_2\":4,\"dup_2_2\":5}\n]\n"}
+      ]
+    },
+    {
+      "name": "JSON typing: a number of more than 15 significant digits is a string, which no reader parsing numbers to doubles can round",
+      "columns": [
+        {"name": "whole", "dataType": "decimal(38,0)", "wire": "text"},
+        {"name": "fine", "dataType": "decimal(38,18)", "wire": "text"},
+        {"name": "cash", "dataType": "money", "wire": "text"},
+        {"name": "big", "dataType": "bigint", "wire": "text"},
+        {"name": "wide", "dataType": "numeric(20,5)", "wire": "text"},
+        {"name": "ratio", "dataType": "float", "wire": "text"}
+      ],
+      "rows": [
+        ["12345678901234567890123456789012345678", "0.000000000000001234", "922337203685477.5807", "123456789012345", "100000000000000.00000", "3.14159265358979"],
+        ["-1", "-1.000000000000000000", "-922337203685477.5808", "-9223372036854775808", "12345.67890", "1E+20"],
+        ["1234567890123456", "0.123456789012345678", "1.0000", "1234567890123456", "0.00000", "0"]
+      ],
+      "copy": [
+      ],
+      "save": [
+        {"format": "json", "headers": true, "nullText": "NULL", "rows": 3, "truncatedCells": 0, "expected": "[\n{\"whole\":\"12345678901234567890123456789012345678\",\"fine\":0.000000000000001234,\"cash\":\"922337203685477.5807\",\"big\":123456789012345,\"wide\":100000000000000.00000,\"ratio\":3.14159265358979},\n{\"whole\":-1,\"fine\":-1.000000000000000000,\"cash\":\"-922337203685477.5808\",\"big\":\"-9223372036854775808\",\"wide\":12345.67890,\"ratio\":1E+20},\n{\"whole\":\"1234567890123456\",\"fine\":\"0.123456789012345678\",\"cash\":1.0000,\"big\":\"1234567890123456\",\"wide\":0.00000,\"ratio\":0}\n]\n"},
+        {"format": "csv", "headers": true, "nullText": "empty", "rows": 3, "truncatedCells": 0, "expected": "\ufeffwhole,fine,cash,big,wide,ratio\r\n12345678901234567890123456789012345678,0.000000000000001234,922337203685477.5807,123456789012345,100000000000000.00000,3.14159265358979\r\n-1,-1.000000000000000000,-922337203685477.5808,-9223372036854775808,12345.67890,1E+20\r\n1234567890123456,0.123456789012345678,1.0000,1234567890123456,0.00000,0\r\n"}
       ]
     },
     {

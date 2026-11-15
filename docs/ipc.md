@@ -1273,11 +1273,12 @@ Results stay in backend memory, never on disk (`ResultStore`).
   would pass that, it and later sets are counted as discarded.
 - **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
-  `ForXmlCollector` joins them into one pooled buffer of up to 2,097,152 + 1 characters (the excess marks the value
+  `ForXmlCollector` joins them into one buffer of up to 2,097,152 + 1 characters (the excess marks the value
   truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
   (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. Text past the cap is read past in
   chunks, row by row, so a long nvarchar(max) value that a query names like that column is never buffered whole.
-  `FOR XML … TYPE` already arrives as one xml cell.
+  The buffer is allocated, not rented from the shared array pool, which would keep arrays of that size once returned,
+  outside the budget. `FOR XML … TYPE` already arrives as one xml cell.
 - **Never unowned.** If a `query.execute` summary still cannot be encoded (`RESPONSE_TOO_LARGE`), its results are
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
@@ -1347,7 +1348,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   policy packs the complete results of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
   query's own when its own half is full; hidden first, then largest) at normal priority on the results' workers, sharing them fairly
   with other result work, one result after another until no query still waits. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
-  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends.
+  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends. The query's reader is not read meanwhile, so SQL Server sees its session wait on `ASYNC_NETWORK_IO` and keeps the statement's locks for that time; each wait ends as soon as packing has made room or has nothing more it may pack (a result held, kept raw, under 1 MiB or one the user is working with), so only a pass that is freeing room keeps it waiting.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
@@ -2013,7 +2014,7 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number, otherwise a string; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits (which any reader parsing numbers as doubles keeps exactly), otherwise a string, so one column can hold both; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 

@@ -12,6 +12,8 @@ const encoder = new TextEncoder()
 const bytes = text => encoder.encode(text)
 const numberTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
 const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
+// A JSON number keeps its value through a double (how most readers parse one) at 15 significant digits or fewer.
+const keepsValue = text => text.split(/[eE]/)[0].replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 15
 const hexDigits = bytes('0123456789ABCDEF')
 const B = { tab: 9, lf: 10, cr: 13, quote: 34, comma: 44, backslash: 92 }
 
@@ -286,7 +288,7 @@ export class TextWriter {
         if (json) this.out.write(bytes('"'))
         return
       case 'number':
-        if (json && value.length <= 64 && jsonNumber.test(String.fromCharCode(...value))) { this.out.write(value); return }
+        if (json && value.length <= 64 && jsonNumber.test(String.fromCharCode(...value)) && keepsValue(String.fromCharCode(...value))) { this.out.write(value); return }
         break
       case 'bit':
         if (json && value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(bytes(value[0] === 49 ? 'true' : 'false')); return }

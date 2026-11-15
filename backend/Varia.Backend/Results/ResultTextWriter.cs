@@ -313,7 +313,7 @@ internal sealed class ResultTextWriter
                 HexBytes(value);
                 if (options.Format == TextFormat.Json) Write("\""u8);
                 return;
-            case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value):
+            case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value) && KeepsValue(value):
                 Write(value);
                 return;
             case ValueKind.Bit when typed && options.Format == TextFormat.Json && value.Length == 1 && value[0] is (byte)'0' or (byte)'1':
@@ -431,6 +431,26 @@ internal sealed class ResultTextWriter
             if (i == start) return false;
         }
         return i == text.Length;
+    }
+
+    /// <summary>Whether a JSON number keeps its value through a double, which is how most JSON readers parse one (JavaScript's
+    /// JSON.parse, a fraction in Python, spreadsheets): one of 15 significant digits or fewer does (DBL_DIG). A bigint,
+    /// decimal, numeric or money value with more is written as a string instead, so no reader rounds it.</summary>
+    public static bool KeepsValue(ReadOnlySpan<byte> number)
+    {
+        int digits = 0, first = -1, last = -1;
+        foreach (var b in number)
+        {
+            if (b is (byte)'e' or (byte)'E') break;
+            if (!char.IsAsciiDigit((char)b)) continue;
+            if (b != '0')
+            {
+                if (first < 0) first = digits;
+                last = digits;
+            }
+            digits++;
+        }
+        return first < 0 || last - first < 15;
     }
 
     private void HexBytes(ReadOnlySpan<byte> bytes)
