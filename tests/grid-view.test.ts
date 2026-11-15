@@ -215,7 +215,7 @@ describe('the grid on a scroller it shares with the views built after it', () =>
     expect(wheel(big.scroller), 'the virtual view handles the wheel itself').toBe(true)
     big.view.dispose()
     expect(wheel(big.scroller), 'a disposed view leaves the wheel alone').toBe(false)
-    // Toggling Transpose, or a live table's rebuild: a view with native scrolling on the same scroller.
+    // Toggling Transpose (or, only at extreme zoom, a live table's rebuild): a native view on the same scroller.
     const small = mount({ rows: 5, columns: 4, stats, on: { root: big.root, scroller: big.scroller } })
     await small.frame()
     expect(wheel(small.scroller), "the native view's wheel scrolls natively").toBe(false)
