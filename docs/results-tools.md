@@ -74,7 +74,18 @@ was built with, not from an edit in the builder not yet built, over the result a
 **Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
 is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
 results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
-once the SQL backend has stopped. Nothing rebuilds by itself. The grid's menu shows more items than its titles have
+once the SQL backend has stopped.
+
+A Pivot that is small and quick to build **follows its result's filters by itself**: when the result stores at most
+500,000 rows and the Pivot's last build took under a quarter of a second (250 ms), a filter change rebuilds it at once,
+as Update would, with no mark in between. The result's stored rows count, not the rows its filters keep, since a build
+reads them all. Otherwise it stays marked out of date with Update. Only a Pivot you can see rebuilds by itself: in Tabs
+layout while its Pivot tab is selected, stacked while its caption is expanded, and only while Results (not Messages) is
+showing. A Pivot that is hidden keeps its mark and rebuilds when you show it (select its Pivot tab, expand it, switch
+back to Results or to the stacked layout). A newer filter change stops a rebuild still running and starts one for the
+newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
+marked, says why in the results toolbar, and is not tried again by itself until the filters change again (Update still
+asks for it). A rebuild you started with Update or Build Pivot is never stopped this way. The grid's menu shows more items than its titles have
 letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
 reach it.
 
