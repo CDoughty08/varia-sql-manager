@@ -1273,8 +1273,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   would pass that, it and later sets are counted as discarded.
 - **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
   `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) arrives as rows of about 2,033 characters;
-  `ForXmlCollector` joins them into one buffer of up to 2,097,152 + 1 characters (the excess marks the value
-  truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
+  `ForXmlCollector` joins them into one buffer of up to 2,097,152 characters (one more character read marks the
+  value truncated), reserving its memory from the query's budget in 256 KiB steps, and stores the value as the set's one row
   (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`, as SSMS shows one link. Text past the cap is read past in
   chunks, row by row, so a long nvarchar(max) value that a query names like that column is never buffered whole.
   The buffer is allocated, not rented from the shared array pool, which would keep arrays of that size once returned,
