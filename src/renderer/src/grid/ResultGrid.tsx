@@ -121,9 +121,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const shownRef = useRef<{ handle: ResultHandle; keys: string }>({ handle: entry.handle, keys: '' })
   const mount = (create: (spec: GridSpec) => GridView) => {
     const now = latest.current
-    // A grid mounted again (a tab switch) shows its sorted view from the start.
-    const sorted = now.sort?.view
-    shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(now.sort) : '' }
+    // A grid mounted again (a tab switch) shows its sorted view from the start: the results' own, which may be a frame ahead
+    // of the published sort this render has (the view that sort names may already be closed).
+    const current = results.sortOf(tabId, key), sorted = current?.view
+    shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(current) : '' }
     results.viewShown(tabId, key, sorted)
     const view = create({
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
@@ -177,11 +178,13 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
-  const target = sort?.view ?? (sort ? undefined : entry.handle)
+  // Read from the results, not the published sort, for the same reason as mount's.
+  const live = results.sortOf(tabId, key)
+  const target = live?.view ?? (live ? undefined : entry.handle)
   useEffect(() => {
     const view = viewRef.current, shown = shownRef.current
     if (!view || !target || target === shown.handle) return
-    const keys = target === entry.handle ? '' : keysOf(latest.current.sort), top = keys !== shown.keys ? 0 : undefined
+    const keys = target === entry.handle ? '' : keysOf(results.sortOf(tabId, key)), top = keys !== shown.keys ? 0 : undefined
     const abort = new AbortController()
     const swap = () => {
       if (abort.signal.aborted || viewRef.current !== view) return
