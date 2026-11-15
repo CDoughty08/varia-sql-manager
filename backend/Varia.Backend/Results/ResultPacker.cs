@@ -268,6 +268,23 @@ internal sealed class ResultPacker : IDisposable
         return later;
     }
 
+    /// <summary>After a candidate was packed for room: whether a query still waits for it. The waits ask again on every page's
+    /// saving until they have room, so a request made during the pass may since have been met; with no wait left it is
+    /// dropped, rather than packing every other candidate (and starting another pass) for rows already stored. A wait counts
+    /// itself (<see cref="ResultStore.RoomWaiting"/>) before it asks, so one asking after this cannot be dropped.</summary>
+    private bool StillWaited()
+    {
+        lock (roomGate)
+        {
+            if (!roomWanted) return false;
+            if (store.RoomWaiting) return true;
+            roomForAll = false;
+            roomFor.Clear();
+            roomWanted = false;
+            return false;
+        }
+    }
+
     /// <summary>Called before each page a pass packs, outside every lock (the checks' way into a pass); null in the product.</summary>
     internal Action<ResultSetBuffer>? OnPage { get; set; }
 
@@ -355,8 +372,8 @@ internal sealed class ResultPacker : IDisposable
                 catch (OutOfMemoryException) { continue; }
                 saved += got;
                 // A candidate that saved something wakes the waits, which ask again while they still have no room: carry on
-                // only while one does. One that saved nothing (its pages kept raw) wakes none, so go on to the next.
-                if (got > 0 && !roomWanted) break;
+                // only while one still waits. One that saved nothing (its pages kept raw) wakes none, so go on to the next.
+                if (got > 0 && !StillWaited()) break;
             }
             // Nothing left to pack: the waits look again and end. Every candidate held by a reader that pinned it after it was
             // asked for (nothing saved): the waits look again at their next poll rather than at once, so a reader pinning

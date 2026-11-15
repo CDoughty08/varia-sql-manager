@@ -1338,9 +1338,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Room for a query.** While the policy runs, a query's row that its own half or the global budget refuses (never a
   live table's or a derived set's) does not stop the query at once: the row stays open and the ingestion waits, outside
   every lock, at most 10 seconds a wait (`ResultStore.RoomWaitMs`), 4 waits a row (`SqlService.MaxRoomWaits`) and 30 seconds in all for the query (`SqlService.MaxRoomWaitMs`), while the
-  policy packs every complete result of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
+  policy packs the complete results of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
   query's own when its own half is full; hidden first, then largest) at normal priority on the results' workers, sharing them fairly
-  with other result work. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
+  with other result work, one result after another until no query still waits. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
   as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
