@@ -220,7 +220,7 @@ const codecCounters = z.object({
 export const resultMemoryDetailSchema = z.object({
   logicalBytes: count, storedBytes: count, compressedBytes: count, packedLogicalBytes: count, cacheBytes: count,
   largest: z.array(z.object({
-    resultId: u32, logicalBytes: count, storedBytes: count, state: z.enum(['raw', 'packed', 'unpacking']), progress: z.number().int().min(0).max(100).optional(), live: z.literal(true).optional()
+    resultId: u32, logicalBytes: count, storedBytes: count, state: z.enum(['raw', 'partial', 'packed', 'unpacking']), progress: z.number().int().min(0).max(100).optional(), live: z.literal(true).optional()
   }).strict()).max(maxLargestResults),
   codec: codecCounters, heap: z.object({ committedBytes: count, freeBytes: count }).strict()
 }).strict() satisfies z.ZodType<ResultMemoryDetail>

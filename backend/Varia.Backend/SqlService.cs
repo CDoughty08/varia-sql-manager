@@ -1137,6 +1137,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var noPlanEvents = false;
         List<uint>? planOrder = null;
         ResultSetBuffer? currentSet = null;
+        // How long this query's rows have waited for room in all (MaxRoomWaitMs).
+        var roomWaited = new RoomWaited();
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         int? spid = null;
@@ -1408,8 +1410,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         try { truncatedCells = plan!.ReadRow(reader, builder, warn, token); }
                                         catch { currentSet.AbortRow(); throw; }
                                         var sealedBefore = currentSet.SealedPages;
+                                        // A row the budget refuses waits, outside every lock, while packing complete results can make
+                                        // room for it, and is committed again; with no room to wait for it is refused as before.
+                                        var committed = currentSet.TryCommitRow(truncatedCells, mayWait: true);
+                                        if (!committed && currentSet.RoomWanted > 0) committed = await WaitAndCommitAsync(store, currentSet, truncatedCells, roomWaited, token);
                                         // A plan's row is not one of the limit's.
-                                        if (currentSet.TryCommitRow(truncatedCells) && !planRow) storedRows++;
+                                        if (committed && !planRow) storedRows++;
                                         if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                                     }
                                     if (currentSet is not null)
@@ -1693,6 +1699,46 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowSizes.maxRows).</summary>
     public const int MaxRowBytesRows = 16_384;
+
+    /// <summary>How many times one row waits for packing to make room (<see cref="ResultStore.WaitForRoomAsync"/>) before it is
+    /// refused: room made and taken again by another query's rows is waited for again, a few times at most.</summary>
+    internal const int MaxRoomWaits = 4;
+    /// <summary>The longest one query's rows wait for room in all, however many rows and result sets wait: each wait ends as soon as
+    /// packing has made room or has nothing more to give, so this only bounds passes a reader keeps stopping. While a row
+    /// waits, the rows committed before it are not sealed (the open row is in the same page), so a grid sees them when the
+    /// wait ends.</summary>
+    internal const long MaxRoomWaitMs = 30_000;
+
+    /// <summary>How long one query's rows have waited for room so far, in milliseconds (<see cref="MaxRoomWaitMs"/>).</summary>
+    internal sealed class RoomWaited
+    {
+        public long Ms;
+    }
+
+    /// <summary>A row the budget refused while packing could make room (<see cref="ResultSetBuffer.RoomWanted"/>): waits for
+    /// room outside every lock (<see cref="ResultStore.WaitForRoomAsync"/>), at most <see cref="MaxRoomWaits"/> times for the
+    /// row and <paramref name="maxMs"/> for the query in all (<paramref name="waited"/>), committing the same row again after
+    /// each; the last try refuses it for real, so the set stops as it would have. Returns whether the row was stored. A
+    /// cancelled query aborts the open row and throws. The ingestion's and the checks' one path.</summary>
+    internal static async Task<bool> WaitAndCommitAsync(ResultStore store, ResultSetBuffer set, int truncatedCells, RoomWaited waited, CancellationToken token, long maxMs = MaxRoomWaitMs)
+    {
+        var committed = false;
+        for (var tries = 0; !committed && set.RoomWanted is > 0 and var wanted; tries++)
+        {
+            bool made;
+            var left = maxMs - waited.Ms;
+            var started = Environment.TickCount64;
+            try { made = tries < MaxRoomWaits && left > 0 && await store.WaitForRoomAsync(set.Budget, wanted, token, (int)Math.Min(left, ResultStore.RoomWaitMs)); }
+            catch
+            {
+                set.AbortRow();
+                throw;
+            }
+            finally { waited.Ms += Environment.TickCount64 - started; }
+            committed = set.TryCommitRow(truncatedCells, mayWait: made);
+        }
+        return committed;
+    }
 
     /// <summary>Each row's bytes (the sum of DATALENGTH over its cells) for a range of a result's sealed rows; fewer than asked
     /// past the rows available, as results.read serves them.</summary>

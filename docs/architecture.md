@@ -248,14 +248,32 @@ being true.
   The store may keep a page packed (`PackedPage`: Zstandard level 2, a one-page window, `PageCodec`), so nothing else
   touches `StoredPage.Stored` (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned,
   unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, not a
-  setting: the backend process's service turns it on request and runs the stage 1 policy (`ResultPacker`,
-  docs/page-compression-findings.md), which packs a complete result of 1 MiB or more hidden in every window for 5 s
-  (`ResultVisibility`), never a live table or one still storing rows. It runs on its own thread, not the workers' gate
+  setting: the backend process's service turns it on request and runs the policy (`ResultPacker`,
+  docs/page-compression-findings.md), never on a live table or a result still storing rows. Stage 1 packs a complete
+  result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`). Stage 2 packs a shown one too once it is
+  idle: no pin or lease (a read, operation, Copy or Save) has begun or ended, and the set has not completed or been shown again, for 30 s
+  (`ResultSetBuffer.Activity`, its time on `ResultStore.Clock`, which is `ResultVisibility`'s), the wait doubling for
+  each operation that unpacked it whole, up to eight times as long (`MaxBackoff`, 4 minutes), so a result in use is never packed and unpacked
+  in a loop. A shown result with an open view (a sorted or filtered grid) stays raw, since each of its screens reads a page or so a
+  row; one packed before its grid was sorted, or shown again with a view, is unpacked again on the workers' gate when the
+  budget has room for it twice over and no query waits (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not
+  as a use, which lengthens a hidden viewed result's delay instead), and closing its last view wakes the policy. A result
+  with an open distinct snapshot is packed as any other (it keeps its pages, not their bytes). A read stops a shown result's pass at the next page (its touch count
+  changed). Both run on the policy's own thread, not the workers' gate
   (which has no lower priority), compressing at the lowest priority (honoured on Windows) and taking locks or allocating only at normal priority, so a
   starved packer never holds a lock a read or a new query waits on; waking only on a deadline, a completed result of 1 MiB or more, a
-  visibility change, or the end of a pin or lease that stopped it or of an operation that unpacked it (`ResultStore.Settled`;
+  visibility change, the end of a pin or lease that stopped it or of an operation that unpacked it, or a view's close (`ResultStore.Settled`;
   an operation's unpack counts as a use, so the delay starts again), and stops between pages when the result is
-  shown, held, released or the service disposed. The checks' stores leave packing off unless a check turns it on
+  shown (stage 1), touched (stage 2), held, released or the service disposed. A query's row the budget refuses
+  (its own half or the global budget, never a live table's or a derived set's) does not stop the query at once while the
+  policy runs (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`): the row stays open and the ingestion waits outside every lock
+  (`WaitForRoomAsync`, `SqlService.WaitAndCommitAsync`, at most `RoomWaitMs` a wait, `SqlService.MaxRoomWaits` waits a row and `MaxRoomWaitMs` in all for the query; the rows committed before the waiting row are sealed only once it ends) while the policy packs, at once and
+  at normal priority on the workers' gate (`Pack`'s `workers`, a page an item, sharing the threads fairly with other
+  result work), the complete results of 1 MiB or more not held that could make room for it, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (`ForRoom`, `MakeRoom`, `PackForRoom`: any query's
+  for the global budget, only its own when its own half is full; hidden first, then largest; one after another until no
+  query still waits, `StillWaited`), then commits the same row again. With
+  nothing to pack the wait ends at once and the row is refused as before; a stop is never undone, since stored rows are
+  a prefix of the rows read. The checks' stores leave packing off unless a check turns it on
   (`SqlService`'s `packHidden`), and their second pass packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
   live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
   `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
@@ -299,7 +317,8 @@ being true.
   held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
   unpacking each packed page into one room of its own (`ReadRoom`, the largest page reserved as working memory;
   refused, the page is read through the accessor and its cache as before). An operation's unpack clears the set's packed
-  mark, so the policy packs it again once it ends. `ResultStore.PackingSnapshot` holds the counters (packed, logical and
+  mark, so the policy packs it again once it ends. A result's Memory panel state is `partial` while some pages are packed and
+  no whole pass has ended since it was last unpacked (`ResultSetBuffer.Memory`'s `Whole`). `ResultStore.PackingSnapshot` holds the counters (packed, logical and
   cached bytes; pages packed, kept raw and unpacked; cache hits and lookups; time; the last whole unpack), which
   `results.memory`'s detail reports with each result's own figures (`ResultSetBuffer.Memory`), so the Memory panel's
   packed and saved figures are the budget's.

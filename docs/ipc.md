@@ -1163,15 +1163,15 @@ event's with it until the check after the summary sends a new one. `resultMemory
 | `storedBytes` | What holds them now: raw pages plus compressed ones |
 | `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
-| `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
+| `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
 | `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds` (elapsed time, which includes any wait while the policy compresses at low priority), `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
 | `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
 
 Each result's figures are read under its own lock and added up (`ResultStore.MemoryDetail`), so `storedBytes` is
 `logicalBytes` less `packedLogicalBytes` plus `compressedBytes`, and the saving it shows is the one the budget got back.
-A result is `packed` once any of its pages is, and `unpacking` while an operation unpacks it whole. The codec's
+A result is `partial` while some of its pages are packed but a pass has not finished (a read stopped it, or it was shown again), `packed` once a pass has packed every page that saves enough, and `unpacking` while an operation unpacks it whole. The codec's
 `name` is `zstd` and its `level` 2 while packing is on, which it is in every backend Varia starts
-([Packing hidden results](#result-store-and-memory-budget)).
+([Packing results](#result-store-and-memory-budget)).
 
 ## Result pages
 
@@ -1301,29 +1301,48 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `ResultVisibility` (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it
   became hidden (or was first asked about). Nothing is evicted by age: results.close forgets released results at once,
   and other released results' entries are swept once the table has doubled since the last sweep, so it stays within
-  twice its size after the last sweep. It changes nothing in the store itself: `IsHidden(resultId, out since)` is what
-  the packing policy below asks, never while holding the store's locks.
-- **Packing hidden results.** A complete result of 1 MiB or more whose grid has been shown in no window for 5 seconds
-  is packed: each sealed page is replaced by its Zstandard bytes (level 2, one page's window; a page that would save
+  twice its size after the last sweep. It also keeps when each shown result was last shown (bounded by the set). It
+  changes nothing in the store itself: `State(resultId, out hidden, out since)` is what the packing policy below asks,
+  never while holding the store's locks.
+- **Packing results.** A complete result of 1 MiB or more whose grid has been shown in no window for 5 seconds
+  (stage 1), or whose grid is shown but idle for 30 seconds (stage 2, below), is packed: each sealed page is replaced by its Zstandard bytes (level 2, one page's window; a page that would save
   under a tenth stays raw), and the budget is charged the packed size at once, so packing makes room. Never a result
   still storing rows, a live table, or one a read, operation, Copy or Save holds. Nothing is evicted and nothing goes to
   disk. `ResultPacker` (`Results/ResultPacker.cs`) schedules it in the backend alone: one thread, which compresses
   each page at the lowest priority (honoured on Windows; on Linux and macOS it competes as an ordinary thread) and does
   everything that takes a lock or allocates at normal priority (so it is never preempted holding a lock a read or a new
-  query needs), sleeps until the next hidden result falls due, or until a result completes, `results.visibility` changes the
-  shown set, or a read or job that stopped packing ends; it packs one result at a time, largest first, page by page
-  (about 275 to 400 MB/s, a 1 GiB result in about three seconds), and stops between pages when the result is shown
-  again, held, released or the backend shuts down, keeping what it packed. It runs beside the results' workers, never
-  through their gate, so sorts, reads and new queries never wait for it. Showing a packed result again needs no wait:
+  query needs), sleeps until the next result falls due, or until a result completes, `results.visibility` changes the
+  shown set, a read or job that stopped packing ends, or a result's last view closes; it packs one result at a time, hidden ones first, then largest first, page by page
+  (about 200 to 400 MB/s, a 1 GiB result in three to five seconds), and stops between pages when a hidden result is shown
+  again, a shown one is read, a result is held or released, or the backend shuts down, keeping what it packed; a shown one stopped by a read falls due again its idle time after the read. It runs beside the results' workers, never
+  through their gate, so sorts, reads and new queries never wait for it (only packing for a waiting query, below, and unpacking a shown result for its view use the gate). Showing a packed result again needs no wait:
   `results.read` unpacks the pages it sends (0.3 ms a read through a six-page cache), and a view read unpacks the pages
   behind its rows on the workers. A sort, filter, profile, pivot, distinct values, row identity, a search and a diff read a
   packed result fused and leave it packed (docs/architecture.md); a search through a view far from its pages' order (a
   sort), a diff's first result read far from its pages' order, and a pivot or extract refused its rooms first unpack it in
   place after reserving its raw size as working memory, and answer
   `TOO_LARGE` with its own sentence, changing nothing, when the budget refuses; the policy packs it again once the
-  operation has ended and the result has gone unused for the same 5 seconds (an operation's unpack counts as a use). A plain Copy or Save reads page by page through the cache and is never refused
-  for it; a transposed one unpacks the pages its rows lie on. A visible result is never packed (that is stage 2 of
-  [page-compression-findings.md](page-compression-findings.md)).
+  operation has ended and the result has gone unused for the same 5 seconds, or for a shown one its idle wait (an operation's unpack counts as a use). A plain Copy or Save reads page by page through the cache and is never refused
+  for it; a transposed one unpacks the pages its rows lie on. **Stage 2:** a shown result is packed once idle: no read, operation, Copy or Save has begun or ended,
+  and it has not completed or been shown again, for 30 seconds (`ResultPacker.VisibleIdleMs`); the wait doubles for
+  each operation that unpacked it whole, up to eight times as long (4 minutes), so a result in use is never packed and unpacked in a loop. A
+  shown result with an open view (a sorted or filtered grid) stays raw, since its screens read a page or so a row (about
+  30 to 55 ms a 256-row screen of a 256 MiB result packed against about 1 ms raw); one already packed when its grid is
+  sorted or filtered, or shown again with such a grid, is unpacked again on the results' workers once the budget has
+  room for it twice over and no query waits for room (otherwise its screens read the packed pages and the policy looks
+  again after 5 seconds, or when a read holding it ends; it is not counted as
+  a use, and a hidden result with a view waits longer each time it was so unpacked). A result with an open distinct
+  snapshot (a value list) is packed as any other: the snapshot keeps its pages, not their bytes, and reads them packed.
+  Packing for room asks each candidate again before it starts and before each page, so a view opened during a pass
+  stops it there. Plain scrolling and jumping cost about 0.2 to 1 ms a read packed. It is on in every backend Varia starts, with no setting, as stage 1 is. Measurements and the reasons for each
+  rule are in [page-compression-findings.md](page-compression-findings.md#stage-2-as-built).
+- **Room for a query.** While the policy runs, a query's row that its own half or the global budget refuses (never a
+  live table's or a derived set's) does not stop the query at once: the row stays open and the ingestion waits, outside
+  every lock, at most 10 seconds a wait (`ResultStore.RoomWaitMs`), 4 waits a row (`SqlService.MaxRoomWaits`) and 30 seconds in all for the query (`SqlService.MaxRoomWaitMs`), while the
+  policy packs the complete results of 1 MiB or more not held that could make room, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (any query's for the global budget, only the
+  query's own when its own half is full; hidden first, then largest) at normal priority on the results' workers, sharing them fairly
+  with other result work, one result after another until no query still waits. Then the row is committed again; with nothing to pack, or no room made, the query is truncated
+  as before (truncation reason `queryBudget` or `globalBudget`): a result the user is working with is not traded for a new query's rows. Rows already stored are never dropped, and a stop is never undone. While a row waits, the rows committed before it (in the same page) are not yet readable; they are sealed once the wait ends.
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together
