@@ -130,7 +130,8 @@ export class StartupReconnectService implements Disposable {
   private wanted(target: ConnectionTarget): boolean { return shouldAutoReconnect(target, this.globalDefault()) }
   private eligible(target: ConnectionTarget): boolean {
     const binding = credentialBinding(target)
-    return this.wanted(target) && (!binding || !this.rejectedCredentials.has(binding)) && ['disconnected', 'lost'].includes(target.lifecycle.state)
+    // Main refuses a background open without the previous account (an unsealed session file drops it), so do not try one.
+    return this.wanted(target) && !!target.expectedPrincipal && (!binding || !this.rejectedCredentials.has(binding)) && ['disconnected', 'lost'].includes(target.lifecycle.state)
   }
   private abortActive(): void { for (const pending of this.active.values()) pending.controller.abort() }
   private async run(pending: PendingAttempt): Promise<void> {

@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// A sweep's listing can be held, to line it up with the next check's download as a slow disk would.
+const listing = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined, calls: 0 }))
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, readdir: (async (...args: Parameters<typeof fs.readdir>) => { listing.calls++; await listing.hold; return fs.readdir(...args) }) as typeof fs.readdir }
+})
 import { classifyUpdateError, httpFailure, StagingBusy, UpdateFailure, Updater, type UpdaterOptions, type UpdateSettings, type UpdateStaging } from '../src/main/updater'
 import { assetFor, compareVersions, legacyAssetKinds, stagedAssetFor, updateFeedUrl, updateLimits, updateManifestSchema, updateStatusText, type UpdateManifest, type UpdateState } from '../src/shared/updates'
 
@@ -378,6 +385,31 @@ describe('Updater', () => {
     // Asked for again, with the newer release ready, it is that one.
     expect(await instance.arm()).toBe(true)
     expect(instance.takeArmed()).toMatchObject({ version: '1.2.0' })
+  })
+  // Linux removes an open file without complaint: a sweep that listed the folder after the next download began deleted it.
+  it('lets the sweep a check started finish before the next check downloads into the same folder', async () => {
+    let release!: () => void
+    listing.hold = new Promise<void>(resolve => { release = resolve })
+    listing.calls = 0
+    let checks = 0
+    const { instance, states } = updater({}, { fetch: async url => {
+      if (!url.endsWith('.json')) return file(payload)
+      return json(manifest(++checks === 1 ? '1.1.0' : '1.2.0'))
+    } })
+    try {
+      expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+      await expect.poll(() => listing.calls).toBe(1)
+      const recheck = instance.check(false)
+      // The newer release is found while the sweep still waits on its listing: its download must not start yet.
+      await expect.poll(() => states.some(state => state.status === 'ready' && state.version === '1.1.0') && checks).toBe(2)
+      for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve))
+      const { readdir: list } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      expect(await list(join(dir, 'updates'))).not.toContain('.Varia-SQL-Manager-1.2.0-Windows-x64-Setup.exe.partial')
+      release()
+      expect(await recheck).toMatchObject({ status: 'ready', version: '1.2.0' })
+      expect(await readdir(join(dir, 'updates'))).toContain('Varia-SQL-Manager-1.2.0-Windows-x64-Setup.exe')
+      expect(await instance.arm()).toBe(true)
+    } finally { release(); listing.hold = undefined }
   })
   // A check left on "checking" would keep Check for Updates disabled for the rest of the run, and end the schedule.
   it('turns anything a check meets into a state, and keeps checking', async () => {

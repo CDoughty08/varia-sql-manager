@@ -49,10 +49,14 @@
 
 ### Fixed
 
+- **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.
 - **Pivot:** the Pivot builder could count its source result as 0 rows; it now shows the rows the result holds.
 - **Object Explorer:** pinned server shortcuts above and below the tree, including entries in More servers, offer the same full context menu as the server row in view.
 - **Connection recovery:** Connect's deferred Explorer focus yields to newer keyboard or pointer input. Rejected native opens fail without blocking cleanup, and cancelled or lost database/password changes cannot leave unverified settings eligible for connection reuse.
+- **Startup reconnect safety:** an edited or planted session file can no longer make startup sign in with Windows Authentication or Microsoft Entra unasked, whether to a server Varia did not save or to one you disconnected. Such connections keep their tabs and labels and wait for an explicit Reconnect. On Linux, a session or saved password forged under Chromium's built-in fallback key is refused.
+- **Closing with a details confirmation open:** a close, quit or Windows shutdown that goes ahead (after any save prompts) cancels an open connection details confirmation instead of being refused, and keeps the tabs. Reload cancels it as soon as it is chosen, before its own confirmation.
+- **Hot exit:** a close after a startup that could not reopen the last session keeps that session as a recoverable copy instead of replacing it, and an earlier failed close no longer refuses every later one.
 - **Connection safety:** Database Properties, Table Designer, SSIS, Activity Monitor and other dependent documents no longer follow a replacement connection by server name alone. Drafts stay open, and operations require their original connection target. Legacy documents without that identity must be reopened explicitly after a connection is replaced.
 - **Disconnect prompts:** cancelling a running query names the server disconnect action and explains that cancellation cannot undo committed work and may have an unknown outcome. Server transaction prompts default to Cancel.
 - **Connection lifecycle:** reload retires obsolete account pins; busy document work and unrelated manual Connect no longer discard startup reconnects. Failed disconnect retains its previous resume preference. Corrected credentials can recover a rejected saved revision after fresh authentication, and transient account-check failures retain their original retryable error.
