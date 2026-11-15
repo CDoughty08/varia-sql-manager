@@ -324,8 +324,13 @@ internal static class SeamChecks
         var longFailure = ActionService.WithOutcomes(new string('m', ActionErrors.MaxMessage), [reason]);
         var shortFailure = ActionService.WithOutcomes("Failed.", ["\"Undo\" completed"]);
         var longReason = ActionService.WithOutcomes("Failed.", [new string('o', ActionErrors.MaxMessage * 2)]);
+        // Both long: each keeps half the room. And a clip never splits a surrogate pair.
+        var bothLong = ActionService.WithOutcomes(new string('m', ActionErrors.MaxMessage), [new string('o', ActionErrors.MaxMessage)]);
+        var paired = ScriptingErrors.Clip("ab\U0001F600cd", 4);
         check(longFailure.Length == ActionErrors.MaxMessage && longFailure.EndsWith(" Then " + reason + ".", StringComparison.Ordinal) && longFailure.Contains("m… Then ", StringComparison.Ordinal)
-            && shortFailure == "Failed. Then \"Undo\" completed." && longReason.Length == ActionErrors.MaxMessage && longReason.StartsWith("Failed. Then ooo", StringComparison.Ordinal),
+            && shortFailure == "Failed. Then \"Undo\" completed." && longReason.Length == ActionErrors.MaxMessage && longReason.StartsWith("Failed. Then ooo", StringComparison.Ordinal)
+            && bothLong.Length == ActionErrors.MaxMessage && bothLong.IndexOf("m… Then oo", StringComparison.Ordinal) == ActionErrors.MaxMessage / 2 - 2 && bothLong.EndsWith("o…", StringComparison.Ordinal)
+            && paired == "ab…" && ScriptingErrors.Clip("abc\U0001F600", 5) == "abc\U0001F600" && ScriptingErrors.Clip("abcd", 3) == "ab…",
             "runner v2 keeps a failed undo step's reason in the message, clipping a long failure before it (" + longFailure.Length + ", " + longReason.Length + ")");
         using var service = new ActionService(new Host(3));
         await using var connection = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");

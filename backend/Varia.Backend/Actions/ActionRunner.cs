@@ -181,7 +181,7 @@ internal sealed partial class ActionService
                 // The step's own reason ends the message too: a compensation refused by its own check says what it left behind.
                 var reason = ActionErrors.FromSql(catalog, sql, connection, ddl: true, null, serverText).Message;
                 Add("failed", step, reason);
-                outcomes.Add("\"" + step.Title + "\" failed: " + reason.TrimEnd('.'));
+                outcomes.Add("\"" + step.Title + "\" failed: " + (reason.EndsWith('.') ? reason[..^1] : reason));
             }
             // The failure or Stop broke the connection (a severe error closes it): the step could not run.
             catch (InvalidOperationException)
