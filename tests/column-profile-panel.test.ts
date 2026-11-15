@@ -20,7 +20,7 @@ import { manualTimers } from './fixtures/workbench'
 
 interface Asked { columns: number[]; signal?: AbortSignal; progress?: OperationProgressListener; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
-function fixture(columns = 40, shown: string | null = 'e1') {
+function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
   const listeners = new Set<() => void>()
   let snapshot = { state: 'open', rowsAvailable: 1000 }
   const asked: Asked[] = []
@@ -29,7 +29,7 @@ function fixture(columns = 40, shown: string | null = 'e1') {
     getSnapshot: () => snapshot,
     profile: vi.fn((cols: number[], signal?: AbortSignal, progress?: OperationProgressListener) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, progress, resolve, reject }) }))
   }
-  const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })) }
+  const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })), ...name ? { name } : {} }
   // Result 1, and a result numbered 5 that stands second (the ones between have gone) and has two columns of its own.
   const other = { columns: [{ name: 'x0', dataType: 'int' }, { name: 'x1', dataType: 'int' }] }
   const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e5', number: 5, descriptor: other, handle }] } as unknown as TabResults
@@ -281,6 +281,15 @@ describe('column profile panel', () => {
     expect(profiledEntry(next, profileTarget(first, 'e2'))).toBe(next[2])
     expect(profiledEntry(next, profileTarget(first, 'e3'))).toBeUndefined()
     expect(profiledEntry(next, undefined)).toBeUndefined()
+  })
+
+  it('names a named result by its name with its number, in its facts and in the toolbar', async () => {
+    const view = fixture(2, 'e1', 'Totals')
+    act(() => { view.timers.advance(300) })
+    expect(view.facts()).toBe('Totals, Result 1')
+    expect(view.results.operations.getSnapshot().t?.items).toMatchObject([{ kind: 'profile', target: 'Totals, Result 1' }])
+    await view.answer(0, 10, 0)
+    view.unmount()
   })
 
   it('shows its progress across every request in the toolbar, and a cancel keeps the cards it has', async () => {

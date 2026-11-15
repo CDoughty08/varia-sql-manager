@@ -1876,6 +1876,25 @@ describe('results service busy state', () => {
     return { ...f, handle, key, select, ops }
   }
 
+  it('names a sort of one of two results of one name with its number in the toolbar, and its copy by its name and number', async () => {
+    const f = fixture()
+    f.service.begin('t1', 'q1')
+    const sized = { rowsAvailable: 10, rowsRead: 10, rowsStored: 10 }
+    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { ...sized, name: 'Totals' }), descriptor(2, { index: 1, ...sized, name: 'Totals' })]) })
+    const handle = f.client.handle(2)!
+    handle.snapshot = { ...handle.snapshot, ...sized, state: 'complete' }
+    const key = keyAt(f.service, 't1', 1)
+    handle.sort.mockReturnValueOnce(deferred<ResultView>().promise)
+    f.service.sortBy('t1', key, 0, 'descending')
+    expect(f.service.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'sort', target: 'Totals (Result 2)' }])
+    const first = keyAt(f.service, 't1', 0)
+    f.service.setSelection('t1', first, selectAll(first))
+    f.api.copyResults.mockReturnValueOnce(new Promise(() => {}))
+    void f.service.copy('t1', first, false)
+    f.flush()
+    expect(f.tab().jobs).toMatchObject([{ kind: 'copy', label: 'Totals, Result 1' }])
+  })
+
   it('holds every sort and filter control and Save off while a view is built: refused, not queued, and the operation shows at once and pulses', async () => {
     const { service, handle, api, key, select, ops } = busy()
     // A filtered view first, so Remove Filter and Clear Filters have something to take off.

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { rowsFact } from '../src/renderer/src/results/status'
+import { planSourceLabel } from '../src/renderer/src/plans/ResultPlans'
+import type { ResultSetEntry } from '../src/renderer/src/results/ResultsService'
 import { comparedNames, distinctName, entryName, entryNumber, entrySecondary, numberedName, queryName, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const view = (rows: number, baseRows: number, complete = true) => ({ rows, baseRows, complete })
@@ -52,5 +54,14 @@ describe("a result's name and its number", () => {
     // A marker that names another result like a number numbers that one; the unnamed result keeps its words.
     const like = { number: 1, label: 'Result 2', descriptor: { name: 'Result 2' } }
     expect([distinctName(unnamed, [like, unnamed]), distinctName(like, [like, unnamed])]).toEqual(['Result 2', 'Result 2 (Result 1)'])
+  })
+})
+
+describe("a SQL-returned plan's name in the plan viewer", () => {
+  it('names a named plan set by its name with its number, an unnamed one and a captured plan as before', () => {
+    const descriptor = (name?: string) => ({ ...name ? { name } : {} }) as ResultSetEntry['descriptor']
+    expect(planSourceLabel({ number: 2, descriptor: descriptor('Plans') }, 0)).toBe('Plans, Result 2, plan 1')
+    expect(planSourceLabel({ number: 2, descriptor: descriptor() }, 1)).toBe('Result 2, plan 2')
+    expect(planSourceLabel({ number: 3, capturedPlan: true, descriptor: descriptor('Plans') }, 0, 'Batch 2')).toBe('Plan 3 · Batch 2')
   })
 })
