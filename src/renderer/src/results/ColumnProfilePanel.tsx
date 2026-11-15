@@ -4,7 +4,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
-import type { ResultHandle, ResultSnapshot, ResultView } from './ResultClient'
+import { ResultError, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
 import { entryOf, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
@@ -23,7 +23,7 @@ interface Profiles {
   readonly columns: ReadonlyMap<number, Profiled>
   readonly loading: boolean
   readonly error?: string
-  /** The handle the failed request read through: another view of the same rows asks again. */
+  /** The handle the grid showed when the request failed: a view of the same rows shown after that asks again. */
   readonly failed?: ResultHandle
 }
 
@@ -49,8 +49,9 @@ function ProfileCard({ name, type, profile, rows }: { name: string; type: string
  * The column profile panel (queryResults.grid.columnProfile), beside the stacked grids: a card per column of the set that
  * last had focus, computed in the backend over the rows its grid shows (results.profile through its view), 32 columns a
  * request. Its figures belong to those rows, not their order: it asks again when the grid's filters keep other rows or the
- * set finishes loading, never for a sort alone (a column, direction or Sort Text By change builds a new view of the same
- * rows). A newer request cancels the older. It holds only aggregates, never rows.
+ * set finishes loading (a sort of a set still loading builds its view over more rows), not for a sort of a loaded set (a
+ * column, direction or Sort Text By change builds a new view of the same rows) unless the last profile failed. A newer
+ * request cancels the older. It holds only aggregates, never rows.
  */
 /** The grid a profile follows: its entry, and for a query's own result its number in the run. */
 export interface ProfileTarget { readonly entry: EntryKey; readonly ordinal?: number }
@@ -71,8 +72,15 @@ export const profiledEntry = (sets: readonly ResultSetEntry[], target: ProfileTa
  *  is order-free (results.profile reads rows in base order through a bitmap of the view's), and neither a filter nor a
  *  profile compares text by the sort's mode, so Sort Text By changes neither. */
 export interface ProfiledRows { readonly filters: string; readonly settled: string }
+/** A view's filters never change: their identity (which sorts each filter's rows) is worked out once, not every render. */
+const identities = new WeakMap<ResultView, string>()
+const viewFilters = (view: ResultView): string => {
+  let identity = identities.get(view)
+  if (identity === undefined) identities.set(view, identity = filtersIdentity(view.filters))
+  return identity
+}
 export const profiledRows = (snapshot: ResultSnapshot | undefined, view: ResultView | undefined): ProfiledRows => ({
-  filters: view ? filtersIdentity(view.filters) : '',
+  filters: view ? viewFilters(view) : '',
   settled: !snapshot ? '' : view ? (view.complete ? 'complete:' : 'partial:') + view.baseRows : snapshot.state === 'complete' ? 'complete:' + snapshot.rowsAvailable : snapshot.state
 })
 
@@ -95,12 +103,15 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   const held = snapshot && snapshot.state !== 'released' && snapshot.state !== 'lost'
   const { filters, settled } = profiledRows(snapshot, view)
   // What a request reads through, read when one starts: a sort alone changes the view but not the rows, so starts none.
-  const reading = useRef({ handle, view, key: entry?.key, rows: filters + ' @ ' + settled })
-  reading.current = { handle, view, key: entry?.key, rows: filters + ' @ ' + settled }
+  const reading = useRef({ base, handle, view, key: entry?.key, filters, settled })
+  reading.current = { base, handle, view, key: entry?.key, filters, settled }
   // A profile that failed is asked again when the grid shows another view of the same rows (a sort after closing other
-  // results, say), as a new view always did before sorts kept the profile.
+  // results, say), as a new view always did before sorts kept the profile. Other rows start a request anyway.
   const [retry, setRetry] = useState(0)
-  useEffect(() => { if (latest.current?.error && latest.current.failed !== handle) setRetry(count => count + 1) }, [handle])
+  useEffect(() => {
+    const last = latest.current
+    if (last?.error && last.failed !== handle && last.base === base && last.of.filters === filters && last.of.settled === settled) setRetry(count => count + 1)
+  }, [handle])
   useEffect(() => {
     const { handle, view, key } = reading.current
     if (!base || !handle || !held || key === undefined) return
@@ -121,10 +132,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
           let result
           try { result = await reader.profile(part, abort.signal) }
           catch (error) {
-            // The backend may still drop a held view (its views per result are bounded): the grid's newer view has the
-            // same rows (else this profile would have been cancelled), so the rest is read through it.
+            // The backend may still drop a held view (its views per result are bounded): the rest is read through the
+            // grid's newer view of the same rows, as a pivot build does. Any other failure is reported, never sent again.
             const now = reading.current
-            if (abort.signal.aborted || !now.handle || now.handle === reader || now.key === undefined || now.rows !== filters + ' @ ' + settled) throw error
+            if (abort.signal.aborted || !(error instanceof ResultError) || error.code !== 'VIEW_NOT_FOUND' || !now.handle || now.handle === reader
+              || now.key === undefined || now.base !== base || now.filters !== filters || now.settled !== settled) throw error
             done()
             reader = now.handle
             release = now.view ? results.holdView(tabId, now.key, now.view) : undefined
@@ -139,7 +151,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
         setProfiles({ ...current, loading: false })
       } catch (error) {
         if (abort.signal.aborted) return
-        setProfiles({ ...current, loading: false, error: error instanceof Error ? error.message : String(error), failed: reader })
+        setProfiles({ ...current, loading: false, error: error instanceof Error ? error.message : String(error), failed: reading.current.handle })
       } finally { done() }
     })()
     return () => { abort.abort(); done() }

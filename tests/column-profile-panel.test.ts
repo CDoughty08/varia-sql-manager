@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ColumnProfile, ResolvedViewFilter, ResultsProfileResult, ViewSortKey } from '../src/shared/contracts'
-import type { ResultView } from '../src/renderer/src/results/ResultClient'
+import { ResultError, type ResultView } from '../src/renderer/src/results/ResultClient'
+import type { ErrorCode } from '../src/shared/ipc/wire/protocol'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import ColumnProfilePanel, { profiledEntry, profileTarget } from '../src/renderer/src/results/ColumnProfilePanel'
@@ -88,7 +89,7 @@ function sortFixture() {
     holds: () => [...holds.values()].reduce((sum, count) => sum + count, 0),
     heldViews: () => [...holds.keys()],
     error: () => container.querySelector('.profile-note.error')?.textContent,
-    failLast: async (message: string) => { const request = asked[asked.length - 1]; await act(async () => { request.reject(new Error(message)) }) },
+    failLast: async (code: ErrorCode, message: string) => { const request = asked[asked.length - 1]; await act(async () => { request.reject(new ResultError(code, message)) }) },
     busy: () => container.querySelector('.profile-panel')?.getAttribute('aria-busy') === 'true',
     answerLast: async (rows: number, nulls: number) => {
       const request = asked[asked.length - 1]
@@ -212,7 +213,7 @@ describe('column profile panel', () => {
     const newer = view.sorted([{ column: 0, descending: true, mode: 'value' }], other)
     view.show(newer)
     expect(view.asked()).toBe(3)
-    await view.failLast('The view is no longer available.')
+    await view.failLast('VIEW_NOT_FOUND', 'This sorted view was closed. Sort the results again.')
     expect(view.request(3).by).toBe(newer)
     expect(view.heldViews()).toEqual([newer])
     await view.answerLast(300, 30)
@@ -224,7 +225,7 @@ describe('column profile panel', () => {
     const filtered: ResolvedViewFilter[] = [{ op: 'notIn', column: 0, rows: [2], nulls: false }]
     view.show(view.sorted([], filtered))
     expect(view.asked()).toBe(5)
-    await view.failLast('There is not enough result memory to profile these rows.')
+    await view.failLast('TOO_LARGE', 'There is not enough result memory to profile these rows.')
     expect(view.error()).toContain('not enough result memory')
     expect(view.asked()).toBe(5)
     const sortedAgain = view.sorted([{ column: 1, descending: false, mode: 'value' }], filtered)
@@ -236,6 +237,28 @@ describe('column profile panel', () => {
     expect(view.nulls('c0')).toBe('60 (10%)')
     view.show(view.sorted([{ column: 1, descending: true, mode: 'value' }], filtered))
     expect(view.asked()).toBe(6)
+    view.unmount()
+  })
+
+  it('reports a failure other than a dropped view without sending it again, and asks once for other rows after a failure', async () => {
+    const view = sortFixture()
+    await view.answerLast(1000, 100)
+    const filter: ResolvedViewFilter[] = [{ op: 'in', column: 0, rows: [1], nulls: false }]
+    view.show(view.sorted([], filter))
+    // Sorted while the profile runs; the profile then times out: reported as it is, not sent through the newer view.
+    view.show(view.sorted([{ column: 0, descending: false, mode: 'value' }], filter))
+    expect(view.asked()).toBe(2)
+    await view.failLast('TIMEOUT', 'The profile took too long.')
+    expect(view.asked()).toBe(2)
+    expect(view.error()).toContain('took too long')
+    expect(view.holds()).toBe(0)
+    // Another filter after the failure: one request, not one for the rows and another for the retry.
+    view.show(view.sorted([], [{ op: 'notIn', column: 0, rows: [1], nulls: false }]))
+    expect(view.asked()).toBe(3)
+    expect(view.signal(2)?.aborted).toBe(false)
+    await view.answerLast(900, 90)
+    expect(view.error()).toBeUndefined()
+    expect(view.nulls('c0')).toBe('90 (10%)')
     view.unmount()
   })
 
