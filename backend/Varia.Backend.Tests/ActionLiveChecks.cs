@@ -25,8 +25,8 @@ internal static class ActionLiveChecks
         public async Task<T> Call<T>(string method, object args, RequestContext? context = null) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json, context);
         public Task<ActionExecuteResult> Rename(ObjectRefDto target, string name, RequestContext? context = null) =>
             Call<ActionExecuteResult>("actions.execute", new ActionArgs("rename", ConnectionId, Guid.NewGuid().ToString(), target, name), context);
-        public Task<ActionExecuteResult> Delete(ObjectRefDto target, bool close = false, bool history = false, RequestContext? context = null) =>
-            Call<ActionExecuteResult>("actions.execute", new ActionArgs("delete", ConnectionId, Guid.NewGuid().ToString(), target, null, close, history), context);
+        public Task<ActionExecuteResult> Delete(ObjectRefDto target, bool close = false, bool history = false, RequestContext? context = null, DatabaseIdentityDto? identity = null) =>
+            Call<ActionExecuteResult>("actions.execute", new ActionArgs("delete", ConnectionId, Guid.NewGuid().ToString(), target, null, close, history, Identity: identity), context);
         public Task<ActionScriptResult> Script(ActionArgs args) => Call<ActionScriptResult>("actions.script", args);
         public Task<ActionDescribeResult> Describe(ObjectRefDto target) =>
             Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(ConnectionId, Guid.NewGuid().ToString(), "deleteObject", target));
@@ -191,6 +191,15 @@ internal static class ActionLiveChecks
                 && target.Warnings.Contains(new ActionWarningDto(ActionService.SnapshotsWarning, true)) && target.Blockers!.Count <= 8,
                 "Delete Object lists a query tab's session in the database with its open transaction, counts it, and warns of the database's snapshot (session " + spid + "; listed "
                 + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, " + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.Error?.Message + ")");
+            // The describe names the database it read; a Delete naming another (one that took the name since) is refused before any DDL.
+            var read = await Exec("SELECT CONVERT(nvarchar(10), database_id) + N'|' + CONVERT(nvarchar(23), create_date, 126) FROM sys.databases WHERE name = " + Literal(compensated) + ";");
+            var identity = described.DeleteTarget?.Identity;
+            var stale = identity is null ? null : await client.Delete(database, close: true, history: true, identity: identity with { Created = "2000-01-01T00:00:00.000" });
+            var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(compensated) + ";")).Scalar == "1";
+            check(identity is not null && read.Scalar?.Split('|') is [var id, var created] && id == identity.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                && created.StartsWith(identity.Created[..19], StringComparison.Ordinal)
+                && stale is { Error.Code: "NOT_FOUND", Steps.Count: 0 } && stale.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal) && kept,
+                "Delete Object names the database it read, and a Delete naming another database is refused before any DDL, leaving the database (" + stale?.Error?.Code + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json); }
         // A query tab in master whose transaction wrote to the database: SINGLE_USER WITH ROLLBACK IMMEDIATE rolls it back too, so

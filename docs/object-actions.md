@@ -143,7 +143,9 @@ OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statem
 
 Delete Object for a database also offers "Delete backup and restore history information for databases" (checked,
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
-confirmation.
+confirmation. OK names the database the dialog read (its database_id and create_date): a database renamed, dropped
+or replaced since, so that another now has the name, is refused before anything runs ("… is not the one Delete Object
+read"), rather than dropped on warnings and sessions the dialog never showed for it.
 
 For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
 is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database

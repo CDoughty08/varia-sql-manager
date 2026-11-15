@@ -56,12 +56,13 @@ export interface RenameRequest {
   readonly identity?: DatabaseIdentity
 }
 /**
- * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only; `dropMappedUsers`
- * (DROP USER in each database first, D4c) and `loginIdentity` (the login Delete Object read) to logins only.
+ * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first), `deleteHistory` and `identity` (the database Delete Object read)
+ * apply to databases only; `dropMappedUsers` (DROP USER in each database first, D4c) and `loginIdentity` (the login Delete Object read)
+ * to logins only.
  */
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
-  readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity
+  readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity; readonly identity?: DatabaseIdentity
 }
 /** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
 export interface DatabaseChanges {
@@ -185,6 +186,8 @@ export interface DeleteTarget {
   readonly closeConnectionsNote?: string
   /** Varia's query tabs (their session ids) whose session holds an open transaction in the database or while in it, whatever database the tab is in (A7). */
   readonly transactionTabs?: readonly string[]
+  /** The database it read (database_id and create_date): the Delete request names it, so a database that took the name since is refused. */
+  readonly identity?: DatabaseIdentity
   /** A login (D4c): its facts with what it owns (the warnings say what blocks the DROP), and the database users mapped to it. */
   readonly login?: LoginFacts
   readonly mappings?: LoginMappings
@@ -543,7 +546,7 @@ const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uui
 const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
 const deleteSchema = z.object({
   action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
-  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional()
+  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional(), identity: identitySchema.optional()
 }).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
 const unlockSchema = z.object({ action: z.literal('unlock'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, mode: z.enum(unlockModes), loginIdentity: loginIdentitySchema.optional() }).strict()
@@ -744,6 +747,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
       if (request.target.kind !== 'login' && (request.dropMappedUsers !== undefined || request.loginIdentity !== undefined)) issue(context, 'dropMappedUsers', 'Only a login has mapped users and an identity to check.')
+      if (request.target.kind !== 'database' && request.identity !== undefined) issue(context, 'identity', 'Only a database has an identity its describe read.')
       break
     case 'properties': {
       const count = plannedStatements(request.changes)

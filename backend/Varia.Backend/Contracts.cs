@@ -626,10 +626,11 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// with an open transaction) are absent without VIEW SERVER STATE, as are Blockers (at most the catalogue's blockers; BlockersTruncated
 /// when more exist) and TransactionTabs (the query tabs, by session id, whose session has an open transaction there, at most
 /// ActionService.TransactionTabLimit); CloseConnectionsNote is why Close existing connections is unavailable (Managed Instance, an
-/// offline database). For a login (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
+/// offline database); Identity is the database it read (database_id and create_date), which the Delete request names. For a login
+/// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);

@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { promptLimits } from '../src/shared/actions/prompts'
-import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionExecuteResult, type DeleteTarget } from '../src/shared/actions/schema'
+import { actionExecuteRequestSchema, dropDatabaseStepTitle, type ActionDescribeResult, type ActionExecuteResult, type DeleteTarget } from '../src/shared/actions/schema'
 import type { ApiResult } from '../src/shared/contracts'
 import { displayText, type ObjectRef } from '../src/shared/explorer/refs'
 import { databaseGoneHandler, queryWindowsNotice } from '../src/renderer/src/dialogs/database-gone'
@@ -45,6 +45,22 @@ describe('Delete Object on a database (D3d)', () => {
     // The DROP failed (a snapshot) and single-user mode was undone: the database is still there.
     expect(removes(appData, [{ status: 'done', title: 'Close existing connections' }, { status: 'failed', title: dropDatabaseStepTitle }, { status: 'done', title: 'Restore multi-user access', compensates: true }], false)).toBe(false)
     expect(removes(orders, [{ status: 'done', title: 'Drop the object' }], true)).toBe(false)
+  })
+
+  it('names the database it read, so a database that took the name since is refused rather than dropped', () => {
+    const identity = { id: 7, created: '2026-01-02T03:04:05.678' }
+    const draft = { deleteHistory: true, closeConnections: false, dropMappedUsers: false }
+    expect(deleteObjectDefinition.request(appData, target({ identity }), draft)).toEqual({ action: 'delete', target: appData, closeConnections: false, deleteHistory: true, identity })
+    // A table's model carries no identity, and an older describe without one sends none.
+    expect(deleteObjectDefinition.request(orders, target({ identity }), draft)).not.toHaveProperty('identity')
+    expect(deleteObjectDefinition.request(appData, target(), draft)).not.toHaveProperty('identity')
+    const ids = { connectionId: '00000000-0000-4000-8000-000000000001', requestId: '00000000-0000-4000-8000-000000000002' }
+    const request = { action: 'delete', ...ids, target: appData, closeConnections: false, deleteHistory: false, identity }
+    expect(actionExecuteRequestSchema.safeParse(request).success).toBe(true)
+    expect(actionExecuteRequestSchema.safeParse({ ...request, target: orders }).success).toBe(false)
+    expect(actionExecuteRequestSchema.safeParse({ ...request, identity: { id: 0, created: identity.created } }).success).toBe(false)
+    const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
+    expect(service).toContain('is not the one Delete Object read')
   })
 
   it('greys Close existing connections where the server cannot set SINGLE_USER, and never sends it there', () => {

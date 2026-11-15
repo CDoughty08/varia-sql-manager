@@ -317,10 +317,13 @@ internal sealed partial class ActionService : IDisposable
                 if (args.Identity is { } read && !DatabaseAlter.IdentityValid(read)) throw Invalid("identity.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
+                // A database's DROP names the database Delete Object read (its database_id and create_date), as a rename's does.
+                if (deleted.Kind != "database" && args.Identity is not null) throw Invalid("only a database has an identity its describe read.");
+                if (args.Identity is { } dropped && !DatabaseAlter.IdentityValid(dropped)) throw Invalid("identity.");
                 if (deleted.Kind != "login" && (args.DropMappedUsers is not null || args.LoginIdentity is not null)) throw Invalid("only a login has mapped users and an identity to check.");
                 // DROP LOGIN and every DROP USER bind to the principal Delete Object showed; Script runs nothing and may omit it.
                 if (deleted.Kind == "login" && !script && args.LoginIdentity is null) throw Invalid("a login's delete needs the loginIdentity it read.");
@@ -852,6 +855,9 @@ internal sealed partial class ActionService : IDisposable
     {
         if (subject.Login is { } login) return LoginRefusal(login, args);
         var row = subject.Row;
+        // Another database has taken the name since Delete Object read it: its warnings, sessions and blockers were about the one it read.
+        if (args.Action == "delete" && subject.Target.Kind == "database" && args.Identity is { } read && !IsDatabase(row, read))
+            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one Delete Object read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
         var system = subject.Target.Kind == "database" ? row.Bool("is_system") : row.Bool("is_ms_shipped");
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, args.Action))
@@ -901,6 +907,10 @@ internal sealed partial class ActionService : IDisposable
         if (closeConnections && engine == "managedInstance") return Error("NOT_SUPPORTED", "Managed Instance cannot set SINGLE_USER, so Varia cannot close the connections. Rename when they are free instead.");
         return null;
     }
+
+    /// <summary>Whether a preflight row (ActionSql.Database) is the database a describe read: its database_id and create_date.</summary>
+    private static bool IsDatabase(ScriptPreflight.Row row, DatabaseIdentityDto read) =>
+        row.Int("database_id") == read.Id && DatabaseProperties.Iso(row.Raw("create_date")) == read.Created;
 
     /// <summary>A login the request's identity does not describe: the name now belongs to another principal, whose facts the user never saw.</summary>
     private ActionError? IdentityRefusal(LoginFactsDto login, ActionArgs args) =>
@@ -1316,8 +1326,10 @@ internal sealed partial class ActionService : IDisposable
             }
         }
         var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
+        // The database read, which OK names; none when its create_date cannot be written as the request's identity carries it.
+        var identity = DatabaseProperties.Iso(row.Raw("create_date")) is { } created ? new DatabaseIdentityDto(row.Int("database_id"), created) : null;
         var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
-            withTransaction, blockers, blockers is null ? null : more, note, tabs);
+            withTransaction, blockers, blockers is null ? null : more, note, tabs, Identity: identity);
         return new(deleted, 0);
     }
 

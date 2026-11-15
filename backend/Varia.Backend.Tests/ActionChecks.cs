@@ -327,13 +327,18 @@ internal static class ActionChecks
             ("an identity of id 0", TakeOffline(appData, false, new(0, "2026-01-02T03:04:05.678"))), ("an identity without milliseconds", BringOnline(appData, new(5, "2026-01-02T03:04:05"))),
             ("an identity with a line break", BringOnline(appData, new(5, "2026-01-02T03:04:05.678\n"))), ("dropConnections on a rename", Rename(table, "x") with { DropConnections = false }),
             ("dropConnections on a delete", Delete(table) with { DropConnections = true }),
+            ("an identity on a table's delete", Delete(table) with { Identity = new(5, "2026-01-02T03:04:05.678") }),
+            ("a delete's identity of id 0", Delete(appData) with { Identity = new(0, "2026-01-02T03:04:05.678") }),
+            ("a delete's identity without milliseconds", Delete(appData) with { Identity = new(5, "2026-01-02T03:04:05") }),
             ("dropConnections on properties", new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), appData, CloseConnections: false,
                 Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }), DropConnections: false))
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses: " + string.Join(", ", accepted));
         check(Refused(Rename(table, " ")) == "accepted" && Refused(Rename(table, Long("q]'); --"))) == "accepted" && Refused(Rename(table, "orders")) == "accepted"
-            && Refused(Delete(new ObjectRefDto("database", Name: "AppData"), close: true, history: true)) == "accepted", "hostile, single-space and case-changed names are accepted verbatim");
+            && Refused(Delete(new ObjectRefDto("database", Name: "AppData"), close: true, history: true)) == "accepted"
+            && Refused(Delete(appData, close: true) with { Identity = new(5, "2026-01-02T03:04:05.678") }) == "accepted",
+            "hostile, single-space and case-changed names are accepted verbatim, and a database's Delete may name the database it read");
         var hostile = new ObjectRefDto("database", Name: Long("q]'); --"));
         check(Refused(TakeOffline(hostile, false)) == "accepted" && Refused(TakeOffline(appData, true, new(5, "2026-01-02T03:04:05.678"))) == "accepted"
             && Refused(BringOnline(hostile)) == "accepted" && Refused(BringOnline(appData, new(int.MaxValue, "2026-01-02T03:04:05.678"))) == "accepted"
