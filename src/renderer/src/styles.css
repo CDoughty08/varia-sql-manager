@@ -950,7 +950,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-tab[data-selected] { background: var(--varia-panel-background); border-color: var(--varia-panel-border); color: var(--varia-foreground); box-shadow: inset 0 2px 0 var(--varia-panelTitle-activeBorder); transition: none; }
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
 .rt-tab[data-selected] > [role="tab"] { font-weight: 600; }
-.rt-more { flex: none; align-self: center; padding: 0 4px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.rt-overflow { display: inline-flex; flex: none; align-items: center; gap: 2px; align-self: center; height: 20px; margin: 0 0 3px auto; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.rt-overflow:hover { background: var(--varia-toolbar-hoverBackground); }
+.rt-overflow[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); transition: none; }
+.rt-overflow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.rt-picker { position: fixed; z-index: 13000; display: flex; flex-direction: column; box-sizing: border-box; width: 320px; max-width: calc(100vw - 16px); min-height: 0; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.rt-picker-head { display: flex; flex: none; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border-bottom: 1px solid var(--varia-menu-separatorBackground); color: var(--varia-descriptionForeground); }
+.rt-picker-head input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--varia-input-foreground); font: inherit; }
+.rt-picker-head input::placeholder { color: var(--varia-input-placeholderForeground); }
+.rt-picker-head:focus-within { box-shadow: inset 0 -1px 0 var(--varia-focusBorder); }
+.rt-picker-list { position: relative; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-color: var(--varia-scrollbarSlider-background) transparent; }
+.rt-picker-space { position: relative; }
+.rt-picker-row { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 6px; height: var(--varia-row); box-sizing: border-box; padding: 0 10px; white-space: nowrap; cursor: default; }
+.rt-picker-row:hover { background: var(--varia-list-hoverBackground); }
+.rt-picker-row[aria-current="true"] { font-weight: 600; }
+.rt-picker-row[data-active] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.rt-picker-row[data-sub] { padding-left: 26px; }
+.rt-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rt-picker-row small { flex: none; margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 400; }
+.rt-picker-row[data-active] small { color: inherit; }
+.rt-picker-none { padding: 6px 10px; color: var(--varia-descriptionForeground); }
+.rt-picker-foot { flex: none; padding: 3px 10px; border-top: 1px solid var(--varia-menu-separatorBackground); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
 .rt-views { display: flex; flex: none; align-items: center; gap: 8px; height: 28px; box-sizing: border-box; padding: 0 4px; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
 .rt-view-tabs { display: flex; flex: none; gap: 2px; }
 .rt-view { display: flex; align-items: center; height: 22px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); }
@@ -966,8 +986,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-close:hover:not(:disabled) { opacity: 1; }
 .rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+/* A short pane folds the rows of tabs (tabsFold): side by side in one row, without the facts; or none, the grid alone. */
+.rt-root[data-fold="one"] { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); grid-template-rows: auto minmax(0, 1fr); }
+.rt-root[data-fold="one"] > .rt-results { grid-column: 1; grid-row: 1; }
+.rt-root[data-fold="one"] > .rt-views { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; border-bottom-color: var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.rt-root[data-fold="one"] > .rt-panel { grid-column: 1 / -1; grid-row: 2; }
+.rt-root[data-fold="one"] .rt-facts { display: none; }
+.rt-root[data-fold="none"] > .rt-results, .rt-root[data-fold="none"] > .rt-views { display: none; }
 @media (forced-colors: active) {
   .rt-tab[data-selected], .rt-view[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .rt-picker-row[data-active] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .rt-picker-row[aria-current="true"]:not([data-active]) { outline: 1px solid CanvasText; outline-offset: -1px; }
   .rt-tab[data-selected] > [role="tab"]:focus-visible, .rt-view[data-selected] > [role="tab"]:focus-visible, .rt-tab[data-selected] .rt-close:focus-visible { outline-color: HighlightText; }
 }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */

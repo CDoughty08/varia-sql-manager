@@ -148,6 +148,7 @@
   {"id":"window.togglePanelTabs","label":"Panel Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","window.togglePanelTabs"]],"checkedAfterClick":false}
   {"id":"window.statistics","label":"Client Statistics","registerAccelerator":false,"type":"normal","click":[["command","window.statistics"]]}
   {"id":"output.toggleResultsTabs","label":"Results as Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","output.toggleResultsTabs"]],"checkedAfterClick":false}
+  {"accelerator":"Cmd+Shift+O","id":"output.goToResult","label":"Go to Result…","registerAccelerator":false,"type":"normal","click":[["command","output.goToResult"]]}
   {"type":"separator"}
   {"id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
   {"id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}

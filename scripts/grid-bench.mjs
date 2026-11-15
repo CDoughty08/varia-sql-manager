@@ -6,7 +6,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { betterAttempt, measuresAgain } from './fixtures/bench.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { stopIfLowMemory } from './fixtures/memory-load.mjs'
-import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { enlargeOutput, pinStackedResults } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
 
@@ -85,6 +85,8 @@ async function launch(env) {
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   // The fake backend (VARIA_TEST_BACKEND) says its runtime is 'fake'; the Release backend names its .NET.
   await backendReady(page, env.VARIA_TEST_BACKEND ? 'fake' : undefined).waitFor({ timeout: 60000 })
+  // The steps read stacked captions and scroll the stack; Tabs is the default.
+  await pinStackedResults(page)
   await page.evaluate(({ gridPart, first }) => {
     /** What the first result's grid shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {

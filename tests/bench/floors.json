@@ -29,6 +29,7 @@
     "node.grid.tiles.opsPerSecond": { "title": "Grid frame: visible range, tiles and prefetch ring, 300 columns", "unit": "ops/s", "better": "higher", "target": 500000, "floor": 100000 },
     "node.chart.drawOpsPerSecond": { "title": "Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px", "unit": "ops/s", "better": "higher", "target": 1000, "floor": 100 },
     "node.grid.cache.opsPerSecond": { "title": "Grid frame: window cache, 3 lookups and 1 insert at 256 windows", "unit": "ops/s", "better": "higher", "target": 100000, "floor": 25000 },
+    "node.grid.resultPicker.opsPerSecond": { "title": "Results picker: 1,251 views of 1,000 results listed, filtered and windowed per keystroke", "unit": "ops/s", "better": "higher", "target": 2000, "floor": 500 },
     "node.search.firstLetterP95Ms": { "title": "Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95", "unit": "ms", "better": "lower", "target": 75, "floor": 500 },
     "node.search.firstLetterAllocatedMb": { "title": "Object search: memory allocated by that search, median", "unit": "MB", "better": "lower", "target": 16, "floor": 64 },
     "e2e.invoke.p50Ms": { "title": "Renderer invoke → backend → renderer, p50", "unit": "ms", "better": "lower", "target": 1, "floor": 5 },

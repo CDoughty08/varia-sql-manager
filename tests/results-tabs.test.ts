@@ -13,11 +13,15 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { scrollbarSize } from '../src/renderer/src/grid/ResultsStack'
-import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
+import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
+import { filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
+import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { PivotService } from '../src/renderer/src/results/PivotService'
+import { formatCount } from '../src/renderer/src/results/status'
+import { windows } from '../src/renderer/src/core/windows'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -509,7 +513,9 @@ describe('results as tabs', () => {
     root = createRoot(container)
     act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 }) })) })
     expect(container.querySelectorAll('[data-tab-row="result"] [role="tab"]')).toHaveLength(g.resultTabsDrawn)
-    expect(container.querySelector('.rt-more')?.textContent).toBe(`+${200 - g.resultTabsDrawn}`)
+    // The overflow button counts the results without a tab in view (happy-dom lays nothing out, so those not drawn).
+    expect(container.querySelector('.rt-overflow')?.textContent).toBe(`+${200 - g.resultTabsDrawn}`)
+    expect(container.querySelector('.rt-more')).toBeNull()
     // End and Home reach the last and the first result, outside the window drawn, and the tab reached takes the focus.
     const press = (key: string) => act(() => { (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
     const redraw = () => act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 }) })) })
@@ -522,6 +528,10 @@ describe('results as tabs', () => {
     press('ArrowRight')
     redraw()
     expect(document.activeElement?.textContent).toBe('Result 1')
+    // A command that moves the drawn window (Previous Result from Result 1 wraps to the last) takes the focus along.
+    act(() => { results.focusEntry('t1', results.getSnapshot().t1.sets[199].key) })
+    redraw()
+    expect(document.activeElement?.textContent).toBe('Result 200')
   })
 })
 
@@ -530,19 +540,450 @@ describe('the results layout toggle', () => {
     const fixture = workbenchFixture()
     try {
       const { commands, api, context, settings } = fixture
-      expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('stacked')
-      expect(commands.isToggled('output.toggleResultsTabs')).toBe(false)
-      await commands.execute('output.toggleResultsTabs', undefined, 'toolbar')
+      // Tabs is the default (PR 14).
       expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('tabs')
       expect(context.getState().resultsTabs).toBe(true)
       expect(commands.isToggled('output.toggleResultsTabs')).toBe(true)
-      await commands.execute('output.toggleResultsTabs', undefined, 'palette')
+      await commands.execute('output.toggleResultsTabs', undefined, 'toolbar')
       expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('stacked')
-      expect(api.updateSettings.mock.calls).toEqual([[{ 'queryResults.grid.layout': 'tabs' }], [{ 'queryResults.grid.layout': 'stacked' }]])
+      expect(context.getState().resultsTabs).toBe(false)
+      expect(commands.isToggled('output.toggleResultsTabs')).toBe(false)
+      await commands.execute('output.toggleResultsTabs', undefined, 'palette')
+      expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('tabs')
+      expect(api.updateSettings.mock.calls).toEqual([[{ 'queryResults.grid.layout': 'stacked' }], [{ 'queryResults.grid.layout': 'tabs' }]])
       // Two quick presses, the second before the first is saved, cancel out.
       await Promise.all([commands.execute('output.toggleResultsTabs', undefined, 'toolbar'), commands.execute('output.toggleResultsTabs', undefined, 'toolbar')])
-      expect(api.updateSettings.mock.calls.slice(2)).toEqual([[{ 'queryResults.grid.layout': 'tabs' }], [{ 'queryResults.grid.layout': 'stacked' }]])
-      expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('stacked')
+      expect(api.updateSettings.mock.calls.slice(2)).toEqual([[{ 'queryResults.grid.layout': 'stacked' }], [{ 'queryResults.grid.layout': 'tabs' }]])
+      expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('tabs')
     } finally { fixture.dispose() }
+  })
+})
+
+describe('the Tabs layout in a short pane', () => {
+  it('keep both rows of tabs while the grid has room for its header and two rows, then one row, then none', () => {
+    const need = g.headerHeight + 2 * g.rowHeight + 10 + g.stackBorder
+    expect(tabsFold(0, 10)).toBeUndefined()
+    expect(tabsFold(g.resultTabsHeight + g.viewTabsHeight + need, 10)).toBeUndefined()
+    expect(tabsFold(g.resultTabsHeight + g.viewTabsHeight + need - 1, 10)).toBe('one')
+    expect(tabsFold(g.resultTabsHeight + need, 10)).toBe('one')
+    expect(tabsFold(g.resultTabsHeight + need - 1, 10)).toBe('none')
+    // The results pane at its 100 px minimum, under its toolbar: the grid alone.
+    expect(tabsFold(64, 10)).toBe('none')
+  })
+
+  it('fold when first drawn, and in the shortest pane give the grid the focus from the picker, picked or closed', () => {
+    const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rt-root') ? 64 : 0 } })
+    try {
+      const { results, two, draw, all } = fixture()
+      draw()
+      // Folded already when first drawn (measured at mount, in a layout effect, so no frame shows both rows).
+      expect(all('.rt-root')[0].getAttribute('data-fold')).toBe('none')
+      const picker = () => document.querySelector<HTMLElement>('.rt-picker')
+      const input = () => document.querySelector<HTMLInputElement>('.rt-picker input')!
+      const press = (key: string) => act(() => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+      // Opened from the shown grid; Enter on another result: its grid, drawn in the old one's place, takes the focus.
+      act(() => { all('[data-grid]')[0].focus() })
+      act(() => { pickerRequests.request('t1') })
+      press('ArrowDown')
+      press('Enter')
+      draw()
+      expect(picker()).toBeNull()
+      expect(results.getSnapshot().t1.focused).toBe(two)
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Enter on the view shown: its grid takes the focus at once.
+      act(() => { pickerRequests.request('t1') })
+      press('Enter')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Asked for again while open, Escape still gives the focus back to where it was first opened from.
+      const editor = document.createElement('textarea')
+      document.body.append(editor)
+      editor.focus()
+      act(() => { pickerRequests.request('t1') })
+      act(() => { pickerRequests.request('t1') })
+      press('Escape')
+      expect(document.activeElement).toBe(editor)
+      // Escape with nowhere to go back to: the grid, not a hidden tab.
+      act(() => { pickerRequests.request('t1') })
+      editor.remove()
+      press('Escape')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      // Or where it was opened from cannot take the focus back (hidden by the fold, here disabled): the grid too.
+      const button = document.createElement('button')
+      document.body.append(button)
+      button.focus()
+      act(() => { pickerRequests.request('t1') })
+      button.disabled = true
+      press('Escape')
+      expect((document.activeElement as HTMLElement).dataset.grid).toBe(two)
+      button.remove()
+      // A press on the picker outside its filter box (its footer, say) leaves the focus in the box, so its keys still work.
+      act(() => { pickerRequests.request('t1') })
+      const down = (target: Element) => { const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); act(() => { target.dispatchEvent(event) }); return event.defaultPrevented }
+      expect(down(document.querySelector('.rt-picker-foot')!)).toBe(true)
+      expect(down(input())).toBe(false)
+      // Its filter box's context menu (Paste) takes the focus and a press without closing it.
+      const menu = document.createElement('div')
+      menu.className = 'menu-layer'
+      menu.innerHTML = '<div role="menu" tabindex="-1"></div>'
+      document.body.append(menu)
+      act(() => { menu.querySelector<HTMLElement>('[role="menu"]')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) })
+      act(() => { menu.querySelector<HTMLElement>('[role="menu"]')!.focus() })
+      expect(picker()).not.toBeNull()
+      menu.remove()
+      act(() => { input().focus() })
+      press('Escape')
+      expect(picker()).toBeNull()
+    } finally {
+      if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    }
+  })
+})
+
+describe('moving through the results as tabs', () => {
+  it('count a query as steppable (multipleResults) from its second result or comparison, never its Pivot', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    results.begin('t1', 'q1')
+    void results.finish('t1', 'q1', { summary: summaryOf([descriptor(1, rows), descriptor(2, { index: 1, ...rows })]) })
+    expect(results.steppable.getSnapshot().t1).toBe(true)
+    results.begin('t2', 'q2')
+    void results.finish('t2', 'q2', { summary: summaryOf([descriptor(3, rows)]) })
+    results.addSet('t2', descriptor(804, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])
+    expect(results.steppable.getSnapshot().t2).toBeUndefined()
+  })
+
+  it('step through the results and comparisons, and through a result\'s views, wrapping round', () => {
+    const { results, one, two, three, pivot, diff } = fixture()
+    const tab = () => results.getSnapshot().t1
+    expect(stepResult(tab(), 1)).toBe(two)
+    expect(stepResult(tab(), -1)).toBe(diff)
+    // A result with one view has no other to step to, nor has a comparison.
+    expect(stepView(tab(), 1)).toBeUndefined()
+    results.focusEntry('t1', three)
+    expect(stepView(tab(), 1)).toBe(pivot)
+    expect(stepView(tab(), -1)).toBe(pivot)
+    results.focusEntry('t1', pivot)
+    expect(stepView(tab(), 1)).toBe(three)
+    expect(stepResult(tab(), 1)).toBe(diff)
+    results.focusEntry('t1', diff)
+    expect(stepView(tab(), 1)).toBeUndefined()
+    // A result's tab returns to the view it showed last: Result 3's Pivot.
+    expect(stepResult(tab(), -1)).toBe(pivot)
+    expect(stepResult(tab(), 1)).toBe(one)
+     // Go to Result N picks the item at that place, a group's view being the one it showed last; the last is the last item.
+    expect(jumpResult(tab(), 1)).toBe(one)
+    expect(jumpResult(tab(), 3)).toBe(pivot)
+    expect(jumpResult(tab(), 4)).toBe(diff)
+    expect(jumpResult(tab(), 5)).toBeUndefined()
+    expect(jumpResult(tab(), 'last')).toBe(diff)
+  })
+
+  it('list every view for the picker, filter it by words and draw only a window of its rows', () => {
+    const { results } = fixture()
+    const rows = pickerRows(results.getSnapshot().t1)
+    expect(rows.map(row => row.label)).toEqual(['Result 1, Table', 'Result 2, Table', 'Result 3, Table', 'Pivot of Result 3', 'Differences: Result 1 → Result 2, Comparison'])
+    expect(rows.map(row => [row.name, row.detail])).toEqual([['Result 1', 'Table'], ['Result 2', 'Table'], ['Result 3', 'Table'], ['Pivot', ''], ['Differences: Result 1 → Result 2', 'Comparison']])
+    expect(filterRows(rows, ' 3  PIV ').map(row => row.label)).toEqual(['Pivot of Result 3'])
+    expect(filterRows(rows, 'result 2').map(row => row.label)).toEqual(['Result 2, Table', 'Differences: Result 1 → Result 2, Comparison'])
+    expect(filterRows(rows, '')).toBe(rows)
+    expect(pickerSummary(rows, rows.length)).toBe('5 views: 3 results, 1 Pivot, 1 comparison')
+    expect(pickerSummary(rows, 1)).toBe('1 of 5 views: 3 results, 1 Pivot, 1 comparison')
+    // The rows in view and two either side, never more.
+    expect(pickerWindow(0, 220, 1000, 22)).toEqual([0, 12])
+    expect(pickerWindow(500 * 22, 220, 1000, 22)).toEqual([498, 512])
+    expect(pickerWindow(0, 220, 3, 22)).toEqual([0, 3])
+    expect(pickerWindow(0, 220, 0, 22)).toEqual([0, 0])
+    // The active row is scrolled into view, moving as little as it can.
+    expect(pickerScroll(0, 220, 3, 22)).toBe(0)
+    expect(pickerScroll(0, 220, 15, 22)).toBe(15 * 22 + 22 - 220)
+    expect(pickerScroll(500, 220, 2, 22)).toBe(44)
+  })
+
+  it('open the overflow picker over 1,000 results, draw a screenful of its rows, and go to the one picked', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() }), none = {}
+    results.begin('t1', 'q1')
+    void results.finish('t1', 'q1', { summary: summaryOf(Array.from({ length: 1000 }, (_, index) => descriptor(index + 1, { index, ...rows }))) })
+    const workbench = { results, resultsSearch: { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }, commands: { execute: vi.fn() }, gestures: gesturesFor('win32'), pivot: new PivotService(results) } as unknown as Workbench
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    const draw = () => act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 }) })) })
+    draw()
+    const button = () => container!.querySelector<HTMLButtonElement>('.rt-overflow')
+    const picker = () => document.querySelector<HTMLElement>('.rt-picker')
+    const options = () => [...document.querySelectorAll<HTMLElement>('.rt-picker [role="option"]')]
+    const input = () => picker()!.querySelector<HTMLInputElement>('input')!
+    const press = (key: string) => act(() => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+    const type = (text: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input(), text)
+      input().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(button()!.textContent).toBe(`+${formatCount(1000 - g.resultTabsDrawn)}`)
+    expect(button()!.getAttribute('aria-expanded')).toBe('false')
+    expect(picker()).toBeNull()
+    act(() => { button()!.click() })
+    expect(button()!.getAttribute('aria-expanded')).toBe('true')
+    // Drawn in the window's body, with the focus in its filter box; a screenful of the 1,000 rows, the first selected.
+    expect(picker()!.parentElement).toBe(document.body)
+    expect(document.activeElement).toBe(input())
+    expect(options().length).toBeGreaterThan(0)
+    expect(options().length).toBeLessThanOrEqual(pickerRowsShown + 4)
+    expect(options()[0].getAttribute('aria-label')).toBe('Result 1, Table')
+    // The active row is the selected option; the view shown is the current one.
+    expect(options()[0].getAttribute('aria-selected')).toBe('true')
+    expect(options()[0].getAttribute('aria-current')).toBe('true')
+    expect(options()[0].getAttribute('aria-setsize')).toBe('1000')
+    expect(input().getAttribute('aria-activedescendant')).toBe(options()[0].id)
+    expect((picker()!.querySelector('.rt-picker-space') as HTMLElement).style.height).toBe(`${1000 * pickerRowHeight}px`)
+    expect(picker()!.querySelector('.rt-picker-foot')!.textContent).toBe('1,000 views: 1,000 results')
+    // Scrolled halfway, it draws the rows there instead, as few.
+    const list = picker()!.querySelector<HTMLElement>('[role="listbox"]')!
+    act(() => { list.scrollTop = 500 * pickerRowHeight; list.dispatchEvent(new Event('scroll')) })
+    expect(options().map(option => option.getAttribute('aria-label'))).toContain('Result 501, Table')
+    expect(options().length).toBeLessThanOrEqual(pickerRowsShown + 4)
+    // The keys move the active row; Page Down a page at a time.
+    // A wheel scrolled the active row out of the drawn rows: no active descendant names a row that is not there.
+    expect(input().hasAttribute('aria-activedescendant')).toBe(false)
+    press('ArrowDown')
+    expect(document.getElementById(input().getAttribute('aria-activedescendant')!)?.getAttribute('aria-label')).toBe('Result 2, Table')
+    expect(options().find(option => option.getAttribute('aria-label') === 'Result 2, Table')?.getAttribute('aria-selected')).toBe('true')
+    expect(options().find(option => option.getAttribute('aria-label') === 'Result 2, Table')?.hasAttribute('aria-current')).toBe(false)
+    press('PageDown')
+    expect(document.getElementById(input().getAttribute('aria-activedescendant')!)?.getAttribute('aria-label')).toBe(`Result ${2 + pickerRowsShown - 1}, Table`)
+    // A filter keeps the rows that match; Enter shows the active one and puts the focus on its tab, drawn once the window moves.
+    type('result 999')
+    expect(options().map(option => option.getAttribute('aria-label'))).toEqual(['Result 999, Table'])
+    expect(picker()!.querySelector('.rt-picker-foot')!.textContent).toBe('1 of 1,000 views: 1,000 results')
+    type('nothing like it')
+    expect(options()).toEqual([])
+    expect(picker()!.querySelector('.rt-picker-none')!.textContent).toBe('Nothing matches.')
+    type('999')
+    press('Enter')
+    draw()
+    expect(picker()).toBeNull()
+    expect(selectedEntry(results.getSnapshot().t1)?.number).toBe(999)
+    expect(document.activeElement?.textContent).toBe('Result 999')
+    expect(document.activeElement?.getAttribute('aria-selected')).toBe('true')
+    // Escape closes it and gives the focus back to the overflow button.
+    act(() => { button()!.click() })
+    expect(options().find(option => option.getAttribute('aria-selected') === 'true')?.getAttribute('aria-label')).toBe('Result 999, Table')
+    press('Escape')
+    expect(picker()).toBeNull()
+    expect(document.activeElement).toBe(button())
+    // A press outside closes it, leaving the focus where the press put it.
+    act(() => { button()!.click() })
+    act(() => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) })
+    expect(picker()).toBeNull()
+    // Go to Result… asks for it, from the editor say; Escape gives the focus back there.
+    const editor = document.createElement('textarea')
+    document.body.append(editor)
+    editor.focus()
+    act(() => { pickerRequests.request('t1') })
+    expect(picker()).not.toBeNull()
+    expect(pickerRequests.take('t1')).toBe(false)
+    press('Escape')
+    expect(document.activeElement).toBe(editor)
+    editor.remove()
+    act(() => { pickerRequests.request('t1') })
+    // It opens at the selected result again; a click on a row shows it.
+    expect(options().find(option => option.getAttribute('aria-selected') === 'true')?.getAttribute('aria-label')).toBe('Result 999, Table')
+    act(() => { options().find(option => option.getAttribute('aria-label') === 'Result 997, Table')!.click() })
+    expect(selectedEntry(results.getSnapshot().t1)?.number).toBe(997)
+    expect(picker()).toBeNull()
+    // A request no layout takes in time lapses.
+    pickerRequests.request('t9', 0)
+    expect(pickerRequests.take('t9', 2001)).toBe(false)
+    pickerRequests.request('t9', 0)
+    expect(pickerRequests.take('t9', 1000)).toBe(true)
+  })
+
+  it('give the focus back, on Escape, to where Go to Result… ran in another window (the pane popped out)', () => {
+    const { draw } = fixture()
+    draw()
+    const other = document.implementation.createHTMLDocument('main')
+    const editor = other.createElement('textarea')
+    other.body.append(editor)
+    const focus = vi.spyOn(editor, 'focus')
+    const active = vi.spyOn(windows, 'activeElement').mockReturnValue(editor)
+    try {
+      act(() => { pickerRequests.request('t1') })
+      active.mockReturnValue(document.querySelector('.rt-picker input'))
+      act(() => { document.querySelector('.rt-picker input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+      expect(document.querySelector('.rt-picker')).toBeNull()
+      expect(focus).toHaveBeenCalled()
+    } finally { active.mockRestore() }
+  })
+
+  it('close the picker when its anchor goes (its pane hidden), giving the focus back to where it was opened from', () => {
+    const observers: (() => void)[] = []
+    const original = window.ResizeObserver
+    window.ResizeObserver = class { constructor(callback: () => void) { observers.push(callback) } observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+    try {
+      const { draw } = fixture()
+      draw()
+      const editor = document.createElement('textarea')
+      document.body.append(editor)
+      editor.focus()
+      act(() => { pickerRequests.request('t1') })
+      expect(document.activeElement?.closest('.rt-picker')).not.toBeNull()
+      // Ctrl+R hides the pane: the anchor has no size left (jsdom gives every element none), so the picker closes.
+      act(() => { for (const callback of [...observers]) callback() })
+      expect(document.querySelector('.rt-picker')).toBeNull()
+      expect(document.activeElement).toBe(editor)
+      editor.remove()
+    } finally { window.ResizeObserver = original }
+  })
+
+  it('keep the picker\'s active row while the run changes under it, and start again at the view shown on a new filter', () => {
+    const { results, two, draw } = fixture()
+    draw()
+    act(() => { pickerRequests.request('t1') })
+    const input = () => document.querySelector<HTMLInputElement>('.rt-picker input')!
+    const active = () => document.getElementById(input().getAttribute('aria-activedescendant')!)?.getAttribute('aria-label')
+    act(() => { input().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })) })
+    act(() => { input().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })) })
+    expect(active()).toBe('Result 3, Table')
+    // Result 2 closes: Result 3's row moves up and stays active.
+    act(() => { results.removeEntry('t1', two) })
+    draw()
+    expect(active()).toBe('Result 3, Table')
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input(), 'result')
+      input().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(active()).toBe('Result 1, Table')
+  })
+
+  it('move the focus with the selection a command moves while a tab has it', () => {
+    const { results, two, three, pivot, draw, resultTabs, viewTabs } = fixture()
+    draw()
+    resultTabs()[0].focus()
+    act(() => { results.focusEntry('t1', two) })
+    draw()
+    expect(document.activeElement).toBe(resultTabs()[1])
+    act(() => { results.focusEntry('t1', three) })
+    draw()
+    viewTabs()[0].focus()
+    act(() => { results.focusEntry('t1', pivot) })
+    draw()
+    expect(document.activeElement).toBe(viewTabs()[1])
+    expect(document.activeElement?.getAttribute('aria-selected')).toBe('true')
+    // From a view tab to another result: its view tabs replace the old ones, and the focus goes to its selected view tab.
+    act(() => { results.focusEntry('t1', results.getSnapshot().t1.sets[0].key) })
+    draw()
+    expect(document.activeElement).toBe(viewTabs()[0])
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Table')
+    // To a comparison, which has no view tabs: the focus goes to its tab in the result row.
+    act(() => { results.focusEntry('t1', results.getSnapshot().t1.comparisons[0].key) })
+    draw()
+    expect(document.activeElement?.textContent).toBe('Differences: Result 1 → Result 2')
+  })
+})
+
+describe('the results tabs commands', () => {
+  async function ran() {
+    const f = workbenchFixture()
+    const tab = f.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
+    const sets = [descriptor(1, rows), descriptor(2, { index: 1, ...rows })]
+    f.results.begin(tab.id, 'q1')
+    for (const set of sets) f.resultClient.emit('q1', { type: 'resultSet.opened', descriptor: { ...set, state: 'open' } })
+    await f.results.finish(tab.id, 'q1', { summary: summaryOf(sets) })
+    const pivot = f.results.addSet(tab.id, descriptor(803, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    const diff = f.results.addSet(tab.id, descriptor(901, { index: 1, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])!
+    const [one, , two] = f.results.getSnapshot()[tab.id].sets.map(set => set.key)
+    const shown = () => selectedEntry(f.results.getSnapshot()[tab.id])?.key
+    return { ...f, tab, one, two, pivot, diff, shown }
+  }
+
+  it('step through the results, comparisons and views, and open the picker, while results show as tabs', async () => {
+    const f = await ran()
+    try {
+      const { commands, settings, tab, one, two, pivot, diff, shown } = f
+      expect(shown()).toBe(one)
+      // Two results and a comparison: the browser tab keys in the results pane are the results'.
+      expect(f.results.steppable.getSnapshot()[tab.id]).toBe(true)
+      // Every output panel closed (the fixture's panels all start closed, as after Ctrl+R): a step brings back what Ctrl+R
+      // hid, with Results' tab selected, without moving the focus.
+      const select = vi.spyOn(f.panes, 'select')
+      const locations = (results: 'grid' | 'closed' | 'window') => ({ ...Object.fromEntries(['explorer', 'editor', 'results', 'messages', 'plan', 'statistics'].map(id => [id, 'closed'])), results }) as never
+      const visible = (results: boolean) => ({ ...f.panes.getSnapshot(), results })
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(f.host.toggleOutput).toHaveBeenCalledTimes(1)
+      expect(select).toHaveBeenLastCalledWith('results')
+      expect(f.host.reveal).not.toHaveBeenCalled()
+      // Open but not showing (behind a maximized group, its group hidden, tabbed with the editor): the dock's reveal.
+      f.panes.set(visible(false), locations('grid'))
+      select.mockClear()
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(f.host.reveal).toHaveBeenLastCalledWith('results', { raise: true })
+      expect(select).not.toHaveBeenCalled()
+      // In a popout: its tab there. Showing already: nothing to do.
+      f.panes.set(visible(false), locations('window'))
+      vi.mocked(f.host.reveal).mockClear()
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(select).toHaveBeenLastCalledWith('results')
+      f.panes.set(visible(true), locations('grid'))
+      select.mockClear()
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(select).not.toHaveBeenCalled()
+      expect(f.host.reveal).not.toHaveBeenCalled()
+      expect(f.host.toggleOutput).toHaveBeenCalledTimes(1)
+      expect(commands.isEnabled('output.nextResultView')).toBe(true)
+      // From a Peek card's grid (bare, not a query's): the active query's results.
+      const peek = { kind: 'output', tabId: 'peek-run', view: 'grid', entry: 'peek-run:1', bare: true, selectedText: '', element: document.createElement('div') } as const
+      expect(commands.isEnabled('output.nextResult', { target: peek })).toBe(true)
+      await commands.execute('output.nextResult', { target: peek }, 'keybinding')
+      expect(shown()).toBe(two)
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(shown()).toBe(one)
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(shown()).toBe(two)
+      // Result 2 has one view.
+      expect(commands.isEnabled('output.nextResultView')).toBe(false)
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(shown()).toBe(one)
+      await commands.execute('output.nextResultView', undefined, 'keybinding')
+      expect(shown()).toBe(pivot)
+      await commands.execute('output.previousResultView', undefined, 'palette')
+      expect(shown()).toBe(one)
+      await commands.execute('output.nextResultView', undefined, 'palette')
+      await commands.execute('output.previousResult', undefined, 'keybinding')
+      expect(shown()).toBe(diff)
+      expect(commands.isEnabled('output.previousResultView')).toBe(false)
+      // Round to Result 1, which shows its Pivot again, the view it showed last.
+      await commands.execute('output.nextResult', undefined, 'keybinding')
+      expect(shown()).toBe(pivot)
+      // Go to Result… asks the layout for its picker, which takes the request when it is drawn.
+      expect(await commands.execute('output.goToResult', undefined, 'palette')).toBe(true)
+      expect(pickerRequests.take(tab.id)).toBe(true)
+      // Go to Result N, as a browser's Ctrl+N: the item at that place (Result 2, the comparison third), the last for Ctrl+9;
+      // none past the end.
+      await commands.execute('output.goToResult2', undefined, 'keybinding')
+      expect(shown()).toBe(two)
+      await commands.execute('output.goToLastResult', undefined, 'keybinding')
+      expect(shown()).toBe(diff)
+      await commands.execute('output.goToResult1', undefined, 'keybinding')
+      expect(shown()).toBe(pivot)
+      expect(commands.isEnabled('output.goToResult3')).toBe(true)
+      expect(commands.isEnabled('output.goToResult4')).toBe(false)
+      // Stacked: Next and Previous Result and Go to Result N select the view and ask the stack to scroll it into view; the
+      // view commands (a Table and its Pivot show together) and the picker are Tabs' only.
+      await settings.choose('queryResults.grid.layout', 'stacked')
+      for (const id of ['output.nextResultView', 'output.previousResultView', 'output.goToResult'] as const) expect(commands.isEnabled(id), id).toBe(false)
+      const reveals: string[] = []
+      const listening = stackReveals.subscribe(requested => { const key = stackReveals.take(requested); if (key) reveals.push(key) })
+      try {
+        expect(await commands.execute('output.nextResult', undefined, 'palette')).toBe(true)
+        expect(shown()).toBe(two)
+        expect(await commands.execute('output.goToLastResult', undefined, 'keybinding')).toBe(true)
+        expect(shown()).toBe(diff)
+        expect(reveals).toEqual([two, diff])
+      } finally { listening.dispose() }
+    } finally { f.dispose() }
   })
 })

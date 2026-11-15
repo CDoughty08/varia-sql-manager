@@ -157,7 +157,8 @@ function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: Ta
   const summary = messagesSummary(tab.messages)
   const open = tab.strip && (tab.stripChosen || fits)
   const style: CSSProperties | undefined = open && maxHeight !== undefined ? { maxHeight, minHeight: g.messagesStripOpen } : undefined
-  return <div className="messages-strip" data-open={open || undefined} style={style}>
+  // `data-messages-strip`: the focus here (its toggle too) takes the query keys, not the results' (`resultsFocus`).
+  return <div className="messages-strip" data-messages-strip="" data-open={open || undefined} style={style}>
     <button type="button" className="messages-strip-toggle" aria-label={summary.label} aria-describedby={!open && summary.firstError ? errorId : undefined} aria-expanded={open} aria-controls={open ? id : undefined}
       title={!open && summary.firstError ? summary.firstError : undefined} onClick={() => results.setStrip(tabId, !open)}>
       <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span className="messages-strip-name">Messages</span>

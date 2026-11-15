@@ -42,7 +42,7 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   SSMS-style guides, shown over the group under the pointer) to tab into that group or split it on a side, or
   Shift-drag it to float. Dockview's pointer drag runs inside the window. While a workspace panel is being dragged, the
   editor area ignores the pointer, so the workspace's own docking guides are the ones that answer.
-- Commands (`src/shared/commands/catalog.ts`; keys avoid SSMS's: Ctrl+1–9 stay query shortcuts):
+- Commands (`src/shared/commands/catalog.ts`; Ctrl+1–9 pick query tabs as a browser's do, Go to Query 1 to 8 and Go to Last Query, and results while the focus is in the results pane):
 
 | Command | Keys (Windows/Linux) | Keys (macOS) | Where |
 | --- | --- | --- | --- |
