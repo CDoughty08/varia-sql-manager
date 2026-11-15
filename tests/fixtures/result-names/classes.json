@@ -1,0 +1,231 @@
+{
+  "about": "How many result sets a top-level statement returns, as ResultNames.Classify reads it from ScriptDom (docs/named-result-sets-scope.md, Binding rule): None, One (with its column count when its select list or OUTPUT has no * and there is no FOR clause, else null) or Unknown. Each sql is one batch; class and columns are for its first statement.",
+  "cases": [
+    {
+      "sql": "DECLARE @x int = 1;",
+      "class": "None"
+    },
+    {
+      "sql": "DECLARE @t TABLE (id int);",
+      "class": "None"
+    },
+    {
+      "sql": "SET NOCOUNT ON;",
+      "class": "None"
+    },
+    {
+      "sql": "SET @x = 1;",
+      "class": "None"
+    },
+    {
+      "sql": "SET STATISTICS XML ON;",
+      "class": "None"
+    },
+    {
+      "sql": "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;",
+      "class": "None"
+    },
+    {
+      "sql": "USE master;",
+      "class": "None"
+    },
+    {
+      "sql": "PRINT 'x';",
+      "class": "None"
+    },
+    {
+      "sql": "CREATE TABLE #t (id int);",
+      "class": "None"
+    },
+    {
+      "sql": "ALTER TABLE #t ADD v int;",
+      "class": "None"
+    },
+    {
+      "sql": "DROP TABLE IF EXISTS #t;",
+      "class": "None"
+    },
+    {
+      "sql": "TRUNCATE TABLE #t;",
+      "class": "None"
+    },
+    {
+      "sql": "BEGIN TRANSACTION;",
+      "class": "None"
+    },
+    {
+      "sql": "COMMIT;",
+      "class": "None"
+    },
+    {
+      "sql": "ROLLBACK TRANSACTION;",
+      "class": "None"
+    },
+    {
+      "sql": "SAVE TRANSACTION s;",
+      "class": "None"
+    },
+    {
+      "sql": "RAISERROR('x', 10, 1);",
+      "class": "None"
+    },
+    {
+      "sql": "THROW 50000, 'x', 1;",
+      "class": "None"
+    },
+    {
+      "sql": "RETURN;",
+      "class": "None"
+    },
+    {
+      "sql": "WAITFOR DELAY '00:00:01';",
+      "class": "None"
+    },
+    {
+      "sql": "GRANT SELECT ON dbo.t TO public;",
+      "class": "None"
+    },
+    {
+      "sql": "EXECUTE AS USER = 'guest';",
+      "class": "None"
+    },
+    {
+      "sql": "REVERT;",
+      "class": "None"
+    },
+    {
+      "sql": "INSERT INTO #t (id) VALUES (1);",
+      "class": "None"
+    },
+    {
+      "sql": "INSERT INTO #t (id) EXEC dbo.p;",
+      "class": "None"
+    },
+    {
+      "sql": "UPDATE #t SET id = 2;",
+      "class": "None"
+    },
+    {
+      "sql": "DELETE FROM #t;",
+      "class": "None"
+    },
+    {
+      "sql": "MERGE #t AS t USING (SELECT 1 AS id) AS s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id);",
+      "class": "None"
+    },
+    {
+      "sql": "INSERT INTO #t (id) OUTPUT inserted.id INTO @log (id) VALUES (1);",
+      "class": "None"
+    },
+    {
+      "sql": "SELECT @x = id FROM #t;",
+      "class": "None"
+    },
+    {
+      "sql": "SELECT id INTO #u FROM #t;",
+      "class": "None"
+    },
+    {
+      "sql": "DECLARE c CURSOR FOR SELECT 1;",
+      "class": "None"
+    },
+    {
+      "sql": "OPEN c;",
+      "class": "None"
+    },
+    {
+      "sql": "FETCH NEXT FROM c INTO @x;",
+      "class": "None"
+    },
+    {
+      "sql": "SELECT 1 AS a, 2 AS b, 3 AS c;",
+      "class": "One",
+      "columns": 3
+    },
+    {
+      "sql": "SELECT * FROM sys.objects;",
+      "class": "One",
+      "columns": null
+    },
+    {
+      "sql": "SELECT o.name, o.* FROM sys.objects AS o;",
+      "class": "One",
+      "columns": null
+    },
+    {
+      "sql": "WITH c AS (SELECT 1 AS n) SELECT n, n + 1 AS m FROM c;",
+      "class": "One",
+      "columns": 2
+    },
+    {
+      "sql": "SELECT 1 AS a, 2 AS b UNION ALL SELECT 3, 4;",
+      "class": "One",
+      "columns": 2
+    },
+    {
+      "sql": "(SELECT 1 AS a) UNION SELECT 2 ORDER BY a;",
+      "class": "One",
+      "columns": 1
+    },
+    {
+      "sql": "SELECT name, object_id FROM sys.objects FOR JSON PATH;",
+      "class": "One",
+      "columns": null
+    },
+    {
+      "sql": "INSERT INTO #t (id) OUTPUT inserted.id, inserted.v VALUES (1);",
+      "class": "One",
+      "columns": 2
+    },
+    {
+      "sql": "DELETE FROM #t OUTPUT deleted.*;",
+      "class": "One",
+      "columns": null
+    },
+    {
+      "sql": "UPDATE #t SET id = 2 OUTPUT inserted.id INTO @log (id) OUTPUT deleted.id;",
+      "class": "One",
+      "columns": 1
+    },
+    {
+      "sql": "EXEC dbo.p;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "EXECUTE sp_who;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "EXEC ('SELECT 1');",
+      "class": "Unknown"
+    },
+    {
+      "sql": "IF 1 = 1 SELECT 1 AS a;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "WHILE 1 = 0 SELECT 1 AS a;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "BEGIN SELECT 1 AS a; END",
+      "class": "Unknown"
+    },
+    {
+      "sql": "BEGIN TRY SELECT 1 AS a; END TRY BEGIN CATCH SELECT 2 AS b; END CATCH",
+      "class": "Unknown"
+    },
+    {
+      "sql": "FETCH NEXT FROM c;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "DBCC USEROPTIONS;",
+      "class": "Unknown"
+    },
+    {
+      "sql": "WAITFOR (RECEIVE TOP (1) * FROM dbo.q), TIMEOUT 10;",
+      "class": "Unknown"
+    }
+  ]
+}

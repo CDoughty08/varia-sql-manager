@@ -1111,7 +1111,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
         // Validate the whole script before opening a session or submitting any SQL.
         List<SqlBatch> batches;
-        try { batches = SqlScript.Parse(args.Sql, args.StartLine); }
+        var unbatched = new List<ResultMarker>();
+        try { batches = SqlScript.Parse(args.Sql, args.StartLine, unbatched); }
         catch
         {
             queries.TryRemove(new(args.QueryId, running));
@@ -1125,6 +1126,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The error that ended the script, which can end the session before managed SNI's asynchronous close updates its state.
         SqlException? ended = null;
         var messages = new QueryMessages(events.Message);
+        // Named result sets (ResultNames.cs): each batch's plan is made before its first execution; notes go to Messages.
+        var nameNotes = new ResultNameNotes(text => messages.Add(text));
+        var namePlans = new ResultNamePlan?[batches.Count];
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1272,15 +1276,23 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             connection.FireInfoMessageEventOnUserErrors = true;
             if (args.IncludeClientStatistics) statistics = new(connection);
+            foreach (var marker in unbatched.Where(marker => marker.Name is not null)) nameNotes.Add(ResultNames.Unbatched(marker));
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
                 var batch = batches[b];
+                // Parsed once, however often GO n repeats the batch; a batch without a marker is not parsed.
+                if (batch.Markers is { Count: > 0 } && await ResultNamePlan.BuildAsync(batch, args.StartLine, token) is { } namePlan)
+                {
+                    namePlans[b] = namePlan;
+                    foreach (var note in namePlan.Notes) nameNotes.Add(note);
+                }
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
                     events.Progress(completed, totalBatches, batchNumber, iteration);
                     var raisedBefore = Raised();
+                    var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1333,11 +1345,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                             var built = ColumnPlan.From(current, prefix);
                                             return (built, built.IsPlan, built.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes);
                                         }, token);
+                                        // Every set with columns is counted, kept or not; once sets are no longer kept, none is named.
+                                        string? name = null;
+                                        if (fate is ResultSetTally.Fate.Overflow or ResultSetTally.Fate.Oversize) names?.Stop("the run kept no more result sets");
+                                        else name = names?.Take(reader, fate == ResultSetTally.Fate.Open && plan!.IsPlan, Raised() != raisedBefore);
                                         if (fate == ResultSetTally.Fate.Open)
                                         {
-                                            if (store.Open(budget, sets.Count, batchNumber, iteration, plan!.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
+                                            if (store.Open(budget, sets.Count, batchNumber, iteration, plan!.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths, name: name) is { } opened)
                                             {
-                                                descriptorBytes += plan.DescriptorBytes;
+                                                // A name's bytes count with the columns', toward the summary's bound.
+                                                descriptorBytes += plan.DescriptorBytes + (name is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(name) + 8);
                                                 currentSet = opened;
                                                 sets.Add(opened);
                                                 events.Opened(opened);
@@ -1472,6 +1489,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
+                    if (names is not null) foreach (var note in names.Unapplied(failed)) nameNotes.Add(note);
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
                     if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
                     if (failed) firstError ??= (batchNumber, iteration);
@@ -1482,6 +1500,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                             + (iteration < batch.RepeatCount ? "repetition." : "batch."));
                 }
             }
+            nameNotes.Finish();
             if (firstError is { } first)
             {
                 status = "completedWithErrors";

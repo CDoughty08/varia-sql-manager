@@ -1,5 +1,16 @@
 # Result grid tools
 
+**Named results.** A query can name a result set with a marker comment just before its statement:
+`/* #Name="Sample Query" */` or `-- #Name="Open orders"` (`#Name` in any case, the name in double quotes, a quote
+inside it doubled, at most 128 characters). The result's tab, caption and the lists that name results show the name
+where they showed "Result 2"; a result without a name keeps its number, so naming one never renumbers another. Several
+markers stacked before one `EXEC` name its result sets in order. The name goes on a result only when Varia can tell
+which result set the statement returns, from the batch's text: a marker inside `BEGIN … END`, a branch or a loop, or
+after an `EXEC`, `IF` or `WHILE` in the same batch, is not applied, nor is one after an error in the batch, and the
+Messages tab says why (put `GO` between such statements to name both). The query runs exactly as written; a marker is
+an ordinary comment to SQL Server. A table trigger that returns rows can still shift a name when its result has the
+same number of columns as the named statement's.
+
 Right-click a result column header or cell, or press Shift+F10 in the grid, to open its menu.
 
 - **Copy Column Name** copies that column's raw name only, without data, brackets or a display-name fallback. An unnamed

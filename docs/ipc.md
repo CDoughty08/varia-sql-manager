@@ -1282,7 +1282,12 @@ Results stay in backend memory, never on disk (`ResultStore`).
   released at once rather than left without an owner.
 - **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
   rowsRead, rowsStored, rowsAvailable (rows in sealed pages), bytesStored, truncatedCells, state: 'open' | 'complete' |
-  'released', truncated?, incomplete }`. Result ids are u32 from 1 per generation and always paired with it.
+  'released', truncated?, incomplete, name? }`. Result ids are u32 from 1 per generation and always paired with it.
+  `name` is the query's own name for the set, from a `#Name="…"` marker comment before its statement
+  (docs/named-result-sets-scope.md): 1 to 128 characters, none of them a control, line separator or bidirectional
+  character, trimmed. It is left out when the set has none, as it is for plan sets, Pivots and comparisons. An optional
+  field, so the protocol version is unchanged; main passes it through and the zod schema (`backendDescriptorSchema`)
+  refuses one out of bounds. Its bytes count toward the summary's 8 MiB of descriptors.
 - **Released** by `results.close`, the next `query.execute` on the same session (whatever its connection), and process
   exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
   SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
