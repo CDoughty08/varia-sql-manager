@@ -669,6 +669,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   release(tabId: string): void {
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
+    this.operations.forget(tabId, { closed: true })
     this.views.delete(tabId)
     this.stripChoices.delete(tabId)
     this.selectionAnnounced.delete(tabId)
@@ -852,7 +853,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   registerGrid(tabId: string, key: EntryKey, controller: GridController): Disposable {
     if (!this.entry(this.runs.get(tabId), key)) return { dispose: () => {} }
     this.controllers.set(key, controller)
-    return { dispose: () => { if (this.controllers.get(key) === controller) this.controllers.delete(key) } }
+    return {
+      dispose: () => {
+        if (this.controllers.get(key) !== controller) return
+        this.controllers.delete(key)
+        // No grid draws it now (collapsed, or its tab switched away): it shows what its next mount shows from the start, the
+        // current view, so the others close now; a cleared sort's view does not wait for the grid to be shown again.
+        const run = this.runs.get(tabId), held = run?.held.get(key)
+        if (run && held) { held.shown = run.sorts.get(key)?.view; this.closeHeld(run, key) }
+      }
+    }
   }
   /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
   canFitColumn(tabId: string, key: EntryKey, column: number): boolean {
@@ -930,7 +940,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.schedule(tabId)
     running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
     let result
-    const view = run.sorts.get(set.key)?.view
+    // The view the selection's rows are positions in: a mounted grid's is the one it shows (a sort just built is not it until
+    // the grid has swapped to it); a grid not mounted shows the current view once it is.
+    const view = this.controllers.has(set.key) ? run.held.get(set.key)?.shown as ResultView | undefined : run.sorts.get(set.key)?.view
     try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
@@ -1251,7 +1263,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * with the arrow keys (which screen readers announce themselves) adds nothing.
    */
   announceSelection(tabId: string, text: string): void {
-    if (this.selectionAnnounced.get(tabId) === text) return
+    // A grid disposing after its tab closed has nothing to read out, and must not leave its sentence behind.
+    if (!this.runs.has(tabId) || this.selectionAnnounced.get(tabId) === text) return
     this.selectionAnnounced.set(tabId, text)
     this.announce(tabId, text)
   }

@@ -83,7 +83,7 @@ interface Remembered { exact: boolean; readonly groups: Map<number, { readonly t
 
 interface Running { readonly abort: AbortController; readonly queryId: string; readonly old: EntryKey; readonly neu: EntryKey; readonly id: string; cancelled?: boolean }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify' | 'focusEntry' | 'operations'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'notify' | 'focusEntry' | 'operations'>
 
 /**
  * Comparisons (results.diff): one group's Table against another's of the same run, in the backend, aligned by a key column
@@ -107,6 +107,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   /** The choices made in each tab's popover, by group number, offered again when it opens on that group. Only a choice
    *  (a pick, a swap, Exact text, Compare) is kept: opening the popover is not one. Forgotten when the tab goes. */
   private readonly remembered = new Map<string, Remembered>()
+  /** Diffs added whose run has yet to publish them, so a sync before that publish keeps their details. */
+  private readonly fresh = new Map<string, { readonly tabId: string; readonly queryId: string }>()
   private readonly unsubscribe: () => void
 
   constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number } = {}) {
@@ -126,6 +128,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       for (const item of items.values()) if (tab?.queryId !== item.queryId || !entryOf(tab.sets, item.old) || !entryOf(tab.sets, item.neu)) item.abort.abort()
     }
     for (const tabId of [...this.remembered.keys()]) if (!snapshot[tabId]) this.remembered.delete(tabId)
+    // A comparison's details go with the last run that shows it, not at the next comparison.
+    const info = this.getSnapshot().info, kept = info.size ? this.shown(info) : info
+    if (kept.size !== info.size) this.publish({ ...this.getSnapshot(), info: kept })
     const pickers = this.getSnapshot().pickers
     let next: Record<string, ComparePicker> | undefined
     for (const [tabId, picker] of Object.entries(pickers)) {
@@ -327,6 +332,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     let done = false
     try {
       const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal, onProgress: (phase, percent) => ticket.progress(phase, percent) }), { signal: abort.signal })
+      // Given up after the backend answered (a Cancel, a new run, an input closed in the same task): nothing is added, and
+      // the diff it built is released.
+      if (abort.signal.aborted) { this.results.discard(result.descriptor); return undefined }
       const label = `Differences: ${fromName} → ${toName}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
       // says nothing was compared.
@@ -337,10 +345,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
         left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
-      // Only diffs some run still shows are kept.
-      const shown = new Set(Object.values(this.results.getSnapshot()).flatMap(run => run.sets.map(entry => setKey(entry.descriptor))))
-      const next = new Map([...this.getSnapshot().info].filter(([setId]) => shown.has(setId)))
-      this.publish({ ...this.getSnapshot(), info: next.set(setKey(result.descriptor), info) })
+      // Only diffs some run still shows are kept; this one is kept until its run publishes it.
+      this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })
+      this.publish({ ...this.getSnapshot(), info: this.shown(this.getSnapshot().info).set(setKey(result.descriptor), info) })
       return { key }
     } catch (error) {
       if (abort.signal.aborted) return undefined
@@ -351,6 +358,17 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()
     }
+  }
+
+  /** The details of the diffs some run shows, or that were just added to a run that has yet to publish them. */
+  private shown(info: ReadonlyMap<string, CompareInfo>): Map<string, CompareInfo> {
+    const snapshot = this.results.getSnapshot()
+    const shown = new Set(Object.values(snapshot).flatMap(run => run.sets.map(entry => setKey(entry.descriptor))))
+    for (const [setId, added] of this.fresh) {
+      const run = snapshot[added.tabId]
+      if (shown.has(setId) || run?.queryId !== added.queryId || run.status === 'closed') this.fresh.delete(setId)
+    }
+    return new Map([...info].filter(([setId]) => shown.has(setId) || this.fresh.has(setId)))
   }
 
   private publishRunning(): void {

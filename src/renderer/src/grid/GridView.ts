@@ -312,6 +312,8 @@ export class GridView {
   private ariaRows = -1
   private ariaLabel = ''
   private ariaTimer: ReturnType<typeof setTimeout> | undefined
+  /** Retries after a busy results port, cleared on dispose. */
+  private readonly retries = new Set<ReturnType<typeof setTimeout>>()
   private resultCount: number
   private measuring = false
   private measureAfter = 0
@@ -611,7 +613,7 @@ export class GridView {
     if (!range || rows <= 0 || this.disposed) return Promise.resolve()
     const first = Math.max(0, Math.min(firstRow, rows - 1)), last = Math.min(rows - 1, first + Math.max(0, range.lastRow - range.firstRow))
     const data = this.dataFor(handle)
-    return Promise.allSettled(data.plan({ ...range, firstRow: first, lastRow: last }, rows).map(key => data.fetch(key, signal))).then(() => undefined)
+    return Promise.allSettled(data.plan({ ...range, firstRow: first, lastRow: last }, rows).map(key => data.fetch(key, signal))).then(() => data.dispose())
   }
   /** Scrolls to the last row (a live log's "n new rows" button): follow tail goes on from there. */
   revealEnd(): void {
@@ -641,11 +643,19 @@ export class GridView {
     this.data.dispose()
     this.sizes?.dispose()
     if (this.ariaTimer !== undefined) clearTimeout(this.ariaTimer)
+    for (const timer of this.retries) clearTimeout(timer)
+    this.retries.clear()
     for (const dispose of this.cleanup.splice(0)) { try { dispose() } catch (error) { this.o.onError(error) } }
     this.scroller.replaceChildren()
   }
 
   private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  /** Runs `callback` once the results port has had time to make room, unless the grid is disposed first. */
+  private later(callback: () => void): void {
+    if (this.disposed) return
+    const timer = setTimeout(() => { this.retries.delete(timer); if (!this.disposed) callback() }, g.busyRetryMs)
+    this.retries.add(timer)
+  }
   /** The rows and columns drawn: the result's own, or turned, with at most `limits.transpose.maxRows` rows as columns. */
   private drawnRows(rows = this.rows()): number { return this.rotated ? this.columns : rows }
   private drawnColumns(rows = this.rows()): number { return this.rotated ? Math.min(rows, wire.transpose.maxRows) : this.columns }
@@ -1092,7 +1102,7 @@ export class GridView {
       if (abort.signal.aborted || this.disposed) return
       done()
       // A full results port has room again shortly; a released or lost result is shown as such by its shell.
-      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitColumn(column) }, g.busyRetryMs)
+      if (portBusy(error)) this.later(() => { if (!abort.signal.aborted && !this.fitting) this.fitColumn(column) })
     })
   }
 
@@ -1123,7 +1133,7 @@ export class GridView {
     }, error => {
       if (abort.signal.aborted || this.disposed) return
       done()
-      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitRow(row) }, g.busyRetryMs)
+      if (portBusy(error)) this.later(() => { if (!abort.signal.aborted && !this.fitting) this.fitRow(row) })
     })
   }
 
@@ -1344,7 +1354,7 @@ export class GridView {
       this.measuring = false
       if (this.disposed) return
       // A full results port has room again shortly.
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; setTimeout(() => this.schedule(), g.busyRetryMs); return }
+      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
       // The type hints stay; a released or lost result is shown as such by its shell.
       state.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
@@ -1367,7 +1377,7 @@ export class GridView {
     }, error => {
       this.measuring = false
       if (this.disposed) return
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; setTimeout(() => this.schedule(), g.busyRetryMs); return }
+      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
       kept.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })

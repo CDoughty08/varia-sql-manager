@@ -44,14 +44,15 @@ function source(rows: number, columns: number) {
 const descriptor = (handle: ResultHandle): ResultDescriptor => ({ generation: 1, resultId: 1, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [...handle.columns], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'complete', incomplete: false } as unknown as ResultDescriptor)
 const cells = (a: [number, number], b: [number, number] = a): GridSelection => ({ entry: 'e1', active: { row: b[0], column: b[1] }, blocks: [{ kind: 'cells', anchor: { row: a[0], column: a[1] }, focus: { row: b[0], column: b[1] } }] })
 
-function mount(o: { rows: number; columns: number; widths?: readonly number[]; resultName?: string; resultNumber?: number; resultCount?: number }) {
+function mount(o: { rows: number; columns: number; widths?: readonly number[]; resultName?: string; resultNumber?: number; resultCount?: number; unsized?: boolean; before?: (handle: ResultHandle) => void }) {
   const made = source(o.rows, o.columns)
+  o.before?.(made.handle)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
   root.append(scroller)
   document.body.append(root)
   for (const [name, value] of [['clientWidth', 900], ['offsetWidth', 900], ['clientHeight', 300]] as const) Object.defineProperty(scroller, name, { value })
-  const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, ...o.widths ? { widths: Float64Array.from(o.widths) } : {} }
+  const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: !o.unsized, ...o.widths ? { widths: Float64Array.from(o.widths) } : {} }
   const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn()
   const view = new GridView({
     root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', resultNumber: o.resultNumber ?? 1, resultCount: o.resultCount ?? 1, ...o.resultName ? { resultName: o.resultName } : {}, platform: 'win32',
@@ -210,5 +211,19 @@ describe("the grid's accessible name", () => {
     expect(unnamed.root.getAttribute('aria-label')).toMatch(/^Result 2 of 5, /)
     unnamed.view.dispose()
     unnamed.root.remove()
+  })
+})
+
+describe('a disposed grid', () => {
+  it('leaves no retry pending after a busy results port refused its measure', async () => {
+    const busy = Object.assign(new Error('Busy.'), { code: 'TOO_MANY_REQUESTS' })
+    const grid = mount({ rows: 5, columns: 3, unsized: true, before: handle => { vi.mocked(handle.measure).mockImplementation(() => Promise.reject(busy)) } })
+    await grid.frame()
+    const retries = (grid.view as unknown as { retries: Set<unknown> }).retries
+    expect(grid.handle.measure).toHaveBeenCalled()
+    expect(retries.size).toBeGreaterThan(0)
+    grid.view.dispose()
+    expect(retries.size).toBe(0)
+    grid.root.remove()
   })
 })

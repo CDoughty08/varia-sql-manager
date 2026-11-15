@@ -2120,3 +2120,25 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.pivot.getSnapshot().building).toEqual({})
   })
 })
+
+describe('a closed tab\'s pivots', () => {
+  it('keep nothing of the tab once its results go, even when a build fails after the close', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    pivot.open('t1', keyAt(results, 't1', 0))
+    vi.mocked(first.pivot).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows.'))
+    await pivot.run('t1')
+    const inside = pivot as unknown as { errors: Map<string, unknown>; tried: Map<string, unknown>; running: Map<string, unknown> }
+    expect(inside.errors.has('t1')).toBe(true)
+    expect(inside.tried.has('t1')).toBe(true)
+    // A second build is in flight when the tab closes, and fails afterwards.
+    let fail!: (error: unknown) => void
+    vi.mocked(first.pivot).mockReturnValueOnce(new Promise((_yes, no) => { fail = no }))
+    const building = pivot.run('t1')
+    await settle()
+    results.release('t1')
+    fail(new ResultError('TIMEOUT', 'The pivot took too long.'))
+    await building
+    expect([inside.errors.has('t1'), inside.tried.has('t1'), inside.running.has('t1')]).toEqual([false, false, false])
+  })
+})

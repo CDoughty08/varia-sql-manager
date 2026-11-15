@@ -114,7 +114,8 @@ export default function ServerPicker({ id, labelledBy, options, value, onChange 
   const place = () => {
     const invoker = button.current, popover = panel.current
     if (!invoker || !popover) return
-    const box = invoker.getBoundingClientRect(), viewport = document.documentElement, inset = 8, gap = 2
+    // Its own window's: the pane may be in a popout.
+    const box = invoker.getBoundingClientRect(), viewport = invoker.ownerDocument.documentElement, inset = 8, gap = 2
     if (!box.width) { close(); return }
     popover.style.minWidth = `${box.width}px`
     popover.style.maxWidth = `${Math.max(box.width, viewport.clientWidth - inset * 2)}px`
@@ -145,9 +146,11 @@ export default function ServerPicker({ id, labelledBy, options, value, onChange 
     place()
     const observer = new ResizeObserver(place)
     if (button.current) observer.observe(button.current)
-    window.addEventListener('resize', place)
-    document.addEventListener('scroll', place, true)
-    return () => { observer.disconnect(); window.removeEventListener('resize', place); document.removeEventListener('scroll', place, true) }
+    // The window the pane is in, which is a popout's once it is popped out.
+    const own = button.current?.ownerDocument ?? document, view = own.defaultView ?? window
+    view.addEventListener('resize', place)
+    own.addEventListener('scroll', place, true)
+    return () => { observer.disconnect(); view.removeEventListener('resize', place); own.removeEventListener('scroll', place, true) }
   }, [open])
   useLayoutEffect(() => {
     if (active !== undefined) panel.current?.querySelector(`#${CSS.escape(optionId(active))}`)?.scrollIntoView({ block: 'nearest' })

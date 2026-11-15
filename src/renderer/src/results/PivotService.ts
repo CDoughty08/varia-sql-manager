@@ -373,8 +373,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       hold?.()
       // A cancel the builder or toolbar already words (a Pivot kept) is said once, by them.
       ticket.end(done ? 'done' : item.cancelled && error === undefined ? 'cancelled' : 'dropped')
-      if (this.running.get(tabId)?.get(item.ordinal) === item) {
-        this.running.get(tabId)!.delete(item.ordinal)
+      const builds = this.running.get(tabId)
+      if (builds?.get(item.ordinal) === item) {
+        builds.delete(item.ordinal)
+        if (builds.size === 0) this.running.delete(tabId)
         // A failed Build Pivot's reason stays in the builder until the user acts: an automatic build's failure goes only to
         // the toolbar. A cancel is not the draft's failure, so a later build over the Pivot's recipe clears what it said.
         const keeps = item.auto !== undefined && !!this.errors.get(tabId)?.get(item.ordinal)?.draft
@@ -449,6 +451,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   private fail(tabId: string, ordinal: number, error: string, draft = true): void {
+    // A build that ends after its tab's results went has no builder to say it in.
+    if (!this.results.getSnapshot()[tabId]) return
     let errors = this.errors.get(tabId)
     if (!errors) this.errors.set(tabId, errors = new Map())
     errors.set(ordinal, { text: error, draft })
@@ -523,6 +527,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         if (!group || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
       }
     }
+    // A tab whose results went keeps nothing here: what its builds said and which filters they read go with it.
+    for (const tabId of [...this.errors.keys()]) if (!snapshot[tabId]) this.errors.delete(tabId)
+    for (const tabId of [...this.tried.keys()]) if (!snapshot[tabId]) this.tried.delete(tabId)
     const current = this.getSnapshot()
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {

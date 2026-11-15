@@ -57,6 +57,7 @@
 
 ### Fixed
 
+- **Results edge cases:** Copy pressed just after a sort finished, before the grid had redrawn, copied the rows the selection would cover in the new order; it now copies what the grid shows. Cancelling a comparison as its answer arrived still added it and said "Compared"; it now adds nothing and frees its memory. A cleared sort's view stays in memory only while its grid is on screen, not until the grid is shown again. The Search Objects filter and server pickers now follow their pane when it is popped out and that window is resized or scrolled.
 - **Results memory while scrolling:** scrolling through a result with long or wide values, or one whose rows were still arriving, no longer keeps the text of every grid section you scrolled past in memory beyond the results cache limit; only the sections in and near view are kept.
 - **Updates on Linux:** a newer release found right after another finished downloading no longer fails its download because cleanup of the older files deleted it.
 - **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare.
