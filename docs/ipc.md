@@ -663,7 +663,7 @@ spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then name
 (`##…##`, trailing spaces ignored; zod and `Validate` refuse such a target name as `INVALID_PARAMS` too) for every action,
 the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
 server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
-A database's `delete` takes `identity?: { id, created }` (refused on any other kind; optional, as for the other database actions), the database Delete Object's describe read: the execute preflight refuses another database with the name as `NOT_FOUND` before any DDL, and the DROP's own batch checks it again right before the DROP (50010, `NOT_FOUND`).
+A database's `delete` takes `identity?: { id, created }` (refused on any other kind; optional, as for the other database actions), the database Delete Object's describe read: the execute preflight refuses another database with the name as `NOT_FOUND` before any DDL, and each statement the Delete runs on the database by name (SINGLE_USER, the DROP, the access a compensation restores) checks it again first in its own batch (50010, `NOT_FOUND`).
 A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity` (both refused on any other kind, and
 `dropMappedUsers` on any other action; `loginIdentity` required on `actions.execute`, by zod's `actionExecuteRequestSchema`
 and `Validate`, optional on `actions.script`), with `closeConnections` and `deleteHistory` absent or false. Its execute

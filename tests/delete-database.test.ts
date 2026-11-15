@@ -37,7 +37,7 @@ function workbench(deleteTarget = target()) {
 describe('Delete Object on a database (D3d)', () => {
   it('keeps the DROP step\'s title equal to the backend\'s, which says whether a reply removed the database', () => {
     const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
-    expect(service).toContain(`ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase => "${dropDatabaseStepTitle}"`)
+    expect(service).toContain(`ActionTemplate.DropDatabase => "${dropDatabaseStepTitle}"`)
     const removes = deleteObjectDefinition.removesDatabase!
     expect(removes(appData, dropped.steps, true)).toBe(true)
     // The DROP completed, then the history step failed: the database is gone all the same.

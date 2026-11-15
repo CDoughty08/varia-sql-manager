@@ -21,13 +21,12 @@ internal enum ActionTemplate
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
     AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline, DropRestoring, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember, RenameLogin,
-    DropLogin, DropMappedUser, CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential,
-    DropBoundDatabase
+    DropLogin, DropMappedUser, CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential
 }
 
-/// <summary>The database a bound DROP DATABASE was planned for (<see cref="ActionTemplate.DropBoundDatabase"/>): the database_id and
-/// create_date Delete Object read. SQL Server checks both in the DROP's own batch, right before it, so a database that took the name
-/// after the preflight (while Varia's pools left it, or SET SINGLE_USER waited) is never dropped.</summary>
+/// <summary>The database a statement was planned for (<see cref="ActionSql.DatabaseBound"/>): the database_id and create_date Delete Object
+/// read. SQL Server checks both in the statement's own batch, right before it (<see cref="ActionSql.DatabaseCheck"/>), so a database that
+/// took the name after the preflight (while Varia's pools left it, or SET SINGLE_USER waited) is never closed, dropped or given access.</summary>
 internal sealed record DatabaseBinding(int Id, DateTime Created);
 
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
@@ -136,7 +135,7 @@ internal static partial class ActionSql
         if (plan.Principal is { } bound && (!(Guarded(plan.Template) || BindingOf(plan.Template) is not null) || bound.Sid.Length is < 1 or > 85
             || (plan.Template == ActionTemplate.DropLogin || BindingOf(plan.Template)?.Login == true) != (bound.PrincipalId is not null && bound.Created is not null)))
             throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
-        if (plan.Bound is { } database && (plan.Template != ActionTemplate.DropBoundDatabase || database.Id < 1)) throw new InvalidOperationException("The database binding does not fit " + plan.Template + ".");
+        if (plan.Bound is { } database && (!DatabaseBound(plan.Template) || database.Id < 1)) throw new InvalidOperationException("The database binding does not fit " + plan.Template + ".");
         return plan;
     }
 
@@ -170,7 +169,7 @@ internal static partial class ActionSql
             ActionTemplate.RenameObject => "EXEC sys.sp_rename @objname = " + Literal(Quote(names[0]) + "." + Quote(names[1])) + ", @newname = " + Literal(names[2]) + ", @objtype = N'OBJECT'",
             ActionTemplate.RenameDatabase => "ALTER DATABASE " + Quote(names[0]) + " MODIFY NAME = " + Quote(names[1]),
             ActionTemplate.SetSingleUser => "ALTER DATABASE " + Quote(names[0]) + " SET  SINGLE_USER WITH ROLLBACK IMMEDIATE",
-            ActionTemplate.DropDatabase or ActionTemplate.DropBoundDatabase => "DROP DATABASE " + Quote(names[0]),
+            ActionTemplate.DropDatabase => "DROP DATABASE " + Quote(names[0]),
             ActionTemplate.DeleteBackupHistory => "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Literal(names[0]),
             // SMO writes two spaces after SET (probed by D1 and D3), and @skipchecks as a plain string.
             ActionTemplate.SetMultiUser => "ALTER DATABASE " + Quote(names[0]) + " SET  MULTI_USER",
@@ -243,9 +242,6 @@ internal static partial class ActionSql
             ActionTemplate.RenameDatabase => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' MODIFY NAME = ' + QUOTENAME(@p2);\n"),
             ActionTemplate.SetSingleUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE';\n"),
             ActionTemplate.DropDatabase => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"),
-            // The name is compared, never run; the id and create_date are bound values. The dry run (live checks) selects the DROP alone.
-            ActionTemplate.DropBoundDatabase => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"
-                + (dryRun ? "" : "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, " + NotTheDatabase + ", 1;\n")),
             ActionTemplate.DeleteBackupHistory => dryRun ? "SELECT @p1 AS database_name;" : "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = @p1;",
             ActionTemplate.SetMultiUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  MULTI_USER';\n"),
             ActionTemplate.SetRestrictedUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  RESTRICTED_USER';\n"),
@@ -286,8 +282,23 @@ internal static partial class ActionSql
         };
     }
 
-    /// <summary>Why a bound DROP DATABASE left a database alone: another database has taken the name since Delete Object read it.</summary>
-    internal const string NotTheDatabase = "N'The database is not the one Delete Object read: it was renamed, dropped or replaced since. It was not dropped. Close Delete Object and open it again.'";
+    /// <summary>Why a bound statement left a database alone: another database has taken the name since Delete Object read it.</summary>
+    internal const string NotTheDatabase = "N'The database is not the one Delete Object read: it was renamed, dropped or replaced since. Varia did not change it. Close Delete Object and open it again.'";
+
+    /// <summary>The templates a database's Delete binds to the database it read (<see cref="DatabaseBinding"/>): every statement its plan
+    /// runs on the database by name.</summary>
+    public static bool DatabaseBound(ActionTemplate template) =>
+        template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser;
+
+    /// <summary>A bound statement's check, the first statement of its batch: the database with its name (@p1, compared, never run) is the
+    /// one with the bound database_id (@id) and create_date (@created), else 50010 (NOT_FOUND) before anything runs. The text is constant.</summary>
+    public const string DatabaseCheck = "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.database_id = @id AND d.create_date = @created) THROW 50010, "
+        + NotTheDatabase + ", 1;\n";
+
+    /// <summary>The batch a planned statement runs: its template's, after <see cref="DatabaseCheck"/> when it is bound. A dry run selects the
+    /// statement alone, as Script shows it.</summary>
+    public static string Executable(PlannedStatement plan, bool dryRun = false) =>
+        (plan.Bound is not null && !dryRun ? DatabaseCheck : "") + Executable(plan.Template, dryRun);
 
     /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
     internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
@@ -326,7 +337,7 @@ internal static partial class ActionSql
     {
         ActionTemplate.DropMappedUser => ["@sid"],
         ActionTemplate.DropLogin => ["@sid", "@principal", "@created"],
-        ActionTemplate.DropBoundDatabase => ["@id", "@created"],
+        ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.SetMultiUser or ActionTemplate.SetRestrictedUser => ["@id", "@created"],
         _ => []
     };
 
@@ -613,7 +624,7 @@ internal static partial class ActionSql
         "N'SERVER ROLE'", "N'dbcreator'",
         // Detach's permission and the login kind its files note reads (Database, DetachInside).
         "N'db_owner'", "N'SQL LOGIN'",
-        // Restore Database's cleanup (DropRestoring), and a database's Delete bound to the database it read (DropBoundDatabase).
+        // Restore Database's cleanup (DropRestoring), and a database's Delete bound to the database it read (DatabaseCheck).
         NotRestoring, NotTheDatabase,
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
@@ -794,6 +805,8 @@ internal static partial class ActionSql
         foreach (var template in Enum.GetValues<ActionTemplate>())
             foreach (var dry in new[] { false, true })
                 yield return (template + (dry ? " (dry run)" : ""), LintExecutable(Executable(template, dry), template));
+        foreach (var template in Enum.GetValues<ActionTemplate>().Where(DatabaseBound))
+            yield return (template + " (bound)", LintExecutable(Executable(new PlannedStatement(template, "master", ["x"], Bound: new(1, DateTime.UnixEpoch))), template));
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             foreach (var kind in new[] { "table", "view", "procedure", "function" }) yield return (kind + " band " + band, LintCatalog(Object(kind, band), band, database: true));

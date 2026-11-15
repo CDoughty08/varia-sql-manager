@@ -267,7 +267,7 @@ internal static class ActionLiveChecks
                 check(Unknown(denied), "and with VIEW SERVER STATE but VIEW SERVER PERFORMANCE STATE denied (" + denied.Error?.Code + " " + denied.Error?.Message + ")");
             }
             // The describe names the database it read, exactly as sys.databases has it. A Delete naming another create_date or id is refused
-            // by the preflight, and a DROP bound to another create_date is refused by its own batch past the preflight (DropBoundDatabase):
+            // by the preflight, and a DROP bound to another create_date is refused by its own batch past the preflight (DatabaseCheck):
             // nothing runs and the database stays. The Delete naming the database read deletes it.
             var identity = described.DeleteTarget?.Identity;
             string Count(DatabaseIdentityDto read) => "SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + " AND database_id = "
@@ -276,7 +276,7 @@ internal static class ActionLiveChecks
             var staleCreated = identity is null ? null : await client.Delete(database, identity: identity with { Created = "2000-01-01T00:00:00.000" });
             var staleId = identity is null ? null : await client.Delete(database, identity: identity with { Id = identity.Id + 100_000 });
             var unbound = identity is null ? null : await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete",
-                [new PlannedStatement(ActionTemplate.DropBoundDatabase, "master", [owned], Bound: new(identity.Id, new DateTime(2000, 1, 1)))], CancellationToken.None);
+                [new PlannedStatement(ActionTemplate.DropDatabase, "master", [owned], Bound: new(identity.Id, new DateTime(2000, 1, 1)))], CancellationToken.None);
             var kept = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "1";
             static bool Refused(ActionExecuteResult? result) => result is { Error.Code: "NOT_FOUND" } && result.Steps.All(step => step.Status != "done")
                 && result.Error.Message.Contains("is not the one Delete Object read", StringComparison.Ordinal);
