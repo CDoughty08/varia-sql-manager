@@ -736,7 +736,7 @@ internal static class UnifiedDiff
         var counter = 0;
         try
         {
-            // Refused rooms end the write here as anywhere else: the result is completed with what it holds (nothing).
+            // Inside the try: a room refused while writing (TOO_LARGE) still completes the result with what it holds.
             leftReader.Ahead(Read(true), token);
             rightReader.Ahead(Read(false), token);
             for (var k = 0; k < model.Entries.Length; k++)

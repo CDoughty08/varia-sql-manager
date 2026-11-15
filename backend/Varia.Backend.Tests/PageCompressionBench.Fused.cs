@@ -182,7 +182,7 @@ internal static partial class PageCompressionBench
         int[] selected = [.. Enumerable.Range(0, columns.Length)];
         var scratch = new int[PageView.ScratchLength(columns.Length)];
         var room = new byte[pages.Length == 0 ? 0 : pages.Max(page => page.Length)];
-        // Reserved as ResultJobs.ReadRoom reserves it, so the budget's peak shows it.
+        // Reserved as ReadRoom (PageRooms.cs) reserves it, so the budget's peak shows it.
         var reserved = pages.Any(page => set.Raw(page) is null) && set.TryReserveWork(room.Length) ? room.Length : 0;
         try
         {

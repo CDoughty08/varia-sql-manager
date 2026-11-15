@@ -584,11 +584,18 @@ internal static partial class FusedReadChecks
         }
         var roomy = new DiffStages();
         var tight = new DiffStages();
+        // Four workers whatever the machine, so the rooms ahead are the same size on CI's few cores as here.
+        using var four = ViewSorter.WorkersHere(4);
         var withRoom = Written(0, roomy);
-        // Free room for the writer's rooms and half its rooms ahead beyond the eighth spare memory leaves.
-        long aheadBytes;
-        using (pair.Left.Pin()) aheadBytes = 2L * Math.Min(PageAhead.Batch, PageCount(pair.Left)) * pair.Left.SealedSnapshot().Max(page => (long)page.Length);
-        var withoutSpare = Written(pair.Store.GlobalBytes / 8 + aheadBytes / 2 + 8 * aheadBytes / Math.Max(1, 2 * Math.Min(PageAhead.Batch, PageCount(pair.Left))), tight);
+        // Free one page less than a side's rooms ahead beyond the eighth spare memory leaves: neither side's are granted,
+        // while the writer's own rooms (working memory, which may take that eighth) and its rows still fit.
+        long aheadBytes, largest;
+        using (pair.Left.Pin())
+        {
+            largest = pair.Left.SealedSnapshot().Max(page => (long)page.Length);
+            aheadBytes = 2L * Math.Min(PageAhead.Batch, PageCount(pair.Left)) * largest;
+        }
+        var withoutSpare = Written(pair.Store.GlobalBytes / 8 + aheadBytes - largest, tight);
         check(withRoom == withoutSpare && withRoom.Length > 0 && roomy.WrittenAhead > 0 && tight.WrittenAhead == 0 && tight.WrittenBehind > 0 && pair.Left.HasPacked && pair.Right.HasPacked,
             "a unified diff with room to work but none to spare unpacks its pages itself and writes the rows it writes with room ahead: "
             + roomy.WrittenAhead + " ahead with room, " + tight.WrittenBehind + " by the writer without");
