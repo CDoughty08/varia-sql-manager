@@ -54,9 +54,10 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
 /// bits (IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16, BinarySort2 16384, BinarySort 32768).</summary>
 internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool Utf8, int Options);
 /// <summary>A stored result set. rowsAvailable counts rows in sealed pages (what results.read can serve); main adds the
-/// backend generation before the renderer sees it.</summary>
+/// backend generation before the renderer sees it. Name is the query's own name for the set, from a #Name="…" marker comment
+/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
-    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete);
+    long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);

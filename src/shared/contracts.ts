@@ -182,6 +182,9 @@ export interface ResultDescriptor {
   state: 'open' | 'complete' | 'released'
   truncated?: TruncationReason
   incomplete: boolean
+  /** The query's own name for the set, from a `#Name="…"` marker comment before its statement (docs/ipc.md): 1 to 128
+   *  characters, no control, line separator or bidirectional characters. Absent when the set has none. */
+  name?: string
 }
 /**
  * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); what the script

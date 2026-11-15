@@ -16,10 +16,15 @@ const columnSchema = z.object({
   name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector', 'tone']).optional(),
   maxLength: count.optional(), precision: count.optional(), scale: count.optional(), nullable: z.boolean(), collation: collationSchema.optional()
 }).strict()
+/** A result name's bounds, the backend's ResultNames.MaxChars and refused characters: C0 and C1 controls, line and paragraph
+ *  separators, bidirectional marks, embeddings, overrides and isolates, and the BOM (docs/named-result-sets-scope.md). */
+export const resultNameChars = 128
+export const refusedResultNameChars = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/
 export const truncationSchema = z.enum(['rowLimit', 'queryBudget', 'globalBudget', 'systemMemory'])
 /** A descriptor as the backend sends it, before main adds the generation. */
 export const backendDescriptorSchema = z.object({
   resultId: u32, index: z.number().int().min(0).max(limits.maxResultSets.max), batchNumber: count, iteration: count, kind: z.enum(['rows', 'executionPlan', 'diff', 'pivot']),
   columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
-  state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean()
+  state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean(),
+  name: z.string().min(1).max(resultNameChars).refine(value => !refusedResultNameChars.test(value) && value.trim() === value).optional()
 }).strict()

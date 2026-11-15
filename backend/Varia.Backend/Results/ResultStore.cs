@@ -298,7 +298,7 @@ internal sealed partial class ResultStore
     /// <param name="derived">A set made from stored results (<see cref="ResultSetBuffer.Derived"/>): a refusal returns null
     /// without stopping the query.</param>
     public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
-        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false)
+        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false, string? name = null)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
@@ -317,7 +317,7 @@ internal sealed partial class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived };
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived, ResultName = name };
             sets[set.ResultId] = set;
             return set;
         }
