@@ -48,7 +48,7 @@ export function patchedDomPurify(): Plugin {
         found += versions.length
         if (other.length) this.error(`${file} ships DOMPurify ${other.join(', ')}, not the installed ${expected}.`)
       }
-      if (!found) this.error('The bundle names no DOMPurify version: the version pattern in electron.vite.config.ts no longer matches the built code, so the DOMPurify check cannot run.')
+      if (!found) this.error('The bundle names no DOMPurify version, so the DOMPurify check cannot run: the version pattern in electron.vite.config.ts no longer matches the built code, or the renderer no longer bundles the sanitiser Monaco uses.')
     }
   }
 }
