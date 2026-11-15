@@ -235,6 +235,7 @@ describe('command execution', () => {
     expect(documents.active?.id).toBe(tabs[2].id)
     expect(commands.isEnabled('document.goToQuery3')).toBe(true)
     expect(commands.isEnabled('document.goToQuery4')).toBe(false)
+    expect(commands.unavailableReason('document.goToQuery4')).toBe('Open 4 queries first.')
     await commands.execute('document.goToQuery2', undefined, 'keybinding')
     expect(documents.active?.id).toBe(tabs[1].id)
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(false)
@@ -422,7 +423,7 @@ describe('context keys', () => {
     expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
-    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; live?: boolean; tree?: 'idle' | 'typing'; options?: boolean; picker?: boolean } = {}): FocusElement & { tag: string } => ({
+    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; strip?: boolean; live?: boolean; tree?: 'idle' | 'typing'; options?: boolean; picker?: boolean } = {}): FocusElement & { tag: string } => ({
       tag, matches: selector => selector.split(', ').includes(tag),
       closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! }
         : selector === '[data-query-editor-id]' ? options.editorOwner === undefined ? null : { getAttribute: () => options.editorOwner! }
@@ -432,6 +433,7 @@ describe('context keys', () => {
           : selector === '[data-document-tab]' ? options.tab ? { getAttribute: () => '' } : null
           : selector === '[data-search-hits]' ? options.hits ? { getAttribute: () => '' } : null
           : selector === '[data-output-view="messages"]' ? options.messages ? { getAttribute: () => 'messages' } : null
+          : selector === '[data-messages-strip]' ? options.strip ? { getAttribute: () => '' } : null
           : selector === '[data-output-view="live"]' ? options.live ? { getAttribute: () => 'live' } : null
           : selector === '[data-explorer-tree]' ? options.tree ? { getAttribute: (name: string) => name === 'data-type-ahead' && options.tree === 'typing' ? '' : name === 'data-explorer-tree' ? '' : null } : null
           : selector === '[data-options-dialog]' ? options.options ? { getAttribute: () => '' } : null
@@ -473,7 +475,9 @@ describe('context keys', () => {
     // The Results pane's tabs and its picker, drawn over the page outside any pane, take the results' browser tab keys.
     expect(focusFacts(element('button', { pane: 'results' }), editor(false))).toMatchObject({ activePanel: 'output', resultsFocus: true })
     // The Messages strip in the Results pane takes the query keys, as the Messages pane does.
-    expect(focusFacts(element('div', { pane: 'results', messages: true }), editor(false))).toMatchObject({ activePanel: 'output', messagesFocus: true, resultsFocus: false })
+    expect(focusFacts(element('div', { pane: 'results', strip: true, messages: true }), editor(false))).toMatchObject({ activePanel: 'output', messagesFocus: true, resultsFocus: false })
+    // Its toggle too, the strip's one focusable element while it is collapsed.
+    expect(focusFacts(element('button', { pane: 'results', strip: true }), editor(false))).toMatchObject({ activePanel: 'output', resultsFocus: false })
     expect(focusFacts(element('input', { picker: true }), editor(false))).toMatchObject({ activePanel: '', inputFocus: true, resultsFocus: true })
     expect(focusFacts(element('div', { pane: 'plan' }), editor(false))).toMatchObject({ activePanel: 'output', resultsFocus: false })
     expect(focusFacts(element('div', { pane: 'explorer', tree: 'idle' }), editor(false))).toMatchObject({ activePanel: 'explorer', explorerFocus: true, explorerTypeAhead: false })
