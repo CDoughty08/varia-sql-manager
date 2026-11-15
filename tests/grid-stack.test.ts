@@ -217,6 +217,7 @@ describe('stacked result sets', () => {
     expect(declared('.rs-caption-toggle', 'max-width')).toBeUndefined()
     expect(declared('.rs-caption-toggle[data-named]', 'flex')).toBe('0 1 auto')
     expect(declared('.rs-caption-toggle[data-named]', 'min-width')).toBe('0')
+    expect(declared('.rs-caption-toggle[data-named]', 'max-width')).toBe('60%')
   })
   it('keep the results\' focus rings visible: inset where controls touch a clipping edge, and apart from the selected view under forced colours', () => {
     const rules = stylesheetRules()
