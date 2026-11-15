@@ -336,6 +336,10 @@ internal static class ScriptingChecks
             && !SmoOptionsMapper.LedgerNeedsNewer("ledger", ScriptVerb.Drop, SqlServerVersion.Version120, DatabaseEngineType.Standalone)
             && !SmoOptionsMapper.LedgerNeedsNewer("table", ScriptVerb.Create, SqlServerVersion.Version120, DatabaseEngineType.Standalone),
             "ledger tables and views are refused only for stand-alone targets older than SQL Server 2022, outside DROP; SqlAzureDatabase keeps the LEDGER clause at Version120");
+        // An unconnected SMO server whose version is set, as SMO sets a Managed Instance's from @@MICROSOFTVERSION.
+        var managedSmo = new Server(new ServerConnection { ServerVersion = new ServerVersion(16, 0, 4135) });
+        var runnerPass = SmoScriptRunner.MapPass(managedSmo, dto, ScriptVerb.Create, managed, true, false, true);
+        check(runnerPass.Target == SqlServerVersion.Version160 && runnerPass.Warnings.Count == 0, "Script As hands SMO's own server version to the mapper, so a Managed Instance reporting 12 targets its engine's version");
         check(ScriptingErrors.VersionName(SqlServerVersion.Version130) == "SQL Server 2016" && ScriptingErrors.VersionName(SqlServerVersion.Version170) == "SQL Server 2025",
             "versions are named as the options page names them");
     }
