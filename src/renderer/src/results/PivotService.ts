@@ -152,8 +152,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly now: () => number
   private readonly defer: (callback: () => void) => void
   /** The Table's filters each group was last built over (`filtersIdentity`), by tab and ordinal, with the run: a Pivot
-   *  does not rebuild by itself over the filters it was last built over (only the last set is kept), so a build that failed, was refused or cancelled is not asked again
-   *  until the filters change or the user asks (Update). */
+   *  does not rebuild by itself over the filters it was last built over (only the last set is kept), so a build that
+   *  failed, was refused or cancelled is not asked again until the filters change or the user asks (Update). */
   private readonly tried = new Map<string, Map<number, { readonly queryId: string; readonly filters: string }>>()
   private following = false
   private disposed = false

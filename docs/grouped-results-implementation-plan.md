@@ -925,12 +925,13 @@ Outcome, accepted by the owner:
       - When a Pivot rebuilds by itself (`PivotService.followGroup`, looked at in a microtask after every results publish
         and layout change, never a timer): it is out of date (`pivotOutOfDate`), shown, under the threshold, its Table can
         be pivoted (`canPivot`: the run ended, its sort or filter built), no build of its group is in flight, and its
-        group has not already been built over these filters in this run. That last rule (`tried`, the Table's filters by
+        group was not last built over these filters. That last rule (`tried`, the last set of the Table's filters by
         `filtersIdentity` when any build of the group starts) is what keeps a failure, a refusal or a cancel from being
         asked again and again, and what keeps a rebuild whose answer still compares as out of date (PR 11's remaining
-        false positives, or a VIEW_NOT_FOUND rerun whose filters resolve another way) from looping: at most one rebuild for
-        each set of filters. Hiding and showing the Pivot does not try the same filters again; Update still does. Filters
-        whose automatic build this service gave up itself (superseded) are not counted as tried, so a change undone and
+        false positives, or a VIEW_NOT_FOUND rerun whose filters resolve another way) from looping: each retry needs the
+        filters to change. Hiding and showing a Pivot whose build ended does not try the same filters again; Update still
+        does. Filters whose automatic build this service gave up itself (superseded, or its Pivot hidden while it ran) are
+        not counted as tried, so a change undone and
         made again rebuilds; a user's Cancel counts the filters shown at that moment as tried, so the cancel is not undone
         at once by an automatic build over filters changed meanwhile. Every build that ends looks at the Pivot again, so a
         failed Build Pivot whose filters changed while it ran is followed then, not at the next unrelated publish. An

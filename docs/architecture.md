@@ -300,7 +300,7 @@ being true.
   refusal or a cancel never loops; each retry needs the filters to change. An automatic build whose Pivot is hidden
   while it runs is given up, and a followed rebuild (`followed` provenance) never switches the output pane. Whether a Pivot is shown is
   `pivotShown`, a function of the run, the layout and the stack's collapsed entries, so every collapse change goes through
-  `ResultsService.setCollapsed`, which publishes; do not mutate `TabViewState.collapsed` elsewhere. The threshold is
+  `ResultsService.setCollapsed`, which publishes; a toggle never mutates `TabViewState.collapsed` directly. The threshold is
   `pivotFollow`, in one place.
 - A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
   any other kind). The Compare popover's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)

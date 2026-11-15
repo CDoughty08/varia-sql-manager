@@ -1666,6 +1666,52 @@ describe("a Pivot following its Table's filters", () => {
     expect(f.group().pivot!.pivot!.followed).toBeUndefined()
   })
 
+  it('gives up an automatic build when its item is collapsed, or another view selected in Tabs, while it runs', async () => {
+    const f = await following({ count: 2 })
+    const pivotKey = f.group().pivot!.key
+    const pending = (target: ReturnType<typeof view>) => {
+      const state: { signal?: AbortSignal } = {}
+      target.pivot.mockImplementationOnce((_spec, options) => new Promise((_, no) => { state.signal = options?.signal; state.signal?.addEventListener('abort', () => no(new Error('aborted'))) }))
+      return state
+    }
+    // Stacked: collapsed while it builds.
+    const f1 = view(f.first, 1, [{ op: 'in', column: 0, rows: [2], nulls: false }])
+    const first = pending(f1)
+    await f.show(f1)
+    f.results.setCollapsed('t1', new Set([pivotKey]))
+    await wait()
+    expect(first.signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    expect(f.stale()).toBe(true)
+    f1.pivot.mockResolvedValueOnce(pivoted(901))
+    f.results.setCollapsed('t1', new Set())
+    await wait()
+    expect(f1.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(901)
+    // Tabs: the Pivot selected while it builds, then another group's view.
+    f.setLayout('tabs')
+    f.results.focusEntry('t1', pivotKey)
+    const f2 = view(f.first, 2, [{ op: 'in', column: 0, rows: [3], nulls: false }])
+    const second = pending(f2)
+    // The filter is applied from the Table, then the Pivot's tab selected again before it builds.
+    f.results.focusEntry('t1', f.one)
+    await f.show(f2)
+    expect(f2.pivot).not.toHaveBeenCalled()
+    f.results.focusEntry('t1', pivotKey)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledOnce()
+    f.results.focusEntry('t1', keyAt(f.results, 't1', 2))
+    await wait()
+    expect(second.signal?.aborted).toBe(true)
+    expect(f.results.getSnapshot().t1.jobNotice).toBe('')
+    f2.pivot.mockResolvedValueOnce(pivoted(902))
+    f.results.focusEntry('t1', pivotKey)
+    await wait()
+    expect(f2.pivot).toHaveBeenCalledTimes(2)
+    expect(f.group().pivot!.entry.descriptor.resultId).toBe(902)
+    expect(f.stale()).toBe(false)
+  })
+
   it('gives up an automatic build whose Pivot is hidden while it runs, leaves the pane the user picked, and rebuilds once shown', async () => {
     const f = await following()
     // F1's rebuild starts while the Pivot is shown, then the user shows Messages before it answers.
