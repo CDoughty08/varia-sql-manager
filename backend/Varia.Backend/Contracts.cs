@@ -78,7 +78,7 @@ internal sealed record ResultsMemoryEvent(long UsedBytes, long GlobalBytes, long
 /// as read first.</summary>
 internal sealed record ResultMemoryDetail(long LogicalBytes, long StoredBytes, long CompressedBytes, long PackedLogicalBytes, long CacheBytes,
     IReadOnlyList<ResultMemoryEntry> Largest, ResultCodecCounters Codec, ManagedHeap Heap);
-/// <summary>State is "raw", "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
+/// <summary>State is "raw", "partial" (a pass stopped part way), "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
 /// view's table, which no Results tab names; left out otherwise.</summary>
 internal sealed record ResultMemoryEntry(uint ResultId, long LogicalBytes, long StoredBytes, string State, int? Progress = null, bool? Live = null);
 /// <summary>The page codec's counters since the backend started. Name and Level are left out while compression is off.

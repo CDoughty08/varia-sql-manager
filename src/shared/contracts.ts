@@ -236,7 +236,7 @@ export interface SessionState { transactionCount: number; checked: boolean }
 export interface MemoryOrder { generation: number; seq: number }
 /** One of the largest results a results.memory event names: its rows as read and what holds them now. `progress` (0 to
  *  100) only while it unpacks; `live` for a live view's table, which no Results tab names. */
-export interface ResultMemoryEntry { resultId: number; logicalBytes: number; storedBytes: number; state: 'raw' | 'packed' | 'unpacking'; progress?: number; live?: true }
+export interface ResultMemoryEntry { resultId: number; logicalBytes: number; storedBytes: number; state: 'raw' | 'partial' | 'packed' | 'unpacking'; progress?: number; live?: true }
 /** The page codec's counters since the backend started; times in microseconds. `name` and `level` only while compression is on. */
 export interface ResultCodecCounters {
   name?: string; level?: number; pagesPacked: number; pagesUnpacked: number; packInputBytes: number; packMicroseconds: number

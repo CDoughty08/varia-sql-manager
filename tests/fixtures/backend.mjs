@@ -1145,10 +1145,6 @@ const fixtures = {
       print('third batch')], elapsedMs: 3, status: 'completedWithErrors',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
-  // Named result sets: the first set carries the query's #Name, the second has none (docs/named-result-sets-scope.md).
-  NAMED_RESULTS_FIXTURE: (id, params) => summary(id, params.database, [
-    { columns: [column('order_id', 'int')], rows: [['1'], ['2']], name: 'Open orders' }, { columns: [column('name', 'nvarchar')], rows: [['master']] }
-  ]),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
   SelectTopNRows: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('CustomerName', 'nvarchar')], rows: [['1', 'Contoso']] }]),
   MENUS_GRID_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('Id', 'int'), column('', 'nvarchar'), column('Note', 'nvarchar')], rows: [['1', 'a', null], ['2', 'b', 'n2'], ['3', 'c', 'n3']] }], {

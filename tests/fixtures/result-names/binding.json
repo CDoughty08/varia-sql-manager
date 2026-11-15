@@ -659,6 +659,221 @@
         []
       ],
       "notes": []
+    },
+    {
+      "name": "a batch with SET NOEXEC applies no name, even before it: an ON from an earlier batch may have skipped those statements",
+      "sql": "SET NOEXEC ON;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;\nSET NOEXEC OFF;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"A\" (line 3) was not applied: a SET NOEXEC statement on line 5 in its batch can make SQL Server skip statements without an error. Put the SET statement in a batch of its own.",
+        "\"B\" (line 6) was not applied: a SET NOEXEC statement on line 5"
+      ]
+    },
+    {
+      "name": "SET NOEXEC in a batch of its own leaves the next batch's names applied",
+      "sql": "SET NOEXEC OFF;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;",
+      "slots": [
+        [],
+        [
+          [
+            0,
+            "A"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 1,
+        "sets": [
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "A"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "a marker between GO and its count is in no batch: it is noted, not dropped",
+      "sql": "SELECT 1 AS a;\nGO /* #Name=\"x\" */ 3\nSELECT 2 AS b;",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"x\" (line 2) is unused: no statement follows it in its batch."
+      ]
+    },
+    {
+      "name": "SET NOEXEC inside an IF applies no name: a GO 2 repetition starts with NOEXEC on",
+      "sql": "-- #Name=\"A\"\nSELECT 1 AS a;\nIF 1 = 1 BEGIN SET NOEXEC OFF; SELECT 9 AS z; SET NOEXEC ON; END\nGO 2",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"A\" (line 1) was not applied: a SET NOEXEC statement on line 3 in its batch can make SQL Server skip statements without an error."
+      ]
+    },
+    {
+      "name": "SET NOEXEC OFF inside an IF after an ON in an earlier batch applies no name",
+      "sql": "SET NOEXEC ON;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;\nIF 1 = 1 BEGIN SET NOEXEC OFF; SELECT 9 AS z; END",
+      "slots": [
+        [],
+        []
+      ],
+      "notes": [
+        "\"A\" (line 3) was not applied: a SET NOEXEC statement on line 5 in its batch"
+      ]
+    },
+    {
+      "name": "a SELECT aliased to the plan column is shown as a plan and not counted, so no name in its batch is applied",
+      "sql": "-- #Name=\"Saved plan\"\nSELECT CAST(N'<ShowPlanXML/>' AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];\n-- #Name=\"Stats\"\nSELECT 1 AS a;",
+      "slots": [
+        []
+      ],
+      "notes": [
+        "\"Saved plan\" (line 1) was not applied: its batch names a column",
+        "\"Stats\" (line 3) was not applied: its batch names a column"
+      ]
+    },
+    {
+      "name": "a plan arriving where a SELECT * may have returned it stops naming: a table's column may be named like the plan column",
+      "sql": "SELECT * FROM #p;\n-- #Name=\"A\"\nSELECT 1 AS a;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            1,
+            "A"
+          ],
+          [
+            2,
+            "B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1,
+            "plan": true
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          null,
+          null,
+          null
+        ],
+        "unapplied": [
+          "\"A\" (line 2) was not applied: a result set shown as an execution plan arrived where a statement with * may have returned it",
+          "\"B\" (line 4) was not applied: a result set shown as an execution plan"
+        ]
+      }
+    },
+    {
+      "name": "a STATISTICS XML plan after a named set with known columns leaves the next name applied",
+      "sql": "-- #Name=\"A\"\nSELECT 1 AS a;\n-- #Name=\"B\"\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            0,
+            "A"
+          ],
+          [
+            1,
+            "B"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1,
+            "plan": true
+          }
+        ],
+        "names": [
+          "A",
+          null,
+          "B",
+          null
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "a marker before ;WITH names the CTE's set, though ScriptDom gives the semicolon to the statement before",
+      "sql": "SET NOCOUNT ON;\n/* #Name=\"x\" */\n;WITH c AS (SELECT 1 AS a) SELECT a FROM c;\nSELECT 1 AS b\n-- #Name=\"y\"\n;WITH d AS (SELECT 2 AS e) SELECT e FROM d;\n",
+      "slots": [
+        [
+          [
+            0,
+            "x"
+          ],
+          [
+            2,
+            "y"
+          ]
+        ]
+      ],
+      "notes": [],
+      "run": {
+        "batch": 0,
+        "sets": [
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          },
+          {
+            "columns": 1
+          }
+        ],
+        "names": [
+          "x",
+          null,
+          "y"
+        ],
+        "unapplied": []
+      }
+    },
+    {
+      "name": "a marker before the semicolon that ends a statement is after it, not inside it",
+      "sql": "SELECT 1 AS a /* #Name=\"z\" */;\nSELECT 2 AS b;",
+      "slots": [
+        [
+          [
+            1,
+            "z"
+          ]
+        ]
+      ],
+      "notes": []
     }
   ]
 }

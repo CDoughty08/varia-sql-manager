@@ -410,6 +410,7 @@ if (liveGroup is null)
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
+        ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),

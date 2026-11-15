@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { backendDescriptorSchema, refusedResultNameChars, resultNameChars } from '../src/shared/ipc/descriptors'
 
@@ -21,5 +23,14 @@ describe('a result descriptor name', () => {
       expect(valid(`a${ch}b`), JSON.stringify(ch)).toBe(false)
     }
     expect([valid(' padded'), valid('padded '), valid('Ünïcødé 名前 😀')]).toEqual([false, false, true])
+  })
+  it('refuses exactly the code units of the shared fixture, as the backend does', () => {
+    // tests/fixtures/result-names/refused.json: ResultNameChecks.cs holds ResultNames.IsRefused to the same ranges.
+    const { ranges } = JSON.parse(readFileSync(join('tests', 'fixtures', 'result-names', 'refused.json'), 'utf8')) as { ranges: [number, number][] }
+    const differ: number[] = []
+    for (let code = 0; code <= 0xffff; code++)
+      if (refusedResultNameChars.test(String.fromCharCode(code)) !== ranges.some(([from, to]) => code >= from && code <= to)) differ.push(code)
+    expect(ranges.length).toBeGreaterThan(0)
+    expect(differ).toEqual([])
   })
 })

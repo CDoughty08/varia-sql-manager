@@ -1129,6 +1129,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // Named result sets (ResultNames.cs): each batch's plan is made before its first execution; notes go to Messages.
         var nameNotes = new ResultNameNotes(text => messages.Add(text));
         var namePlans = new ResultNamePlan?[batches.Count];
+        // The running batch execution's binder until its notes are out; one an exception ended reports them in finally.
+        ResultNameBinder? pendingNames = null;
+        // The batches whose plans are made (their notes out); those after them that the run never reached are noted in finally.
+        var plannedBatches = 0;
+        var pendingRepetition = 0;
+        // The next repetition of the last planned batch to start, and whether the batch loop began (a refused or failed
+        // request says nothing about names).
+        var nextRepetition = 1;
+        var namesBegun = false;
         // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
         Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
@@ -1141,6 +1150,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var noPlanEvents = false;
         List<uint>? planOrder = null;
         ResultSetBuffer? currentSet = null;
+        // How long this query's rows have waited for room in all (MaxRoomWaitMs).
+        var roomWaited = new RoomWaited();
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         int? spid = null;
@@ -1277,6 +1288,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             connection.FireInfoMessageEventOnUserErrors = true;
             if (args.IncludeClientStatistics) statistics = new(connection);
             foreach (var marker in unbatched.Where(marker => marker.Name is not null)) nameNotes.Add(ResultNames.Unbatched(marker));
+            namesBegun = true;
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
@@ -1287,12 +1299,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     namePlans[b] = namePlan;
                     foreach (var note in namePlan.Notes) nameNotes.Add(note);
                 }
+                plannedBatches = b + 1;
+                nextRepetition = 1;
                 for (iteration = 1; iteration <= batch.RepeatCount; iteration++)
                 {
                     token.ThrowIfCancellationRequested();
                     events.Progress(completed, totalBatches, batchNumber, iteration);
                     var raisedBefore = Raised();
                     var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
+                    pendingNames = names;
+                    pendingRepetition = batch.RepeatCount > 1 ? iteration : 0;
+                    nextRepetition = iteration + 1;
                     await using var command = connection.CreateCommand();
                     command.CommandText = batch.Sql;
                     // The token alone carries the script's deadline. A CommandTimeout would arm a second timer expiring with
@@ -1359,7 +1376,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                                 sets.Add(opened);
                                                 events.Opened(opened);
                                             }
-                                            else { tally.Refused(); plan = null; }
+                                            else { tally.Refused(); plan = null; names?.Refused(); }
                                         }
                                         unkept = fate == ResultSetTally.Fate.Unkept;
                                     }
@@ -1425,8 +1442,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         try { truncatedCells = plan!.ReadRow(reader, builder, warn, token); }
                                         catch { currentSet.AbortRow(); throw; }
                                         var sealedBefore = currentSet.SealedPages;
+                                        // A row the budget refuses waits, outside every lock, while packing complete results can make
+                                        // room for it, and is committed again; with no room to wait for it is refused as before.
+                                        var committed = currentSet.TryCommitRow(truncatedCells, mayWait: true);
+                                        if (!committed && currentSet.RoomWanted > 0) committed = await WaitAndCommitAsync(store, currentSet, truncatedCells, roomWaited, token);
                                         // A plan's row is not one of the limit's.
-                                        if (currentSet.TryCommitRow(truncatedCells) && !planRow) storedRows++;
+                                        if (committed && !planRow) storedRows++;
                                         if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                                     }
                                     if (currentSet is not null)
@@ -1489,7 +1510,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
-                    if (names is not null) foreach (var note in names.Unapplied(failed)) nameNotes.Add(note);
+                    if (names is not null) foreach (var note in names.Unapplied(failed, null, batch.RepeatCount > 1 ? iteration : 0)) nameNotes.Add(note);
+                    pendingNames = null;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
                     if (failed && args.StopOnError) { status = "failed"; failure = new("SQL_ERROR", ErrorText([]), batchNumber, iteration); break; }
                     if (failed) firstError ??= (batchNumber, iteration);
@@ -1500,7 +1522,6 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                             + (iteration < batch.RepeatCount ? "repetition." : "batch."));
                 }
             }
-            nameNotes.Finish();
             if (firstError is { } first)
             {
                 status = "completedWithErrors";
@@ -1546,6 +1567,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         finally
         {
+            if (pendingNames is not null) foreach (var note in pendingNames.Unapplied(true, "its batch stopped before its result set arrived", pendingRepetition)) nameNotes.Add(note);
+            if (namesBegun)
+            {
+                // The planned batch's repetitions that never started, then the batches never reached.
+                if (plannedBatches > 0 && namePlans[plannedBatches - 1] is { Slots.Count: > 0 } lastPlan && nextRepetition <= batches[plannedBatches - 1].RepeatCount)
+                    foreach (var note in ResultNameBinder.Unrun(lastPlan, nextRepetition, batches[plannedBatches - 1].RepeatCount, batches[plannedBatches - 1].RepeatCount > 1)) nameNotes.Add(note);
+                for (var b = plannedBatches; b < batches.Count; b++)
+                    foreach (var marker in batches[b].Markers ?? [])
+                        if (marker.Name is not null) nameNotes.Add(ResultNames.Note(marker, "was not applied: the run ended before its batch ran."));
+            }
+            nameNotes.Finish();
             // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
             statisticsSample = statistics?.Finish();
             watch.Stop();
@@ -1712,6 +1744,46 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowSizes.maxRows).</summary>
     public const int MaxRowBytesRows = 16_384;
+
+    /// <summary>How many times one row waits for packing to make room (<see cref="ResultStore.WaitForRoomAsync"/>) before it is
+    /// refused: room made and taken again by another query's rows is waited for again, a few times at most.</summary>
+    internal const int MaxRoomWaits = 4;
+    /// <summary>The longest one query's rows wait for room in all, however many rows and result sets wait: each wait ends as soon as
+    /// packing has made room or has nothing more to give, so this only bounds passes a reader keeps stopping. While a row
+    /// waits, the rows committed before it are not sealed (the open row is in the same page), so a grid sees them when the
+    /// wait ends.</summary>
+    internal const long MaxRoomWaitMs = 30_000;
+
+    /// <summary>How long one query's rows have waited for room so far, in milliseconds (<see cref="MaxRoomWaitMs"/>).</summary>
+    internal sealed class RoomWaited
+    {
+        public long Ms;
+    }
+
+    /// <summary>A row the budget refused while packing could make room (<see cref="ResultSetBuffer.RoomWanted"/>): waits for
+    /// room outside every lock (<see cref="ResultStore.WaitForRoomAsync"/>), at most <see cref="MaxRoomWaits"/> times for the
+    /// row and <paramref name="maxMs"/> for the query in all (<paramref name="waited"/>), committing the same row again after
+    /// each; the last try refuses it for real, so the set stops as it would have. Returns whether the row was stored. A
+    /// cancelled query aborts the open row and throws. The ingestion's and the checks' one path.</summary>
+    internal static async Task<bool> WaitAndCommitAsync(ResultStore store, ResultSetBuffer set, int truncatedCells, RoomWaited waited, CancellationToken token, long maxMs = MaxRoomWaitMs)
+    {
+        var committed = false;
+        for (var tries = 0; !committed && set.RoomWanted is > 0 and var wanted; tries++)
+        {
+            bool made;
+            var left = maxMs - waited.Ms;
+            var started = Environment.TickCount64;
+            try { made = tries < MaxRoomWaits && left > 0 && await store.WaitForRoomAsync(set.Budget, wanted, token, (int)Math.Min(left, ResultStore.RoomWaitMs)); }
+            catch
+            {
+                set.AbortRow();
+                throw;
+            }
+            finally { waited.Ms += Environment.TickCount64 - started; }
+            committed = set.TryCommitRow(truncatedCells, mayWait: made);
+        }
+        return committed;
+    }
 
     /// <summary>Each row's bytes (the sum of DATALENGTH over its cells) for a range of a result's sealed rows; fewer than asked
     /// past the rows available, as results.read serves them.</summary>

@@ -10,15 +10,15 @@ namespace Varia.Backend.Tests;
 /// thread's lifetime. Most checks drive the policy with their own clock (PackDue); the last ones run its thread.</summary>
 internal static class PackerChecks
 {
-    private static readonly IReadOnlyList<ResultColumn> W1Columns = [.. SyntheticRows.Columns("W1").Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))];
-    private static readonly IReadOnlyList<WireKind> W1Wires = [.. SyntheticRows.Columns("W1").Select(column => column.Wire)];
+    internal static readonly IReadOnlyList<ResultColumn> W1Columns = [.. SyntheticRows.Columns("W1").Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))];
+    internal static readonly IReadOnlyList<WireKind> W1Wires = [.. SyntheticRows.Columns("W1").Select(column => column.Wire)];
     /// <summary>W1 rows of about 9 MiB, well over the policy's floor, in about 35 pages.</summary>
-    private const int BigRows = 40_000;
+    internal const int BigRows = 40_000;
 
-    private static ResultSetBuffer Open(ResultStore store, string session) =>
+    internal static ResultSetBuffer Open(ResultStore store, string session) =>
         store.Open(store.BeginQuery(session), 0, 1, 1, "rows", W1Columns, W1Wires) ?? throw new InvalidOperationException("The result set was not kept.");
 
-    private static void Write(ResultSetBuffer set, long from, long rows)
+    internal static void Write(ResultSetBuffer set, long from, long rows)
     {
         for (var row = from; row < from + rows; row++)
         {
@@ -29,7 +29,7 @@ internal static class PackerChecks
         }
     }
 
-    private static ResultSetBuffer Filled(ResultStore store, string session, long rows)
+    internal static ResultSetBuffer Filled(ResultStore store, string session, long rows)
     {
         var set = Open(store, session);
         Write(set, 0, rows);
@@ -37,20 +37,20 @@ internal static class PackerChecks
         return set;
     }
 
-    private static byte[][] Bodies(ResultSetBuffer set)
+    internal static byte[][] Bodies(ResultSetBuffer set)
     {
         using var pin = set.Pin();
         return [.. set.SealedSnapshot().Select(page => page.Body())];
     }
 
-    private static bool Same(byte[][] left, byte[][] right) => left.Length == right.Length && left.Zip(right).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second));
+    internal static bool Same(byte[][] left, byte[][] right) => left.Length == right.Length && left.Zip(right).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second));
 
     /// <summary>Every page is held packed: W1 pages always pack smaller. (Only the accessor and PackingChecks read the stored form;
     /// tests/result-page-access.test.ts.)</summary>
-    private static bool AllPacked(ResultSetBuffer set) => set.SealedSnapshot().All(page => page.StoredLength < page.Length);
+    internal static bool AllPacked(ResultSetBuffer set) => set.SealedSnapshot().All(page => page.StoredLength < page.Length);
 
     /// <summary>A store on request, a visibility table on the check's clock and a policy over them, its thread not started.</summary>
-    private sealed class Rig
+    internal sealed class Rig
     {
         public long Clock;
         public readonly ResultStore Store;
@@ -62,13 +62,15 @@ internal static class PackerChecks
         private readonly Guid source = Guid.NewGuid();
         private long seq;
 
-        public Rig(long global = 1L << 30)
+        /// <param name="visibleIdle">The stage 2 idle wait, or null (these checks) to pack hidden results only.</param>
+        public Rig(long global = 1L << 30, long? visibleIdle = null)
         {
             Store = new ResultStore(global, global) { Packing = PagePacking.OnRequest };
             Visibility = new ResultVisibility(id => (OnLookup?.Invoke(id) ?? true) && Store.Find(id) is not null, () => Clock);
+            Store.Clock = () => Clock;
             // The checks run passes on their own threads: compressing at the product's lowest priority would starve them on
             // a busy machine (offline-stress), and the priority is not what they test (Priorities does).
-            Packer = new ResultPacker(Store, Visibility) { Priority = ThreadPriority.Normal };
+            Packer = new ResultPacker(Store, Visibility, visibleIdleMs: visibleIdle) { Priority = ThreadPriority.Normal };
             Store.Settled = () => Interlocked.Increment(ref Pokes);
         }
 
@@ -483,12 +485,14 @@ internal static class PackerChecks
         // The service's thread runs on the real clock: a long delay keeps it from packing the result before it is shown,
         // however long this check is held up between storing and showing it.
         packer.Delay = 1L << 40;
+        packer.VisibleDelay = 1L << 40;
         var store = service.Results;
         var set = Filled(store, "service", BigRows);
         var source = Guid.NewGuid().ToString();
         object Visible(long seq, params uint[] ids) => service.DispatchAsync("results.visibility", JsonSerializer.SerializeToElement(new { source, seq, visible = ids }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         Visible(1, set.ResultId);
-        // With no delay at all a shown result is still not due: a pass, run here, skips it whatever the time.
+        // With no hidden delay at all a shown result is still not due (its idle wait, stage 2, is long here): a pass, run
+        // here, skips it.
         packer.Delay = 0;
         packer.PackDue();
         check(!set.HasPacked, "a result shown through results.visibility is not packed, even with no delay");

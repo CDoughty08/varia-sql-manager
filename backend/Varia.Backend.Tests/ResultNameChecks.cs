@@ -39,6 +39,11 @@ internal static class ResultNameChecks
             if (found != expected) differences.Add((string)item["name"]! + " gave [" + found + "], not [" + expected + "]");
         }
         check(cases.Count >= 30 && differences.Count == 0, "the marker scan finds each case's markers in tests/fixtures/result-names/markers.json: " + string.Join("; ", differences));
+        // The refused characters, held to the ranges the descriptor schema's test reads too (tests/result-name-descriptor.test.ts).
+        var refusedPath = Path.Combine(GoldenText.Repository(), "tests", "fixtures", "result-names", "refused.json");
+        var ranges = JsonNode.Parse(File.ReadAllText(refusedPath))!["ranges"]!.AsArray().Select(range => ((int)range![0]!, (int)range[1]!)).ToList();
+        var differ = Enumerable.Range(0, 0x10000).Where(code => ResultNames.IsRefused((char)code) != ranges.Any(range => code >= range.Item1 && code <= range.Item2)).ToList();
+        check(ranges.Count > 0 && differ.Count == 0, "ResultNames.IsRefused refuses exactly the code units in tests/fixtures/result-names/refused.json: " + string.Join(", ", differ.Take(8).Select(code => code.ToString("x4"))));
         // A batch's marker offsets are its own text's, so the comment they point at is in the batch as the server gets it.
         var script = "SELECT 1 AS a;\nGO\n/* #Name=\"Second\" */\nSELECT 2 AS b;";
         var second = SqlScript.Parse(script)[1];
@@ -142,6 +147,20 @@ internal static class ResultNameChecks
         try { await ResultNamePlan.BuildAsync(shallow, 1, cancelled.Token); }
         catch (OperationCanceledException) { stopped = true; }
         check(stopped, "a cancelled run stops waiting for its plan");
+        // Many names before one EXEC, repeated by GO n: placing and noting them is linear (once quadratic: 0.7 s an execution
+        // for 20,000 names). 100,000 names would take minutes quadratically; the bound only catches that.
+        const int many = 100_000;
+        var execText = new string(' ', many) + "EXEC sp_who;";
+        var execScript = (TSqlScript)new TSql180Parser(initialQuotedIdentifiers: true).Parse(new StringReader(execText), out _);
+        var manyMarkers = Enumerable.Range(0, many).Select(index => new ResultMarker(index, index + 1, 1, "n")).ToList();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var manyPlan = ResultNamePlan.Build([.. execScript.Batches[0].Statements], manyMarkers, 1);
+        var manyBinder = new ResultNameBinder(manyPlan);
+        manyBinder.Take(1, false, false, false);
+        var manyNotes = manyBinder.Unapplied(false).Count();
+        timer.Stop();
+        check(manyPlan.Slots.Count == many && manyNotes == many - 1 && timer.Elapsed < TimeSpan.FromSeconds(10),
+            $"placing, binding and noting {many:N0} names is linear: {timer.ElapsedMilliseconds} ms");
     }
 
     private static void Notes(Action<bool, string> check)
@@ -153,6 +172,10 @@ internal static class ResultNameChecks
         notes.Finish();
         check(shown.Count == 21 && shown[19] == "note 19" && shown[20] == "… and 5 more notes about result names.",
             "a run says each note once, at most 20 of them, then counts the rest: " + string.Join(" / ", shown.Skip(18)));
+        // A GO n run can make millions of distinct notes: past the cap they are counted, and only a bounded number kept.
+        var flood = new ResultNameNotes(_ => { });
+        for (var i = 0; i < 200_000; i++) flood.Add("flood " + i);
+        check(flood.Kept <= ResultNames.MaxNotes + 4096, $"notes past the cap are counted, not all kept: {flood.Kept:N0} kept");
     }
 
     private static void Readers(Action<bool, string> check)
@@ -171,6 +194,27 @@ internal static class ResultNameChecks
         var binder = new ResultNameBinder(placed);
         check(binder.Take(Reader("a", "b"), isPlan: false, errored: false) == "Rows" && binder.Take(Reader("c"), isPlan: false, errored: false) is null && !binder.Unapplied(false).Any(),
             "a reader's set is named by its place and column count");
+        // The result budget refuses a named set: its name is noted as not applied, and so is every later one.
+        var budget = ResultNamePlan.BuildAsync(SqlScript.Parse("-- #Name=\"Kept\"\nSELECT 1 AS a;\n-- #Name=\"Refused\"\nSELECT 2 AS b;\n-- #Name=\"Later\"\nSELECT 3 AS c;").Single(), 1, CancellationToken.None).GetAwaiter().GetResult()!;
+        var refusing = new ResultNameBinder(budget);
+        var taken = new[] { refusing.Take(1, false, false, false), refusing.Take(1, false, false, false) };
+        refusing.Refused();
+        var unapplied = refusing.Unapplied(false).ToList();
+        check(taken is ["Kept", "Refused"] && refusing.Take(1, false, false, false) is null && unapplied is [var refusedNote, var laterNote]
+            && refusedNote == "Result name \"Refused\" (line 3) was not applied: result memory kept no more result sets." && laterNote.StartsWith("Result name \"Later\" (line 5) was not applied: result memory", StringComparison.Ordinal),
+            "a named set the result budget refuses is noted as not applied, as is each later name: " + string.Join(" / ", unapplied));
+        // A batch that ends early (an error that ends the script, a cancel) notes the names no set reached.
+        var ended = new ResultNameBinder(budget);
+        ended.Take(1, false, false, false);
+        check(ended.Unapplied(true, "its batch stopped before its result set arrived").ToList() is [var cut, _] && cut == "Result name \"Refused\" (line 3) was not applied: its batch stopped before its result set arrived.",
+            "names a batch never reached are noted with why it ended");
+        // Repetitions a stopped run never started are noted, once for the run of them.
+        check(ResultNameBinder.Unrun(budget, 2, 3, true).First() == "Result name \"Kept\" (line 1) was not applied: the run ended before repetitions 2 to 3 ran."
+            && ResultNameBinder.Unrun(budget, 3, 3, true).First().EndsWith("before repetition 3 ran.", StringComparison.Ordinal)
+            && ResultNameBinder.Unrun(budget, 1, 1, false).First().EndsWith("before its batch ran.", StringComparison.Ordinal), "names in repetitions a stopped run never started are noted");
+        // A GO n repetition's notes name it: another repetition may have applied the same name.
+        check(new ResultNameBinder(budget).Unapplied(true, null, 2).First() == "Result name \"Kept\" (line 1, repetition 2) was not applied: an error earlier in its batch made the place of its result set unknown.",
+            "a repetition's notes say which repetition");
     }
 
     private static void Descriptor(Action<bool, string> check)

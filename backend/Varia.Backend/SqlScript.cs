@@ -146,12 +146,13 @@ internal static class SqlScript
             {
                 // The line of the marker itself, which a block comment may put below its opening.
                 var at = start + 2 + hash;
-                var markerLine = sourceStartLine + line - 1 + sql.AsSpan(start, at - start).Count('\n');
+                var markerLine = sourceStartLine + line - 1 + LineBreaks(sql.AsSpan(start, at - start));
                 (markers ??= []).Add(new(start, stop, markerLine, name));
             }
         }
 
-        // The markers from start to stop, made relative to `origin`; those after stop wait for the next batch.
+        // The markers from start to stop, made relative to `origin`; those after stop wait for the next batch, and those
+        // before start (on a GO line, between GO and its count) are in no batch and name nothing.
         IReadOnlyList<ResultMarker> Take(int start, int stop, int origin)
         {
             if (markers is null) return [];
@@ -159,6 +160,7 @@ internal static class SqlScript
             foreach (var marker in markers)
                 if (marker.Offset >= stop) left.Add(marker);
                 else if (marker.Offset >= start) taken.Add(marker with { Offset = marker.Offset - origin, End = marker.End - origin });
+                else unbatched?.Add(marker);
             markers = left.Count == 0 ? null : left;
             return taken;
         }
@@ -190,6 +192,15 @@ internal static class SqlScript
         }
 
         RequestException Invalid(int line, string message) => new("INVALID_SCRIPT", $"Line {sourceStartLine + line - 1}: {message} The script was not executed.");
+    }
+
+    /// <summary>Line breaks as the scan counts them: CRLF, LF, or a CR alone.</summary>
+    private static int LineBreaks(ReadOnlySpan<char> text)
+    {
+        var count = 0;
+        for (var i = 0; i < text.Length; i++)
+            if (text[i] == '\n' || text[i] == '\r' && (i + 1 == text.Length || text[i + 1] != '\n')) count++;
+        return count;
     }
 
     private static bool IsIdentifierPart(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';

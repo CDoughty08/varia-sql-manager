@@ -11,9 +11,9 @@ internal static class ResultNameLiveChecks
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
         var session = Guid.NewGuid().ToString();
-        async Task<QueryResult> Run(string sql, string database = "tempdb") =>
-            (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(new QueryArgs(info.Id, session, database, sql, Guid.NewGuid().ToString(), 1000, 30,
-                MaxResultSets: 100), json), json);
+        async Task<QueryResult> Run(string sql, string database = "tempdb", int timeoutSeconds = 30, bool stopOnError = false) =>
+            (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(new QueryArgs(info.Id, session, database, sql, Guid.NewGuid().ToString(), 1000, timeoutSeconds,
+                MaxResultSets: 100, StopOnError: stopOnError), json), json);
         static string Names(QueryResult result) => string.Join(", ", result.ResultSets.Select(set => (set.Kind == "rows" ? "" : set.Kind + ":") + (set.Name ?? "-")));
         static List<string> Notes(QueryResult result) => [.. result.Messages.Where(message => message.Text.StartsWith("Result name", StringComparison.Ordinal)).Select(message => message.Text)];
         static string Show(QueryResult result) => Names(result) + " | " + string.Join(" / ", LiveResultChecks.Texts(result));
@@ -47,6 +47,25 @@ internal static class ResultNameLiveChecks
             // The next batch starts its own count.
             var nextBatch = await Run("SELECT 1 / 0 AS z;\nGO\n-- #Name=\"Fresh\"\nSELECT 2 AS b;");
             check(Names(nextBatch) == "-, Fresh", "an error in one batch does not stop names in the next: " + Show(nextBatch));
+
+            // SET NOEXEC ON in one batch and OFF in the next: SQL Server skips the second batch's first SELECT without an error,
+            // so the set that arrives first is the second SELECT's. No name in a batch with SET NOEXEC is applied.
+            var noexec = await Run("SET NOEXEC ON;\nGO\n-- #Name=\"A\"\nSELECT 1 AS a;\nSET NOEXEC OFF;\n-- #Name=\"B\"\nSELECT 2 AS b;");
+            check(noexec.Status == "completed" && noexec.ResultSets is [{ Name: null } skipped] && skipped.Columns[0].Name == "b" && Notes(noexec) is [var noexecA, var noexecB]
+                && noexecA.Contains("SET NOEXEC statement on line 5", StringComparison.Ordinal) && noexecB.StartsWith("Result name \"B\"", StringComparison.Ordinal),
+                "a set after SET NOEXEC skipped a statement does not take that statement's name: " + Show(noexec));
+            // A timeout ends the run inside a batch: the names its batch never reached are still noted.
+            var timedOut = await Run("-- #Name=\"A\"\nSELECT 1 AS a;\nWAITFOR DELAY '00:00:10';\n-- #Name=\"B\"\nSELECT 2 AS b;", timeoutSeconds: 1);
+            check(timedOut.Status == "timedOut" && Names(timedOut) == "A" && Notes(timedOut) is [var cut]
+                && cut == "Result name \"B\" (line 4) was not applied: its batch stopped before its result set arrived.", "a run that times out notes the names its batch did not reach: " + Show(timedOut));
+
+            // An error that ends the script (stopOnError): the names in the batches it never ran are noted too.
+            var ended = await Run("SELECT 1 / 0 AS z;\nGO\n-- #Name=\"B\"\nSELECT 2 AS b;", stopOnError: true);
+            check(ended.Status == "failed" && Notes(ended) is [var unreached] && unreached == "Result name \"B\" (line 3) was not applied: the run ended before its batch ran.",
+                "a script an error ends notes the names in the batches it did not run: " + Show(ended));
+            var endedRepeat = await Run("-- #Name=\"X\"\nSELECT 1 / 0 AS z;\nGO 3", stopOnError: true);
+            check(endedRepeat.Status == "failed" && Names(endedRepeat) == "X" && Notes(endedRepeat) is [var laterRepetitions]
+                && laterRepetitions == "Result name \"X\" (line 1) was not applied: the run ended before repetitions 2 to 3 ran.", "a script an error ends notes the repetitions it did not run: " + Show(endedRepeat));
 
             // GO 3: the batch is parsed once and each repetition's set is named.
             var repeated = await Run("-- #Name=\"Repeated\"\nSELECT 1 AS a;\nGO 3");

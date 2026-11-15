@@ -74,6 +74,10 @@ describe('Memory panel Nerd metrics', () => {
     expect(now.segments.reduce((sum, part) => sum + part.share, 0)).toBeCloseTo(1)
     expect(model.biggest.map(row => row.stateLabel)).toEqual(['Packed', 'Unpacking 62%', 'Raw'])
     expect(model.biggest[0].storedShare).toBeCloseTo(880 / 1840)
+    // A pass a read stopped part way (stage 2 stops at the next page) leaves some pages packed: neither Raw nor Packed.
+    const partial = { ...packed, largest: [{ resultId: 6, logicalBytes: 900 * MB, storedBytes: 600 * MB, state: 'partial' as const }] }
+    expect(resultMemoryDetailSchema.safeParse(partial).success).toBe(true)
+    expect(nerdMetrics(partial, named).biggest.map(row => row.stateLabel)).toEqual(['Partly packed'])
     expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toEqual({
       'Pages packed': '15,420', 'Pack speed': '342 MB/s', 'Cache hits': '96.8%', 'Unpack speed': '1.6 GB/s', 'Last unpack': '0.38 s', 'Per page': '0.5 ms'
     })
