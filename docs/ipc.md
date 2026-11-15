@@ -1313,9 +1313,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   everything that takes a lock or allocates at normal priority (so it is never preempted holding a lock a read or a new
   query needs), sleeps until the next result falls due, or until a result completes, `results.visibility` changes the
   shown set, a read or job that stopped packing ends, or a result's last view closes; it packs one result at a time, hidden ones first, then largest first, page by page
-  (about 275 to 400 MB/s, a 1 GiB result in about three seconds), and stops between pages when a hidden result is shown
+  (about 200 to 400 MB/s, a 1 GiB result in three to five seconds), and stops between pages when a hidden result is shown
   again, a shown one is read, a result is held or released, or the backend shuts down, keeping what it packed; a shown one stopped by a read falls due again its idle time after the read. It runs beside the results' workers, never
-  through their gate, so sorts, reads and new queries never wait for it (only packing for a waiting query, below, uses the gate). Showing a packed result again needs no wait:
+  through their gate, so sorts, reads and new queries never wait for it (only packing for a waiting query, below, and unpacking a shown result for its view use the gate). Showing a packed result again needs no wait:
   `results.read` unpacks the pages it sends (0.3 ms a read through a six-page cache), and a view read unpacks the pages
   behind its rows on the workers. A sort, filter, profile or pivot reads a packed result fused and leaves it packed
   (docs/architecture.md); an operation that needs every row at once (distinct values, row identity, search, diff, and a
@@ -1328,10 +1328,11 @@ Results stay in backend memory, never on disk (`ResultStore`).
   shown result with an open view (a sorted or filtered grid) stays raw, since its screens read a page or so a row (about
   30 to 55 ms a 256-row screen of a 256 MiB result packed against about 1 ms raw); one already packed when its grid is
   sorted or filtered, or shown again with such a grid, is unpacked again on the results' workers once the budget has
-  room for it twice over and no query waits for room (otherwise its screens read the packed pages; it is not counted as
+  room for it twice over and no query waits for room (otherwise its screens read the packed pages and the policy looks
+  again after 5 seconds, or when a read holding it ends; it is not counted as
   a use, and a hidden result with a view waits longer each time it was so unpacked). A result with an open distinct
   snapshot (a value list) is never packed, by either stage or for room: the snapshot keeps the raw pages it read, so
-  packing would credit bytes still held. Closing its last snapshot wakes the policy; plain scrolling and jumping cost about 0.2 to 1 ms a read
+  packing would credit bytes still held. Packing for room asks each candidate again before it starts and before each page, so a value list or view opened during a pass stops it there. Closing its last snapshot wakes the policy; plain scrolling and jumping cost about 0.2 to 1 ms a read
   packed. It is on in every backend Varia starts, with no setting, as stage 1 is. Measurements and the reasons for each
   rule are in [page-compression-findings.md](page-compression-findings.md#stage-2-as-built).
 - **Room for a query.** While the policy runs, a query's row that its own half or the global budget refuses (never a

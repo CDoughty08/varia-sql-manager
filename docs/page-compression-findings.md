@@ -500,7 +500,7 @@ live, not held), once it is idle. Measured first, then each rule settled:
   does not unpack and pack it every time. Closing its last view wakes the policy.
 - **Value lists keep a result raw.** A distinct snapshot (a column's value list, a filter by value) keeps the raw
   bodies of the pages it read for later reads of its values, so packing that result would credit the budget bytes
-  still held. A result with an open snapshot is not packed by either stage or for room; closing it wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
+  still held. A result with an open snapshot is not packed by either stage or for room; a pass for room asks each candidate again before it and before each page, since one opened mid-pass would otherwise be packed anyway. Closing it wakes the policy. Plain scrolling packed costs about 0.2 ms a 1,000-row read on `orders` and 0.8 ms on
   `log`, a jump 0.4 to 1 ms: well inside a frame.
 - **Operations.** Fused sorts, filters, profiles and pivots read the packed result and leave it packed (the first sort
   after idle took 0.26 to 0.37 s packed against 0.36 to 0.49 s raw on `orders`, a little faster since it reads half

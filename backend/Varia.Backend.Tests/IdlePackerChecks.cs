@@ -24,6 +24,7 @@ internal static class IdlePackerChecks
         ReleaseAndStop(check);
         Room(check);
         RoomForQuery(check);
+        RoomRecheck(check);
         NoRoom(check);
         Service(check);
     }
@@ -284,6 +285,42 @@ internal static class IdlePackerChecks
         rig.Clock += 100 * Idle;
         check(rig.Packer.PackDue() is null && !later.HasPacked, "and it stays raw while the view is open");
 
+        // The view's own build still holds the result when it pokes: the policy finds it held, and its end pokes again.
+        var held = Filled(rig.Store, "held at view", BigRows);
+        rig.Show(held.ResultId);
+        rig.Packer.PackDue();
+        rig.Clock += Idle;
+        rig.Packer.PackDue();
+        var building = held.Pin();
+        Call<ResultsViewResult>("results.view", new { resultId = held.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
+        rig.Packer.PackDue();
+        var stillPacked = AllPacked(held);
+        pokes = rig.Pokes;
+        building.Dispose();
+        var pokedAtEnd = rig.Pokes > pokes;
+        rig.Packer.PackDue();
+        check(stillPacked && pokedAtEnd && !held.HasPacked, "a view's result held while the policy looks is unpacked once the hold ends, which wakes it");
+
+        // Without room for it twice over, it stays packed and the policy looks again after the delay (freeing memory pokes nothing).
+        var tight = Filled(rig.Store, "tight", BigRows);
+        rig.Show(tight.ResultId);
+        Call<ResultsViewResult>("results.view", new { resultId = tight.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
+        rig.Show();
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs;
+        rig.Packer.PackDue();
+        var packedHidden = AllPacked(tight);
+        var global = rig.Store.GlobalBytes;
+        var query = rig.Store.QueryBytes;
+        rig.Store.Resize(rig.Store.UsedBytes + (1L << 20), rig.Store.UsedBytes + (1L << 20));
+        rig.Show(tight.ResultId);
+        var retryAt = rig.Packer.PackDue();
+        var leftPacked = packedHidden && AllPacked(tight) && retryAt == rig.Clock + ResultPacker.DelayMs;
+        rig.Store.Resize(global, query);
+        rig.Clock += ResultPacker.DelayMs;
+        rig.Packer.PackDue();
+        check(leftPacked && !tight.HasPacked, "without room for it the view's result stays packed and is unpacked at the next look once there is room: " + (retryAt - rig.Clock + ResultPacker.DelayMs));
+
         // A column's value list (a distinct snapshot) keeps the raw pages it read: packing them would credit the budget bytes
         // still held, so a result with one stays raw, hidden or shown, until it closes.
         var listed = Filled(rig.Store, "listed", BigRows);
@@ -408,6 +445,40 @@ internal static class IdlePackerChecks
         SpinWait.SpinUntil(() => AllPacked(first), 60_000);
         check(second.IsComplete && second.Truncated == TruncationReason.None && second.RowsAvailable == BigRows * 7 / 4 && waits > 0 && AllPacked(first) && !stranger.HasPacked,
             "a query refused for its own half waits while its own earlier result is packed, not other queries' results: " + waits + " waits, " + second.RowsAvailable + " rows, " + second.Truncated + ", first packed " + AllPacked(first) + ", stranger packed " + stranger.HasPacked);
+    }
+
+    private static void RoomRecheck(Action<bool, string> check)
+    {
+        // A value list opened on a later candidate while packing for room works on an earlier one: that candidate is asked
+        // again before it is packed, and its raw pages, which the value list keeps, are not credited to the budget.
+        var (store, visibility, packer) = Running(40L << 20, 40L << 20);
+        using var running = packer;
+        using var service = new SqlService(store);
+        var first = Filled(store, "hidden first", BigRows * 2);
+        var later = Filled(store, "shown later", BigRows);
+        // Smaller than the later one, so it comes after it in the pass: packing it shows the pass went past the later one.
+        var spare = Filled(store, "shown spare", BigRows / 2);
+        visibility.Set(Guid.NewGuid(), 1, [later.ResultId, spare.ResultId], out _);
+        var query = Open(store, "query");
+        var opened = 0;
+        string? failed = null;
+        packer.OnPage = page =>
+        {
+            if (page != first || Interlocked.Exchange(ref opened, 1) != 0) return;
+            // The budget is full (a query waits): room for the value list's own memory, then the budget as it was.
+            var global = store.GlobalBytes;
+            store.Resize(global + (64L << 20), global + (64L << 20));
+            try { service.DispatchAsync("results.distinct", JsonSerializer.SerializeToElement(new { resultId = later.ResultId, column = 0 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
+            catch (Exception error) { failed = error.GetType().Name + ": " + error.Message; }
+            finally { store.Resize(global, global); }
+            // The query asks again before the first is done, so the same pass goes on to the later candidates.
+            packer.MakeRoom(query.Budget, global: true);
+        };
+        Ingest(store, query, BigRows * 4);
+        SpinWait.SpinUntil(() => AllPacked(first) && AllPacked(spare), 60_000);
+        packer.OnPage = null;
+        check(opened == 1 && AllPacked(first) && AllPacked(spare) && store.HasSnapshots(later) && !later.HasPacked,
+            "a result given a value list while packing for room works on another is not packed for it: " + opened + " " + failed + ", snapshot " + store.HasSnapshots(later) + ", first packed " + AllPacked(first) + ", spare packed " + AllPacked(spare) + ", later packed " + later.HasPacked);
     }
 
     private static void NoRoom(Action<bool, string> check)

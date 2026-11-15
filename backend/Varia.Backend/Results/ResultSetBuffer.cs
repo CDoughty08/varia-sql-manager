@@ -417,6 +417,18 @@ internal sealed class ResultSetBuffer
 
     public int Pins { get { lock (gate) return pins; } }
 
+    /// <summary>Whether a pin or lease holds the set now; if so, its last one ends by poking the policy
+    /// (<see cref="ResultStore.Settle"/>), as when packing stopped for it. In one lock, so the end cannot slip between.</summary>
+    public bool NotifyWhenIdle()
+    {
+        lock (gate)
+        {
+            if (pins == 0 && leases == 0) return false;
+            notifyIdle = state == 1;
+            return true;
+        }
+    }
+
     /// <summary>What the stage 2 policy (<see cref="ResultPacker"/>) reads to tell a result in use from an idle one, in one
     /// lock: the pins and leases taken so far (every read, operation, Copy or Save), whether one is held now, the whole
     /// unpacks so far (<see cref="Unpacks"/>), and when a pin or lease last began or ended or the set completed (on

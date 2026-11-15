@@ -50,6 +50,8 @@ internal sealed class ResultPacker : IDisposable
     private readonly AutoResetEvent wake = new(false);
     private Thread? thread;
     private volatile bool stopping;
+    /// <summary>Cancelled on disposal: a view's unpack in flight stops rather than running on for a backend that is ending.</summary>
+    private readonly CancellationTokenSource ending = new();
     private int passes;
     /// <summary>Each result an operation has unpacked: its unpack count when the policy noticed it, and when. An operation's
     /// unpack counts as a use, so a hidden result a search or comparison reads again and again is not packed between runs.
@@ -164,7 +166,7 @@ internal sealed class ResultPacker : IDisposable
         Interlocked.Increment(ref passes);
         if (store.Packing == PagePacking.Off) return null;
         // A pass that packed for a waiting query leaves the room to it: unpacking for a view would take it straight back.
-        if (!PackForRoom()) UnpackViewed();
+        var unpackLater = UnpackViewed(PackForRoom());
         var now = visibility.Now;
         var wait = Delay;
         var idle = VisibleDelay;
@@ -220,6 +222,8 @@ internal sealed class ResultPacker : IDisposable
             }
         }
         Forget(sets);
+        // A shown result left packed under its view for want of room looks again after the delay: freeing memory pokes nothing.
+        if (unpackLater) next = Math.Min(next ?? now + wait, now + wait);
         return roomWanted ? visibility.Now : next;
     }
 
@@ -231,20 +235,37 @@ internal sealed class ResultPacker : IDisposable
     /// held, nor while a query waits for room, and only with as much room again left over, so it never takes the room a
     /// running query is about to need. It is not a use (<see cref="ResultSetBuffer.ViewUnpacks"/>): closing the view leaves
     /// the result's waits, and whether packing for room may take it, as they were.</summary>
-    private void UnpackViewed()
+    /// <param name="forRoom">This pass packed for a waiting query: leave the room to it.</param>
+    /// <returns>Whether a result was left packed for want of room (no headroom, a query waiting, this pass's room): the
+    /// policy looks again after the delay, since memory freed later pokes nothing. One left because a read or operation
+    /// holds it is looked at again when the hold ends (<see cref="ResultSetBuffer.NotifyWhenIdle"/>): the view's own build
+    /// still holds it when <see cref="ResultStore.AddView"/> pokes.</returns>
+    private bool UnpackViewed(bool forRoom)
     {
+        var later = false;
         foreach (var set in store.Sets())
         {
-            if (stopping || roomWanted || store.RoomWaiting) return;
-            if (set.Budget.Live is not null || set.IsReleased || !set.HasPacked || !store.HasViews(set) || set.Activity().Held) continue;
+            if (stopping) return false;
+            if (set.Budget.Live is not null || set.IsReleased || !set.HasPacked || !store.HasViews(set)) continue;
             if (!visibility.State(set.ResultId, out var hidden, out _) || hidden) continue;
+            if (forRoom || roomWanted || store.RoomWaiting)
+            {
+                later = true;
+                continue;
+            }
+            if (set.NotifyWhenIdle()) continue;
             try
             {
                 using (set.Pin())
-                    if (store.UsedBytes + 2 * set.UnpackNeed() <= store.GlobalBytes) set.TryUnpackAll(forView: true);
+                {
+                    if (store.UsedBytes + 2 * set.UnpackNeed() > store.GlobalBytes) later = true;
+                    else if (!set.TryUnpackAll(ending.Token, forView: true)) later = true;
+                }
             }
-            catch (OutOfMemoryException) { }
+            catch (OutOfMemoryException) { later = true; }
+            catch (OperationCanceledException) { return false; }
         }
+        return later;
     }
 
     /// <summary>Called before each page a pass packs, outside every lock (the checks' way into a pass); null in the product.</summary>
@@ -321,10 +342,16 @@ internal sealed class ResultPacker : IDisposable
             foreach (var (set, _, _) in candidates)
             {
                 if (stopping) break;
+                // Packing one candidate takes seconds: one later in the list may have become one the user works with since
+                // (a value list or a view opened, an operation's unpack), so it is asked again now, and again before each
+                // page. An operation that unpacks it during its pass stops it too (Pack's unpacks).
+                if (!ForRoom(set, all, queries)) continue;
+                var unpacks = set.Unpacks;
+                var hidden = visibility.IsHidden(set.ResultId, out _);
                 long got;
                 // One candidate's failure (out of memory compressing a page) skips it rather than every other candidate and
                 // the scheduled passes after this one.
-                try { got = set.Pack(() => Page(set), workers: RoomGate); }
+                try { got = set.Pack(() => Page(set) && !store.HasSnapshots(set) && (hidden || !store.HasViews(set)), unpacks: unpacks, workers: RoomGate); }
                 catch (OutOfMemoryException) { continue; }
                 saved += got;
                 // A candidate that saved something wakes the waits, which ask again while they still have no room: carry on
@@ -423,6 +450,7 @@ internal sealed class ResultPacker : IDisposable
     public void Dispose()
     {
         stopping = true;
+        ending.Cancel();
         store.Settled = null;
         store.RoomMaker = null;
         // A query waiting for room stops waiting: nothing more will pack for it.
