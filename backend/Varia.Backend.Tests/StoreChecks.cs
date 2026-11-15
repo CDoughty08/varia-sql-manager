@@ -33,6 +33,7 @@ internal static class StoreChecks
     public static void Run(Action<bool, string> check)
     {
         FusedReadChecks.ReturnedRooms(check);
+        FusedReadChecks.SnapshotKeepsNoBodies(check);
         // The budget's size: a quarter of the machine's memory between 256 MiB and 16 GiB, or the user's limit as it is,
         // up to three quarters of the memory and never under 256 MiB. A query has half.
         const long MiB = 1L << 20, GiB = 1L << 30;

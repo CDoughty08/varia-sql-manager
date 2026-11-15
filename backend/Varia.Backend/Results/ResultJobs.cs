@@ -461,40 +461,6 @@ internal sealed class ResultJobs(ResultStore store)
         return total;
     }
 
-    /// <summary>The room a plain Copy or Save unpacks a packed page into before it reads it (a fused read on one thread):
-    /// one page, the largest met, reserved from the result's budget as working memory while the job reads and returned
-    /// when it ends. Without room, or for a view's pages (built for the read), a page is read through its set's accessor
-    /// as before, so a Copy or Save is never refused for it. Pages held as sealed are read in place.</summary>
-    private sealed class ReadRoom(ResultSetBuffer set) : IDisposable
-    {
-        private byte[]? bytes;
-        private long reserved;
-        private bool refused;
-
-        public ReadOnlySpan<byte> Body(StoredPage page)
-        {
-            if (page.Set != set) return page.Body();
-            if (set.Raw(page) is { } raw) return raw;
-            if (!refused && (bytes is null || bytes.Length < page.Length))
-            {
-                if (set.TryReserveWork(page.Length - reserved))
-                {
-                    reserved = page.Length;
-                    bytes = new byte[page.Length];
-                }
-                else refused = true;
-            }
-            return bytes is not null && bytes.Length >= page.Length ? set.Read(page, bytes).AsSpan(0, page.Length) : page.Body();
-        }
-
-        public void Dispose()
-        {
-            set.ReturnWork(reserved);
-            reserved = 0;
-            bytes = null;
-        }
-    }
-
     /// <summary>The pages holding rows [first, last], fetched a bounded batch at a time; a view's are built in its order.</summary>
     private static IEnumerable<StoredPage> Pages(Source source, long first, long last)
     {

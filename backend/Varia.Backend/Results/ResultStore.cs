@@ -375,6 +375,15 @@ internal sealed partial class ResultStore
         return true;
     }
 
+    /// <summary>Whether both budgets are still short of the eighth <see cref="TryReserveSpare"/> leaves free: once either
+    /// reaches it, memory taken as spare is better given back to the operation's own work.</summary>
+    public bool HasSpare(QueryBudget query)
+    {
+        var budget = Volatile.Read(ref figures);
+        var limit = Math.Min(budget.Query, query.MaxBytes);
+        return query.UsedBytes <= limit - limit / 8 && UsedBytes <= budget.Global - budget.Global / 8;
+    }
+
     /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
     /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
     /// reservation of its own that found the budget full would stop it for good.</summary>

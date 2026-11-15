@@ -1880,7 +1880,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
     /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
-    /// reserves nothing. It stops at its next checkpoint once the result is released or the view closed.</summary>
+    /// reserves nothing for them; a packed result is read fused, through rooms it reserves (ResultSearcher.Search). It
+    /// stops at its next checkpoint once the result is released or the view closed.</summary>
     private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
     {
         if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
@@ -1890,12 +1891,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
-        // A search keeps each page it reads in its slots (a view's order touches pages at random), so a packed result is
-        // unpacked first, its pages charged, rather than read page by page into memory nothing charges.
-        await Unpack("There is not enough result memory to search these rows. Close other results and try again.", token, set);
         var pages = set.SealedSnapshot();
+        // A view whose order is far from its pages' (a sort) would unpack a page for most rows it reads fused, so a packed
+        // result is unpacked first then, its pages charged; in base order or near it, the search reads it fused.
+        // Counted once: after an unpack nothing is packed, so the search reads its pages as they are either way.
+        if (view is not null && set.HasPacked && !ResultSearcher.Local(pages, view.Order, token)) await Unpack(ResultSearcher.TooLarge, token, set);
         var stopped = ResultSearcher.Stopped(store, set, view);
-        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
+        var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped, local: true), token), ResultSearcher.TooLarge);
         // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
         if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
         if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
@@ -1980,19 +1982,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
-        progress?.Phase("unpack", 0.2);
-        await Unpack("There is not enough result memory to list this column's values. Close other results and try again.", token, progress, set);
+        // A packed result is read fused (ViewSorter.DistinctValues), and its snapshot reads its pages through the set.
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = ViewSorter.DistinctWorkingBytes(rows);
         if (!store.TryReserveWork(set.Budget, working))
-            throw TooLarge("There is not enough result memory to list this column's values. Close other results and try again.");
+            throw TooLarge(ViewSorter.DistinctTooLarge);
         DistinctSnapshot snapshot;
         try
         {
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            snapshot = await UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, progress, set);
+            snapshot = await LowMemoryAware(UntilReleased(work => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, work, keptView, keyMemory), token, progress, set), ViewSorter.DistinctTooLarge);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
             // Cancelled once built: nobody waits for it, so it is not kept.
@@ -2073,16 +2074,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
         using var pin = set.Pin();
-        await Unpack("There is not enough result memory to tell these rows apart. Close other results and try again.", token, set);
+        // A packed result is read fused (RowIdentity.Build).
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = RowIdentity.WorkingBytes(rows);
         var kept = 8 * rows + ResultStore.ViewOverhead;
         if (!store.TryReserveWork(set.Budget, working + kept))
-            throw TooLarge("There is not enough result memory to tell these rows apart. Close other results and try again.");
+            throw TooLarge(RowIdentity.TooLarge);
         (int Column, bool Unique, bool Approximate, long[] Ids) built;
-        try { built = await UntilReleased(work => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, work), token, set); }
+        try { built = await LowMemoryAware(UntilReleased(work => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, work), token, set), RowIdentity.TooLarge); }
         catch
         {
             store.Return(set.Budget, working + kept);
@@ -2209,6 +2210,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// because the machine is short of memory, which closing results here may not cure.</summary>
     private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
 
+    /// <summary>An operation refused inside (a room, a column extract) answers as one refused before it began: the
+    /// low-memory sentence while the machine is short of memory, its own sentence otherwise.</summary>
+    private async Task<T> LowMemoryAware<T>(Task<T> operation, string sentence)
+    {
+        try { return await operation; }
+        catch (RequestException error) when (error.Code == "TOO_LARGE" && error.Message == sentence) { throw TooLarge(sentence); }
+    }
+
     internal const string LowMemory = "The computer is low on memory, so there is no room to do this now. Close other programs or other results and try again.";
 
     internal const string BudgetStoppedLowMemory = "The computer was low on memory while this query ran, so it can store nothing more. Run the query again.";
@@ -2235,10 +2244,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThrowIfStopped(left.Budget);
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
-        const string compareTooLarge = "There is not enough result memory to compare these results. Close other results and try again.";
+        // Packed results are read fused (ResultDiffer.Compare, UnifiedDiff.Write); only a first result read far from its
+        // pages' order is unpacked, and that inside the comparison.
         var progress = ProgressOf(context);
-        progress?.Phase("unpack", 0.15);
-        await Unpack(compareTooLarge, token, progress, left, right);
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2246,7 +2254,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in rightPages) rightRows += page.Rows;
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
         if (!store.TryReserveWork(left.Budget, working))
-            throw TooLarge("There is not enough result memory to compare these results. Close other results and try again.");
+            throw TooLarge(ResultDiffer.TooLarge);
         // The differing cells are charged a chunk at a time, asking the system's memory load once for every 64 MiB of them.
         var cells = new WorkSteps(store, left.Budget);
         try
@@ -2255,7 +2263,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, progress, left, right); }
             catch (RequestException error) when (error.Code == "TOO_LARGE")
             {
-                throw NotStored(left.Budget, cells.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : error, (left, args.Left), (right, args.Right));
+                // A room or the first result's unpacking refused may be the machine's memory as much as the budget's.
+                var refusal = cells.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : error.Message == ResultDiffer.TooLarge ? TooLarge(ResultDiffer.TooLarge) : error;
+                throw NotStored(left.Budget, refusal, (left, args.Left), (right, args.Right));
             }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
@@ -2270,7 +2280,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 progress?.Phase("write", 0.98);
-                await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work), token, progress, left, right);
+                try { await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, progress, left, right); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right)); }
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
                 var written = set.Describe();

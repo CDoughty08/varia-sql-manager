@@ -12,14 +12,18 @@ internal static partial class PageCompressionBench
     /// (zstd 2), unpacked whole on the workers first and packed again after (rehydrate, the unpacking timed with the
     /// operation); and over the packed result directly (fused). For each it prints the time, the most the store's budget
     /// held above the result while it ran (rooms, extracts and unpacked pages are charged there), and the most the managed
-    /// heap grew, sampled every millisecond.</summary>
-    private static void RunFused(double gib, string shapeName, Shape shape, int workers)
+    /// heap grew, sampled every millisecond. With <c>--whole</c> it measures the operations that read a result whole
+    /// instead: a distinct list (a low and a high cardinality column, the latter with a search of its values), row
+    /// identities, a search, and a diff against a second result of the same rows (one in 500 replaced), in the same order
+    /// and shuffled (the first result read far from its pages' order, which the fused diff unpacks in place).</summary>
+    private static void RunFused(double gib, string shapeName, Shape shape, int workers, bool whole = false)
     {
         ResultColumn[] columns = [.. shape.Columns.Select(column => column.Meta)];
         var none = CancellationToken.None;
         var budget = (long)(gib * (1L << 30));
         // Room for the result, its unpacked copy and the operations' working memory beside it.
-        var store = new ResultStore(4 * budget, 4 * budget) { Packing = PagePacking.OnRequest };
+        // --whole: two more results of the same size and their unpacked copies.
+        var store = new ResultStore((whole ? 7 : 4) * budget, (whole ? 7 : 4) * budget) { Packing = PagePacking.OnRequest };
         var query = store.BeginQuery("fused");
         var set = store.Open(query, 0, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The result set was not kept.");
         long rows = 0;
@@ -32,11 +36,33 @@ internal static partial class PageCompressionBench
             rows++;
         }
         set.Complete();
+        var rawBytes = store.UsedBytes;
+        // The diff's second results: the same rows, one in 500 replaced by a new one, in order and shuffled (a fixed
+        // permutation of the positions).
+        ResultSetBuffer Second(int index, Func<long, long> position)
+        {
+            var other = store.Open(query, index, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The second result was not kept.");
+            for (var k = 0L; k < rows; k++)
+            {
+                var at = position(k);
+                var row = at % 500 == 7 ? rows + at : at;
+                other.CountRow();
+                if (other.BeginRow() is not { } builder) throw new InvalidOperationException("The second result is full.");
+                if (shapeName == "w1") SyntheticRows.WriteCells("W1", row, builder);
+                else foreach (var column in shape.Columns) column.Write(builder, row);
+                if (!other.TryCommitRow()) throw new InvalidOperationException("The second result is full.");
+            }
+            other.Complete();
+            return other;
+        }
+        const long Stride = 1_000_003;
+        if (whole && rows % Stride == 0) throw new InvalidOperationException("The shuffle's stride divides the rows.");
+        var right = whole ? Second(1, k => k) : null;
+        var shuffled = whole ? Second(2, k => (long)((ulong)k * Stride % (ulong)rows)) : null;
         var pageCount = set.SealedSnapshot().Length;
         var detail = rows.ToString("N0", CultureInfo.InvariantCulture) + " rows, " + pageCount.ToString("N0", CultureInfo.InvariantCulture) + " pages, " + columns.Length + " columns";
         Print("rows", rows, "rows", detail);
         Print("workers", workers, "threads", "ViewSorter.Workers on " + Environment.ProcessorCount + " logical processors");
-        var rawBytes = store.UsedBytes;
 
         // The product's key memory: whole keys only while the budget has room to spare; and none, so that ties read cells.
         ViewSorter.KeyMemory Spare() => new((bytes, large) => store.TryReserveSpare(query, bytes, large), bytes => store.Return(query, bytes));
@@ -44,20 +70,42 @@ internal static partial class PageCompressionBench
         var pivotSpec = new PivotSpec([shape.LowColumn], -1, [new(PivotAggregate.Count, -1), new(PivotAggregate.Sum, shape.SumColumn), new(PivotAggregate.Max, shape.MaxColumn)]);
         // The text column with many equal 8-byte starts: the shape's longest text (note, message), else its text column.
         var tieColumn = shapeName switch { "orders" => 11, "log" => 5, _ => shape.TextColumn };
-        (string Name, Func<StoredPage[], object> Run)[] operations =
-        [
-            ("sortInt", pages => ViewSorter.Build(set, pages, [new ViewKey(shape.IntColumn, true, SortMode.Value)], [], none, Spare()).Order.Length),
-            ("sortText", pages => ViewSorter.Build(set, pages, [new ViewKey(shape.TextColumn, false, SortMode.Value)], [], none, Spare()).Order.Length),
-            ("sortTies", pages => ViewSorter.Build(set, pages, [new ViewKey(tieColumn, false, SortMode.Value)], [], none, Narrow()).Order.Length),
-            ("filterIn", pages => ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.In, shape.LowColumn, [0], false, null, [])], none, Spare()).Order.Length),
-            ("profile", pages => ColumnProfiler.Profile(set, pages, null, shape.Profile, true, none).Columns.Length),
-            ("pivot", pages => ResultPivoter.Build(set, pages, null, pivotSpec, none, _ => true).RowGroups),
-            ("save", pages => SaveThrough(set, pages, columns)),
+        var all = set.SealedSnapshot();
+        ResultSetBuffer[] one = [set];
+        // A diff and its unified result (three rows of context), released after; the warm pass (a few pages) skips it.
+        object Diff(StoredPage[] pages, ResultSetBuffer second)
+        {
+            if (pages.Length < all.Length) return 0;
+            var model = ResultDiffer.Compare(set, set.SealedSnapshot(), second, second.SealedSnapshot(), false, none);
+            var unified = store.Open(query, 9, 1, 1, "diff", UnifiedDiff.Columns(second, model), UnifiedDiff.Wires(second, model), lengths: UnifiedDiff.Lengths(second, model), derived: true)
+                ?? throw new InvalidOperationException("The unified diff was not kept.");
+            UnifiedDiff.Write(unified, set, set.SealedSnapshot(), second, second.SealedSnapshot(), model, 3, none);
+            var stored = unified.RowsAvailable;
+            store.Release([unified.ResultId]);
+            return stored;
+        }
+        (string Name, ResultSetBuffer[] Sets, Func<StoredPage[], object> Run)[] operations = whole
+        ? [
+            ("distinctLow", one, pages => ViewSorter.DistinctValues(set, pages, null, shape.LowColumn, true, none, null, Spare()).Distinct),
+            ("distinctHigh", one, pages => ViewSorter.DistinctValues(set, pages, null, shape.TextColumn, true, none, null, Spare()).Read(DistinctOrder.Value, 0, 100, "no such text", none).Total),
+            ("identify", one, pages => RowIdentity.Build(set, pages, IdentityBy.Auto, -1, none).Ids.Length),
+            ("search", one, pages => ResultSearcher.Search(set, pages, null, "no such text", 0, false, 100, none)?.Searched ?? 0),
+            ("diff", [set, right!], pages => Diff(pages, right!)),
+            ("diffShuffled", [set, shuffled!], pages => Diff(pages, shuffled!)),
+        ]
+        : [
+            ("sortInt", one, pages => ViewSorter.Build(set, pages, [new ViewKey(shape.IntColumn, true, SortMode.Value)], [], none, Spare()).Order.Length),
+            ("sortText", one, pages => ViewSorter.Build(set, pages, [new ViewKey(shape.TextColumn, false, SortMode.Value)], [], none, Spare()).Order.Length),
+            ("sortTies", one, pages => ViewSorter.Build(set, pages, [new ViewKey(tieColumn, false, SortMode.Value)], [], none, Narrow()).Order.Length),
+            ("filterIn", one, pages => ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.In, shape.LowColumn, [0], false, null, [])], none, Spare()).Order.Length),
+            ("profile", one, pages => ColumnProfiler.Profile(set, pages, null, shape.Profile, true, none).Columns.Length),
+            ("pivot", one, pages => ResultPivoter.Build(set, pages, null, pivotSpec, none, _ => true).RowGroups),
+            ("save", one, pages => SaveThrough(set, pages, columns)),
         ];
 
-        void Measure(string mode, Func<Func<StoredPage[], object>, object> run, Action? after = null)
+        void Measure(string mode, Func<ResultSetBuffer[], Func<StoredPage[], object>, object> run, Action<ResultSetBuffer[]>? after = null)
         {
-            foreach (var (name, op) in operations)
+            foreach (var (name, sets, op) in operations)
             {
                 var seconds = new double[3];
                 long budgetPeak = 0, heapPeak = 0;
@@ -79,11 +127,11 @@ internal static partial class PageCompressionBench
                     }) { IsBackground = true, Priority = ThreadPriority.AboveNormal };
                     sampler.Start();
                     var timer = Stopwatch.StartNew();
-                    run(op);
+                    run(sets, op);
                     seconds[i] = timer.Elapsed.TotalSeconds;
                     Volatile.Write(ref done, 1);
                     sampler.Join();
-                    after?.Invoke();
+                    after?.Invoke(sets);
                     budgetPeak = Math.Max(budgetPeak, usedMost - usedBefore);
                     heapPeak = Math.Max(heapPeak, heapMost - heapBefore);
                 }
@@ -94,31 +142,34 @@ internal static partial class PageCompressionBench
         }
 
         // Warm every path on the raw pages and on a packed copy, so no timed run pays for compiling it.
-        var all = set.SealedSnapshot();
-        foreach (var (_, op) in operations) op(all[..Math.Min(8, all.Length)]);
-        Measure("raw", op => op(set.SealedSnapshot()));
+        foreach (var (_, _, op) in operations) op(all[..Math.Min(8, all.Length)]);
+        Measure("raw", (_, op) => op(set.SealedSnapshot()));
         var packTimer = Stopwatch.StartNew();
         var saved = set.Pack();
+        right?.Pack();
+        shuffled?.Pack();
         Print("fused.packSeconds", packTimer.Elapsed.TotalSeconds, "s", "the store's Pack, one thread");
         Print("fused.ratio", (double)rawBytes / (rawBytes - saved), "x", "the result's charge raw over packed, lengths and overheads included");
-        foreach (var (_, op) in operations) op(all[..Math.Min(8, all.Length)]);
+        foreach (var (_, _, op) in operations) op(all[..Math.Min(8, all.Length)]);
         Thread.Sleep(1000);
-        Measure("rehydrate", op =>
+        // Every result the operation reads unpacked whole first (a diff unpacked both), as the product did before.
+        Measure("rehydrate", (sets, op) =>
         {
-            object result;
-            using (set.Pin())
+            var pins = sets.Select(read => read.Pin()).ToArray();
+            try
             {
-                if (!set.TryUnpackAll()) throw new InvalidOperationException("No room to unpack.");
-                result = op(set.SealedSnapshot());
+                foreach (var read in sets) if (!read.TryUnpackAll()) throw new InvalidOperationException("No room to unpack.");
+                return op(set.SealedSnapshot());
             }
-            return result;
-        }, after: () => set.Pack());
-        Measure("fused", op =>
+            finally { foreach (var pin in pins) pin.Dispose(); }
+        }, after: sets => { foreach (var read in sets) read.Pack(); });
+        // Only the shuffled diff may unpack (its first result, in place): its time includes that, and it is packed again after.
+        Measure("fused", (sets, op) =>
         {
             var result = op(set.SealedSnapshot());
-            if (!set.HasPacked) throw new InvalidOperationException("The fused run unpacked the result.");
+            if (sets.Any(read => !read.HasPacked) && sets[^1] != shuffled) throw new InvalidOperationException("The fused run unpacked a result.");
             return result;
-        });
+        }, after: sets => { foreach (var read in sets) if (!read.HasPacked) read.Pack(); });
         using (var process = Process.GetCurrentProcess()) Print("fused.peakWorkingSetMiB", process.PeakWorkingSet64 >> 20, "MiB", "over the whole run");
     }
 
@@ -131,7 +182,7 @@ internal static partial class PageCompressionBench
         int[] selected = [.. Enumerable.Range(0, columns.Length)];
         var scratch = new int[PageView.ScratchLength(columns.Length)];
         var room = new byte[pages.Length == 0 ? 0 : pages.Max(page => page.Length)];
-        // Reserved as ResultJobs.ReadRoom reserves it, so the budget's peak shows it.
+        // Reserved as ReadRoom (PageRooms.cs) reserves it, so the budget's peak shows it.
         var reserved = pages.Any(page => set.Raw(page) is null) && set.TryReserveWork(room.Length) ? room.Length : 0;
         try
         {

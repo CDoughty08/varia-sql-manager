@@ -9,7 +9,7 @@ namespace Varia.Backend.Tests;
 
 /// <summary>The page compression benchmark, run by hand (docs/page-compression-findings.md holds what it measured):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench &lt;GiB&gt; &lt;shape&gt;
-/// [--codecs name,name] [--keep name] [--no-ops] [--fused] [--policy]</c>, one size and shape a process so each memory reading is its own.
+/// [--codecs name,name] [--keep name] [--no-ops] [--fused [--whole]] [--policy]</c>, one size and shape a process so each memory reading is its own.
 /// <c>--policy</c> measures only the stage 1 policy (ResultPacker) on the filled result instead: see <see cref="Policy"/>.
 /// Fills one query budget of that size with rows of the shape, then measures, without changing how the product stores
 /// pages: each codec's ratio and its compress and decompress speed (one thread over a sample of pages, and the results'
@@ -354,7 +354,7 @@ internal static partial class PageCompressionBench
         var shape = Build(shapeName);
         if (args.Contains("--fused"))
         {
-            RunFused(gib, shapeName, shape, workers);
+            RunFused(gib, shapeName, shape, workers, args.Contains("--whole"));
             return;
         }
         ResultColumn[] columns = [.. shape.Columns.Select(column => column.Meta)];
