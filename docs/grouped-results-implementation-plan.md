@@ -4,9 +4,11 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 8 (2026-11-12). It follows the owner's decisions, three independent reviews against the code, the orientation
-spike's findings, what PRs 1 to 5b found when they merged, and the
-[pivot performance findings](pivot-performance-findings.md). PRs 6, 7 and 9 are in progress.
+Revision 9 (2026-11-14). It follows the owner's decisions, three independent reviews against the code, the orientation
+spike's findings, what PRs 1 to 13 and 16 found when they merged, and the
+[pivot performance findings](pivot-performance-findings.md). PRs 14 and 17 are in progress; 15 and 18 follow. Each
+merged PR's entry under Delivery says what it settled or left, and where the PR and an earlier section of this document
+disagree, the entry is the later word.
 
 The visual references are the three mocks in [prototypes/results-pane](../prototypes/results-pane/README.md): Tabs,
 Stacked and the transposed grid. The owner accepted their defaults on 2026-11-11, to be adjusted as the PRs land: the
@@ -244,11 +246,13 @@ There is no Undo for a close.
 
 Separate work is changing how much a result can hold, and this plan's limits were written against today's 2 GiB cap:
 
-- **A larger global budget** is proposed: a quarter of memory up to 16 GiB, with a setting. A query's budget is half of
-  it, so a source can hold several times the rows it does today. A result-scale benchmark at 1 to 8 GiB of rows
-  (`--result-scale-bench` in the .NET test project) is measuring sort, filter and pivot at those sizes.
-- **Compressed pages** are proposed after it: sealed pages compressed in place and decompressed per page on read, so
-  every scan pays for decompression.
+- **A larger global budget merged** as #447, with its gaps closed in #477: a quarter of memory up to 16 GiB, with
+  limits in Options. A query's budget is half of it, so a source can hold several times the rows it did. A result-scale
+  benchmark at 1 to 8 GiB of rows (`--result-scale-bench` in the .NET test project) measures sort, filter and pivot at
+  those sizes.
+- **Packed pages merged** in stages: #468 packs result pages inside the store behind an internal switch, #482 packs a
+  result hidden for five seconds, and #480 reads packed results fused in sorts, filters, profiles, pivots and plain
+  Save. A scan of a packed result pays for unpacking.
 - **Merged since:** #426 sends a set's truncation reason with `progress`, so the strip shows while the query still
   runs. #427, then #432, #435 and #439, stopped sorts and groupings reading the pages for every tie (numbers first, then
   text, dates and binary values) and put keys, sorts and scans on several threads. A million-row Count by a column of
@@ -268,7 +272,7 @@ What that changes here:
   the sort work, say the same reasoning now reaches 500,000 (the slowest recipe found takes 189 ms there on a 24-core
   machine). The time condition is what covers machines with few cores, long decimals and Distinct Count, so it is not
   optional. The owner accepted the row figure on 2026-11-12; it does not rise with
-  a larger budget. Compressed pages landed first, so PR 17 measured it again on 2026-11-14: the slowest recipe at
+  a larger budget. Packed pages landed before PR 17, so it measured it again on 2026-11-14: the slowest recipe at
   500,000 rows takes 177 to 197 ms, raw or packed, and the figures stand.
 - **The reported slow Pivot was not reproduced.** At the reported shape (about 20,000 rows of one `int` column) a build
   takes 110 to 180 ms from the click to the painted pivot, before and after the sort fixes. If it is seen again it needs
@@ -535,7 +539,7 @@ Outcome, accepted by the owner:
 6. **Transposed copy and save. Merged as #448.**
 7. **Commands switch to the orientation. Merged as #449.** The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
-8. **Remove the stored transpose.** After PRs 6 and 7. What it settled or left:
+8. **Remove the stored transpose. Merged as #452.** What it settled or left:
    - Gone: `results.transpose` (`RpcMethods`, `methodPolicies`, the port request and answer schemas, `ResultsPortHost`,
      the worker protocol and core, `ResultHandle.transpose`, `SqlService`'s dispatch, lane, `MethodNames` entry and
      `TransposeAsync`, the two records in `Contracts.cs`), `ResultTransposer`, `TransposeService` with its strip, the
@@ -553,7 +557,7 @@ Outcome, accepted by the owner:
    - `ResultsService` had no branch on the `transpose` kind (only comments), so nothing there changed for PR 9 to
      conflict with. If PR 9 merges after this one it drops its own allowance: `ResultGroup.transposes`, the `'transpose'`
      `ViewKind` and its branches, and the transposes test in `tests/results-groups.test.ts`.
-9. **Groups.** In progress. It also takes what PR 3 left: closing through a command or menu target, and a Results badge
+9. **Groups. Merged as #450.** It also takes what PR 3 left: closing through a command or menu target, and a Results badge
    that counts original groups. The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
    source" picker goes, and building a group's Pivot again releases the old one first and then shows the new (not yet
@@ -586,7 +590,7 @@ Outcome, accepted by the owner:
        (`stackNeed`) counts the same rows.
      - A build and its failure belong to one group: the builder shows "running" and the message only while it is that
        group's, and names the group that is building when it is another's (one build per tab until PR 10).
-10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
+10. **Atomic Pivot replacement. Merged as #465.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
     - **What PR 10 settled or left** (`tests/results-pivot.test.ts`, `tests/results-derived-jobs.test.ts` and
@@ -653,7 +657,8 @@ Outcome, accepted by the owner:
         four in turn. Nothing starves, which is what the cap is for; two at once gain nothing over one after the other, so
         a lower cap would cost little either, but the plan's four is kept. [Pivot performance findings](pivot-performance-findings.md#measured-again-for-pr-10)
         has the table.
-11. **Out of date and Update.**
+11. **Out of date and Update. Merged as #476**, with #487 after it: the mark compares filters by the values they keep,
+    so re-ticking the same values or re-making a selection filter from other cells no longer marks a Pivot.
     - **What PR 11 settled or left** (`tests/results-pivot.test.ts`'s "an out-of-date Pivot and Update",
       `tests/menu-commands.test.ts`'s Update Pivot case, `tests/results-stack.test.ts` and `tests/results-tabs.test.ts`
       for the marks, and `results-smoke` step 13b2 hold its checks):
@@ -718,7 +723,7 @@ Outcome, accepted by the owner:
         Each errs towards offering Update. A filter's label reads its values from the resolved rows, so a selection
         filter is named by its value's lowest row (under a CI collation 'a' for a selected 'A'), as the funnel's checklist
         already lists that row's text.
-12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
+12. **`hasResultSets`** and its consumers. **Merged as #474.** (After PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
     the catalogue's preconditions for Save and Find, `PeekCard`.
@@ -748,7 +753,7 @@ Outcome, accepted by the owner:
         ordinal, stay for the next Pivot…. Until then it stayed open, hidden with the grids, and came back with the
         next run, which `results-pivot` pinned for Close Results.
       - The plan's "with only comparisons left, the badge hides" was already true from PR 9 (the badge counts groups).
-13. **Tabs layout**, default still Stacked. Tabs, the toggle and setting, view tabs, selection rules, Find Next across
+13. **Tabs layout**, default still Stacked. **Merged as #467.** Tabs, the toggle and setting, view tabs, selection rules, Find Next across
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near
     the split guideline).
@@ -819,8 +824,13 @@ Outcome, accepted by the owner:
         makes Tabs the default, should add the layout there.
 14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
-15. **Save names, narrow and short panes, popouts.**
+15. **Save names, narrow and short panes, popouts.** After PR 14. It inherits two things from PR 13: the Tabs toolbar
+    button is hidden at 1,440 px and below, which leaves the Window menu as the only way to change layout there, and
+    the results toolbar's search box is squeezed in a narrow window.
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
+    **Merged as #466.** Changed since: #489 fixed Compare failing on results matched by whole rows (the answer has no
+    `key` member then), and #490 turned the picker into a popover beside what opened it, from the options mocked in
+    #488; it no longer takes the Pivot builder's place.
     - **What PR 16 settled or left** (`tests/results-compare.test.ts`, `tests/compare-pairing.test.ts`,
       `tests/results-derived-jobs.test.ts`, `DiffChecks.cs` and `results-smoke` step 14g hold its checks):
       - The picker is a side panel in the builder's place (`ComparePanel`): opening Compare closes the Pivot builder and
@@ -947,7 +957,8 @@ Outcome, accepted by the owner:
 Follow-ups, not in this work: Pivot with Pivot comparison (explicit diff key); a Plan tab inside a group; uncapped
 transposed columns; value-based filters that survive a Pivot rebuild; opening one view in its own window; a selection
 filter (Keep Selected Rows included) that survives its view closing while it resolves; changing a transposed grid's
-shared width by hand; a screen reader pass over the transposed grid.
+shared width by hand; a screen reader pass over the transposed grid; a Find match past the transposed cap, which shows
+the cap's strip and is then used up, so Find Next must be pressed again to reach the next match.
 
 ## Validation
 
