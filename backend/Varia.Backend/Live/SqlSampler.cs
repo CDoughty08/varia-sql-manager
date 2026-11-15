@@ -407,9 +407,10 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
             // As in SampleAsync: the cancel in SqlClient's words ends the subscription cancelled, and a connection cancelled
-            // mid-statement goes back to no pool.
+            // mid-statement goes back to no pool unless it still answers.
             if (server is not null && !await LiveConnections.AnswersAsync(server).ConfigureAwait(false))
             {
+                PoolClears++;
                 try { SqlConnection.ClearPool(server); }
                 catch (InvalidOperationException) { /* A connection string SqlClient cannot pool: nothing pooled. */ }
             }
@@ -659,7 +660,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         held.Dispose();
     }
 
-    /// <summary>How many times this sampler cleared its pool (the checks read it: ClearPool itself cannot be seen offline).</summary>
+    /// <summary>How many times this sampler cleared a pool, its held connection's or the catalog lookup's (the checks read it:
+    /// ClearPool itself cannot be seen offline).</summary>
     internal int PoolClears { get; private set; }
 
     /// <summary>Whether the held connection survived a cancelled statement (LiveConnections.AnswersAsync); false with none held.</summary>

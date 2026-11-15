@@ -840,7 +840,9 @@ internal static class LiveSchedulerChecks
             catch (OperationCanceledException) { connectEnd = "cancelled"; }
 
             var scripted = new ScriptedOpenHost(id);
-            // One gate in the backend, held here: the sample's connect succeeds (it never reaches a server) and then waits for it.
+            // One gate in the backend, held here: the scripted connect returns without opening anything (no server is reached), and
+            // the sample then waits for the gate. Keeping an open connection after such a cancel would need a server, so it is not
+            // checked here.
             var gates = new LiveGates(2, 1, scripted.IsConnected);
             using var held = await gates.WaitAsync(id, 1000, CancellationToken.None);
             using var waiting = new SqlSampler(scripted, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(scripted, id));
