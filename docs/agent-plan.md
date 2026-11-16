@@ -150,7 +150,8 @@ Agent method answers BQ-0's `UNSUPPORTED_PROVIDER` (planned in #528).
 
 A capability read (one constant batch, msdb through `msdb.sys.sp_executesql`, as the explorer's per-database batches; the
 same built-ins the SSIS profile and live session probe already use) reads `IS_SRVROLEMEMBER(N'sysadmin')`,
-`IS_ROLEMEMBER` for the three Agent roles, `HAS_PERMS_BY_NAME` for the permissions the state probe needs (on 2022+ the
+`IS_ROLEMEMBER` for the three Agent roles, `HAS_PERMS_BY_NAME(N'msdb.dbo.sp_purge_jobhistory', N'OBJECT', N'EXECUTE')`
+(Delete History below Operator), `HAS_PERMS_BY_NAME` for the permissions the state probe needs (on 2022+ the
 live catalogue's `serverState` already means VIEW SERVER PERFORMANCE STATE, which the `sys.dm_exec_sessions` fallback
 needs; `sys.dm_server_services` may need VIEW SERVER SECURITY STATE there, so AG-0 settles it and, if so, adds a
 `serverSecurityState` permission kind and splits `explorer.agentService` into a DMV probe and a session-fallback probe, each
@@ -163,8 +164,8 @@ the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator
 | --- | --- | --- |
 | sysadmin | Everything | Everything, incl. any job owner, Agent properties, error logs, service control. |
 | SQLAgentOperatorRole | Jobs (all), Job Activity Monitor, Alerts, Operators, Proxies (read-only) | Start/Stop/Enable/Disable any local job; enable or disable any schedule (`sp_update_schedule @enabled` only; Manage Schedules shows Enable/Disable for them); delete history; edit only own jobs. |
-| SQLAgentReaderRole | Jobs (all, others' read-only), Job Activity Monitor | View all jobs and history; edit only own jobs; delete history of own jobs. |
-| SQLAgentUserRole | Jobs (own only), Job Activity Monitor (own) | Create and manage own jobs, including deleting their history; T-SQL steps, or other subsystems only through a proxy granted to the login. |
+| SQLAgentReaderRole | Jobs (all, others' read-only), Job Activity Monitor | View all jobs and history; edit only own jobs; no Delete History by default (needs EXECUTE on `sp_purge_jobhistory`). |
+| SQLAgentUserRole | Jobs (own only), Job Activity Monitor (own) | Create and manage own jobs (no Delete History by default: needs EXECUTE on `sp_purge_jobhistory`); T-SQL steps, or other subsystems only through a proxy granted to the login. |
 | No msdb access / no role | Agent node with `noAccess` status | Nothing; the node says why. |
 
 Rules: hide what SSMS hides (Alerts/Operators/Proxies below Operator; Error Logs sysadmin only), disable rather than hide
@@ -245,12 +246,18 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   the children listing is in C# only (`Explorer/ExplorerService.cs`), and the capability read is cached. Listing the
   `agent` kind runs no SQL today (static folders and singletons, no `list`, so `LoadAsync` returns before opening a
   connection), so AG-1 adds an explicit pre-folder step for `target.Kind == "agent"` beside `DatabaseProblemAsync` and
-  `HistoryAsync`: one constant `CatalogSql` read of `Agent XPs` from `sys.configurations` (no permission needed) through
-  `RunAsync` on the explorer pool, counted against `Budget` with the usual timeout and error mapping; at 0 it adds
-  neither the folders nor the Job Activity Monitor singleton. A re-list therefore always sees the current value and
+  `HistoryAsync`: one constant `CatalogSql` batch run through `msdb.sys.sp_executesql` (as the capability read, so
+  `IS_ROLEMEMBER` resolves in msdb rather than returning NULL in master) via `RunAsync` on the explorer pool, counted
+  against `Budget` with the usual timeout and error mapping. It reads `Agent XPs` from `sys.configurations` (no
+  permission needed), `IS_SRVROLEMEMBER(N'sysadmin')` and the three Agent role memberships. At XPs 0 it adds neither the
+  folders nor the Job Activity Monitor singleton; otherwise it gates folders by the role rules above (Alerts, Operators
+  and Proxies need SQLAgentOperatorRole or sysadmin, Error Logs sysadmin; a login with no Agent role and no sysadmin gets
+  the `noAccess` node and no children). Each Agent folder listing then picks the sysadmin path or the role path from an
+  `IS_SRVROLEMEMBER(N'sysadmin')` column in its own batch, as the sampler chooses per sample, so no role fact is cached
+  across listings. A re-list therefore always sees the current value and
   `explorer.children` gains no new param; `OwnsChildren` and `HasChildren` count singletons, so a kind with singletons
-  reports children. A C# offline check covers both XPs values and that listing an XPs-1 `agent` node costs one round
-  trip, and a renderer vitest feeds an `explorer.agentService` sample that flips XPs 0 → 1 (the
+  reports children. C# offline checks cover both XPs values, each role's folder set (sysadmin, Operator, Reader, User,
+  none), and that listing an XPs-1 `agent` node costs one round trip, and a renderer vitest feeds an `explorer.agentService` sample that flips XPs 0 → 1 (the
   `agent` node re-lists with its folders, keeping expansion and selection), then 1 → 0 (they go), and an unchanged value
   (no re-list). An `AgentStateSource` on the renderer's `src/renderer/src/explorer/ExplorerService.ts`
   (modelled on `DatabaseRuntimeSource`) carries `explorer.agentService`'s XPs value, and when it changes 0 → 1 or 1 → 0 it
@@ -378,8 +385,9 @@ watched job runs, and never polls; it does not depend on Job Activity Monitor or
 shows only when the start is readable (below).
 
 Start times: `sp_help_job` returns no start time for a running job. Sysadmin reads `sysjobactivity.start_execution_date`;
-other logins read `sp_help_jobactivity`, which returns other owners' jobs only to sysadmin, so a login gets start times
-for its own jobs only. Where no start time is readable, Varia shows no elapsed time (tiles, status bar, In progress run),
+other logins read `sp_help_jobactivity`, which joins `sysjobs_view` and so returns every job `sp_help_job` shows the login
+(Reader and Operator see all jobs, User its own). Where no start time is readable (a NULL `start_execution_date`, or no
+row for the current Agent session in `syssessions`), Varia shows no elapsed time (tiles, status bar, In progress run),
 never a guess.
 
 Job dialog pages (`ObjectDialog` with pages, as Login and Database Properties; describe through `actions.describe`). Describe
@@ -486,8 +494,8 @@ Database Mail logs, which SSMS shows there).
   start. A run is a job's step 0 row plus the step rows with `instance_id` after that job's previous step 0 row **and** a
   start at or after the step 0 row's start. Step rows that match no step 0 row form:
   - an **In progress** run (outcome "In progress", no duration yet) when the job is executing now (from `agent.jobs`) and
-    the rows started at or after the current execution's start; where that start is not readable (another owner's job on
-    the role path), the rows after the job's last step 0 row;
+    the rows started at or after the current execution's start; where that start is not readable (a NULL
+    `start_execution_date` or no current `syssessions` row), the rows after the job's last step 0 row;
   - otherwise an **Unknown (no job outcome)** run, which is what Agent leaves when it stops or crashes mid-job (Varia's own
     Stop and Restart included).
 
@@ -505,9 +513,10 @@ Database Mail logs, which SSMS shows there).
   and says "msdb returns at most 1,024 characters to this login" when it is that long.
 - History cap text ("Agent keeps 1,000 history rows, 100 per job") shows only when it was read: through
   `msdb.dbo.sp_get_sqlagent_properties` (undocumented, sysadmin, allowlisted read). Other logins see no cap text.
-- Delete History (sysadmin, Operator, or the owner of every checked job, as `sp_purge_jobhistory` allows: it raises
-  14392, mapped to `PERMISSION_DENIED`, only for a caller who does not own the job and is neither sysadmin nor Operator; the button is disabled with
-  that reason while any checked job fails the rule) from the Log File Viewer's toolbar for the jobs checked in its sources: all their
+- Delete History (sysadmin and Operator; other logins only when the capability read says they have EXECUTE on
+  `sp_purge_jobhistory`, which msdb grants only to SQLAgentOperatorRole by default, and they own every checked job,
+  because the procedure then raises 14392 for another owner's job; otherwise the button is disabled with the reason;
+  229 and 14392 both map to `PERMISSION_DENIED`) from the Log File Viewer's toolbar for the jobs checked in its sources: all their
   history, or only rows **older than** a date (SSMS's option; `@oldest_date`). One `sp_purge_jobhistory @job_id [,
   @oldest_date]` call per job in one transaction. The cut-off is computed on the server, in the server's local time that
   `sysjobhistory` uses: the template sets `@oldest_date` by a constant `CASE @unit WHEN 1 THEN DATEADD(day, -@count,
@@ -715,8 +724,9 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   editing a shared schedule, which `version_number` bumps, a failing middle step commits nothing, each msdb error number
   maps to its code with the refused call's index, Delete History refuses an empty job list), `AgentRoles` (a
   SQLAgentUserRole login opens and saves its own job through the describe role path; Reader sees others' jobs read-only;
-  Operator starts another's job; a SQLAgentUserRole login deletes its own job's history and is refused with
-  `PERMISSION_DENIED` for another login's job), `AgentScripting` (SMO scripts vs SSMS goldens in `tests/fixtures/scripting/`),
+  Operator starts another's job; a default SQLAgentUserRole login is refused Delete History with
+  `PERMISSION_DENIED` (229) even for its own job, and the capability read reports no EXECUTE; tests never grant EXECUTE
+  on msdb objects; a Reader login reads another owner's running job's start time through `sp_help_jobactivity`), `AgentScripting` (SMO scripts vs SSMS goldens in `tests/fixtures/scripting/`),
   `AgentCredentials` (secret never in a reply or script, hostile names, an identity-only edit refused), `AgentService`
   and `AgentSteps` (above; excluded from grouped runs, run by their own command).
 - **Offline**: `AgentSql.LintRead`, `LintExecutable` and `CredentialSql` lints render every variant; schedule encoding and
@@ -727,7 +737,8 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running), state
   unknown, `PERMISSION_DENIED` mid-dialog, `STALE`, `AGENT_STOPPED`, `JOB_STATE`, a save failure with no part index, empty,
   loading and failed history and Job Activity Monitor, error-log truncation, role-path history (1,024-character message,
-  no elapsed time for another owner's running job), the job Alerts page hidden for User and Reader, every service-control
+  no elapsed time for a running job whose `start_execution_date` is NULL, and the Delete History disabled reason
+  for a login without EXECUTE on `sp_purge_jobhistory`), the job Alerts page hidden for User and Reader, every service-control
   state (Starting…, Stopping…, access denied, left stopped, Cancel restart), and the status-bar job with and without a
   free status-only slot.
 - **Smoke**: `scripts/agent-smoke.mjs` on the fake backend (tree, Job Activity Monitor grid with multi-select Start Jobs,
