@@ -259,14 +259,18 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   Classify table gains 15281, and docs/ipc.md lists the code. The live path has its own list, so `AGENT_DISABLED` also joins
   `liveErrorCodes` (`src/shared/live/schema.ts`, validated by main's supervisor, which drops any tick that fails it):
   `LiveErrors.Classify` maps 15281 to it and `LiveErrors.From` gives the same sentence; docs/ipc.md's live code list and
-  a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It is deliberately not in `LiveErrors.IsTerminal`, so the probe retries
-  with `LiveService`'s usual back-off (up to the larger of `backoffMs` and its interval); to recover promptly, a view
-  showing `AGENT_DISABLED` sends `live.update` with `refresh: true` when `agent.jobs.service` or `explorer.agentService`
-  reports XPs 0 → 1, or after its own Start succeeds, and a renderer vitest covers that recovery. Job Activity Monitor, the
+  a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It joins `LiveErrors.IsTerminal`: a non-terminal error backs off (up to the
+  larger of `backoffMs` and the interval) and `LiveService.Refresh` never shortens a backing-off probe's delay, whereas a
+  terminally stopped probe is restarted by a refresh with its failures reset. So the failing probe stops, the view shows
+  the banner, and when `agent.jobs.service` or `explorer.agentService` (which read XPs without error and keep running)
+  reports XPs 0 → 1, or after the view's own Start succeeds, the view sends `live.update` with `refresh: true`; a view
+  whose every probe stopped (`AllStopped()` ends the subscription, as the Log File Viewer's lone `agent.history` probe
+  would) subscribes again instead. A C# offline LiveService check asserts that after an `AGENT_DISABLED` stop a refresh
+  makes the probe due at once, and a renderer vitest covers the refresh and the re-subscribe. Job Activity Monitor, the
   status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
   state; the banner offers Start (sysadmin on Windows, not a failover cluster instance, startup type not Disabled) only
   while the service state is Stopped, and with Agent running it offers no Start, only the `sp_configure` /
-  `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `!LiveErrors.IsTerminal("AGENT_DISABLED")`,
+  `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `LiveErrors.IsTerminal("AGENT_DISABLED")`,
   renderer fixtures assert which button shows for XPs 0 with Agent stopped and running, and a renderer
   vitest feeds Job Activity Monitor an `AGENT_DISABLED` sample. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
