@@ -168,7 +168,10 @@ part needs; `explorer.agentService` and `agent.jobs.service` stay one ungated pr
 session fallback with their own `HAS_PERMS_BY_NAME` checks (a catalogue `permission` would make the probe unavailable and
 lose the ungated `Agent XPs` read that recovery, the re-list and the sublabel need), so no probe split and no new
 permission kind; before 2022 both are VIEW SERVER STATE), `ALTER ANY CREDENTIAL`, `SERVERPROPERTY('IsClustered')`, the `Agent XPs` value from
-`sys.configurations`, and whether Database Mail can be read. It is cached per connection and re-read on Refresh, and drives
+`sys.configurations`, and whether Database Mail can be read. It is cached per connection in a renderer `AgentProfileService` (keyed by connection id, read on the first Agent node
+expand or Agent surface open, re-read on Refresh of the Agent node and on reconnect, dropped on disconnect) that
+`ExplorerService` takes through `useAgentProfiles`, re-publishing context keys when it changes (vitest that the role and
+service-control keys follow it), and drives
 the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator | reader | user | none`, plus
 `explorerSelectionAgentRole`) and the read path. It is a `CatalogSql` statement linted by `CatalogSql.Lint` with its own
 exact per-statement `literals` set (as Peek's rows batch; the role names, `N'sysadmin'`, the `HAS_PERMS_BY_NAME` object
@@ -201,9 +204,16 @@ in the message bar; pages stay navigable; list buttons that change something (St
 Schedules' New, Pick, Remove; Alerts' Add, Remove; Start step) are disabled with the same reason, while Edit stays enabled
 and opens the Step, Schedule or Alert dialog read-only the same way; Script stays offered and, since nothing can change,
 says "There is no action to be scripted." as SSMS's Script Action does with no changes; New and Delete stay disabled with
-the same reason (mock scene `job-readonly`, drawn on the Steps page; renderer vitests for each of those five cases, a nested
-step dialog opened read-only, and Script's message; the live `AgentRoles` suite asserts the describe returns the flag for
-Reader on another's job and Operator on an alert). A state the login cannot read is unknown, never a guess: Agent state without
+the same reason. Read-only carries into the controls of nested dialogs: a read-only schedule's Jobs in Schedule opens with
+its checkboxes disabled and Close; a read-only step's Open… is disabled; a read-only alert's Response page disables New
+Job… and New Operator… (View Job and View Operator open those read-only when the login may not change them). Credentials
+join the rule: a login that sees Security › Credentials without `ALTER ANY CREDENTIAL` opens Credential Properties
+read-only with "ALTER ANY CREDENTIAL is needed to change it", and New Credential is disabled with that reason (mock scenes
+`job-readonly`, drawn on the Steps page with Start step disabled and an inset of Script's message, `agent-props-mi`, and
+`oe-user`'s Agent node menu with Properties disabled; renderer vitests for each of those cases, each nested control above,
+a nested step dialog opened read-only, and Script's message; the live `AgentRoles` suite asserts the describe returns the
+flag for Reader on another's job, Operator on an alert, an operator and a proxy, and a SQLAgentUserRole login on a scratch
+schedule owned by another scratch login). A state the login cannot read is unknown, never a guess: Agent state without
 VIEW SERVER STATE shows no state chip; Database Mail readiness without access shows no warning. Credential dialogs (AG-8b)
 need `ALTER ANY CREDENTIAL` and only add verbs to the existing Security › Credentials folder; they never hide that folder,
 whether AG-8b has landed or not.
@@ -386,8 +396,10 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   `agent` node re-lists with its folders, keeping expansion and selection), then 1 → 0 (they go), and an unchanged value
   (no re-list). An `AgentStateSource` on the renderer's `src/renderer/src/explorer/ExplorerService.ts`
   (modelled on `DatabaseRuntimeSource`) carries the whole `explorer.agentService` sample (XPs value, service state,
-  startup type) for each server, and `ExplorerServiceOptions` gains a long-run source (wired in
-  `src/renderer/src/core/workbench.ts` from `LongRunService`); `targetOf` fills `ActionTarget.agent` for `kind === 'agent'`
+  startup type) for each server, and `ExplorerService` gains a late `useLongRuns(source)` setter like the existing `useStatus`, called in
+  `src/renderer/src/core/workbench.ts` once `LongRunService` exists (it is built after `ExplorerService` today), plus a
+  late `useAgentProfiles(source)` for the profile holder below; `ExplorerTarget` (`src/shared/explorer/refs.ts`) gains the
+  same optional `agent` field as `ActionTarget`, since `targetOf` returns an `ExplorerTarget`; `targetOf` fills `agent` for `kind === 'agent'`
   from both, and `updateContext()` re-publishes the context keys on either signal (vitest that the Start/Stop/Restart keys
   flip when a sample changes and when an Agent run begins or ends). When the XPs value changes 0 → 1 or 1 → 0 it
   reconciles the `agent` node (re-lists its children, keeping expansion and selection), the one case where a status sample
@@ -455,8 +467,11 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   Stopping…, a sample that says the state is unreadable, or a service action already running in this window disable all
   three with that reason; no sample at all (the status view off or Object Explorer hidden) is unknown, not unreadable, so,
   as the catalogue's "without a runtime the row stands" convention, all three stay enabled for sysadmin on Windows and the
-  dialog's fresh describe (`agentService`) decides the confirmation, or refuses with the state it read (vitest with the
-  status view off);
+  dialog's fresh describe (`agentService`) decides the confirmation, or refuses with the state it read: in place of the
+  confirmation it says "SQL Server Agent is already running on <server>" (Start while Running), "SQL Server Agent is
+  already stopped on <server>" (Stop or Restart while Stopped), "SQL Server Agent is <state>; try again when it settles"
+  (a pending state) or "The SQL Server Agent service is disabled" (Start or Restart), with Close only, primary and focused
+  (mock note on `oe-stopped`, the Start confirmation scene; vitest per state with the status view off);
   startup type Disabled disables Start and Restart with "The SQL Server Agent service is disabled" (a running service can be
   set Disabled and keeps running; Restart's Stop would work and its Start could not). With Agent XPs at 0 (`AGENT_DISABLED`),
   New ›, Job Activity Monitor and View History on the node, and the palette's "SQL Server Agent: Job Activity Monitor" and
@@ -582,8 +597,11 @@ live check that a SQLAgentUserRole login opens and saves its own job:
     Parse uses the language service's parse, never executes), Open… loads a local file through main's dialog.
   - Step dialog **Advanced**: On success / On failure action (next step, quit reporting success/failure, go to step n),
     Retry attempts and interval, Output file (server path through the server file picker) and Append, Log to table and "Append output to existing entry
-    in table" (`sysjobsteps.flags` 16, enabled only with Log to table), Include
-    step output in history, Run as user (T-SQL). SSMS's View buttons for the output file and the table log are later.
+    in table" (enabled only with Log to table), Include
+    step output in history, encoded as `@flags` by a table in `src/shared/agent/catalog.ts`: Append to output file 2, Include
+    step output in history 4, Log to table alone 8, Log to table with Append 16 (not 24), as SSMS scripts them (table tests
+    against SSMS-scripted `@flags` values; an `AgentActions` live round trip reads `sysjobsteps.flags` back for each
+    checkbox combination), Run as user (T-SQL). SSMS's View buttons for the output file and the table log are later.
   - SSIS steps (in AG-6b): package source (SSIS Catalog / SQL Server / file system), the SSIS Catalog tree reused for picking
     a package, environment reference and parameter overrides as a command line the backend builds; Configuration tab
     subset. CmdExec: command and process exit code. PowerShell: script. A step whose command Varia cannot model keeps it
@@ -605,7 +623,11 @@ live check that a SQLAgentUserRole login opens and saves its own job:
     against SSMS's own sentences.
 - **Alerts** (hidden below SQLAgentOperatorRole, which alone can read alerts, and where the gates have no alerts, such as
   Managed Instance): alerts that run this job (Edit, Remove;
-  Add opens New Alert with the job preset and is hidden until AG-7 lands, so the page ships with AG-6a either way).
+  Add opens New Alert with the job preset and is hidden until AG-7 lands, so the page ships with AG-6a either way). Alert
+  links are written through `sp_update_alert`, which no Agent role may run, so for any non-sysadmin, even on a job the
+  login owns, Add and Remove are disabled with the role-named reason ("SQLAgentOperatorRole may view alerts, not change
+  them") and Edit opens the alert read-only; the describe marks alert links not editable (renderer vitest for an Operator on
+  their own job; `AgentRoles` check of the describe flag).
 - **Notifications**: E-mail / Page / Net send operator with When (succeeds, fails, completes), Write to the Windows
   Application event log, Automatically delete job. Kinds the platform gates refuse are disabled with the reason.
 - **Targets**: "Target local server" only in 0.10.0; multi-server (MSX/TSX) targets are later and shown disabled.
@@ -710,8 +732,8 @@ Database Mail logs, which SSMS shows there).
 | Shared schedules | Schedule dialog, Pick, Jobs in Schedule, Manage Schedules: Delete offered for any schedule the login owns (sysadmin: any), never judged "unused" from Jobs in schedule counts; `sp_delete_schedule` without `@force_delete`, whose in-use refusal maps to `IN_USE` with msdb's message (an `AgentActions` check) | |
 | Job categories | Category picker | Manage Job Categories dialog |
 | Operators | List, New / Properties (General: name, enabled, e-mail, pager and on-duty schedule; Notifications: alerts and jobs; History), Enable/Disable, Rename, Delete, Script As | Fail-safe operator (Agent Properties › Alert System) |
-| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, notify operators; Options: include error text, additional notification message to send, delay between responses), Enable/Disable, Rename, Delete, Script As | WMI event alerts editable (shown read-only) |
-| Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References), Rename, Delete, Script As | |
+| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, with New Job… and View Job opening the job dialog nested, and notify operators, with New Operator… and View Operator opening the operator dialog nested, the new object selected on return, New buttons hidden for roles that cannot create, read-only from a read-only alert, vitest; Options: include error text, additional notification message to send, delay between responses; History: date of last alert, date of last response, number of occurrences from `sp_help_alert`, and Reset Count through `sp_update_alert @occurrence_count = 0`, sysadmin only, with mock scene `alert-history` and a vitest), Enable/Disable, Rename, Delete, Script As | WMI event alerts editable (shown read-only) |
+| Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References: job steps that run as this proxy, read by sysadmin from `sysjobsteps` joined to `sysproxies`; other roles, which cannot read `sysjobsteps`, see "Only sysadmin can list the job steps that use this proxy", with a fixture per role), Rename, Delete, Script As | |
 | Credentials | New Credential and Credential Properties on the existing Security › Credentials folder (kind `credential`) and from the Proxy dialog: name, identity, secret, encryption provider. `ALTER CREDENTIAL` resets the secret when `SECRET` is omitted, so in Properties the Identity and secret are read-only until "Change identity and password" is checked, and every ALTER sends both | |
 | Error logs | List, view in Log File Viewer, Recycle | Configure (log path, level) via Agent Properties › General |
 | SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation; it is its own allowlisted template with its own lint entry (it passes no `@job_id`, which Delete History's template refuses) and shares only the server-computed `CASE @unit … DATEADD(…, GETDATE())` cut-off statement, its bounds and its NULL-date THROW, and the confirmation labels it "(server time)" when the offsets differ (renderer test; AG-8a's live check covers the cut-off) | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
@@ -792,9 +814,11 @@ Database Mail logs, which SSMS shows there).
   on `DialogSpec` (added to the docs.ts dialog table): one hidden `general` page keeps `open()`'s `pages[0]` read valid, and
   the layout renders a confirmation that becomes the steps table in place, footers as below, no page list and no Script
   button (vitest that it renders no Script and no page list). Every dialog id is a describe id and `open()` always
-  describes, so the C# describe switch gains a `DescribeAgentServiceAsync` case for the three ids (on the read gate, under
-  the `AgentSql` lint: `QueryState` through the allowlisted `xp_servicecontrol` shape, the startup type from
-  `sys.dm_server_services`, sysadmin, and the profile's Linux, Managed Instance and clustered facts), returning a typed
+  describes, so the C# describe switch gains a `DescribeAgentServiceAsync` case for the three ids (on the read gate, through `AgentReader` under `AgentSql.LintRead`, whose master shapes gain one read-only
+  `EXEC @rc = master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAgent';` with both arguments constant, so Start and
+  Stop stay admitted only by `LintExecutable` (lint render of the describe batch, near-miss tests that `N'Start'`,
+  `N'Stop'`, a parameter action or another service name are refused); the startup type from `sys.dm_server_services`, a
+  catalog read already admitted by `LintRead`, sysadmin, and the profile's Linux, Managed Instance and clustered facts), returning a typed
   `agentService` member of `ActionDescribeResult` (TS interface and strict zod schema in `src/shared/actions/schema.ts`, the
   C# record and bounds; offline check that the switch never falls through to `DescribeJobAsync` for these ids, and a vitest
   of the describe shape); the confirmation text and enablement are taken from that fresh describe, not only the sample.
@@ -863,7 +887,11 @@ Database Mail logs, which SSMS shows there).
   `start-agent-left-stopped`). `ObjectDialogService.ok()` only sends the open definition's own request and registers its
   own `longRun`, so Start again is a new service method, `startAgain()`: it builds `{ action: 'startAgent', target }` with
   a fresh request id that it `track`s and `forget`s on `ActionProgressService`, calls `longRuns.begin({ kind:
-  'startAgent' })`, and appends its step rows to the open dialog; the three definitions set `keepOpen: true`, so a success
+  'startAgent' })`, and appends its step rows to the open dialog; for `layout: 'confirmProgress'`, `ok()` sends only from the `ready` phase and every ending is terminal: in `failed` or
+  `stopped` `ok()` acts as Close, and Enter anywhere in the dialog (the form, the log region) acts as Close, so a second
+  Enter never resends Stop or Restart unconfirmed, and Start again is reachable only through `startAgain()` (vitests that
+  Enter on the form and on the log region after each ending sends no `executeObjectAction`); the three definitions set
+  `keepOpen: true`, so a success
   leaves the dialog open on its ending with Close focused (vitests that Start again registers a `startAgent` run, not
   `restartAgent`, and that success keeps the dialog open). Fake-service checks: a failing Stop in each of plain Stop and Restart step 0, access denied
   on Start reading Stopped; renderer vitests for those endings, the Disabled variant and the plain dialog's Start again. Restart is Stop,
