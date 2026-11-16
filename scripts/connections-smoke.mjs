@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
+import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, activeDocumentName, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
@@ -716,7 +717,7 @@ async function rememberPassword() {
   const options = { ...launchOptions, env: { ...seamless, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } } }
   const read = path => readFile(path, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
   const entries = async () => JSON.parse(await read(passwordsFile) || '{"entries":[]}').entries
-  const calls = async () => (await read(callsFile)).split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const calls = async () => parseCalls(await read(callsFile))
   const historyId = async server => JSON.parse(await read(connectionsFile)).profiles.find(item => item.options.server === server && item.lastConnected)?.id
   async function noSecrets() {
     for (const [name, text] of [['saved-passwords.json', await read(passwordsFile)], ['connections.json', await read(connectionsFile)], ['calls.jsonl', await read(callsFile)]]) {
@@ -873,7 +874,7 @@ async function rememberPassword() {
   await noSecrets()
   // (11) Stop through main's own handlers (varia:request registers the dialog's requestId, varia:connections-cancel sends
   // CANCEL): the fake ends a Microsoft Entra sign-in wait only on a CANCEL frame, and logs it.
-  const cancels = async () => (await read(join(control, 'cancels.jsonl'))).split('\n').filter(Boolean).map(line => JSON.parse(line).method)
+  const cancels = async () => parseCalls(await read(join(control, 'cancels.jsonl'))).map(line => line.method)
   const loading = dialog.getByText('Loading databases…', { exact: true })
   await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('entraMfa')
