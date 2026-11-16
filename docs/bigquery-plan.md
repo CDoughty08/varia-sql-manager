@@ -424,14 +424,23 @@ its session id never leaves the backend, so no later tab could adopt it. It is e
 session ends, whether or not the tab entered the prompt's plan (an idle BigQuery tab never does: it reports no
 transactions and nothing running):
 
-- at quit and on every Disconnect, for every BigQuery tab except those whose job is left running or kept for re-attach;
-- by `connections.disconnect` for a BigQuery handle, which aborts its idle sessions and leaves those holding a running
-  or detached job;
-- by a graceful backend stop (quit, Reload Window, a requested restart), which aborts idle sessions and leaves those
-  holding a job.
+- on every Disconnect, by `connections.disconnect` for a BigQuery handle, which aborts its idle sessions and leaves
+  those holding a running or detached job;
+- before every backend stop that main makes (quit, Reload Window, the renderer-crash restart, a requested restart): main
+  first calls `bigquery.endIdleSessions`, a main-only method with no params (deadline and `drainMs` 10 s), and only then
+  closes the backend. The backend aborts every idle session, kept tabs' included, in parallel and outside the sessions,
+  and answers with the ones that failed. Reload never passes through the renderer's close path and a graceful stop
+  allows only `stopGraceMs` (2 s), so neither could do this.
 
-Only a backend crash leaves idle sessions behind; they end after 24 hours idle, and the restored tab starts a new session
-with the existing notice. A restored tab therefore keeps its temp tables only when it re-attaches to a running job, as a
+A session holds a job while a job of its own is running or detached and Varia has not cancelled it; a session whose job
+Varia cancelled counts as idle, so closing a tab after Stop or Cancel the job aborts it at once, outside the session.
+
+Only a crash (of the backend, of Varia, or an OS shutdown that kills it), a stop that outruns that 10 s budget, Keep in the records dialog (which says so), or a failed abort (network down, refused
+credentials, errors after retries) leaves idle sessions behind; they end after 24 hours idle, and the restored tab
+starts a new session with the existing notice. A failed abort adds a Messages line, or a notification when the tab is
+gone, saying the session's temp tables are billed as storage until it expires, and the backend retries it once on the
+connection's next reconnect while it still runs. Aborts that fail during `bigquery.endIdleSessions` at quit cannot be shown (the app is closing); at Reload
+they are reported in the reloaded window. A restored tab therefore keeps its temp tables only when it re-attaches to a running job, as a
 SQL Server tab keeps nothing across a restart.
 
 **Job keys.** Every BigQuery query tab gets a **job key**, a random id, when it is created or restored. It travels:
@@ -464,7 +473,9 @@ SQL Server tab keeps nothing across a restart.
   without the principal's credentials.
 - Leave it running on a tab close or session end drops the record (the job is the user's to find in Job History, and
   the records dialog would otherwise ask about it at the next start). Leave it running on Close Results marks the record
-  `detached`: a re-attach only holds the session's queue for it and reads no results.
+  `detached`: a re-attach only holds the session's queue for it and reads no results, and finding the job DONE drops
+  the record. A `detached` record is also dropped when its tab closes without Leave it running, and by the 24-hour
+  expiry.
 - A finished job's record is dropped once its result set is open in the tab (in memory or windowed), or at once when it
   has no result set (DML, DDL) and its summary reached the tab. Records expire 24 hours after the job was created, the
   result table's lifetime. A session can outlive that, but re-attach never resumes a session from an expired record.
@@ -484,9 +495,15 @@ SQL Server tab keeps nothing across a restart.
   `query.execute`'s.
   - Params: `connectionId`, `sessionId` (Varia's tab id), `queryId`, `jobKey`, the job reference (job id 1,024,
     location 64, project 30), `maxRows`, `maxResultSets`, and `adoptSession`.
-  - `adoptSession` is true only for a restore or reconnect re-attach: the tab takes over the BigQuery session the job
-    ran in. Job History's Open results and Re-attach send false, so a new tab never shares another tab's session (one
-    queue per session, and closing either tab would abort the other's).
+  - Main's supervisor records `query.attach` in its session map (the tab's session generation) and stamps its result
+    descriptors with the generation, as it does for `query.execute`. Otherwise, after a Restart Backend or a backend
+    crash, where the tab keeps its id, `query.session.close` and `query.session.state` would be answered locally from
+    the old generation and never reach the adopted session, and the attached result sets could not be read.
+  - `adoptSession` is true for a restore or reconnect re-attach, and for a Re-attach from Job History or the records
+    dialog when no open tab holds the job (its record has no live job key): the tab takes over the BigQuery session the
+    job ran in, so that session ends with the tab. When another open tab holds the job, Job History focuses that tab
+    instead; Open results on a finished job whose session another tab still uses sends false, so a new tab never
+    shares another tab's session (one queue per session, and closing either tab would abort the other's).
 - The backend keeps one attachment per job id. If two reconnect paths race, the second `query.attach` takes over the
   first's events, and the first request answers at once with status `superseded`.
 - The backend first checks that the connection's principal created the job, without string-matching the identity pin
@@ -512,7 +529,9 @@ SQL Server tab keeps nothing across a restart.
 
 **A restored tab that does not reconnect** by itself (auto-reconnect off, or credentials refused) shows a line in
 Messages and the status bar: "BigQuery job … from the last session is still running: Reconnect to re-attach, or Cancel
-job", so a running job is never unseen. Its Cancel job goes through `session.cancelRestoredJobs` (below).
+job", so a running job is never unseen. Its Cancel job goes through `session.cancelRestoredJobs` (below); when the
+profile cannot cancel without a connection (an ad-hoc connection, a key file picked for one run), the line shows the
+job id with Copy instead.
 
 **Records without a tab.** After a crash only the tabs restored at the previous start come back, and Reload Window with
 hot exit off restores only pinned tabs (docs/hot-exit.md), so records whose job key matches no restored tab are expected.
@@ -522,14 +541,16 @@ dialog (a decision, so not a toast): "N BigQuery jobs from the last session have
 started, state, Copy), and **Show in Job History** (filtered to those jobs, where Re-attach opens each in a new tab),
 **Cancel jobs** and **Keep**. Show in Job History connects the records' profile first through the usual connect path
 (when it is not connected and cannot be, it is disabled with the reason). Keep drops the records; the jobs stay in Job
-History. Before BQ-9 lands, the dialog offers Cancel jobs and Keep.
+History, and the dialog says that a kept job's session, with its temp tables billed as storage, ends 24 hours after
+the job finishes. Before BQ-9 lands, the dialog offers Cancel jobs and Keep.
 
 **Cancelling without a connection.**
 
 - `bigquery.cancelJobs` (sensitive, carrying the profile's credential material, no connection handle) is a main-only
   method: a `BigQueryMainMethods` interface in `BackendMethods`, an entry in `mainOnlyMethods`, and no `requestSchemas`
   entry, so no renderer request can reach it. It, `bigquery.account` and `bigquery.projects` join C#'s
-  `SensitiveMethods` (compared by `tests/validation.test.ts`).
+  `SensitiveMethods` (compared by `tests/validation.test.ts`). Besides cancelling each job, it ends the job's session
+  (read from `statistics.sessionInfo`) with `ABORT_SESSION` outside the session, since no tab will.
 - The renderer asks main through a narrow `session.cancelRestoredJobs` channel that takes job keys or the dialog's id;
   main validates them, finds the records itself and calls the backend.
 - It needs a saved profile whose credentials still resolve: ADC, a remembered key file path, federation or
@@ -563,9 +584,10 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
 | Session action | BigQuery tab with a running job |
 | --- | --- |
 | `close` (tab close) | The three choices |
-| `closeAll`, `disconnectAll` | As today: tabs with running queries stay open (and connected) and are not asked about |
-| `changeConnection`, `disconnectQuery`, `disconnect` | The three choices; Leave it running detaches the job and skips `ABORT_SESSION` |
-| `exit` | Kept tabs: not asked, jobs keep running and re-attach. Unkept tabs: the three choices, "Don't quit" |
+| `closeAll`, `disconnectAll` | As today: tabs with running queries stay open (and connected) and are not asked about; so do tabs holding a detached job (`holdsJob`) |
+| `changeConnection`, `disconnectQuery` | As today, the tab's Change Connection and Disconnect are unavailable while its query runs, so they never see a running job. For a tab holding a detached job they offer the three choices; Leave it running skips `ABORT_SESSION` |
+| `disconnect` (Object Explorer's server Disconnect) | Today it includes running tabs and offers "Cancel Query and Disconnect" or "Keep Running", then cancels strictly. Running BigQuery jobs get Cancel the job, Leave it running, or "Don't disconnect". Leave makes the in-flight request answer `detached`, drops the record, shows the job id, and is excluded from the strict `cancelPreparedSessions` before `connections.disconnect`; the prompt's choice to close the query tabs applies to such tabs as to any |
+| `exit` | Kept tabs: not asked, jobs (running or detached) keep running and re-attach. Unkept tabs: the three choices, "Don't quit"; the box's detail lists each job id as text, since no tab or record will hold it afterwards |
 
 - **Mixed boxes.** When the box also lists SQL Server tabs, its existing buttons stay and the BigQuery choice is the
   box's checkbox, "Leave BigQuery jobs running" (its default from the setting). Proceeding cancels SQL Server queries
@@ -574,8 +596,23 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
   - `SessionTab` gains optional `provider`, `job` (`elapsedMs`, `estimateBytes`, `detached`) and `openTransaction`; the
     schema's `refine`, which accepts only running, transactions or unchecked tabs, also accepts a tab with a `job`.
   - `SessionAnswer` gains `leave`; the mixed box's answer carries `leaveJobs`.
-  - `SessionPlan` entries become `SessionEnd | 'leave'`.
-  - `query.session.close` gains optional `keepJob: true`, which detaches the job and skips `ABORT_SESSION`.
+  - `SessionPlan` entries become `SessionEnd | 'leave' | 'cancelJob'`, and `endSession` passes them on.
+  - `query.session.close` gains optional `keepJob: true`, which detaches the job and skips `ABORT_SESSION` (only while
+    the backend still sees the job running; for a job that has finished it is a normal close that aborts), and
+    optional `cancelJob: true` (the prompt's Cancel the job), which cancels the job and aborts the session (zod and
+    C#). As a safety net the backend never aborts a session holding a job (as defined above) unless the close says
+    `cancelJob`; any other close detaches and leaves the session.
+  - `QueryService` gains `holdsJob(id)`: true while the tab's query runs, while it holds a detached job that the
+    backend still sees running, or while it holds job references not yet attached (after `BACKEND_LOST`, or a restored
+    tab that has not reconnected). For those, the prompt offers Cancel the job through `session.cancelRestoredJobs`
+    (or the job id as text when the profile cannot cancel without a connection), Leave it running (drops the records,
+    shows the job id) or Don't close. Only the backend polls a detached job, so `query.session.state` gains `job` (`running`
+    or `none`), and `holdsJob` reads it when a decision needs it, never on a timer. `closeMany`, `disconnectAll`,
+    `prepareSessions`, `disconnect-workbench.ts` and quit's kept-tab rule use it; `isRunning`, and so `canExecute`,
+    stay as today, so Execute stays enabled and waits behind a detached job.
+  - The prompt is a native message box with one checkbox and no per-item actions. A BigQuery-only box's checkbox is
+    "Remember my choice"; a mixed box's is "Leave BigQuery jobs running", and it remembers nothing. Job ids appear as
+    plain text in the box's detail.
   - A detached job's in-flight `query.execute` or `query.attach` answers at once with status `detached`; its events
     stop and the job carries on in BigQuery.
 - **Leave it running** detaches the job: Varia forgets it, and a notification shows its job id (with Copy) so the user
@@ -603,8 +640,10 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
   still holds the session, which BigQuery runs one query at a time. So the backend keeps polling the detached job's
   state (no rows), and the next Execute in that tab waits for it, with a Messages line naming the job and Stop
   cancelling it.
-- The detached job stays in the tab's `SessionTab.job` (with `detached`) while it runs, so a later tab close, Change
-  Connection or Disconnect asks again rather than aborting the session under it; a remembered `leave` sends `keepJob`.
+- The detached job stays in the tab's `SessionTab.job` (with `detached`) while it runs, and `holdsJob` is true for the
+  tab. So a later tab close, Change Connection or
+  Disconnect asks again rather than aborting the session under it (a remembered `leave` sends `keepJob`), and Close All
+  and Disconnect All leave the tab open and connected.
 - SQL Server tabs are unchanged.
 
 ### Job history (BQ-9)
@@ -784,15 +823,14 @@ Varia follows BigQuery Studio: the estimate is always visible, and nothing block
   the real project that a dry run accepts a session id; if it does not, text that needs the session gets no estimate
   and the status bar says why. It also checks how BigQuery refuses a concurrent session query and how soon a
   cancelled job frees the session; until then the queue waits for a cancelled job to reach DONE. `ABORT_SESSION` runs
-  on every session end (closing the tab, Change Connection, Disconnect, Disconnect All, quit, and a graceful backend
-  stop for idle sessions; see [Idle sessions](#re-attaching-to-jobs-bq-3d)), except when its running
-  job is left running
+  on every session end (closing the tab, Change Connection, Disconnect, Disconnect All, and `bigquery.endIdleSessions`
+  before every backend stop main makes), except when its job is left running
   ([Re-attaching to jobs](#re-attaching-to-jobs-bq-3d)).
 - `query.session.state` answers `transactionCount: 0` for BigQuery, so SQL Server's open-transaction close prompt never
   fires: closing the tab runs `ABORT_SESSION`, which ends the session and with it the transaction (Google documents
   only that a transaction stays active until its session ends or it is rolled back; BQ-3a-2 confirms on the real
   project that aborting rolls it back). A transaction left in a session that is not aborted stays open until the
-  session ends (24 hours idle or 7 days); only Leave it running and a backend crash do that, and Leave it running's
+  session ends (24 hours idle or 7 days); only Leave it running, a crash or a failed abort do that, and Leave it running's
   dialog says so.
 - A session ends after 24 hours idle or 7 days in all. When BigQuery reports it gone, the next execution starts a new
   one and Messages says that temp tables and variables were lost. The Sessions page says that temp tables in a session
@@ -933,7 +971,7 @@ REST through the shared rate limiter. Explorer chips are SQL Server-only.
 | `connections.databases`, `databases.list` | Datasets of the billing project, with locations |
 | `connections.identity`, `connections.preview` | Principal and project; the dialog's preview of what will be connected |
 | `query.execute` | Gains optional `dataset` (1,024 bytes). Today's `sessionId` stays Varia's tab id; the backend keeps the BigQuery session keyed by it and never sends BigQuery's session id over IPC. SQL Server-only fields (`includeActualPlan`, `includeLivePlan`, `includeClientStatistics`, `stopOnError`) refused in main and in C# |
-| `query.cancel`, `query.session.close`, `query.session.state` | `jobs.cancel` (plus session abort); `ABORT_SESSION`; `transactionCount: 0` |
+| `query.cancel`, `query.session.close`, `query.session.state` | `jobs.cancel` only (the session stays); `ABORT_SESSION` outside the session, with `keepJob` and `cancelJob`; `transactionCount: 0` plus `job` (a detached job still running) |
 | `results.*` | Unchanged for in-memory results. For remote results: `read`, `rowBytes`, `rowIds` through the cache; `copy` and `export` streaming; `viewClose`, `distinctClose`, `close`, `visibility`, `setMemoryLimit` as today (for derived results too); `view`, `distinct`, `distinctRead`, `distinctTick`, `pivot`, `profile`, `diff`, `search`, `findRows`, `identify` answer `REMOTE_RESULT`, and remote sort, filter and value lists go through `results.remoteQuery` |
 | `live.subscribe`, `live.update` | The `bigquery.jobs` source (job history) in the new `bigquery` live scope; SQL Server's sources answer `UNSUPPORTED_PROVIDER` |
 | `explorer.children`, `explorer.index`, `explorer.search` | REST listers and the BigQuery index |
@@ -946,7 +984,7 @@ REST through the shared rate limiter. Explorer chips are SQL Server-only.
 New methods, each in all five places with bounded strings: `bigquery.account` and `bigquery.projects` (pre-connect,
 sensitive), `bigquery.dryRun` (the estimate before execute and for views), `bigquery.preview` (Preview Rows),
 `bigquery.cancelJobs` (the fallback when re-attaching is impossible, sensitive, main-only: listed in
-`mainOnlyMethods` with no `requestSchemas` entry),
+`mainOnlyMethods` with no `requestSchemas` entry), `bigquery.endIdleSessions` (main-only, before every backend stop),
 `query.attach`,
 `bigquery.jobs.get`, `bigquery.jobs.cancel` (job history) and `results.remoteQuery`. New event types in existing
 query requests: `resultSet.residence` and `query.job` (essential). New main-only IPC channels:
@@ -961,6 +999,7 @@ and optional descriptor fields are all additive (docs/ipc.md records each).
 | `bigquery.dryRun` | unary | control | 30 s |
 | `bigquery.preview` | unary | results | 120 s |
 | `bigquery.cancelJobs` | unary, sensitive | control | 30 s |
+| `bigquery.endIdleSessions` | unary, main-only | control | 10 s, `drainMs` 10 s |
 | `bigquery.jobs.get` | unary | metadata | 30 s |
 | `bigquery.jobs.cancel` | unary | control | 30 s |
 | `results.remoteQuery` | unary with EVENTs | query | 0 (until done or cancelled), backstop 0 |
@@ -1019,13 +1058,15 @@ a shell's environment, which docs/bigquery.md explains. gRPC through an HTTP pro
 | Layer | What | Runs |
 | --- | --- | --- |
 | Offline .NET | A fake BigQuery HTTP handler injected through `BigQueryClientBuilder`, replaying recorded REST JSON: paging, the residence decision and the switch to windowed, byte-sized blocks, read-ahead per viewer, the fetch lane, remote sort and filter SQL and the fallback to the original query, `REMOTE_RESULT` on every page reader, `REMOTE_EXPIRED`, the row cap, every error row in [Errors](#errors), child-job scripts with incremental polling and `[l:c]` with selection offsets, client `jobId` lookup after a network error and the 409 path, cancel, job records and `query.attach` in every state (running, finished, script, session, expired, other principal, superseded), backend stop and restart leaving jobs and sessions alone, the `bigquery.cancelJobs` fallback, `jobs.list` paging, scopes, the three-part refresh (overlapping window, open jobs that finished), DONE jobs never re-read, child order, idle and active intervals, bounds, redacted fields, lazy children, `bigquery.jobs.get` and `bigquery.jobs.cancel` with permission refusals, every type in both REST and Arrow (the golden test), `sortKind` parity for SQL Server, identity pins per mode, every accepted and refused federation shape, key file checks, `BqNames` and the SQL lint, the provider check in `DispatchAsync` | `npm run check`, every PR |
-| vitest | Tokenizer golden files, completion and alias scope, both `providers` lints and the main-side method check, the principal union with the old spelling, migration of every 0.9.0 file, dialog form logic (type switch, Undo, pickers), the cost-prompt rules (threshold, incomplete estimate, both opt-outs), the location prompt (decision 18), the prompt's three choices for every session action, mixed SQL Server and BigQuery boxes and the remembered setting (decision 52), Close Results while a BigQuery job runs and the next Execute waiting for a detached job, quitting with hot exit on and off, a restored tab that does not reconnect, records without a tab after a crash, a Reload with hot exit off and a pinned tab with hot exit off, kept tabs left out of `endSession` at quit, the job key through session and AutoRecover records, references kept on `BACKEND_LOST`, `jobs.json`'s schema, limits and quarantine, `bigquery.cancelJobs` in `mainOnlyMethods` and refused from the renderer, a superseded attach, a detached request, idle sessions aborted at quit and on Disconnect (unplanned tabs included), a job detached by Close Results asked about again on tab close, `query.attach` moving a record to its new key, Leave dropping or marking records, the records dialog after the Recover dialog, `query.job` handled with no renderer port open, deleting a profile with job records, records older than 24 hours, the 10 GiB threshold units | `npm run check` |
+| vitest | Tokenizer golden files, completion and alias scope, both `providers` lints and the main-side method check, the principal union with the old spelling, migration of every 0.9.0 file, dialog form logic (type switch, Undo, pickers), the cost-prompt rules (threshold, incomplete estimate, both opt-outs), the location prompt (decision 18), the prompt's three choices for every session action, mixed SQL Server and BigQuery boxes and the remembered setting (decision 52), Close Results while a BigQuery job runs and the next Execute waiting for a detached job, quitting with hot exit on and off, a restored tab that does not reconnect, records without a tab after a crash, a Reload with hot exit off and a pinned tab with hot exit off, kept tabs left out of `endSession` at quit, the job key through session and AutoRecover records, references kept on `BACKEND_LOST`, `jobs.json`'s schema, limits and quarantine, `bigquery.cancelJobs` in `mainOnlyMethods` and refused from the renderer, a superseded attach, a detached request, idle sessions aborted at quit and on Disconnect (unplanned tabs included), a job detached by Close Results asked about again on tab close while it runs and not after it finished (`query.session.state`'s `job`), `keepJob` on a finished job aborting normally, Change Connection and Disconnect unavailable while a job runs, server Disconnect with Leave it running excluded from the strict cancel, closing a tab with unattached references asks, a tab-less job re-attached from the records dialog adopting its session, `bigquery.cancelJobs` aborting the job's session, Restart Backend then re-attach then close reaching the adopted session, and kept open by Close All and Disconnect All, the backend refusing to abort a session holding a job without `cancelJob`, `bigquery.endIdleSessions` before every backend stop (quit, Reload, renderer crash) with kept tabs' idle sessions included, a session whose job Varia cancelled aborted at once on close, `holdsJob` leaving Execute enabled, `query.attach` moving a record to its new key, Leave dropping or marking records, the records dialog after the Recover dialog, `query.job` handled with no renderer port open, deleting a profile with job records, records older than 24 hours, the 10 GiB threshold units | `npm run check` |
 | Smoke | The connect dialog's BigQuery path, Explorer browse, execute and stream, a windowed result under **Always windowed** (scroll, jump, sort, filter, expiry), Stop, the cost prompts, hidden SQL Server commands, focus and announcements, against the emulator via `VARIA_TEST_BIGQUERY_ENDPOINT` (skips when unset). The emulator finishes jobs synchronously and its `jobs.list` filters are unconfirmed, so Job History (open, filter, cancel, open results), the close prompt with Leave it running, and re-attach after a backend restart run against a REST fake built into `Varia.Backend` behind `VARIA_BACKEND_TEST_HOOKS` (the offline .NET fake lives in the test project) instead | An existing Linux smoke shard |
 | Emulator live | `ghcr.io/goccy/bigquery-emulator` 0.8.x (pinned by digest) as a service container: queries, paging, scripts, parameters, cancel, types, REST metadata, and Storage Read (its plaintext gRPC port, 9060, through an insecure HTTP/2 channel in test builds only). Emulator mode uses anonymous credentials, skips the probe and sessions, and fakes estimates. It does not cover sessions, dry runs, transactions, bytes statistics, routines beyond insert, or INFORMATION_SCHEMA; those stay on the fakes and the real project. BQ-1 confirms the .NET client works against it first | Folded into an existing Linux live group, not a new job; seconds recorded in docs/ci.md |
 | Real project (opt-in) | `VARIA_TEST_BIGQUERY_PROJECT` plus ADC or `VARIA_TEST_BIGQUERY_KEY_FILE`. Public datasets and one scratch dataset with a 1-day expiration. It proves sessions, dry runs, cost figures, child jobs, identity pinning, the per-statement cap question and Storage Read pricing. **Spending rules:** every job sends `maximumBytesBilled` of 100 MiB (the suite fails a job that does not), every check dry-runs first and skips above its allowance, a run stops after 1 GiB billed in total, queries touch only small public tables and the scratch dataset, the Storage Read check reads one small result, and the run asserts and prints `totalBytesBilled`. Recorded fixtures for the offline fakes are refreshed from this suite at release preparation | Local only, no repository secret (decided) |
 
 **Test-project hygiene** (docs/testing.md): before the first run, set a custom "Query usage per day" quota of 10–50 GiB
-on the project and a budget alert; budgets only alert, the quota is what stops spending. The free tier (1 TiB of
+on the project and a budget alert; budgets only alert, and the quota roughly caps a day's spending (Google calls custom quotas approximate, and a lowered
+quota takes a few minutes to apply, so set it well before the first run); the per-job `maximumBytesBilled` is the exact
+cap. The free tier (1 TiB of
 queries a month) covers the suite many times over. A sandbox project cannot run DML, so the scratch checks need billing
 enabled. Neither the daily query quota nor `maximumBytesBilled` limits Storage Read bytes or session temp-table
 storage, so the suite reads one small result and ends its sessions. Benchmarks for Storage Read throughput run offline against the fake or locally, never against the real
@@ -1046,7 +1087,7 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-2** Connect dialog and saved connections | Server type with Undo; BigQuery fields; account line; key file picker through main; both project pickers and the dataset picker; saved connections, MRU and labels by project; query tab dataset dropdown and status bar | M | BQ-1 | README, settings and icons regenerated |
 | **BQ-3a** Execution | `jobs.insert` with a client `jobId` (`useLegacySql`, lookup after a network error, 409 means it exists) and `jobs.getQueryResults` polling; REST reads into memory (`BigQueryColumnPlan`, converter, types); truncation as SQL Server; cost figures and units; the per-statement cap check | L | BQ-1 | ipc.md |
 | **BQ-3a-2** Scripts, sessions, Stop | Child jobs with incremental polling and `[l:c]`; tab sessions, expiry, location prompt; Stop; the `query.job` event, its essential classification and `queryEventSchema` entry | M | BQ-3a, BQ-2 (the location prompt sits on its dataset dropdown) | |
-| **BQ-3d** Re-attaching to jobs | Job keys (tabs, `query.execute` and `results.remoteQuery` params, session and AutoRecover records); job records in `WorkbenchSession/jobs.json`; references kept on `BACKEND_LOST`; `query.attach` (running, finished, scripts, sessions, `adoptSession`, expired, superseded, detached); identity check; records without a tab after every restore; `bigquery.cancelJobs` (main-only) and `session.cancelRestoredJobs`; quit with kept and unkept tabs; the prompt across every session action, mixed boxes, contract and setting; Close Results while running; Leave running; the Reload prompt wording; deleting a profile with job records | M | BQ-3a-2, BQ-3c-1 (finished results may be windowed), BQ-7 (the dialog shows the estimate; the setting sits on its pages) | README, ipc.md, hot-exit.md, settings regenerated |
+| **BQ-3d** Re-attaching to jobs | Job keys (tabs, `query.execute` and `results.remoteQuery` params, session and AutoRecover records); job records in `WorkbenchSession/jobs.json`; references kept on `BACKEND_LOST`; `query.attach` (running, finished, scripts, sessions, `adoptSession`, expired, superseded, detached); identity check; records without a tab after every restore; `bigquery.cancelJobs` (main-only) and `session.cancelRestoredJobs`; quit with kept and unkept tabs; the prompt across every session action, mixed boxes, contract and setting; Close Results while running; Leave running; the Reload prompt wording and `lossDetails`; idle sessions ending with their tab (`connections.disconnect`, `bigquery.endIdleSessions` before every backend stop, the failed-abort notice and retry on reconnect); `cancelJob`, `keepJob`, `holdsJob` and `query.session.state`'s `job`; the server Disconnect row; `holdsJob` for unattached references; `adoptSession` for tab-less jobs and `bigquery.cancelJobs` ending their sessions; the supervisor's session map and result stamping for `query.attach`; deleting a profile with job records | M | BQ-3a-2, BQ-3c-1 (finished results may be windowed), BQ-7 (the dialog shows the estimate; the setting sits on its pages) | README, ipc.md, hot-exit.md, settings regenerated |
 | **BQ-3b** Storage Read in memory | Storage Read (Arrow), stream order by the backend scanner, REST fallback and messages, the REST/Arrow golden test, pricing check, proxy check, offline throughput benchmark | M | BQ-3a | testing.md |
 | **BQ-7** Dry run and cost | `bigquery.dryRun`; the estimate before execute, both prompts and opt-outs; status bar estimate; diagnostics markers; Cost and Sessions settings pages | M | BQ-3a, BQ-4 | settings regenerated, architecture.md (dry runs send text) |
 | **BQ-3c-1** Remote results | Residence decision and setting; remote result; byte-sized block cache, read-ahead per viewer, fetch lane; `results.read` waits; `revision` and the residence event; row cap; Memory panel; invariant change and page-access and working-memory lints; misestimate switch; `results.remoteQuery` (all five places, kinds enum, events, cancel path, ipc.md entry) with the `load` kind | L | BQ-3b | architecture.md, ipc.md |
@@ -1189,7 +1230,8 @@ Recorded on 2026-11-15, from the owner's answers on job lifecycle.
     jobs (running or finished) through persisted job records and `query.attach`. Quitting Varia leaves jobs running.
     In 0.10.0, as lane BQ-3d.
 52. **Close prompt:** closing a tab or Close Results while a job runs asks: Cancel the job, Leave it running, or Don't
-    close. So do Change Connection and Disconnect; Close All and Disconnect All keep leaving running tabs open. Quitting
+    close. Object Explorer's server Disconnect asks the same. A tab's Change Connection and Disconnect stay unavailable while a job runs, and ask the same about a job left
+    running by Close Results; Close All and Disconnect All keep leaving running tabs open. Quitting
     asks the same once for tabs that will not be restored; kept tabs' jobs keep running. The choice can be remembered in Options. Close Results, disabled while SQL
     Server queries run, is enabled for this while a BigQuery job runs.
 
