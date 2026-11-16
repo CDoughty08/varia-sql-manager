@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow, explorerStatics, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendReady, documentTabs, editorText as editorTextOf, messages, part, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTabs, editorText as editorTextOf, messages, part, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox, expectEditorShown } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'palette-profile-'))
@@ -22,7 +22,7 @@ async function launch() {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   await application.evaluate(({ dialog }) => {
     dialog.showSaveDialog = async () => ({ canceled: true })
     dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })

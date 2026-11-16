@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, queryDatabase, queryServer, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { glyphConditions, glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 
 await mkdir('artifacts', { recursive: true })
@@ -24,7 +24,7 @@ async function launch(options = {}) {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
 async function close() {
