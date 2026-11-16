@@ -433,8 +433,14 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   sampled service state: Running enables Stop and Restart and disables Start ("SQL Server Agent is running"); Stopped
   enables Start and disables Stop and Restart ("SQL Server Agent is stopped"); Start pending, Stop pending, Starting… and
   Stopping…, an unreadable state, or a service action already running in this window disable all three with that reason;
-  startup type Disabled disables Start with "The SQL Server Agent service is disabled" (renderer vitest over every state
-  and the startup type, mock scenes `oe-stopped`, `oe-starting`, `oe-stopping` and the `jam-disabled` note).
+  startup type Disabled disables Start and Restart with "The SQL Server Agent service is disabled" (a running service can be
+  set Disabled and keeps running; Restart's Stop would work and its Start could not). With Agent XPs at 0 (`AGENT_DISABLED`),
+  New ›, Job Activity Monitor and View History on the node, and the palette's "SQL Server Agent: Job Activity Monitor" and
+  "SQL Server Agent: New Job", are disabled with the `AGENT_DISABLED` sentence, while Start keeps the rules above (renderer
+  vitest over every state, the startup type and XPs 0, mock scenes `oe-stopped`, `oe-starting`, `oe-stopping`, `oe-xps`
+  and the `jam-disabled` note). The Stop and Restart confirmations name only the running-job count from the latest
+  `explorer.agent` sample ("2 jobs are running. Stopping Agent stops them, …"), with "Any running jobs are stopped" when
+  the count is unknown or the sample failed, and no job names (no extra read; renderer vitest for a count, zero and unknown).
 
 ## Jobs
 
@@ -745,11 +751,28 @@ Database Mail logs, which SSMS shows there).
   `N'Start'`, `N'Stop'`, `N'QueryState'` as a parameter; `LintExecutable` allows exactly this positional shape, with
   `N'SQLServerAgent'` its only literal, beside the `EXEC @rc = msdb.dbo.<proc> @arg = @param` shape. `xp_servicecontrol` maps the constant `SQLServerAgent` to the
   connected instance's Agent (`SQLSERVERAGENT` or `SQLAgent$<instance>`), as the QueryState fact showed; the Windows CI job
-  proves it on a named instance. Three action rows: `startAgent`, `stopAgent` and `restartAgent`, each an `objectActions` entry with an
+  proves it on a named instance. Catalogue shape (today's catalogue narrows only database targets): `actionKindSpecs` gains an `agent` row offering the
+  three verbs; `ActionTarget` gains an optional `agent` field (service state, startup type, sysadmin, Linux, Managed
+  Instance, clustered) filled from the node's `explorer.agentService` sample and the profile; an `agentServiceActionRules`
+  table, mirroring `databaseActionRules`, gives each verb's enablement and reason, and `actionMenuState`/`actionMenuReasons`
+  apply it when the kind is `agent` (emitted in `actionsCatalogJson` and the generated docs, regenerated with
+  `npx vitest run tests/object-actions-catalog.test.ts -u`; vitest per rule). The backend's preflight repeats what it can
+  check itself before any statement: Linux, Managed Instance or `IsClustered` refuses `NOT_SUPPORTED`, a non-sysadmin login
+  `PERMISSION_DENIED` (offline check for each through a fake capability read). All three rows are `class: 'dialog'` with one
+  new dialog id, `agentService`, in `dialogIds`; its `dialogSpecs` entry uses a new `confirmProgress` layout (a confirmation
+  that becomes the steps table in place, footers as below, no page list, no Script button), used by no other id (vitest
+  that the layout renders no Script and no pages). Script is not offered: zod's `actions.script` schema and C#
+  `Validate(args, script: true)` refuse the three action ids (vitest and offline check), so `ScriptAsync` never reaches
+  them. Three action rows: `startAgent`, `stopAgent` and `restartAgent`, each an `objectActions` entry with an
   `ObjectActionSpec` row on the Agent node kind (only object actions carry `long`; `actionDrainMs`, the long gate, step
-  events and drain registration all key off it, so a server or kind-dialog row would silently get none; vitest that
-  `actionDrainMs` is non-zero and the backend's `IsLong` true for each). Each sets `cleanupMs` to at least
-  `serviceWaitMs` plus the statement's own deadline plus one `QueryState` read (offline check per row that `actionDrainMs`
+  events and drain registration all key off it, so a server or kind-dialog row would silently get none; a vitest that
+  `actionDrainMs` is non-zero and the generated `actionsCatalogJson()` row says `long: true` for each, and a C# offline
+  check that `ActionsCatalog.Current.IsLong` is true for each). Two more limits bound the parts:
+  `agentLimits.serviceStatementMs` (one `xp_servicecontrol` Start or Stop, as the command timeout) and
+  `agentLimits.serviceReadMs` (one `QueryState` read, as `CancelAfter` on its own token), documented with the others. Each
+  row's `cleanupMs` is derived from them in the actions catalogue by one formula used everywhere in this plan: statement +
+  `serviceWaitMs` + read for Start and Stop, and for Restart the same sum for its start phase (the Start, its wait and the
+  read after it), which is larger than the post-cancel read (offline check per row that `actionDrainMs`
   and `StopWait` cover it; `tests/action-seams.test.ts`'s per-row `cleanupMs` assertion gains the three rows). Start and
   Stop are built like Restart below:
   `long: true`, fixed steps (Start: 0 Start, 1 Wait for Running; Stop: 0 Stop, 1 Wait for stopped),
@@ -771,21 +794,31 @@ Database Mail logs, which SSMS shows there).
   checks cover a cancel after each statement was sent, a failing Start whose read says Start pending, a Start timeout reading Stopped and one reading Start pending, and a
   Stop timeout, and vitests the long-run refusal for each kind. The state every ending names travels as a typed field, not
   parsed text: `ActionExecuteResult` gains an optional `agentService` (`running`, `stopped`, `startPending`,
-  `stopPending`, `unreadable`) in `src/shared/contracts.ts`, the strict `actionExecuteResultSchema`, the C# record and C#
+  `stopPending`, `unreadable`) in `src/shared/actions/schema.ts` (the interface and the strict `actionExecuteResultSchema`), the C# record and C#
   bounds; `AgentSql` maps `QueryState`'s text to it in the backend, an offline contract check covers every value and an
   unknown text (`unreadable`), and the renderer vitests drive each ending (Start again or Close only, the wording) from
   that field alone. A Start that fails with an error, not only one that times out, reads `QueryState` once the same way
-  before choosing its ending. Restart is Stop,
+  before choosing its ending. A Stop statement that fails (plain Stop, or Restart's step 0) reads `QueryState` once on its
+  own token, skips the wait, sends no Start, and ends with the engine's message plus the state, Close only. "Access is
+  denied" takes precedence over every state rule: it ends `PERMISSION_DENIED` with Close only and never offers Start again,
+  since the same request would be refused (mock `agent-denied` in the progress layout). "Left stopped" offers Start again only
+  when the latest `explorer.agentService` sample's startup type is not Disabled; otherwise it says the service is disabled
+  and offers Close only. A plain Start dialog's Start again behaves like Restart's below: in place, no second confirmation, a
+  new step row, its own `startAgent` long run, Close disabled with focus on the log region until it ends (mock
+  `start-agent-left-stopped`). Fake-service checks: a failing Stop in each of plain Stop and Restart step 0, access denied
+  on Start reading Stopped; renderer vitests for those endings, the Disabled variant and the plain dialog's Start again. Restart is Stop,
   then the action itself re-reads `QueryState` (ActionService has no live
   probes) on its own connection under the `AgentSql` lint until it reads stopped, each wait bounded by `agentLimits.serviceWaitMs` and
   Stop-able, then Start. Sysadmin and Windows servers only, not on a failover cluster instance; confirmation first, through
   ActionService. "Access is denied" (the engine's virtual account may lack the right on the Agent service) maps by its
-  error number (AG-0) to a `PERMISSION_DENIED` value with a sentence naming the account. This deliberately differs from
+  error number (AG-0) to a `PERMISSION_DENIED` value with a fixed sentence: "Windows refused the request: the SQL Server service account may
+  not control the Agent service on this server. Start it in SQL Server Configuration Manager, or grant that account the
+  right." (no account name: the action path has no read of `service_account`, and none is added for an error message). This deliberately differs from
   SSMS, which controls the service from the client computer through WMI: Varia goes through the engine so it needs no
   Windows rights or network path to the server, and works the same from Linux and macOS clients. If AG-0 finds it cannot
   work on default virtual accounts, the lane comes back to the owner. States, each mocked and in the renderer fixtures:
   Starting… / Stopping… on the node and in the dialog until `QueryState` agrees (the next `explorer.agentService` sample
-  then takes over); "Access is denied" naming the engine's service account; a Restart whose Stop succeeded but whose Start
+  then takes over); "Access is denied" with that fixed sentence; a Restart whose Stop succeeded but whose Start
   failed or timed out, which reads `QueryState` once and says "SQL Server Agent was left stopped" with Start again only when
   it reads stopped (otherwise the "its state is …" or "could not be read" ending with Close only); and Cancel restart (the
   dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. The restart row in
@@ -795,7 +828,9 @@ Database Mail logs, which SSMS shows there).
   Agent", so the window close, Disconnect of that server and Restart SQL Backend are refused and the reload prompt names it;
   `longRunMessages` gains a per-kind override so `restartAgent`, `startAgent` and `stopAgent` each say "… Wait for it to finish." instead of "Stop it
   first", and the same override covers `close` ("… Wait for it to finish, then close the window.") and main's `reload` and
-  `restart` prompt lines (src/main/action-prompts.ts), which for these kinds say the backend lets a sent Start or Stop finish, and cancels a Restart only before its Start is
+  `restart` prompt lines (src/main/action-prompts.ts), which today describe the whole state through its first run; they
+  become one clause per run kind present (Agent kinds first, then "… and a restore stops part way" for the rest), so a mixed
+  state is worded right in either order (vitest for a mixed state in each order); for these kinds they say the backend lets a sent Start or Stop finish, and cancels a Restart only before its Start is
   sent, instead of "stops it part way", since Cancel restart is disabled in the start phase and a plain Start or Stop cannot be stopped once its statement is sent; vitest per kind over `stop`, `close`, `reload` and `restart`): during the stop phase the drain acts as Cancel restart,
   during the start phase Start finishes (offline check that the drain covers both phases) (only long actions send step events today, through
   `ActionProgress.Begin` and main's `varia:actions-progress`), so it takes the long gate and reports fixed steps: 0 Stop,
@@ -805,8 +840,8 @@ Database Mail logs, which SSMS shows there).
   `SqlException` itself and returns the step results as a value (cancelled after Stop, left stopped, Start error), never
   letting them escape (only a cancel before step 0, in the gate wait, sign-in or prologue, is left to `RunAsync`'s
   `CANCELLED`), and step 2's Start and its `QueryState` reads run on a token of their own bounded by the Start wait,
-  not the job token (`cleanupMs` covers the larger of the Start statement plus the Start wait and the post-cancel `QueryState` read, since a Stop's reply and the drain
-  wait only `stopGraceMs` plus `cleanupMs`). Backend fake-service checks: a Stop in step 1 returns the cancelled-after-Stop
+  not the job token (`cleanupMs` is the formula above, statement + `serviceWaitMs` + read, which covers the post-cancel read too, since a
+  Stop's reply and the drain wait only `stopGraceMs` plus `cleanupMs`). Backend fake-service checks: a Stop in step 1 returns the cancelled-after-Stop
   outcome with the read state, and a Stop in step 2 followed by a failing Start returns the Start error with the state read
   after it (`stopped` gives left stopped; a `startPending` read gives the Close-only ending, its own check). The long gate is shared with restores and backups (`longPerConnection` 1, `longTotal` 2), so its BUSY messages in
   `ActionService` and the generated `longPerConnection` text in `src/shared/actions/docs.ts` (both of its quotes), the `long` doc comment in
@@ -893,7 +928,10 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   the action, waiting on `QueryState` and an Agent session (conditions, generous timeouts), and always leaves Agent running
   in `finally` (Start, then a wait). It is set on the owner's test instance (which exists only for testing Varia) and in the
   Windows workflow below, never in the Linux CI jobs, where the feature is hidden; there the suite asserts only that service
-  control is refused as `NOT_SUPPORTED` — that assertion lives in `AgentActions`, which runs everywhere. Other Agent suites
+  control is refused as `NOT_SUPPORTED` — that assertion lives in `AgentActions`, which runs everywhere. The backend's
+  preflight for the three service rows refuses Linux, Managed Instance and failover cluster instances
+  (`SERVERPROPERTY('IsClustered') = 1`) with `NOT_SUPPORTED` before any `xp_servicecontrol`, independent of the hidden menu
+  item (offline check per profile through a fake capability read). Other Agent suites
   never stop Agent. `backend:test` takes only a shared machine lock, so `AgentService` is excluded from the grouped and full
   live runs: `LiveGroups` gains an explicit excluded set (today every suite in `Suites` is split into groups), its
   `--live-suite` option accepts a comma-separated list, and the suite runs only through its own command
