@@ -223,14 +223,18 @@ looks the same in both: one continuous result, and the user never sees a BigQuer
   the bytes processed in the status bar beside the row count.
   - **Before execute** (setting, on by default): a dry run (free). When its estimate passes a threshold (setting,
     default 10 GB), a prompt shows "This query will process 1.4 TB (about $8.75 on demand). Run it?", with Run,
-    Cancel, "Don't ask again for this connection" and a **Cost settings…** link. The link opens Tools › Options at the
-    BigQuery cost section, the same way other pages link to their settings. The price is labelled an on-demand
-    estimate, because projects with capacity (reservations) do not pay per byte.
-  - **Caps are configurable** and are the hard guard. A global default in Tools › Options (BigQuery › Cost: maximum
-    bytes billed per query, empty by default) applies to every connection, and each connection can override it in the
-    dialog's Advanced section. The effective cap goes out as `maximumBytesBilled` with every job, so BigQuery fails
-    the job, at no charge, past it. The prompt threshold, the prompt on/off switch and the dry-run diagnostics switch
-    live in the same Options section.
+    Cancel, "Don't ask again for this connection" and a **Cost settings…** link. The link opens Tools › Options ›
+    Query Execution › BigQuery › Cost, the same way other pages link to their settings. The price is labelled an
+    on-demand estimate, because projects with capacity (reservations) do not pay per byte.
+  - **Caps are configurable** and are the hard guard. A global default on that Cost page (maximum bytes billed per
+    query, empty by default) applies to every connection, and each connection can override it in the dialog's
+    Advanced section. The effective cap goes out as `maximumBytesBilled` with every job, so BigQuery fails the job, at
+    no charge, past it. The prompt on/off switch, the threshold and the price display live on the same page.
+- **Options placement:** BigQuery settings go in per-engine pages beside SQL Server's, following the existing Options
+  tree (`src/shared/settings/pages.ts`), not a top-level BigQuery page. **Text Editor › GoogleSQL** holds dry-run
+  diagnostics and the opt-in bulk metadata path. **Query Execution › BigQuery** holds Cost (prompt, threshold, cap,
+  price display) and Sessions. **Query Results › BigQuery** holds the residence, Storage Read and the window cache
+  size.
 - **Sessions:** each query tab gets a BigQuery session, created on its first execution (no extra charge). Temp tables,
   variables and `BEGIN TRANSACTION … COMMIT` then carry across executions, like a SQL Server tab's session. Closing the
   tab ends it (`CALL BQ.ABORT_SESSION()`). A session runs one query at a time, which a tab already does. Prompting on
@@ -392,7 +396,7 @@ Search Objects enhancements this needs (in BQ-6a, with the index's limits mirror
 | vitest | Tokenizer golden files, completion and alias scope, catalogue `providers` lint and gating, the connection union's back-compatibility on old `connections.json`/`session.json` files, dialog form logic, the cost-prompt logic | `npm run check` |
 | Smoke | The connect dialog's BigQuery path, Explorer browse, execute and stream, Stop, the cost prompt, hidden SQL Server commands. It runs against the emulator, pointed at by `VARIA_TEST_BIGQUERY_ENDPOINT`, and skips when that is unset | A smoke shard on Linux |
 | Emulator live | `ghcr.io/goccy/bigquery-emulator` 0.8.x as a CI service container: queries, paging, scripts, parameters, cancel, types, REST metadata, and Storage Read (its gRPC port, 9060) for the in-memory path and the windowed block cache. It does not cover sessions, dry run, bytes statistics, routines or full INFORMATION_SCHEMA, so those stay on the offline fakes and the real-project checks. Whether the .NET client works against it (`BaseUri`) is unconfirmed: BQ-1 checks that first | A new live group on Linux only (estimate: under 2 min including the image pull; recorded in docs/ci.md) |
-| Real project (opt-in) | `VARIA_TEST_BIGQUERY_PROJECT` plus ADC or `VARIA_TEST_BIGQUERY_KEY_FILE`. It uses public datasets and one scratch dataset with a 1-day expiration, with `maximumBytesBilled` 100 MB per job. It proves sessions, dry run, cost figures, child jobs and identity pinning | Local only, no repository secret (decided) |
+| Real project (opt-in) | `VARIA_TEST_BIGQUERY_PROJECT` plus ADC or `VARIA_TEST_BIGQUERY_KEY_FILE`. It uses public datasets and one scratch dataset with a 1-day expiration, with `maximumBytesBilled` 100 MB per job. It proves sessions, dry run, cost figures, child jobs and identity pinning. The owner's project is a free trial with limited credits, so the suite is built to spend nothing: every check dry-runs first and is skipped above its own byte allowance, a run stops once it has billed 1 GB in total (well inside the free monthly query tier), queries touch only small public tables and the scratch dataset, the Storage Read check reads one small result, and the run prints the bytes billed | Local only, no repository secret (decided) |
 
 The free tier (1 TiB of queries a month) covers the real-project checks many times over. A sandbox project cannot run
 DML, so the scratch checks need billing enabled.
@@ -427,6 +431,8 @@ Peek and Properties can move to 0.11 without hurting the core experience.
 - Pivot and profile pushed down to BigQuery for windowed results, and Save to a BigQuery table (see [Other modes considered](#other-modes-considered)).
 - Execution details: BigQuery's query plan stages and timeline in the plan canvas.
 - Job history pane (`jobs.list`), reopening a past job's results.
+- A parameters prompt for undeclared `@names`, batch query priority, a local-time TIMESTAMP option, and a custom API
+  endpoint in the UI.
 - Table actions (delete, copy, expiration, labels), dataset creation, the external-account `executable` source behind
   an explicit opt-in.
 
@@ -438,8 +444,8 @@ Recorded on 2026-11-15, from the owner's answers to the draft's open questions.
    impersonation. Browser sign-in waits until a Varia Google OAuth client is verified (0.11 or later).
 2. **Key files:** a saved connection remembers the key file's path, not its contents.
 3. **Cost guard:** the estimate prompt is on by default above 10 GB, with no hard cap by default. **Caps must be
-   configurable:** a global default in Tools › Options plus a per-connection override, and the threshold and switches
-   in the same Options section. The prompt links to that Options section.
+   configurable:** a global default in Tools › Options › Query Execution › BigQuery › Cost plus a per-connection
+   override, with the threshold and switches on the same page. The prompt links to that page.
 4. **Sessions:** a BigQuery session per query tab, on by default.
 5. **Metadata:** the Search Objects index and IntelliSense use free REST calls. The billed `INFORMATION_SCHEMA` bulk path
    is opt-in. Search Objects gets the BigQuery enhancements in [Search Objects for BigQuery](#search-objects-for-bigquery-bq-6a).
@@ -449,3 +455,28 @@ Recorded on 2026-11-15, from the owner's answers to the draft's open questions.
    request. The details are agreed as written: the half-of-budget projection, a 64 MiB block cache of 4,096-row blocks,
    switching to windowed on a misestimate, windowed sort and filter going through the cost prompt, and Load sample in
    0.10.0. Pivot and profile pushed down to BigQuery, and Save to a BigQuery table, are 0.11.
+
+Recorded on 2026-11-15, from the owner's answers to the mock review's questions (all agreed as recommended).
+
+9. **Test project:** the owner has a free-trial project for the opt-in real-project checks. Its credits are limited, so
+   those checks keep to the spending rules in [Testing](#5-testing). The project id stays out of the repository; it goes
+   in `VARIA_TEST_BIGQUERY_PROJECT` locally.
+10. **Query parameters:** 0.10.0 relies on `DECLARE`/`SET` in scripts. A prompt for undeclared `@names` is later.
+11. **Batch priority:** not in 0.10.0.
+12. **Price in estimates:** bytes are always shown. The price is on by default at the US on-demand rate, with one
+    switch on the Cost page; there is no per-connection rate.
+13. **Legacy SQL:** refused with a clear message (a `#legacySQL` prefix or a legacy-only error); GoogleSQL only.
+14. **TIMESTAMP display:** UTC, as the BigQuery console shows it. A local-time option is later.
+15. **Custom API endpoint:** not in the 0.10.0 UI; a test-only setting points Varia at the emulator.
+16. **Installer size:** the estimated 15–25 MB growth is acceptable; BQ-1 measures it.
+17. **Provider icon:** a generic custom icon (a hexagon with a magnifier, drawn on Varia's icon grid), not Google's logo.
+18. **Sessions and location:** switching a tab to a dataset in another location starts a new session, so Varia asks
+    first, as SQL Server's transaction prompt does.
+19. **Proxies:** REST and the gRPC Storage Read path use the system proxy and certificate store; the docs get a proxy
+    note.
+20. **Getting Started:** a "Connect to BigQuery" guide and a windowed-results sample, in BQ-8.
+
+## Mocks
+
+[docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) shows each UI change on Varia's own renderer: its captured DOM,
+stylesheet and dark theme, edited per scene. Open it in a browser; Annotations marks what is new.
