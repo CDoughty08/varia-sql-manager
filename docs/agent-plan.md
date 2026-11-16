@@ -244,10 +244,16 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   sublabel, lists no folders and no Job Activity Monitor singleton (msdb's procedures fail with error 15281), and still offers Start to sysadmin on Windows
   (starting Agent turns the option on, as SSMS does). XPs at 0 with Agent running (rare; AG-0 spikes the option's value
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
-  a generic failure: `ExplorerErrors.Classify` maps 15281 to a new explorer code `AGENT_DISABLED` (added to
-  `explorerErrorCodes` in `src/shared/contracts.ts` and its C# mirror), and the live path, which has its own list, gets the
-  same code: `AGENT_DISABLED` joins `liveErrorCodes` (`src/shared/live/schema.ts`) and `LiveErrors.Classify` maps 15281 to
-  it with the `sp_configure` / `mssql-conf` sentence. It is deliberately not in `LiveErrors.IsTerminal`: the probe keeps
+  a generic failure: a new explorer code `AGENT_DISABLED` joins `explorerErrorCodes` in `src/shared/contracts.ts` (C# has
+  no code list; codes are strings in `ExplorerErrors`): `ExplorerErrors.Classify` gains `15281 => "AGENT_DISABLED"`, and
+  `ExplorerErrors.Create` gains an `AGENT_DISABLED` message case worded per platform (`sp_configure` on Windows,
+  `mssql-conf` on Linux) instead of the default `Msg n:` text, retryable (Refresh after Start succeeds). The no-role
+  `PERMISSION_DENIED` sentence is passed as caller-supplied text, as `NOT_SUPPORTED`'s is, since `Create`'s fixed
+  "You do not have permission to view …" text does not say which role is missing. ExplorerChecks' Classify table gains
+  15281, and docs/ipc.md lists the code. The live path has its own list, so `AGENT_DISABLED` also joins
+  `liveErrorCodes` (`src/shared/live/schema.ts`, validated by main's supervisor, which drops any tick that fails it):
+  `LiveErrors.Classify` maps 15281 to it and `LiveErrors.From` gives the same sentence; docs/ipc.md's live code list and
+  a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It is deliberately not in `LiveErrors.IsTerminal`: the probe keeps
   sampling at its interval so a view recovers by itself once Start turns the option on. Job Activity Monitor, the
   status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped" (with Start for
   sysadmin on Windows), never the error state; a C# offline check covers `LiveErrors.Classify(15281)` and a renderer
