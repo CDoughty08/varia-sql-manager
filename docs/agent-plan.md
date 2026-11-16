@@ -99,6 +99,10 @@ From Microsoft's documentation (re-checked in AG-0 and AG-1, never assumed):
   (AG-0 probes it with a low-privilege login).
 
 Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job:
+which Agent reads raise 15281 with Agent XPs off (`sp_help_job` does, through `sp_get_composite_job_info`'s
+`xp_sqlagent_*` calls; `sp_help_jobactivity` and `sp_help_jobhistory @mode = N'FULL'` contain no `xp_sqlagent` call, and
+the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable: if so, the Log File Viewer
+drops its `AGENT_DISABLED` banner, the `agent.history.service` probe and their tests);
 whether `sp_get_sqlagent_properties` returns values to a SQLAgentUserRole login (msdb grants that role EXECUTE and the
 procedure has no sysadmin check, but it reads through `xp_instance_regread`, which may refuse non-sysadmin callers; until
 then the plan treats it as sysadmin-only, and if it works the cap text, idle-CPU and mail facts show to every role that
@@ -261,13 +265,22 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   `LiveErrors.Classify` maps 15281 to it and `LiveErrors.From` gives the same sentence; docs/ipc.md's live code list and
   a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It joins `LiveErrors.IsTerminal`: a non-terminal error backs off (up to the
   larger of `backoffMs` and the interval) and `LiveService.Refresh` never shortens a backing-off probe's delay, whereas a
-  terminally stopped probe is restarted by a refresh with its failures reset. So the failing probe stops, the view shows
-  the banner, and when `agent.jobs.service` or `explorer.agentService` (which read XPs without error and keep running)
-  reports XPs 0 → 1, or after the view's own Start succeeds, the view sends `live.update` with `refresh: true`; a view
-  whose every probe stopped (`AllStopped()` ends the subscription, as the Log File Viewer's lone `agent.history` probe
-  would) subscribes again instead. A C# offline LiveService check asserts that after an `AGENT_DISABLED` stop a refresh
-  makes the probe due at once, and a renderer vitest covers the refresh and the re-subscribe. Job Activity Monitor, the
-  status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
+  terminally stopped probe is restarted by a refresh with its failures reset. So the failing probe stops and the view shows
+  the banner. Every view that can stop this way carries its own XPs signal in the same subscription, so the subscription
+  never ends by `AllStopped()` and recovery needs nothing else to be open: Job Activity Monitor has `agent.jobs.service`,
+  the Log File Viewer's `agent.history` source gains the table-less `agent.history.service` probe (only if AG-0 finds a
+  history read that raises 15281; see Facts) (the same constant text
+  as `agent.jobs.service`), and Object Explorer's status view has `explorer.agentService`. When that probe reports XPs
+  0 → 1 (also after a Start whose service reached Running before Agent turned the option on), the view sends
+  `live.update` with `refresh: true`, which restarts the stopped probes; for Object Explorer that is
+  `ExplorerStatusService`, so the role-path `explorer.agent` probe (`sp_help_job`, terminal on 15281) and the running-jobs
+  chips come back by themselves alongside `AgentStateSource`'s re-list. A C# offline LiveService check asserts that after
+  an `AGENT_DISABLED` stop a refresh makes the probe due at once; renderer vitests cover each view: Job Activity Monitor
+  and the Log File Viewer (with Object Explorer hidden, including a 15281 right after their own Start that recovers on the
+  later 0 → 1 sample) and Object Explorer (a role-path `explorer.agent` stop, then an `explorer.agentService` 0 → 1
+  sample, a `refresh: true`, and the chip back). The status-bar watched job does not recover: Agent's stop ended the job,
+  so on `AGENT_DISABLED` or Agent stopped it shows "Agent stopped, job outcome unknown" once and releases its view and
+  status-only slot without re-subscribing. Job Activity Monitor and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
   state; the banner offers Start (sysadmin on Windows, not a failover cluster instance, startup type not Disabled) only
   while the service state is Stopped, and with Agent running it offers no Start, only the `sp_configure` /
   `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `LiveErrors.IsTerminal("AGENT_DISABLED")`,
@@ -679,7 +692,8 @@ its `MethodNames` entry and C# record; string inputs get max lengths in both zod
 | `agent.historyMessage` | One history row's full message (`instance_id`) | Metadata slot |
 | `agent.errorLogs` | Error log list (`xp_enumerrorlogs 2`) for the Log File Viewer's sources | Metadata slot |
 | Existing `actions.describe` / `actions.execute` | Job, alert, operator, proxy, credential, schedule, Agent Properties describes and every write, service control included | As other object actions; credential execute is sensitive |
-| Existing `explorer.*`, `live.subscribe` | Agent kinds; new live sources `agent.jobs` (probes `agent.jobs.list`, `agent.jobs.watched`, `agent.jobs.service`), `agent.history`, `agent.tree` (probe `agent.treeProbe`), and the new `explorer.agentService` probe in the existing `explorer` source | Each new source needs a `liveSourceIds` entry, probe ids in `liveProbeIds`, a `LiveService.CreateSampler` case and a C# args check; args bounded in the live catalogue's schemas |
+| Existing `explorer.*`, `live.subscribe` | Agent kinds; new live sources `agent.jobs` (probes `agent.jobs.list`, `agent.jobs.watched`, `agent.jobs.service`), `agent.history` (plus probe
+  `agent.history.service`), `agent.tree` (probe `agent.treeProbe`), and the new `explorer.agentService` probe in the existing `explorer` source | Each new source needs a `liveSourceIds` entry, probe ids in `liveProbeIds`, a `LiveService.CreateSampler` case and a C# args check; args bounded in the live catalogue's schemas |
 
 Error codes: action code `STALE` (the name already exists for the shortcuts save; the action row adds its own message,
 not retryable) and new action codes `AGENT_STOPPED` and `JOB_STATE` (decided after msdb 22022 by a re-read, and 15281);
