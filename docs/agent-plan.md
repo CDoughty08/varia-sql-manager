@@ -1,11 +1,31 @@
 # SQL Server Agent plan (0.10.0)
 
-Status: **draft for owner review** (2026-11-15). Nothing here is implemented yet. Once the owner agrees, this page is the
+Status: **agreed with the owner on 2026-11-15** (decisions below). Nothing here is implemented yet. This page is the
 plan of record for the Agent lanes; each lane's PR updates the area's own page (a new docs/sql-server-agent.md, generated
 below a marker like docs/integration-services.md) and moves the lane's row here to Done.
 
 0.10.0 ships two headline features: SQL Server Agent (this page) and BigQuery (docs/bigquery-plan.md, planned in parallel).
 SSMS 2022/22 is the parity target for names, menus, keys and behaviour; visuals follow Calm Pro.
+
+Mocks of every new or changed surface: [docs/mockups/sql-server-agent.html](mockups/sql-server-agent.html) (open it in a
+browser; Dark and Light, a picker per surface, design notes as dashed boxes). Each lane's PR builds what its mock shows, or
+updates the mock in the same PR when the design changes.
+
+## Owner decisions (2026-11-15)
+
+- **Plan home**: this docs page plus the mocks, in a docs-only PR (as docs/bigquery-plan.md), pushed only with mocks for
+  all new and changed UI in Varia's style.
+- **Agent service control**: Start, Stop and Restart in 0.10.0 through `master.dbo.xp_servicecontrol`, behind a
+  confirmation, sysadmin and Windows servers only, hidden on Linux and Managed Instance.
+- **Proxies and credentials**: full dialogs in 0.10.0: New and Properties for proxies (General, Principals, References)
+  and a New Credential dialog (lane AG-8b).
+- **Log File Viewer**: master/detail (runs grid, the selected run's steps below, details pane); no tree mode in `GridView`.
+- **Local live checks**: the owner sets the local MSSQLSERVER's Agent to Automatic, so `VARIA_TEST_SQL_AGENT=1` checks
+  (CmdExec, PowerShell and SSIS steps included) run locally; tests never start or stop the service themselves.
+- **Write path**: Agent writes run inside ActionService, templates in `AgentSql` with a lint chained from `ActionSql.Lint`.
+- **Scope cut if 0.10.0 runs long**: must ship AG-0 to AG-6c; may slip AG-7 (operators and alerts dialogs), AG-8a
+  (proxies read-only, Agent Properties) and AG-8b (proxy and credential dialogs). Operators, alerts and proxies stay
+  listable and scriptable from AG-1 and AG-4.
 
 ## What exists today
 
@@ -44,7 +64,7 @@ Agent's ownership filtering exactly as SSMS shows it. Direct table reads are an 
 
 | Server | Agent node | Notes |
 | --- | --- | --- |
-| SQL Server 2016-2025, Windows (EngineEdition 1-3) | Shown | Full feature set. Start/Stop only here (see open question Q2). |
+| SQL Server 2016-2025, Windows (EngineEdition 1-3) | Shown | Full feature set. Start/Stop/Restart only here. |
 | SQL Server on Linux | Shown | Agent must be enabled (`mssql-conf set sqlagent.enabled true` or `MSSQL_AGENT_ENABLED=true`). Step types from `syssubsystems` (no CmdExec, PowerShell, SSIS). No service control from T-SQL. |
 | Express (EngineEdition 4) | Hidden | No Agent service; SSMS hides the node too. |
 | Azure SQL Managed Instance (8) | Shown | Agent always runs and cannot be stopped; no Start/Stop/Restart. Subsystems from `syssubsystems`; notifications by Database Mail only. Verify proxies and error-log reads on MI during AG-1. |
@@ -198,11 +218,11 @@ Database Mail logs, which SSMS also shows there).
 | Job categories | Category picker | Manage Job Categories dialog |
 | Operators | List, New / Properties (General: name, enabled, e-mail, pager and schedule; Notifications: alerts and jobs; History), Enable/Disable, Rename, Delete, Script As | |
 | Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text, performance condition; Response: run job, notify operators; Options: include text, delay), Enable/Disable, Delete, Script As | WMI event alerts (Windows only, shown read-only) |
-| Proxies | List by subsystem, Properties read-only, Delete, Script As | New / edit Proxy (needs a New Credential dialog, which Varia does not have yet) |
-| Credentials | (existing Credentials folder) | New Credential dialog, prerequisite for proxies |
+| Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References), Delete, Script As | |
+| Credentials | New Credential (name, identity, secret, encryption provider) and Properties, its secret handled as New Login's password (secret slot only, one parameter, scrubbed, scripted as `<secret>`) | |
 | Error logs | List, view in Log File Viewer, Recycle (`sp_cycle_agent_errorlog`) | Configure (log path, level) via Agent Properties |
 | SQL Server Agent Properties | General (auto restart), History (max rows, per job, remove older than) | Advanced, Alert System (mail profile), Job System, Connection |
-| Agent service | State and chips | Start / Stop / Restart (Q2) |
+| Agent service | State and chips; Start / Stop / Restart (`xp_servicecontrol`, sysadmin, Windows) | |
 | Database Mail | Read whether it is set up (`Database Mail XPs`, `sysmail_profile`) and warn on e-mail notifications when it is not | Database Mail configuration wizard and Database Mail log |
 | Multi-server (MSX/TSX) | Targets page shows local only | Multi-server administration |
 | Script Action to Job | | The "Agent Job…" Script As destination and dialogs' "Script Action to Job" |
@@ -224,8 +244,8 @@ Agent adds no new DDL path; it extends two existing ones.
   transaction. Live checks prove that hostile names (`]`, `'`, `--`, Unicode, 128-character names) round-trip and that
   Script Action equals what runs. Why ActionService and not an `AgentActionService` like SSIS: SSIS needs an SSISDB
   connection of its own, while msdb procedures run from master with three-part names, and Agent's verbs are ordinary
-  object actions (dialogs, Delete Object, Rename, Script Action) that ActionService already owns. (Q3)
-- **Service control** (if Q2 is yes): `master.dbo.xp_servicecontrol N'Start'|N'Stop', N'SQLServerAgent'` as constant
+  object actions (dialogs, Delete Object, Rename, Script Action) that ActionService already owns.
+- **Service control**: `master.dbo.xp_servicecontrol N'Start'|N'Stop', N'SQLServerAgent'` as constant
   text, sysadmin and Windows box servers only, through ActionService with a confirmation.
 - **Script As**: SMO through `ScriptPipeline` (`JobServer` URNs), never executing, `HeaderGuard` applied.
 - Never log job, step, schedule, operator or alert names, commands, messages or SQL.
@@ -247,7 +267,7 @@ explorer catalogue; verbs and dialogs in the actions catalogue; live sources in 
   offline lint and script tests in CI and by live checks on the owner's Windows server.
 - **`VARIA_TEST_SQL_AGENT=1`** (new, docs/testing.md): Agent live suites require a running Agent and fail if it is not
   running; without the variable they skip with one line saying why. Tests never start or stop the service, except an
-  opt-in `VARIA_TEST_SQL_AGENT_SERVICE=1` check of service control (Q2).
+  opt-in `VARIA_TEST_SQL_AGENT_SERVICE=1` check of service control on a disposable server.
 - **Scratch objects**: Agent objects are server-level, in msdb. Every job, schedule, operator, alert and category a
   check makes is named `VariaScratch_<run>_…`, created under a `VariaScratch` job category, dropped in `finally`, and
   swept by name prefix and age (`ScratchAgent.cs`, beside `ScratchDatabase.cs`). Checks never read, change or count
@@ -279,31 +299,20 @@ work, M, L).
 | AG-6b | Steps page and step dialog (T-SQL with editor features and Parse, CmdExec, PowerShell, SSIS basics, Advanced) | AG-6a | L |
 | AG-6c | Schedules: `schedule.ts` encoding + Description sentences, schedule dialog, Pick, Manage Schedules | AG-6a | M |
 | AG-7 | Operators and Alerts: dialogs, Enable/Disable, Delete; Database Mail readiness warning | AG-1, AG-6a (shared dialog parts) | M |
-| AG-8 | Proxies read-only + Delete; SQL Server Agent Properties (General, History) | AG-1 | S |
+| AG-8a | SQL Server Agent Properties (General, History); Agent service Start / Stop / Restart | AG-1 | S |
+| AG-8b | Proxies: New / Properties (General, Principals, References), Delete; New Credential and Credential Properties (secret slot as New Login) | AG-1, AG-6a | M |
 | AG-9 | Getting Started guide and sample, README, CHANGELOG pass, parity re-check of the Agent rows | all | S |
-| Later | Agent service Start/Stop/Restart (if Q2 defers it), New Proxy + New Credential, Manage Job Categories, multi-server targets, Script Action to Job, Activity Monitor job links, SQL Server Logs and Database Mail in the Log File Viewer, Agent Properties' remaining pages, Elastic Jobs | | |
+| Later | Manage Job Categories, multi-server targets, Script Action to Job, Activity Monitor job links, SQL Server Logs and Database Mail in the Log File Viewer, Agent Properties' remaining pages, Elastic Jobs | | |
 
-Suggested waves: AG-0 → AG-1 → {AG-2, AG-4, AG-5, AG-8} → {AG-3, AG-6a} → {AG-6b, AG-6c, AG-7} → AG-9. Lanes that touch
-the Agent tree menus or the actions catalogue (AG-2, AG-6a, AG-7, AG-8) merge main in after each lands, as the Activity
+Suggested waves: AG-0 → AG-1 → {AG-2, AG-4, AG-5, AG-8a} → {AG-3, AG-6a} → {AG-6b, AG-6c, AG-7, AG-8b} → AG-9. Lanes that
+touch the Agent tree menus or the actions catalogue (AG-2, AG-6a, AG-7, AG-8a, AG-8b) merge main in after each lands, as the Activity
 Monitor lanes did.
 
 Coordination with BigQuery: AG-1 and BQ-5 both extend `src/shared/explorer/catalog.ts` and its generated
 docs/object-explorer.md and `explorer-catalog.json`. Land AG-1 before BQ-5 starts, or rebase whichever is second; neither
 needs the other. BQ-0's `providers` default covers Agent's entries whichever lands first.
 
-## Open questions for the owner
+## Questions still open
 
-- **Q1. Where the plan lives.** This docs page (as docs/bigquery-plan.md) or a planning artifact? Recommended: this page.
-- **Q2. Agent service Start/Stop/Restart.** SSMS uses the Windows service manager on the server's machine, which a
-  cross-platform client cannot reach. Options: (a) `xp_servicecontrol` (undocumented but long-standing, sysadmin, Windows
-  servers only) in 0.10.0; (b) show state only in 0.10.0, defer control. Linux and Managed Instance never get control.
-  Recommended: (a), behind a confirmation, hidden where it cannot work.
-- **Q3. Write path.** Agent writes inside ActionService (recommended, above) or their own `AgentActionService` like SSIS.
-- **Q4. Proxies and credentials scope.** Read-only + Delete in 0.10.0 with New/Edit Proxy and New Credential later
-  (recommended), or the full proxy and credential dialogs in 0.10.0 (+1 M lane).
-- **Q5. Log File Viewer layout.** Master/detail (runs grid, steps grid below; recommended, no grid tree mode) or SSMS's
-  expandable run rows (needs a tree mode in `GridView`).
-- **Q6. Local live checks.** The local MSSQLSERVER's Agent is Stopped/Manual. Set it to Automatic (recommended) so
-  `VARIA_TEST_SQL_AGENT=1` checks run locally, or keep Agent checks CI-only.
-- **Q7. Release scope cut.** If 0.10.0 runs long, which lanes may slip? Recommended must-ship: AG-0 to AG-6c; may slip:
-  AG-7, AG-8 (Operators/Alerts/Proxies stay listable and scriptable from AG-1/AG-4).
+None blocking. Lanes raise new questions in their PRs; verify on Managed Instance during AG-1 which proxy and error-log
+reads it allows, and record the answer in docs/sql-server-agent.md.

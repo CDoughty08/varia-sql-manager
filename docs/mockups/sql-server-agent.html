@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Varia · SQL Server Agent mocks (0.10.0 plan)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Mocks for docs/agent-plan.md: every new or changed UI surface of SQL Server Agent support. Colours are Varia's built-in
+  Dark and Light palette slots (src/shared/theme/palette.ts), sizes the Compact metrics (src/shared/theme/metrics.ts). Static,
+  self-contained, fictional data; no network. Not product code: the renderer still takes colours only from the theme.
+-->
+<style>
+:root { color-scheme: dark }
+body { margin: 0; padding: 16px; background: #0b0c0f; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 20px; color: #d9dce3 }
+body.light { background: #e9ebef; color: #1c1f26; color-scheme: light }
+.dark-vars, body { --canvas:#16181d; --panel:#16181d; --side:#111317; --chrome:#111317; --raised:#1c1f25; --overlay:#1d2026; --input:#101216; --accentSurface:#232842; --hover:#262a32; --active:#30343e; --sel:#21273b; --selStrong:#29314f; --text:#d9dce3; --strong:#f5f6f8; --text2:#bcc1cb; --text3:#a3a9b5; --muted:#9298a4; --textAccent:#bcc5ff; --border:#262a31; --borderSubtle:#1f2228; --borderStrong:#2e323a; --sep:#30343c; --control:#6b7286; --inputBorder:#6a7184; --accent:#8f9cff; --accentHover:#a8b2ff; --onAccent:#0e1230; --error:#f39a9a; --warning:#e4bb6a; --success:#74d19c; --errorSurface:#3a1d22; --errorSurfaceText:#f6bcc1; --warningSurface:#33291a; --warningSurfaceText:#f0d49e; --icon:#a3a9b5; --iconMuted:#7f8694; --iconFolder:#bfa878; --scrim:#0008 }
+body.light { --canvas:#ffffff; --panel:#ffffff; --side:#f7f8fa; --chrome:#f7f8fa; --raised:#f1f3f6; --overlay:#ffffff; --input:#ffffff; --accentSurface:#dde1f9; --hover:#dfe2e7; --active:#d6dae0; --sel:#e7ebfc; --selStrong:#d9e0fb; --text:#1c1f26; --strong:#0a0c10; --text2:#3a404b; --text3:#4d5461; --muted:#5c6370; --textAccent:#3240b0; --border:#e3e6eb; --borderSubtle:#eceef2; --borderStrong:#d4d8df; --sep:#dcdfe5; --control:#878e9b; --inputBorder:#878e9b; --accent:#4453d0; --accentHover:#3744b8; --onAccent:#ffffff; --error:#b42229; --warning:#875800; --success:#146f3b; --errorSurface:#fdecec; --errorSurfaceText:#8f1d24; --warningSurface:#fff5dc; --warningSurfaceText:#6b4400; --icon:#4d5461; --iconMuted:#6b7280; --iconFolder:#7d6532; --scrim:#1c1f2640 }
+* { box-sizing: border-box }
+button, input, select, textarea { font: inherit; color: inherit }
+.mono { font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; font-size: 12px }
+
+/* Picker above the window */
+.pick { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px }
+.pick label { font-size: 12px; color: var(--text3) }
+.pick select { background: var(--input); border: 1px solid var(--inputBorder); border-radius: 4px; height: 26px; padding: 0 6px }
+.pick .note { font-size: 12px; color: var(--muted); flex-basis: 100%; }
+
+/* Window */
+.win { position: relative; height: 820px; min-width: 1100px; display: grid; grid-template-rows: 40px 1fr 24px; background: var(--canvas); border: 1px solid var(--border); border-radius: 8px; overflow: hidden }
+.title { display: flex; align-items: center; gap: 4px; background: var(--chrome); border-bottom: 1px solid var(--border); padding: 0 10px; font-size: 13px }
+.title .brand { color: var(--accent); margin-right: 8px; display: flex }
+.title .m { padding: 2px 8px; border-radius: 4px; color: var(--text) }
+.title .search { margin: 0 auto; width: 440px; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--input); color: var(--muted); font-size: 12px }
+.title .search kbd { margin-left: auto }
+kbd { font: inherit; font-size: 11px; border: 1px solid var(--sep); border-radius: 3px; padding: 0 4px; line-height: 16px; color: var(--text3) }
+.body { display: grid; grid-template-columns: 360px 1fr; min-height: 0 }
+.status { display: flex; align-items: center; gap: 14px; background: var(--chrome); border-top: 1px solid var(--border); padding: 0 10px; font-size: 11px; color: var(--text3) }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 6px }
+.status.running { background: var(--accentSurface) }
+
+/* Object Explorer */
+.oe { background: var(--side); border-right: 1px solid var(--borderStrong); display: flex; flex-direction: column; min-height: 0 }
+.oe-head { height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--text2); border-bottom: 1px solid var(--border) }
+.oe-head .t { font-weight: 600; margin-right: auto }
+.oe-search { margin: 6px 8px; height: 26px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); color: var(--muted); display: flex; align-items: center; gap: 6px; padding: 0 6px; font-size: 12px }
+.tree { flex: 1; overflow: auto; padding-bottom: 8px; position: relative }
+.row { height: 22px; display: flex; align-items: center; gap: 4px; padding-right: 8px; white-space: nowrap; font-size: 13px; cursor: default; position: relative }
+.row:hover { background: var(--hover) }
+.row.sel { background: var(--selStrong) }
+.row .chev { width: 16px; display: flex; justify-content: center; color: var(--iconMuted) }
+.row .ic { width: 16px; height: 16px; display: flex; position: relative; color: var(--icon) }
+.row .ic.folder { color: var(--iconFolder) }
+.row .badge { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--side); display: flex; align-items: center; justify-content: center }
+.row .sub { color: var(--muted); font-size: 12px; margin-left: 4px; overflow: hidden; text-overflow: ellipsis }
+.row.dim .lbl { color: var(--muted) }
+.row.server { height: 30px; font-weight: 600 }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 16px; font-weight: 400; margin-left: 6px; border: 1px solid transparent }
+.chip.running { color: var(--textAccent); background: var(--sel); border-color: var(--selStrong) }
+.chip.warn { color: var(--warningSurfaceText); background: var(--warningSurface) }
+.chip.err { color: var(--errorSurfaceText); background: var(--errorSurface) }
+.chip.ok { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent) }
+.chip.muted { color: var(--muted); background: var(--raised) }
+.oe-foot { border-top: 1px solid var(--border); padding: 4px 10px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between }
+.explain { margin: 8px; padding: 8px; border-radius: 4px; background: var(--raised); color: var(--text3); font-size: 12px; line-height: 17px; white-space: normal }
+
+/* Menus */
+.menu { position: absolute; z-index: 20; min-width: 236px; background: var(--overlay); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 12px #0006; padding: 4px 0; font-size: 12px }
+.menu .mi { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px 0 8px; color: var(--text) }
+.menu .mi:hover, .menu .mi.hl { background: var(--active) }
+.menu .mi .k { margin-left: auto; color: var(--muted); font-size: 11px }
+.menu .mi.dis { color: var(--muted) }
+.menu .mi .g { width: 16px; display: flex; color: var(--icon) }
+.menu hr { border: 0; border-top: 1px solid var(--sep); margin: 4px 0 }
+
+/* Document area */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+.doctabs { height: 44px; display: flex; align-items: stretch; background: var(--chrome); border-bottom: 1px solid var(--border) }
+.doctab { display: flex; flex-direction: column; justify-content: center; padding: 0 14px 0 12px; border-right: 1px solid var(--border); font-size: 13px; min-width: 150px; color: var(--muted) }
+.doctab .s { font-size: 11px; color: var(--muted); line-height: 14px }
+.doctab.on { background: var(--canvas); color: var(--strong); box-shadow: inset 0 2px 0 var(--accent) }
+.doctab .r { display: flex; align-items: center; gap: 6px }
+.toolbar { height: 36px; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--canvas); font-size: 12px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap }
+.tb { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 4px; border: 1px solid transparent; background: transparent; color: var(--text2); cursor: default; white-space: nowrap }
+.tb:hover { background: var(--hover) }
+.tb.dis { color: var(--muted); opacity: .6 }
+.tb.primary { background: var(--accent); color: var(--onAccent) }
+.tb.outline { border-color: var(--control) }
+.vsep { width: 1px; height: 18px; background: var(--sep); margin: 0 4px }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; height: 26px }
+.seg span { padding: 0 9px; display: flex; align-items: center; gap: 5px; color: var(--text2); font-size: 12px; border-right: 1px solid var(--border) }
+.seg span:last-child { border-right: 0 }
+.seg span.on { background: var(--selStrong); color: var(--textAccent) }
+.seg .n { color: var(--muted); font-size: 11px }
+.filterbox { height: 26px; width: 220px; display: flex; align-items: center; gap: 6px; padding: 0 6px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); color: var(--muted) }
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--text3); font-size: 11px }
+.live .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--success) }
+
+/* Tiles */
+.tiles { display: flex; gap: 8px; padding: 10px 10px 4px }
+.tile { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: var(--canvas) }
+.tile .l { font-size: 11px; color: var(--text3) }
+.tile .v { font-size: 20px; line-height: 26px; color: var(--strong) }
+.tile .v.err { color: var(--error) } .tile .v.acc { color: var(--accent) } .tile .v.warn { color: var(--warning) }
+.tile .d { font-size: 11px; color: var(--muted) }
+
+/* Grids (LiveGrid / GridView look) */
+.gridwrap { flex: 1; min-height: 0; overflow: auto; position: relative }
+table.g { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px }
+table.g th { position: sticky; top: 0; z-index: 1; height: 24px; text-align: left; font-weight: 400; font-size: 11px; color: var(--text3); background: var(--panel); border-bottom: 1px solid var(--border); border-right: 1px solid var(--borderSubtle); padding: 0 8px; white-space: nowrap }
+table.g th .fn { color: var(--iconMuted); margin-left: 4px; vertical-align: -2px }
+table.g td { height: 22px; padding: 0 8px; border-bottom: 1px solid var(--borderSubtle); border-right: 1px solid var(--borderSubtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px }
+table.g td.num { text-align: right; color: var(--muted); width: 34px; background: var(--panel) }
+table.g tr.sel td { background: var(--selStrong) }
+table.g tr.tone-error td.t { color: var(--error) }
+table.g tr.tone-warning td.t { color: var(--warning) }
+table.g tr.tone-muted td { color: var(--muted) }
+table.g tr.tone-running td.t { color: var(--textAccent) }
+table.g td .pill { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif }
+.pill.ok { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent) }
+.pill.err { color: var(--errorSurfaceText); background: var(--errorSurface) }
+.pill.warn { color: var(--warningSurfaceText); background: var(--warningSurface) }
+.pill.run { color: var(--textAccent); background: var(--sel) }
+.pill.mut { color: var(--muted); background: var(--raised) }
+.bar { height: 4px; width: 70px; background: var(--raised); border-radius: 2px; display: inline-block; vertical-align: middle; margin-right: 6px; overflow: hidden }
+.bar i { display: block; height: 100%; background: var(--accent) }
+.panehead { height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 11px; color: var(--text3); background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border) }
+.panehead b { color: var(--text2); font-weight: 600 }
+.panehead .r { margin-left: auto; display: flex; gap: 8px; align-items: center }
+.detail { padding: 8px 12px; font-size: 12px; line-height: 18px; overflow: auto; user-select: text }
+.detail dl { display: grid; grid-template-columns: 130px 1fr; gap: 2px 12px; margin: 0 0 8px }
+.detail dt { color: var(--text3) } .detail dd { margin: 0 }
+.detail pre { margin: 0; white-space: pre-wrap; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--text) }
+.trunc { padding: 4px 10px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--borderSubtle) }
+
+/* Log File Viewer */
+.lfv { display: grid; grid-template-columns: 250px 1fr; flex: 1; min-height: 0 }
+.sources { border-right: 1px solid var(--border); background: var(--side); overflow: auto; font-size: 12px; padding: 6px 0 }
+.sources .cap { padding: 4px 10px; font-size: 11px; font-weight: 600; color: var(--text3) }
+.sources .src { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; white-space: nowrap }
+.sources .src.i1 { padding-left: 26px } .sources .src.i2 { padding-left: 42px }
+.cb { width: 14px; height: 14px; border: 1px solid var(--inputBorder); border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; background: var(--input); flex: none }
+.cb.on { background: var(--accent); border-color: var(--accent); color: var(--onAccent) }
+.cb.part::after { content: ""; width: 7px; height: 2px; background: var(--accent) }
+.lfv-right { display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+.split-top { flex: 1.3; min-height: 0; display: flex; flex-direction: column }
+.split-mid { flex: 1; min-height: 0; display: flex; flex-direction: column }
+.split-bot { flex: .8; min-height: 0; display: flex; flex-direction: column }
+
+/* Editor placeholder behind dialogs */
+.editor { flex: 1; padding: 10px 0; font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; color: var(--muted) }
+.editor .ln { display: flex; gap: 20px; padding: 0 16px } .editor .ln span:first-child { width: 14px; text-align: right; color: var(--iconMuted) }
+
+/* Dialogs (ObjectDialog frame) */
+.scrim { position: absolute; inset: 40px 0 24px 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; z-index: 30 }
+.dlg { width: 880px; height: 640px; background: var(--overlay); border: 1px solid var(--control); border-radius: 8px; box-shadow: 0 16px 48px #0008; display: flex; flex-direction: column; overflow: hidden }
+.dlg.small { width: 560px; height: auto }
+.dlg.mid { width: 760px; height: 600px }
+.dlg-title { height: 40px; display: flex; align-items: center; padding: 0 14px; font-size: 15px; font-weight: 600; color: var(--strong) }
+.dlg-title .x { margin-left: auto; color: var(--iconMuted) }
+.dlg-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--sep) }
+.dlg-side { flex: 0 0 200px; display: flex; flex-direction: column; border-right: 1px solid var(--sep) }
+.cap2 { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text3) }
+.pages { flex: 1; overflow: auto }
+.pg { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; font-size: 13px; color: var(--text2); cursor: pointer; border-left: 2px solid transparent }
+.pg:hover { background: var(--hover) }
+.pg.on { background: var(--selStrong); color: var(--textAccent); border-left-color: var(--accent) }
+.box { border-top: 1px solid var(--sep); padding-bottom: 8px; font-size: 11px; color: var(--text3) }
+.box .v { padding: 0 10px; line-height: 16px; color: var(--text2) }
+.dlg-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+.dlg-tools { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--sep) }
+.btn { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--control); border-radius: 4px; background: transparent; color: var(--text2); font-size: 12px; cursor: default; white-space: nowrap }
+.btn:hover { background: var(--hover) }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--onAccent) }
+.btn.dis { opacity: .45 }
+.btn.split { border-top-right-radius: 0; border-bottom-right-radius: 0 }
+.btn.arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 0 4px }
+.btn.danger { background: var(--error); border-color: var(--error); color: var(--onAccent) }
+.dlg-page { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px 14px }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--sep) }
+.dlg-foot .left { margin-right: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted) }
+.form { display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px; align-items: center; font-size: 13px }
+.form .full { grid-column: 1 / -1 }
+.form label { color: var(--text2) }
+.inp { height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); color: var(--text); font-size: 13px; min-width: 0 }
+.inp.ro { background: transparent; border-color: var(--border); color: var(--text3) }
+.inp.sel::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.5px solid var(--iconMuted); border-bottom: 1.5px solid var(--iconMuted); transform: rotate(45deg) translateY(-2px) }
+.inp.area { height: 64px; align-items: flex-start; padding-top: 4px }
+.inp.dis { opacity: .55 }
+.inp.short { width: 90px } .inp.mid { width: 200px }
+.hstack { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.chk { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text) }
+.radio { width: 14px; height: 14px; border: 1px solid var(--inputBorder); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--input); flex: none }
+.radio.on::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent) }
+fieldset { border: 1px solid var(--border); border-radius: 4px; margin: 12px 0 0; padding: 8px 12px 12px }
+legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px }
+.note { display: flex; gap: 6px; align-items: flex-start; margin: 10px 0 0; padding: 6px 8px; border-radius: 4px; background: var(--sel); color: var(--textAccent); font-size: 12px; line-height: 18px }
+.warnnote { display: flex; gap: 6px; align-items: flex-start; margin: 10px 0 0; padding: 6px 8px; border-radius: 4px; background: var(--warningSurface); color: var(--warningSurfaceText); font-size: 12px; line-height: 18px }
+.errnote { display: flex; gap: 6px; align-items: flex-start; margin: 8px 10px 0; padding: 6px 8px; border-radius: 4px; background: var(--errorSurface); color: var(--errorSurfaceText); font-size: 12px; line-height: 18px }
+.desc { padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--raised); color: var(--text); font-size: 12px; line-height: 18px }
+.dtable { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; border: 1px solid var(--border) }
+.dtable th { text-align: left; font-weight: 400; font-size: 11px; color: var(--text3); height: 24px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--raised) }
+.dtable td { height: 22px; padding: 0 8px; border-bottom: 1px solid var(--borderSubtle) }
+.dtable tr.sel td { background: var(--selStrong) }
+.btnrow { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap }
+.code { border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--canvas); font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; line-height: 19px; padding: 6px 0; min-height: 190px }
+.code div { padding: 0 10px; white-space: pre } .code .k { color: var(--accent) } .code .s { color: #d8bf5e } body.light .code .s { color: #8f6b00 } .code .c { color: var(--muted); font-style: italic } .code .n { color: var(--iconMuted); display: inline-block; width: 22px }
+.tabs2 { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: -4px 0 10px }
+.tabs2 span { padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent }
+.tabs2 span.on { color: var(--strong); border-bottom-color: var(--accent) }
+.days { display: flex; gap: 4px }
+.days span { width: 34px; height: 26px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: var(--text2) }
+.days span.on { background: var(--selStrong); color: var(--textAccent); border-color: var(--accent) }
+.legendbar { margin: 10px 0 0; font-size: 11px; color: var(--muted) }
+.callout { position: absolute; z-index: 40; max-width: 260px; padding: 6px 8px; border-radius: 4px; border: 1px dashed var(--accent); background: color-mix(in srgb, var(--overlay) 92%, transparent); color: var(--textAccent); font-size: 11px; line-height: 15px; pointer-events: none }
+.hidden { display: none !important }
+.legend-top { font-size: 12px; color: var(--muted); margin: 12px 0 0; max-width: 1100px; line-height: 18px }
+</style>
+</head>
+<body>
+<div class="pick">
+  <label for="scene">Surface</label>
+  <select id="scene">
+    <optgroup label="Object Explorer">
+      <option value="oe">Agent node (sysadmin, running)</option>
+      <option value="oe-stopped">Agent stopped, Start confirmation</option>
+      <option value="oe-menu-job">Job context menu</option>
+      <option value="oe-user">SQLAgentUserRole login</option>
+      <option value="oe-mi">Managed Instance / Linux</option>
+      <option value="oe-noaccess">No Agent access</option>
+    </optgroup>
+    <optgroup label="Documents">
+      <option value="jam">Job Activity Monitor</option>
+      <option value="lfv">Log File Viewer · job history</option>
+      <option value="lfv-log">Log File Viewer · Agent error log</option>
+    </optgroup>
+    <optgroup label="Job dialog">
+      <option value="job-general">Job Properties · General</option>
+      <option value="job-steps">Job Properties · Steps</option>
+      <option value="job-schedules">Job Properties · Schedules</option>
+      <option value="job-alerts">Job Properties · Alerts</option>
+      <option value="job-notifications">Job Properties · Notifications</option>
+      <option value="job-targets">Job Properties · Targets</option>
+      <option value="step-general">Job Step · General (T-SQL)</option>
+      <option value="step-ps">Job Step · General (PowerShell, proxy)</option>
+      <option value="step-ssis">Job Step · General (SSIS package)</option>
+      <option value="step-advanced">Job Step · Advanced</option>
+      <option value="schedule">Job Schedule</option>
+      <option value="manage-schedules">Manage Schedules</option>
+    </optgroup>
+    <optgroup label="Verbs">
+      <option value="start-step">Start Job at Step</option>
+      <option value="delete-job">Delete Object (job)</option>
+      <option value="running-status">Running job in the status bar</option>
+    </optgroup>
+    <optgroup label="Alerts, operators, proxies">
+      <option value="operator">Operator Properties</option>
+      <option value="alert">Alert Properties · General</option>
+      <option value="alert-response">Alert Properties · Response</option>
+      <option value="proxy">Proxy Properties</option>
+      <option value="credential">New Credential</option>
+      <option value="agent-props">SQL Server Agent Properties · History</option>
+    </optgroup>
+  </select>
+  <label for="theme">Theme</label>
+  <select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select>
+  <label><input type="checkbox" id="notes" checked> Design notes</label>
+  <span class="note">Fictional data. Dashed boxes are design notes, not UI. Names, menus and pages follow SSMS 22; visuals follow Calm Pro (graphite neutrals, one iris accent, Compact density).</span>
+</div>
+
+<div class="win" id="win">
+  <div class="title">
+    <span class="brand" data-i="brand"></span>
+    <span class="m">File</span><span class="m">Edit</span><span class="m">View</span><span class="m">Query</span><span class="m">Tools</span><span class="m">Window</span><span class="m">Help</span>
+    <div class="search"><span data-i="search"></span>Search commands, queries and objects<kbd>Ctrl+Q</kbd></div>
+  </div>
+  <div class="body">
+    <aside class="oe">
+      <div class="oe-head"><span class="t">Object Explorer</span><span data-i="plug"></span><span data-i="filter"></span><span data-i="refresh"></span><span data-i="more"></span></div>
+      <div class="oe-search"><span data-i="search"></span>Search objects</div>
+      <div class="tree" id="tree"></div>
+      <div class="oe-foot"><span id="oefoot">sql-prod-01 · Updated 2 s ago</span><span>1 connected server</span></div>
+    </aside>
+    <main class="main" id="main"></main>
+  </div>
+  <div class="status" id="status"><span><span class="dot"></span>Ready</span><span>Connected. sql-prod-01 (16.0)</span><span>CONTOSO\dana</span><span>master</span><span style="margin-left:auto">Ln 1 · Col 1</span><span>UTF-8</span></div>
+  <div id="overlay"></div>
+</div>
+<p class="legend-top">Each surface maps to a lane in docs/agent-plan.md: Object Explorer AG-1, verbs AG-2, Job Activity Monitor AG-3, Script As AG-4, Log File Viewer AG-5, job dialog AG-6a–c, operators and alerts AG-7, proxies, credentials and Agent properties AG-8.</p>
+
+<script>
+// Icons: simple codicon-like strokes, drawn here only for the mock.
+const P = {
+  brand: '<path d="M3 3h10v10H3z" fill="none"/><path d="M5.5 6l2.5 5 2.5-5"/>',
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>',
+  plug: '<path d="M6 2v3M10 2v3M4 5h8v3a4 4 0 01-8 0zM8 12v2"/>',
+  filter: '<path d="M2 3h12L9.5 8.5V13l-3-1.5v-3z"/>',
+  refresh: '<path d="M13 8a5 5 0 11-1.5-3.5M13 2v3h-3"/>',
+  more: '<circle cx="3.5" cy="8" r=".8"/><circle cx="8" cy="8" r=".8"/><circle cx="12.5" cy="8" r=".8"/>',
+  chevR: '<path d="M6 4l4 4-4 4"/>', chevD: '<path d="M4 6l4 4 4-4"/>',
+  server: '<rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.8h.5M5 11.3h.5"/>',
+  folder: '<path d="M1.5 4.5v8h13v-7H7.5L6 4H1.5z"/>',
+  agent: '<rect x="3" y="2.5" width="10" height="11" rx="2"/><circle cx="6.2" cy="7" r=".9"/><circle cx="9.8" cy="7" r=".9"/><path d="M6 10.5h4M8 1v1.5"/>',
+  job: '<circle cx="8" cy="8" r="5.5"/><path d="M7.5 4.5v4h3"/>',
+  monitor: '<rect x="1.5" y="2.5" width="13" height="9" rx="1"/><path d="M5 14h6M3.5 9l2.5-2.5 2 2 4-4"/>',
+  alert: '<path d="M8 2a4 4 0 014 4v3l1.5 2.5h-11L4 9V6a4 4 0 014-4zM6.5 13.5a1.5 1.5 0 003 0"/>',
+  person: '<circle cx="8" cy="5" r="2.8"/><path d="M2.5 14a5.5 5.5 0 0111 0"/>',
+  shield: '<path d="M8 1.5l5.5 2v4c0 3.5-2.5 6-5.5 7-3-1-5.5-3.5-5.5-7v-4z"/>',
+  log: '<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3"/>',
+  play: '<path d="M5 3l8 5-8 5z"/>', stop: '<rect x="4" y="4" width="8" height="8" rx="1"/>',
+  check: '<path d="M3 8.5l3 3 7-7"/>', x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  down: '<path d="M8 3v10M4 9l4 4 4-4"/>', up: '<path d="M8 13V3M4 7l4-4 4 4"/>',
+  err: '<circle cx="8" cy="8" r="6"/><path d="M8 4.5v4.5M8 11v.5"/>', warn: '<path d="M8 2l6.5 12h-13z"/><path d="M8 6.5v3.5M8 12v.3"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7v4.5M8 4.8v.3"/>',
+  code: '<path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4"/>', history: '<path d="M2.5 8a5.5 5.5 0 105.5-5.5A5.6 5.6 0 003.5 5M3 2v3h3M8 5v3.5l2.5 1.5"/>',
+  edit: '<path d="M10.5 2.5l3 3L6 13H3v-3z"/>', trash: '<path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5l.7 9h5.6l.7-9"/>',
+  plus: '<path d="M8 3v10M3 8h10"/>', calendar: '<rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6.5h12M5 1.5v3M11 1.5v3"/>',
+  key: '<circle cx="5" cy="8" r="3"/><path d="M8 8h6M12 8v2.5M10 8v1.5"/>', file: '<path d="M3.5 1.5h6l3 3v10h-9z"/>',
+  dot: '<circle cx="8" cy="8" r="3" fill="currentColor"/>', copy: '<rect x="5" y="5" width="8.5" height="8.5" rx="1"/><path d="M3 10.5V2.5h8"/>',
+  save: '<path d="M2.5 2.5h9l2 2v9h-11z"/><path d="M5 2.5v3.5h5V2.5M5 13.5v-4h6v4"/>', pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+  arrowDown: '<path d="M4 6l4 4 4-4"/>', disabledBadge: '<path d="M8 4v7M5 8.5L8 11.5 11 8.5"/>', noaccess: '<circle cx="8" cy="8" r="5.5"/><path d="M4.2 11.8l7.6-7.6"/>',
+  restart: '<path d="M3 8a5 5 0 109-3M12 2v3h-3"/>', props: '<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/><circle cx="5" cy="4" r="1.2" fill="currentColor"/><circle cx="10" cy="8" r="1.2" fill="currentColor"/><circle cx="7" cy="12" r="1.2" fill="currentColor"/>',
+  rename: '<path d="M2 12.5h5M10.5 2.5l3 3L8 11H5V8z"/>', link: '<path d="M7 9a3 3 0 004.2 0l2-2A3 3 0 009 2.8L8 3.8M9 7a3 3 0 00-4.2 0l-2 2A3 3 0 007 13.2l1-1"/>'
+}
+const ic = (n, size = 16, extra = '') => `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${P[n] || ''}</svg>`
+const fill = root => root.querySelectorAll('[data-i]').forEach(el => { el.innerHTML = ic(el.dataset.i, +(el.dataset.s || 16)); el.style.display = 'inline-flex' })
+
+// ---------- Object Explorer ----------
+function row(depth, o) {
+  const pad = 4 + depth * 16
+  const chev = o.leaf ? '' : ic(o.open ? 'chevD' : 'chevR')
+  const badge = o.badge ? `<span class="badge" style="color:${o.badgeColor || 'var(--iconMuted)'}">${ic(o.badge, 9)}</span>` : ''
+  const chips = (o.chips || []).map(c => `<span class="chip ${c[0]}">${c[2] ? ic(c[2], 12) : ''}${c[1]}</span>`).join('')
+  return `<div class="row ${o.cls || ''}" style="padding-left:${pad}px" ${o.id ? `id="${o.id}"` : ''}><span class="chev">${chev}</span><span class="ic ${o.folder ? 'folder' : ''}">${ic(o.icon)}${badge}</span><span class="lbl">${o.label}</span>${o.sub ? `<span class="sub">${o.sub}</span>` : ''}${chips}</div>`
+}
+function tree(mode) {
+  const out = []
+  const serverChips = mode === 'noaccess' ? [] : []
+  out.push(row(0, { icon: 'server', label: 'sql-prod-01', sub: '16.0 · CONTOSO\\' + (mode === 'user' ? 'report_svc' : 'dana'), open: true, cls: 'server', chips: serverChips }))
+  for (const f of ['Databases', 'Security', 'Server Objects', 'Replication', 'Always On High Availability', 'Management', 'Integration Services Catalogs']) {
+    if (mode === 'user' && !['Databases', 'Security'].includes(f)) continue
+    out.push(row(1, { icon: 'folder', folder: true, label: f }))
+  }
+  if (mode === 'express') return out.join('')
+  const running = mode !== 'stopped'
+  const agentChips = mode === 'stopped' ? [['warn', 'Stopped', 'pause']] : mode === 'noaccess' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
+  const agentSub = mode === 'stopped' ? 'Agent XPs disabled' : mode === 'mi' ? 'Managed Instance' : ''
+  const agentBadge = mode === 'stopped' ? 'disabledBadge' : mode === 'noaccess' ? 'noaccess' : ''
+  out.push(row(1, { icon: 'agent', label: 'SQL Server Agent', sub: agentSub, open: mode !== 'noaccess', badge: agentBadge, badgeColor: mode === 'stopped' ? 'var(--warning)' : 'var(--iconMuted)', chips: agentChips, id: 'agentRow', cls: mode === 'stopped' ? 'sel' : '' }))
+  if (mode === 'noaccess') {
+    out.push(`<div class="explain" style="margin-left:40px">${ic('noaccess', 12)} This login has no SQL Server Agent role in msdb. Ask a sysadmin for SQLAgentUserRole, SQLAgentReaderRole or SQLAgentOperatorRole.</div>`)
+    return out.join('')
+  }
+  out.push(row(2, { icon: 'folder', folder: true, label: 'Jobs', open: true }))
+  const jobs = mode === 'user'
+    ? [['Refresh reporting snapshot', '', 'job'], ['Export finance extract', 'running', 'job']]
+    : [['ETL – Load warehouse', 'failed'], ['Index maintenance', 'running'], ['Log backup – Sales', 'retry'], ['Nightly full backup – Sales', ''], ['Purge audit rows', ''], ['Refresh reporting snapshot', 'disabled'], ['syspolicy_purge_history', '']]
+  for (const [n, s] of jobs) {
+    out.push(row(3, { icon: 'job', label: n, leaf: true, badge: s === 'disabled' ? 'disabledBadge' : '', cls: (s === 'disabled' ? 'dim ' : '') + (mode === 'menu-job' && n === 'Index maintenance' ? 'sel' : ''), id: n === 'Index maintenance' ? 'jobRow' : '',
+      chips: s === 'running' ? [['running', 'Running · step 2/4', '']] : s === 'failed' ? [['err', 'Failed', '']] : s === 'retry' ? [['warn', 'Between retries', '']] : [] }))
+  }
+  out.push(row(2, { icon: 'monitor', label: 'Job Activity Monitor', leaf: true }))
+  if (mode === 'user') {
+    out.push(`<div class="explain" style="margin-left:40px">SQLAgentUserRole: only the login's own jobs, and only Jobs and Job Activity Monitor, as SSMS shows it. Alerts, Operators, Proxies and Error Logs are hidden; New Job's step types are T-SQL plus subsystems with a proxy granted to the login.</div>`)
+    return out.join('')
+  }
+  out.push(row(2, { icon: 'folder', folder: true, label: 'Alerts', open: true }))
+  for (const [n, d] of [['Severity 017 – Insufficient resources', 0], ['Severity 024 – Fatal hardware error', 0], ['Error 823 – I/O error', 0], ['Log file > 80% full', 1]]) out.push(row(3, { icon: 'alert', label: n, leaf: true, badge: d ? 'disabledBadge' : '', cls: d ? 'dim' : '' }))
+  out.push(row(2, { icon: 'folder', folder: true, label: 'Operators', open: true }))
+  for (const n of ['DBA team', 'On-call pager']) out.push(row(3, { icon: 'person', label: n, leaf: true }))
+  out.push(row(2, { icon: 'folder', folder: true, label: 'Proxies', open: mode !== 'mi' }))
+  if (mode !== 'mi') {
+    out.push(row(3, { icon: 'folder', folder: true, label: 'Operating System (CmdExec)' }))
+    out.push(row(3, { icon: 'folder', folder: true, label: 'PowerShell', open: true }))
+    out.push(row(4, { icon: 'shield', label: 'FileShareWriter', leaf: true }))
+    out.push(row(3, { icon: 'folder', folder: true, label: 'SSIS Package Execution' }))
+    out.push(row(3, { icon: 'folder', folder: true, label: 'Unassigned Proxies' }))
+  }
+  out.push(row(2, { icon: 'folder', folder: true, label: 'Error Logs', open: true }))
+  out.push(row(3, { icon: 'log', label: 'Current', sub: '15/11/2026 07:02', leaf: true }))
+  for (let i = 1; i <= 3; i++) out.push(row(3, { icon: 'log', label: 'Archive #' + i, sub: `${15 - i * 2}/11/2026 06:5${i}`, leaf: true }))
+  if (mode === 'mi') out.push(`<div class="explain" style="margin-left:40px">Managed Instance: Agent always runs, so Start, Stop and Restart are absent. Linux: the same, and step types come from msdb.dbo.syssubsystems (T-SQL plus replication). Express and Azure SQL Database show no Agent node.</div>`)
+  return out.join('')
+}
+
+// ---------- Documents ----------
+const jamRows = [
+  ['ETL – Load warehouse', 'Yes', 'Idle', 'err:Failed', '15/11/2026 02:30:00', '16/11/2026 02:30:00', 'Data Collector', 'error'],
+  ['Index maintenance', 'Yes', 'run:Executing · 2 Rebuild fragmented indexes', 'ok:Succeeded', '08/11/2026 03:00:00', '22/11/2026 03:00:00', 'Database Maintenance', 'running'],
+  ['Log backup – Sales', 'Yes', 'warn:Between retries (1 of 3)', 'err:Failed', '15/11/2026 14:15:00', '15/11/2026 14:30:00', 'Database Maintenance', 'warning'],
+  ['Nightly full backup – Sales', 'Yes', 'Idle', 'ok:Succeeded', '15/11/2026 01:00:00', '16/11/2026 01:00:00', 'Database Maintenance', ''],
+  ['Purge audit rows', 'Yes', 'Idle', 'ok:Succeeded', '14/11/2026 23:45:00', '15/11/2026 23:45:00', '[Uncategorized (Local)]', ''],
+  ['Refresh reporting snapshot', 'No', 'Idle', 'mut:Canceled', '01/11/2026 06:00:00', '', 'Report Server', 'muted'],
+  ['syspolicy_purge_history', 'Yes', 'Idle', 'ok:Succeeded', '15/11/2026 02:00:00', '16/11/2026 02:00:00', '[Uncategorized (Local)]', '']
+]
+const pill = v => { const [k, t] = v.includes(':') ? v.split(/:(.*)/s) : ['', v]; return k ? `<span class="pill ${k}">${t}</span>` : t }
+function jam(stopped) {
+  const rows = jamRows.map((r, i) => `<tr class="tone-${r[7]} ${i === 1 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="t">${r[0]}</td><td>${r[1]}</td><td>${stopped ? '<span class="pill warn">Agent stopped</span>' : pill(r[2])}</td><td>${pill(r[3])}</td><td class="mono">${r[4]}</td><td class="mono">${r[5] || '<span style="color:var(--muted)">Not scheduled</span>'}</td><td>${r[6]}</td></tr>`).join('')
+  return `
+  <div class="doctabs"><div class="doctab"><div class="r">${ic('file', 14)}SQLQuery1.sql</div><div class="s">sql-prod-01 · master</div></div><div class="doctab on"><div class="r">${ic('monitor', 14)}Job Activity Monitor</div><div class="s">sql-prod-01</div></div></div>
+  <div class="toolbar">
+    <span class="seg"><span class="on">All <span class="n">7</span></span><span>Running <span class="n">1</span></span><span>Failed <span class="n">2</span></span><span>Disabled <span class="n">1</span></span></span>
+    <div class="filterbox">${ic('search', 14)}Filter jobs</div>
+    <span class="vsep"></span>
+    <span class="tb">${ic('play', 14)}Start Job at Step…</span><span class="tb">${ic('stop', 14)}Stop Job</span><span class="tb">Enable</span><span class="tb">Disable</span><span class="tb">${ic('history', 14)}View History</span><span class="tb">${ic('props', 14)}Properties</span>
+    <span style="margin-left:auto" class="live"><span class="pulse"></span>Live · every 5 s</span><span class="tb">${ic('pause', 14)}</span><span class="tb">${ic('more', 14)}</span>
+  </div>
+  <div class="tiles">
+    <div class="tile"><div class="l">Running</div><div class="v acc">1</div><div class="d">Index maintenance · 12 min</div></div>
+    <div class="tile"><div class="l">Failed (24 h)</div><div class="v err">2</div><div class="d">ETL – Load warehouse, Log backup – Sales</div></div>
+    <div class="tile"><div class="l">Succeeded (24 h)</div><div class="v">14</div><div class="d">across 5 jobs</div></div>
+    <div class="tile"><div class="l">Next run</div><div class="v" style="font-size:15px">14:30:00</div><div class="d">Log backup – Sales · in 9 min</div></div>
+  </div>
+  ${stopped ? `<div class="errnote" style="background:var(--warningSurface);color:var(--warningSurfaceText)">${ic('warn', 14)}SQL Server Agent is not running, so no job starts on schedule. Last outcomes are from msdb. <b style="margin-left:6px">Start Agent…</b></div>` : ''}
+  <div class="gridwrap" style="margin-top:6px">
+    <table class="g"><thead><tr><th></th><th>Name ${ic('filter', 12, 'class="fn"')}</th><th>Enabled</th><th>Status ${ic('filter', 12, 'class="fn"')}</th><th>Last Run Outcome ${ic('filter', 12, 'class="fn"')}</th><th>Last Run</th><th>Next Run</th><th>Category ${ic('filter', 12, 'class="fn"')}</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>
+  <div class="panehead"><b>7 jobs</b><span>1 selected</span><span class="r">Read through msdb.dbo.sp_help_job, as SSMS shows it to this login</span></div>`
+}
+
+const runs = [
+  ['15/11/2026 14:15:00', 'Log backup – Sales', 'err:Failed', '00:00:04', 'The job failed. The Job was invoked by Schedule 12 (Every 15 minutes). The last step to run was step 1 (Back up log).', 'error'],
+  ['15/11/2026 14:00:00', 'Log backup – Sales', 'ok:Succeeded', '00:00:06', 'The job succeeded. The Job was invoked by Schedule 12 (Every 15 minutes). The last step to run was step 1 (Back up log).', ''],
+  ['15/11/2026 02:30:00', 'ETL – Load warehouse', 'err:Failed', '00:18:42', 'The job failed. The Job was invoked by Schedule 4 (Nightly 02:30). The last step to run was step 3 (Merge facts).', 'error'],
+  ['15/11/2026 02:00:00', 'syspolicy_purge_history', 'ok:Succeeded', '00:00:02', 'The job succeeded.', ''],
+  ['15/11/2026 01:00:00', 'Nightly full backup – Sales', 'ok:Succeeded', '00:21:10', 'The job succeeded. The Job was invoked by Schedule 2 (Daily 01:00).', ''],
+  ['14/11/2026 23:45:00', 'Purge audit rows', 'ok:Succeeded', '00:01:13', 'The job succeeded.', ''],
+  ['14/11/2026 02:30:00', 'ETL – Load warehouse', 'ok:Succeeded', '00:17:58', 'The job succeeded.', '']
+]
+function lfv(errlog) {
+  const srcs = `
+    <div class="cap">Select logs</div>
+    <div class="src"><span class="cb ${errlog ? '' : 'part'}"></span>${ic('chevD', 12)}<b style="font-weight:600">Job History</b></div>
+    ${['ETL – Load warehouse', 'Index maintenance', 'Log backup – Sales', 'Nightly full backup – Sales', 'Purge audit rows', 'syspolicy_purge_history'].map((n, i) => `<div class="src i1"><span class="cb ${!errlog && i !== 1 ? 'on' : ''}">${!errlog && i !== 1 ? ic('check', 10) : ''}</span>${n}</div>`).join('')}
+    <div class="src" style="margin-top:6px"><span class="cb ${errlog ? 'part' : ''}"></span>${ic('chevD', 12)}<b style="font-weight:600">SQL Server Agent</b></div>
+    <div class="src i1"><span class="cb ${errlog ? 'on' : ''}">${errlog ? ic('check', 10) : ''}</span>Current – 15/11/2026 07:02</div>
+    ${[1, 2, 3].map(i => `<div class="src i1"><span class="cb"></span>Archive #${i}</div>`).join('')}
+    <div class="src" style="margin-top:6px;color:var(--muted)"><span class="cb" style="opacity:.4"></span>${ic('chevR', 12)}SQL Server (later)</div>
+    <div class="src" style="color:var(--muted)"><span class="cb" style="opacity:.4"></span>${ic('chevR', 12)}Database Mail (later)</div>`
+  const tool = `<div class="toolbar"><span class="tb">${ic('refresh', 14)}Refresh</span><span class="tb">${ic('filter', 14)}Filter…</span><div class="filterbox">${ic('search', 14)}Search messages</div><span class="seg"><span class="on">Last 7 days</span><span>24 h</span><span>All</span></span><span class="vsep"></span><span class="tb">${ic('save', 14)}Export…</span>${errlog ? `<span class="tb">${ic('restart', 14)}Recycle</span>` : `<span class="tb">${ic('trash', 14)}Delete history…</span>`}<span style="margin-left:auto" class="live"><span class="pulse"></span>Live · new runs appear</span></div>`
+  const head = `<div class="doctabs"><div class="doctab"><div class="r">${ic('monitor', 14)}Job Activity Monitor</div><div class="s">sql-prod-01</div></div><div class="doctab on"><div class="r">${ic('log', 14)}Log File Viewer</div><div class="s">sql-prod-01 · ${errlog ? 'SQL Server Agent' : 'Job History'}</div></div></div>`
+  if (errlog) {
+    const lines = [['15/11/2026 07:02:11', 'Information', '[129] SQLSERVERAGENT starting under Windows NT service control'], ['15/11/2026 07:02:12', 'Information', '[364] The Messenger subsystem is not supported'], ['15/11/2026 07:02:13', 'Warning', '[396] An idle CPU condition has not been defined - OnIdle job schedules will have no effect'], ['15/11/2026 07:02:13', 'Information', '[146] Request servicer engine started'], ['15/11/2026 14:15:04', 'Error', '[264] An attempt was made to send an email when no email session has been established']]
+    return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}<div class="split-top"><div class="gridwrap"><table class="g"><thead><tr><th></th><th>Date</th><th>Log Type</th><th>Message</th></tr></thead><tbody>${lines.map((l, i) => `<tr class="${l[1] === 'Error' ? 'tone-error' : l[1] === 'Warning' ? 'tone-warning' : ''} ${i === 4 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="mono">${l[0]}</td><td class="t">${l[1]}</td><td class="mono">${l[2]}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="panehead"><b>Selected row details</b></div><div class="split-bot"><div class="detail"><dl><dt>Date</dt><dd>15/11/2026 14:15:04</dd><dt>Log</dt><dd>SQL Server Agent (Current – 15/11/2026 07:02)</dd><dt>Log Type</dt><dd>Error</dd></dl><pre>[264] An attempt was made to send an email when no email session has been established</pre></div></div></div></div>`
+  }
+  const rowsHtml = runs.map((r, i) => `<tr class="tone-${r[5]} ${i === 0 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="mono">${r[0]}</td><td class="t">${r[1]}</td><td>${pill(r[2])}</td><td class="mono">${r[3]}</td><td>sql-prod-01</td><td>${r[4]}</td></tr>`).join('')
+  const steps = [['0', '(Job outcome)', 'err:Failed', '00:00:04', '0', '0', 'The job failed. The last step to run was step 1 (Back up log).'], ['1', 'Back up log', 'err:Failed', '00:00:04', '16', '3201', 'Executed as user: CONTOSO\\svc-agent. Cannot open backup device \'\\\\backup01\\sql\\Sales_log.trn\'. Operating system error 53 (The network path was not found.). [SQLSTATE 42000] (Error 3201)  BACKUP LOG is terminating abnormally. [SQLSTATE 42000] (Error 3013). The step failed.']]
+  return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}
+    <div class="split-top"><div class="gridwrap"><table class="g"><thead><tr><th></th><th>Date</th><th>Job Name ${ic('filter', 12, 'class="fn"')}</th><th>Outcome ${ic('filter', 12, 'class="fn"')}</th><th>Duration</th><th>Server</th><th>Message</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><div class="trunc">7 runs in the last 7 days · Agent keeps 1,000 history rows (100 per job), set in SQL Server Agent Properties › History</div></div>
+    <div class="panehead"><b>Steps of the selected run</b><span>Log backup – Sales · 15/11/2026 14:15:00</span></div>
+    <div class="split-mid"><div class="gridwrap"><table class="g"><thead><tr><th>Step ID</th><th>Step Name</th><th>Outcome</th><th>Duration</th><th>Sql Severity</th><th>Sql Message ID</th><th>Message</th></tr></thead><tbody>${steps.map((s, i) => `<tr class="tone-error ${i === 1 ? 'sel' : ''}"><td class="mono">${s[0]}</td><td class="t">${s[1]}</td><td>${pill(s[2])}</td><td class="mono">${s[3]}</td><td class="mono">${s[4]}</td><td class="mono">${s[5]}</td><td>${s[6]}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="panehead"><b>Selected row details</b><span class="r">${ic('copy', 14)} Copy</span></div>
+    <div class="split-bot"><div class="detail"><dl><dt>Job</dt><dd>Log backup – Sales · step 1 Back up log</dd><dt>Retries attempted</dt><dd>0</dd><dt>Operator e-mailed</dt><dd>DBA team</dd></dl><pre>${steps[1][6]}</pre></div></div>
+  </div></div>`
+}
+
+function editorBg() {
+  return `<div class="doctabs"><div class="doctab on"><div class="r">${ic('file', 14)}SQLQuery1.sql</div><div class="s">sql-prod-01 · master</div></div></div>
+  <div class="toolbar"><span class="tb primary">${ic('play', 14)}Execute <kbd style="color:inherit;border-color:currentColor">F5</kbd></span><span class="tb dis">${ic('stop', 14)}Cancel</span></div>
+  <div class="editor"><div class="ln"><span>1</span><span>SELECT name, enabled FROM msdb.dbo.sysjobs_view;</span></div></div>`
+}
+
+// ---------- Dialogs ----------
+const dlgFrame = (o) => `<div class="scrim"><div class="dlg ${o.size || ''}" role="dialog" aria-label="${o.title}">
+  <div class="dlg-title">${o.title}<span class="x">${ic('x')}</span></div>
+  <div class="dlg-body">${o.pages ? `<div class="dlg-side"><div class="cap2">Select a page</div><div class="pages">${o.pages.map(p => `<div class="pg ${p === o.page ? 'on' : ''}" data-go="${o.go ? o.go(p) : ''}">${p}</div>`).join('')}</div>
+    <div class="box"><div class="cap2">Connection</div><div class="v">Server: sql-prod-01</div><div class="v">Connection: CONTOSO\\dana</div></div>
+    <div class="box"><div class="cap2">Progress</div><div class="v">${o.progress || 'Ready'}</div></div></div>` : ''}
+    <div class="dlg-main">${o.noTools ? '' : `<div class="dlg-tools"><span class="btn split">${ic('code', 14)}Script</span><span class="btn arrow">${ic('arrowDown', 14)}</span>${o.tools || ''}</div>`}${o.message || ''}<div class="dlg-page">${o.body}</div></div></div>
+  <div class="dlg-foot">${o.footLeft ? `<span class="left">${o.footLeft}</span>` : ''}${o.foot || '<span class="btn primary">OK</span><span class="btn">Cancel</span>'}</div></div></div>`
+
+const jobPages = ['General', 'Steps', 'Schedules', 'Alerts', 'Notifications', 'Targets']
+const jobGo = p => 'job-' + p.toLowerCase()
+const jobDlg = (page, body, extra = {}) => dlgFrame({ title: 'Job Properties - Index maintenance', pages: jobPages, page, go: jobGo, body, ...extra })
+
+const D = {
+  'job-general': () => jobDlg('General', `<div class="form">
+    <label>Name</label><div class="inp">Index maintenance</div>
+    <label>Owner</label><div class="hstack"><div class="inp" style="flex:1">CONTOSO\\dana</div><span class="btn">…</span></div>
+    <label>Category</label><div class="hstack"><div class="inp sel" style="flex:1">Database Maintenance</div><span class="btn">View</span></div>
+    <label style="align-self:start;margin-top:4px">Description</label><div class="inp area">Rebuilds or reorganizes fragmented indexes and updates statistics on Sales and Warehouse.</div>
+    <span></span><span class="chk"><span class="cb on">${ic('check', 10)}</span>Enabled</span>
+  </div>
+  <fieldset><legend>Facts</legend><div class="form" style="grid-template-columns:150px 1fr;gap:4px 12px;font-size:12px">
+    <label>Source</label><span>sql-prod-01</span><label>Created</label><span>02/03/2025 10:14:07</span><label>Last modified</label><span>08/11/2026 16:40:51</span><label>Last executed</label><span>08/11/2026 03:00:00</span>
+  </div></fieldset>
+  <div class="note">${ic('info', 14)}Owner is editable only for sysadmin, as in SSMS. Others see their own login, read-only.</div>`),
+  'job-steps': () => jobDlg('Steps', `<div style="font-size:12px;color:var(--text3)">Job step list</div>
+  <table class="dtable"><thead><tr><th style="width:40px">Step</th><th>Name</th><th>Type</th><th>On Success</th><th>On Failure</th></tr></thead><tbody>
+    <tr><td>1</td><td>Check databases online</td><td>Transact-SQL script (T-SQL)</td><td>Go to the next step</td><td>Quit the job reporting failure</td></tr>
+    <tr class="sel"><td>2</td><td>Rebuild fragmented indexes</td><td>Transact-SQL script (T-SQL)</td><td>Go to the next step</td><td>Go to step: [4] Notify on failure</td></tr>
+    <tr><td>3</td><td>Update statistics</td><td>Transact-SQL script (T-SQL)</td><td>Quit the job reporting success</td><td>Go to step: [4] Notify on failure</td></tr>
+    <tr><td>4</td><td>Notify on failure</td><td>PowerShell</td><td>Quit the job reporting failure</td><td>Quit the job reporting failure</td></tr>
+  </tbody></table>
+  <div class="hstack" style="margin-top:8px"><span style="font-size:12px;color:var(--text2)">Move step</span><span class="btn">${ic('up', 14)}</span><span class="btn">${ic('down', 14)}</span><span style="margin-left:16px;font-size:12px;color:var(--text2)">Start step</span><div class="inp sel mid">[1] Check databases online</div></div>
+  <div class="btnrow"><span class="btn">New…</span><span class="btn">Insert…</span><span class="btn">Edit…</span><span class="btn">Delete</span></div>
+  <div class="warnnote">${ic('warn', 14)}Deleting step 4 leaves steps 2 and 3 going to a step that no longer exists; Varia asks first and changes them to "Quit the job reporting failure", as SSMS does.</div>`),
+  'job-schedules': () => jobDlg('Schedules', `<div style="font-size:12px;color:var(--text3)">Schedule list</div>
+  <table class="dtable"><thead><tr><th style="width:40px">ID</th><th>Name</th><th style="width:70px">Enabled</th><th>Description</th><th style="width:70px">Jobs in schedule</th></tr></thead><tbody>
+    <tr class="sel"><td>7</td><td>Weekly Sunday 03:00</td><td>Yes</td><td>Occurs every week on Sunday at 03:00:00. Schedule will be used starting on 02/03/2025.</td><td>2</td></tr>
+    <tr><td>9</td><td>After Agent starts</td><td>No</td><td>Start automatically when SQL Server Agent starts</td><td>1</td></tr>
+  </tbody></table>
+  <div class="btnrow"><span class="btn">New…</span><span class="btn">Pick…</span><span class="btn">Edit…</span><span class="btn">Remove</span></div>
+  <div class="note">${ic('info', 14)}Schedule 7 is shared with another job (Jobs in schedule: 2). Remove detaches it from this job; Varia deletes a schedule only when no other job uses it and you confirm, as SSMS asks.</div>`),
+  'job-alerts': () => jobDlg('Alerts', `<div style="font-size:12px;color:var(--text3)">Alerts that run this job</div>
+  <table class="dtable"><thead><tr><th>Name</th><th>Enabled</th><th>Type</th></tr></thead><tbody><tr class="sel"><td>Log file &gt; 80% full</td><td>No</td><td>SQL Server performance condition alert</td></tr></tbody></table>
+  <div class="btnrow"><span class="btn">Add…</span><span class="btn">Edit…</span><span class="btn">Remove</span></div>`),
+  'job-notifications': () => jobDlg('Notifications', `<div style="font-size:12px;color:var(--text3);margin-bottom:8px">Actions to perform when the job completes</div>
+  <div class="form" style="grid-template-columns:28px 120px 1fr 200px">
+    <span class="cb on">${ic('check', 10)}</span><label>E-mail</label><div class="inp sel">DBA team</div><div class="inp sel">When the job fails</div>
+    <span class="cb"></span><label>Page</label><div class="inp sel dis">On-call pager</div><div class="inp sel dis">When the job fails</div>
+    <span class="cb"></span><label>Net send</label><div class="inp sel dis"></div><div class="inp sel dis">When the job fails</div>
+    <span class="cb on">${ic('check', 10)}</span><label class="full" style="grid-column:2 / 3">Write to the Windows Application event log</label><span></span><div class="inp sel">When the job fails</div>
+    <span class="cb"></span><label style="grid-column:2 / 3">Automatically delete job</label><span></span><div class="inp sel dis">When the job succeeds</div>
+  </div>
+  <div class="warnnote">${ic('warn', 14)}Database Mail is not set up on sql-prod-01 (Database Mail XPs is off), so e-mail notifications will not be sent. SQL Server Agent Properties › Alert System picks the mail profile once it is.</div>`),
+  'job-targets': () => jobDlg('Targets', `<div class="hstack" style="flex-direction:column;align-items:flex-start;gap:10px">
+    <span class="chk"><span class="radio on"></span>Target local server</span>
+    <span class="chk" style="color:var(--muted)"><span class="radio"></span>Target multiple servers</span></div>
+    <table class="dtable" style="opacity:.5"><thead><tr><th>Server</th><th>Status</th></tr></thead><tbody><tr><td colspan="2" style="color:var(--muted)">This server is not a master server (MSX)</td></tr></tbody></table>
+    <div class="note">${ic('info', 14)}Multi-server administration (MSX/TSX) comes after 0.10.0. The option shows, disabled, so the page reads as SSMS's.</div>`),
+  'step-general': () => stepDlg('General', 'tsql'),
+  'step-ps': () => stepDlg('General', 'ps'),
+  'step-ssis': () => stepDlg('General', 'ssis'),
+  'step-advanced': () => stepDlg('Advanced'),
+  schedule: () => dlgFrame({ title: 'Job Schedule Properties - Weekly Sunday 03:00', size: 'mid', noTools: true, body: `<div class="form">
+    <label>Name</label><div class="hstack"><div class="inp" style="flex:1">Weekly Sunday 03:00</div><span class="btn">Jobs in Schedule</span></div>
+    <label>Schedule type</label><div class="hstack"><div class="inp sel" style="flex:1">Recurring</div><span class="chk"><span class="cb on">${ic('check', 10)}</span>Enabled</span></div></div>
+  <fieldset><legend>Frequency</legend><div class="form"><label>Occurs</label><div class="inp sel mid">Weekly</div><label>Recurs every</label><div class="hstack"><div class="inp short">1</div>week(s) on</div><span></span><div class="days">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<span class="${d === 'Sun' ? 'on' : ''}">${d}</span>`).join('')}</div></div></fieldset>
+  <fieldset><legend>Daily frequency</legend><div class="form"><span class="chk"><span class="radio on"></span>Occurs once at</span><div class="inp short mono">03:00:00</div><span class="chk"><span class="radio"></span>Occurs every</span><div class="hstack" style="opacity:.55"><div class="inp short">1</div><div class="inp sel short">hour(s)</div>Starting at<div class="inp short mono">00:00:00</div>Ending at<div class="inp short mono">23:59:59</div></div></div></fieldset>
+  <fieldset><legend>Duration</legend><div class="form"><label>Start date</label><div class="hstack"><div class="inp mid">02/03/2025 ${ic('calendar', 14)}</div><span class="chk"><span class="radio"></span>End date</span><div class="inp mid" style="opacity:.55">—</div><span class="chk"><span class="radio on"></span>No end date</span></div></div></fieldset>
+  <fieldset><legend>Summary</legend><div class="desc">Occurs every week on Sunday at 03:00:00. Schedule will be used starting on 02/03/2025.</div></fieldset>` }),
+  'manage-schedules': () => dlgFrame({ title: 'Manage Schedules', size: 'mid', noTools: true, body: `<div class="hstack"><span class="chk"><span class="cb"></span>Show only schedules not used by any job</span><div class="filterbox" style="margin-left:auto">${ic('search', 14)}Filter schedules</div></div>
+  <table class="dtable"><thead><tr><th>Enabled</th><th>Name</th><th>Jobs in schedule</th><th>Description</th></tr></thead><tbody>
+    ${[['Yes', 'Daily 01:00', 1, 'Occurs every day at 01:00:00.'], ['Yes', 'Every 15 minutes', 1, 'Occurs every day every 15 minute(s) between 00:00:00 and 23:59:59.'], ['Yes', 'Nightly 02:30', 2, 'Occurs every day at 02:30:00.'], ['Yes', 'Weekly Sunday 03:00', 2, 'Occurs every week on Sunday at 03:00:00.'], ['No', 'After Agent starts', 1, 'Start automatically when SQL Server Agent starts.'], ['Yes', 'Month-end close', 0, 'Occurs every month on the last day of the month at 22:00:00.']].map((r, i) => `<tr class="${i === 3 ? 'sel' : ''}"><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')}
+  </tbody></table><div class="btnrow"><span class="btn">New…</span><span class="btn">Properties</span><span class="btn">Jobs in Schedule</span><span class="btn">Delete</span></div>
+  <div class="note">${ic('info', 14)}Opened from Jobs › Manage Schedules. Delete is offered only for "Month-end close" here: the others are in use.</div>`, foot: '<span class="btn primary">Close</span>' }),
+  'start-step': () => dlgFrame({ title: 'Start Job on \'sql-prod-01\'', size: 'small', noTools: true, body: `<div style="margin-bottom:8px">Start <b>Index maintenance</b> at step:</div>
+    <table class="dtable"><thead><tr><th style="width:40px">ID</th><th>Step Name</th><th>Type</th></tr></thead><tbody><tr><td>1</td><td>Check databases online</td><td>T-SQL</td></tr><tr class="sel"><td>2</td><td>Rebuild fragmented indexes</td><td>T-SQL</td></tr><tr><td>3</td><td>Update statistics</td><td>T-SQL</td></tr><tr><td>4</td><td>Notify on failure</td><td>PowerShell</td></tr></tbody></table>
+    <div class="note">${ic('info', 14)}A one-step job starts at once, without this dialog, as SSMS's Start Job does. Progress then follows the live row in Job Activity Monitor and the status bar.</div>`, foot: '<span class="btn primary">Start</span><span class="btn">Cancel</span>' }),
+  'delete-job': () => dlgFrame({ title: 'Delete Object', size: 'small', noTools: false, body: `<div style="margin-bottom:6px">Object to be deleted</div>
+    <table class="dtable"><thead><tr><th>Object Name</th><th>Object Type</th><th>Owner</th><th>Status</th></tr></thead><tbody><tr><td>Refresh reporting snapshot</td><td>Job</td><td>CONTOSO\\dana</td><td></td></tr></tbody></table>
+    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px"><span class="chk"><span class="cb on">${ic('check', 10)}</span>Delete the job's history</span><span class="chk"><span class="cb"></span>Delete schedules no other job uses (Daily 06:00)</span></div>`, foot: '<span class="btn danger">Delete</span><span class="btn">Cancel</span>' }),
+  'start-agent': () => dlgFrame({ title: 'Start SQL Server Agent', size: 'small', noTools: true, body: `<div>Start the SQL Server Agent service on <b>sql-prod-01</b>?</div><div class="note">${ic('info', 14)}Runs master.dbo.xp_servicecontrol on the server (sysadmin, Windows servers). Linux and Managed Instance never show Start, Stop or Restart.</div>`, foot: '<span class="btn primary">Start</span><span class="btn">Cancel</span>' }),
+  operator: () => dlgFrame({ title: 'Operator Properties - DBA team', pages: ['General', 'Notifications', 'History'], page: 'General', body: `<div class="form">
+    <label>Name</label><div class="hstack"><div class="inp" style="flex:1">DBA team</div><span class="chk"><span class="cb on">${ic('check', 10)}</span>Enabled</span></div>
+    <label>E-mail name</label><div class="inp">dba-team@contoso.example</div>
+    <label>Net send address</label><div class="inp dis"></div>
+    <label>Pager e-mail name</label><div class="inp">dba-pager@contoso.example</div></div>
+    <fieldset><legend>Pager on duty schedule</legend><table class="dtable"><thead><tr><th></th><th>Day</th><th>Workday begin</th><th>Workday end</th></tr></thead><tbody>${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d, i) => `<tr><td style="width:30px"><span class="cb ${i < 5 ? 'on' : ''}">${i < 5 ? ic('check', 10) : ''}</span></td><td>${d}</td><td class="mono">08:00:00</td><td class="mono">18:00:00</td></tr>`).join('')}</tbody></table></fieldset>` }),
+  alert: () => dlgFrame({ title: 'Alert Properties - Error 823 – I/O error', pages: ['General', 'Response', 'Options'], page: 'General', go: p => 'alert' + (p === 'General' ? '' : '-' + p.toLowerCase()), body: `<div class="form">
+    <label>Name</label><div class="hstack"><div class="inp" style="flex:1">Error 823 – I/O error</div><span class="chk"><span class="cb on">${ic('check', 10)}</span>Enable</span></div>
+    <label>Type</label><div class="inp sel">SQL Server event alert</div></div>
+    <fieldset><legend>Event alert definition</legend><div class="form"><label>Database name</label><div class="inp sel">&lt;all databases&gt;</div>
+    <label>Alerts will be raised based on</label><div class="hstack" style="gap:16px"><span class="chk"><span class="radio on"></span>Error number</span><div class="inp short">823</div><span class="chk"><span class="radio"></span>Severity</span><div class="inp sel mid dis">001 - Miscellaneous System Information</div></div>
+    <span></span><span class="chk"><span class="cb"></span>Raise alert when message contains</span><label>Message text</label><div class="inp dis"></div></div></fieldset>
+    <div class="note">${ic('info', 14)}Types: SQL Server event alert, SQL Server performance condition alert (object, counter, instance, threshold), and WMI event alert (Windows servers; shown read-only in 0.10.0).</div>` }),
+  'alert-response': () => dlgFrame({ title: 'Alert Properties - Error 823 – I/O error', pages: ['General', 'Response', 'Options'], page: 'Response', go: p => 'alert' + (p === 'General' ? '' : '-' + p.toLowerCase()), body: `<span class="chk"><span class="cb on">${ic('check', 10)}</span>Execute job</span>
+    <div class="hstack" style="margin:6px 0 0 22px"><div class="inp sel" style="flex:1">Index maintenance ([Uncategorized (Local)])</div><span class="btn">New Job…</span><span class="btn">View Job</span></div>
+    <div style="margin-top:12px"><span class="chk"><span class="cb on">${ic('check', 10)}</span>Notify operators</span></div>
+    <table class="dtable" style="margin-left:22px;width:calc(100% - 22px)"><thead><tr><th>Operator name</th><th>E-mail</th><th>Pager</th><th>Net Send</th></tr></thead><tbody><tr><td>DBA team</td><td><span class="cb on">${ic('check', 10)}</span></td><td><span class="cb"></span></td><td><span class="cb" style="opacity:.4"></span></td></tr><tr><td>On-call pager</td><td><span class="cb"></span></td><td><span class="cb on">${ic('check', 10)}</span></td><td><span class="cb" style="opacity:.4"></span></td></tr></tbody></table>
+    <div class="btnrow" style="margin-left:22px"><span class="btn">New Operator…</span><span class="btn">View Operator</span></div>` }),
+  proxy: () => dlgFrame({ title: 'Proxy Account Properties - FileShareWriter', pages: ['General', 'Principals', 'References'], page: 'General', body: `<div class="form">
+    <label>Proxy name</label><div class="inp">FileShareWriter</div>
+    <label>Credential name</label><div class="hstack"><div class="inp" style="flex:1">FileShareWriterCred</div><span class="btn">…</span><span class="btn">New Credential…</span></div>
+    <label style="align-self:start;margin-top:4px">Description</label><div class="inp area">Writes export files to \\\\files01\\exports.</div></div>
+    <fieldset><legend>Active to the following subsystems</legend>${['Operating system (CmdExec)', 'PowerShell', 'SQL Server Integration Services Package', 'Replication Distributor', 'Replication Merge', 'Replication Queue Reader', 'Replication Snapshot', 'Replication Transaction-Log Reader', 'SQL Server Analysis Services Command', 'SQL Server Analysis Services Query'].map((s, i) => `<div style="height:24px;display:flex;align-items:center"><span class="chk"><span class="cb ${i === 0 || i === 1 ? 'on' : ''}">${i === 0 || i === 1 ? ic('check', 10) : ''}</span>${s}</span></div>`).join('')}</fieldset>
+    <div class="note">${ic('info', 14)}Subsystems come from msdb.dbo.syssubsystems, so a Linux server lists only what it has. Principals: logins, msdb roles and server roles that may use the proxy.</div>` }),
+  credential: () => dlgFrame({ title: 'New Credential', size: 'small', noTools: false, body: `<div class="form">
+    <label>Credential name</label><div class="inp">FileShareWriterCred</div>
+    <label>Identity</label><div class="hstack"><div class="inp" style="flex:1">CONTOSO\\svc-exports</div><span class="btn">…</span></div>
+    <label>Password</label><div class="inp">••••••••••</div>
+    <label>Confirm password</label><div class="inp">••••••••••</div>
+    <span></span><span class="chk"><span class="cb"></span>Use Encryption Provider</span>
+    <label>Provider</label><div class="inp sel dis"></div></div>
+    <div class="note">${ic('key', 14)}The secret is handled like New Login's password: only in the dialog's secret slot, sent once as a parameter, scrubbed from replies, and scripted as &lt;secret&gt;.</div>` }),
+  'agent-props': () => dlgFrame({ title: 'SQL Server Agent Properties - sql-prod-01', pages: ['General', 'Advanced', 'Alert System', 'Job System', 'Connection', 'History'], page: 'History', body: `<fieldset style="margin-top:0"><legend>Current job history log size</legend>
+    <span class="chk"><span class="cb on">${ic('check', 10)}</span>Limit size of job history log</span>
+    <div class="form" style="margin:8px 0 0 22px;grid-template-columns:240px 120px"><label>Maximum job history log size (rows)</label><div class="inp">1000</div><label>Maximum job history rows per job</label><div class="inp">100</div></div></fieldset>
+    <fieldset><legend>Remove agent history</legend><span class="chk"><span class="cb"></span>Remove agent history</span>
+    <div class="hstack" style="margin:8px 0 0 22px;opacity:.55">Older than<div class="inp short">4</div><div class="inp sel mid">Week(s)</div></div></fieldset>
+    <div class="note">${ic('info', 14)}0.10.0 ships General and History; Advanced, Alert System, Job System and Connection follow. Pages not yet served show what SSMS shows, read-only.</div>` })
+}
+function stepDlg(page, type) {
+  const types = { tsql: 'Transact-SQL script (T-SQL)', ps: 'PowerShell', ssis: 'SQL Server Integration Services Package' }
+  const common = (inner) => dlgFrame({ title: 'Job Step Properties - Rebuild fragmented indexes', pages: ['General', 'Advanced'], page, go: p => p === 'General' ? 'step-general' : 'step-advanced', body: inner, size: 'mid' })
+  if (page === 'Advanced') return common(`<fieldset style="margin-top:0"><legend>On success action</legend><div class="form"><label>On success action</label><div class="inp sel">Go to the next step</div><label>Retry attempts</label><div class="hstack"><div class="inp short">2</div>Retry interval (minutes)<div class="inp short">5</div></div></div></fieldset>
+    <fieldset><legend>On failure action</legend><div class="form"><label>On failure action</label><div class="inp sel">Go to step: [4] Notify on failure</div></div></fieldset>
+    <fieldset><legend>Transact-SQL script (T-SQL)</legend><div class="form"><label>Output file</label><div class="hstack"><div class="inp" style="flex:1">D:\\AgentLogs\\IndexMaintenance.txt</div><span class="btn">…</span><span class="btn">View</span></div>
+    <span></span><span class="chk"><span class="cb on">${ic('check', 10)}</span>Append output to existing file</span>
+    <span></span><span class="chk"><span class="cb"></span>Log to table</span>
+    <span></span><span class="chk"><span class="cb on">${ic('check', 10)}</span>Include step output in history</span>
+    <label>Run as user</label><div class="hstack"><div class="inp" style="flex:1"></div><span class="btn">…</span></div></div></fieldset>
+    <div class="note">${ic('info', 14)}The "…" beside Output file opens Varia's server file picker (paths on the server, not this computer).</div>`)
+  const head = `<div class="form"><label>Step name</label><div class="inp">${type === 'ps' ? 'Notify on failure' : type === 'ssis' ? 'Load staging package' : 'Rebuild fragmented indexes'}</div>
+    <label>Type</label><div class="inp sel">${types[type]}</div>
+    <label>Run as</label><div class="inp sel ${type === 'tsql' ? 'dis' : ''}">${type === 'ps' ? 'FileShareWriter' : type === 'ssis' ? 'SQL Server Agent Service Account' : ''}</div>`
+  if (type === 'tsql') return common(`${head}<label>Database</label><div class="inp sel mid">Sales</div></div>
+    <div class="hstack" style="margin:10px 0 4px"><span style="font-size:13px;color:var(--text2)">Command</span><span style="margin-left:auto" class="btn">Open…</span><span class="btn">Select All</span><span class="btn">${ic('check', 14)}Parse</span></div>
+    <div class="code"><div><span class="n">1</span><span class="c">-- Rebuild indexes over 30% fragmented, reorganize from 10%</span></div><div><span class="n">2</span><span class="k">DECLARE</span> @min_pages <span class="k">int</span> = 1000;</div><div><span class="n">3</span><span class="k">EXEC</span> dbo.IndexOptimize @Databases = <span class="s">N'USER_DATABASES'</span>,</div><div><span class="n">4</span>     @FragmentationLevel2 = 30, @MinNumberOfPages = @min_pages;</div></div>
+    <div class="note">${ic('check', 14)}Parse: the command parsed successfully. (Varia's language service parses it; nothing runs on the server.)</div>`)
+  if (type === 'ps') return common(`${head}</div>
+    <div class="hstack" style="margin:10px 0 4px"><span style="font-size:13px;color:var(--text2)">Command</span><span style="margin-left:auto" class="btn">Open…</span></div>
+    <div class="code"><div><span class="n">1</span><span class="k">$file</span> = <span class="s">"\\\\files01\\exports\\index-failure-$(Get-Date -Format yyyyMMdd).txt"</span></div><div><span class="n">2</span><span class="s">"Index maintenance failed on $env:COMPUTERNAME"</span> | <span class="k">Out-File</span> <span class="k">$file</span></div></div>
+    <div class="note">${ic('shield', 14)}Run as lists the proxies granted to this login for PowerShell; "SQL Server Agent Service Account" appears only for sysadmin. A login with no proxy for a subsystem does not see that type.</div>`)
+  return common(`${head}</div><div class="tabs2" style="margin-top:12px"><span class="on">Package</span><span>Configuration</span></div>
+    <div class="form"><label>Package source</label><div class="inp sel">SSIS Catalog</div><label>Server</label><div class="inp">sql-prod-01</div><label>Package</label><div class="hstack"><div class="inp" style="flex:1">\\SSISDB\\Warehouse\\Staging\\LoadStaging.dtsx</div><span class="btn">…</span></div></div>
+    <div class="note">${ic('info', 14)}"…" reuses the SSIS Catalog tree from Object Explorer to pick a folder, project and package. Configuration: environment reference and parameter overrides; the backend builds the step command, as SSMS does.</div>`)
+}
+
+// ---------- Scenes ----------
+const callouts = {
+  oe: [['agentRow', 'Running-jobs chip moves from the server row to the Agent node (statusChipKinds). Same live probe, no tree reload.', 200, 0], ['jobRow', 'Job rows carry live state chips from Job Activity Monitor\'s source while the folder is open.', 230, 0]],
+  'oe-stopped': [['agentRow', '"Stopped" chip (warning) and SSMS\'s "Agent XPs disabled" sublabel. Start/Stop/Restart via xp_servicecontrol (sysadmin, Windows).', 200, 0]],
+  'oe-menu-job': [], 'oe-user': [], 'oe-mi': [], 'oe-noaccess': []
+}
+function menu(kind) {
+  const items = kind === 'agent'
+    ? [['play', 'Start', '', 1], ['stop', 'Stop', '', 0], ['restart', 'Restart', '', 0], '-', ['monitor', 'Job Activity Monitor', '', 0], ['history', 'View History', '', 0], '-', ['props', 'Properties', 'Alt+Enter', 0], ['refresh', 'Refresh', 'F5', 0]]
+    : [['plus', 'New Job…', '', 0], '-', ['play', 'Start Job at Step…', '', 0], ['stop', 'Stop Job', '', 0], '-', ['code', 'Script Job as', '›', 0], '-', ['history', 'View History', '', 0], '-', ['', 'Enable', '', 1], ['', 'Disable', '', 0], '-', ['rename', 'Rename', 'F2', 0], ['trash', 'Delete', 'Del', 0], ['refresh', 'Refresh', 'F5', 0], '-', ['props', 'Properties', 'Alt+Enter', 0]]
+  return items.map(it => it === '-' ? '<hr>' : `<div class="mi ${it[3] ? 'dis' : ''} ${it[1] === 'Start Job at Step…' ? 'hl' : ''}"><span class="g">${it[0] ? ic(it[0], 14) : ''}</span>${it[1]}<span class="k">${it[2]}</span></div>`).join('')
+}
+function render() {
+  const s = document.getElementById('scene').value
+  document.body.classList.toggle('light', document.getElementById('theme').value === 'light')
+  const notes = document.getElementById('notes').checked
+  const treeEl = document.getElementById('tree'), main = document.getElementById('main'), ov = document.getElementById('overlay'), st = document.getElementById('status')
+  const mode = { 'oe-stopped': 'stopped', 'oe-user': 'user', 'oe-mi': 'mi', 'oe-noaccess': 'noaccess', 'oe-menu-job': 'menu-job' }[s] || (s === 'jam-stopped' ? 'stopped' : 'normal')
+  treeEl.innerHTML = tree(mode)
+  ov.innerHTML = ''
+  st.classList.remove('running')
+  st.innerHTML = '<span><span class="dot"></span>Ready</span><span>Connected. sql-prod-01 (16.0)</span><span>CONTOSO\\dana</span><span>master</span><span style="margin-left:auto">Ln 1 · Col 1</span><span>UTF-8</span>'
+  if (s === 'jam') main.innerHTML = jam(false)
+  else if (s === 'lfv') main.innerHTML = lfv(false)
+  else if (s === 'lfv-log') main.innerHTML = lfv(true)
+  else main.innerHTML = editorBg()
+  if (s === 'oe' || s === 'oe-user' || s === 'oe-mi' || s === 'oe-noaccess') {
+    if (s === 'oe') {
+      const m = document.createElement('div'); m.className = 'menu'; m.style.left = '200px'; m.style.top = '440px'; m.innerHTML = menu('agent'); ov.appendChild(m)
+    }
+  }
+  if (s === 'oe-stopped') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '200px'; m.style.top = '440px'; m.innerHTML = menu('agent'); m.querySelectorAll('.mi').forEach(x => { const t = x.textContent.trim(); if (/^(Stop|Restart)/.test(t)) x.classList.add('dis'); if (/^Start$/.test(t)) { x.classList.remove('dis'); x.classList.add('hl') } }); ov.appendChild(m); setTimeout(() => { ov.insertAdjacentHTML('beforeend', D['start-agent']()); fill(ov) }, 0) }
+  if (s === 'oe-menu-job') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '220px'; m.style.top = '470px'; m.innerHTML = menu('job'); ov.appendChild(m); const sub = document.createElement('div'); sub.className = 'menu'; sub.style.left = '460px'; sub.style.top = '582px'; sub.innerHTML = ['CREATE To', 'DROP To', 'DROP And CREATE To'].map(t => `<div class="mi"><span class="g"></span>${t}<span class="k">›</span></div>`).join(''); ov.appendChild(sub) }
+  if (s === 'running-status') { st.classList.add('running'); st.innerHTML = `<span style="color:var(--textAccent);display:inline-flex;gap:6px;align-items:center">${ic('job', 12)}Index maintenance: running step 2 of 4 · 12:04</span><span>Started by CONTOSO\\dana</span><span class="tb" style="height:18px;color:var(--textAccent)">${ic('stop', 12)}Stop</span><span style="margin-left:auto">sql-prod-01</span>`; main.innerHTML = jam(false) }
+  if (D[s]) ov.insertAdjacentHTML('beforeend', D[s]())
+  // Design notes
+  if (notes) {
+    const win = document.getElementById('win').getBoundingClientRect()
+    for (const [id, text, dx, dy] of (callouts[s] || [])) {
+      const el = document.getElementById(id); if (!el) continue
+      const r = el.getBoundingClientRect(); const c = document.createElement('div'); c.className = 'callout'; c.textContent = text
+      c.style.left = (r.right - win.left + 12 + (dx > 300 ? 0 : 0)) + 'px'; c.style.top = (r.top - win.top - 4 + dy) + 'px'
+      if (s === 'oe' || s === 'oe-stopped') c.style.left = '470px'
+      ov.appendChild(c)
+    }
+    const extra = { jam: 'LiveGrid with the Results grid\'s components; tones from the backend (failed error, running accent, between retries warning, disabled muted). View chips, filter box and column funnels filter in backend memory. LiveService pauses it while hidden.', lfv: 'Master/detail: runs above, the selected run\'s steps below, full message in the details pane. agent.history live source (like SSIS Operations): filters are args, new runs append.', 'lfv-log': 'Agent error log through xp_readerrorlog (sysadmin). The same viewer later adds SQL Server logs and Database Mail.', 'running-status': 'Tinted status bar while a job this window started is running; Stop sends sp_stop_job. Follows the live row, no polling.' }[s]
+    if (extra) { const c = document.createElement('div'); c.className = 'callout'; c.style.right = '14px'; c.style.bottom = '34px'; c.textContent = extra; ov.appendChild(c) }
+  }
+  fill(document)
+  ov.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => { if (el.dataset.go && D[el.dataset.go]) { document.getElementById('scene').value = el.dataset.go; render() } }))
+}
+for (const id of ['scene', 'theme', 'notes']) document.getElementById(id).addEventListener('change', render)
+const hash = location.hash.slice(1); if (hash) { const [sc, th] = hash.split(','); if (sc) document.getElementById('scene').value = sc; if (th) document.getElementById('theme').value = th }
+render()
+</script>
+</body>
+</html>
