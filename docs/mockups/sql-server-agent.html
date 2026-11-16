@@ -334,8 +334,9 @@ function row(depth, o) {
 }
 function tree(mode) {
   const out = []
-  const serverChips = mode === 'noaccess' ? [] : []
-  out.push(row(0, { icon: 'server', label: 'sql-prod-01', sub: '16.0 · CONTOSO\\' + (mode === 'user' ? 'report_svc' : 'dana'), open: true, cls: 'server', chips: serverChips }))
+  // The server row keeps its running-jobs chip (owner, 2026-11-15) so a collapsed server still shows running jobs.
+  const serverChips = mode === 'noaccess' || mode === 'stopped' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
+  out.push(row(0, { icon: 'server', label: 'sql-prod-01', sub: '16.0', open: true, cls: 'server', chips: serverChips }))
   for (const f of ['Databases', 'Security', 'Server Objects', 'Replication', 'Always On High Availability', 'Management', 'Integration Services Catalogs']) {
     if (mode === 'user' && !['Databases', 'Security'].includes(f)) continue
     out.push(row(1, { icon: 'folder', folder: true, label: f }))
@@ -610,7 +611,7 @@ function stepDlg(page, type) {
 
 // ---------- Scenes ----------
 const callouts = {
-  oe: [['agentRow', 'Running-jobs chip moves from the server row to the Agent node (statusChipKinds). Same live probe, no tree reload.', 200, 0], ['jobRow', 'Job rows carry live state chips from Job Activity Monitor\'s source while the folder is open.', 230, 0]],
+  oe: [['agentRow', 'Running-jobs chip on both the server row (kept, so a collapsed server still shows it) and the Agent node. One explorer.agent sample feeds both; no tree reload.', 200, 0], ['jobRow', 'Job rows carry live state chips from Job Activity Monitor\'s source while the folder is open.', 230, 0]],
   'oe-stopped': [['agentRow', '"Stopped" chip (warning) and SSMS\'s "Agent XPs disabled" sublabel. Start/Stop/Restart via xp_servicecontrol (sysadmin, Windows).', 200, 0]],
   'oe-menu-job': [], 'oe-user': [], 'oe-mi': [], 'oe-noaccess': []
 }

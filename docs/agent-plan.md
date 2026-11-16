@@ -22,6 +22,8 @@ updates the mock in the same PR when the design changes.
 - **Log File Viewer**: master/detail (runs grid, the selected run's steps below, details pane); no tree mode in `GridView`.
 - **Local live checks**: the owner sets the local MSSQLSERVER's Agent to Automatic, so `VARIA_TEST_SQL_AGENT=1` checks
   (CmdExec, PowerShell and SSIS steps included) run locally; tests never start or stop the service themselves.
+- **Running-jobs chip**: shown on both the server row (as today) and the Agent node, so a collapsed server still says jobs
+  are running.
 - **Write path**: Agent writes run inside ActionService, templates in `AgentSql` with a lint chained from `ActionSql.Lint`.
 - **Scope cut if 0.10.0 runs long**: must ship AG-0 to AG-6c; may slip AG-7 (operators and alerts dialogs), AG-8a
   (proxies read-only, Agent Properties) and AG-8b (proxy and credential dialogs). Operators, alerts and proxies stay
@@ -33,7 +35,8 @@ updates the mock in the same PR when the design changes.
   `src/shared/explorer/catalog.ts`).
 - The live `explorer.agent` probe (`Live/LiveSql.cs`) already counts running jobs from `msdb.dbo.sysjobactivity` for the
   Agent's current session, and the server row shows "n Agent jobs running" (`src/shared/explorer/status.ts`). The catalogue
-  comment says the chip lives on the server row only until the Agent node is served.
+  comment says the chip lives on the server row only until the Agent node is served; the owner chose to keep it there as
+  well (decisions below), so that comment changes, not the chip.
 - Icon `agent-job` exists (`src/shared/icons.ts`), marked "jobs (planned)".
 - Script As's destinations leave out SSMS's "Agent Job…" until Agent exists (`src/shared/scripting/catalog.ts`).
 - SSIS is the closest precedent: its own catalogue (`src/shared/ssis/catalog.ts`: code tables, describe views, verbs,
@@ -116,8 +119,10 @@ SQL Server Agent                (agent node: state sublabel "Agent XPs disabled"
   read-only msdb procedures in reads, see SQL rules below). Error logs list through `xp_enumerrorlogs 2` (sysadmin).
 - Agent state: a new `explorer.agentService` probe (in the existing `explorer` live source) reads
   `sys.dm_server_services` where it answers, else the presence of an Agent session (`program_name LIKE N'SQLAgent - %'`)
-  in `sys.dm_exec_sessions`. Chips move from the server row to the Agent node (`statusChipKinds.agent`): "Stopped" (warning)
-  and the existing running-jobs chip. The node never reloads the tree for a chip.
+  in `sys.dm_exec_sessions`. The Agent node gets chips of its own (`statusChipKinds.agent`): "Stopped" (warning) and the
+  running-jobs chip. The server row **keeps** its running-jobs chip too, so a server collapsed (or scrolled to the top or
+  bottom of Object Explorer) still shows that jobs are running; both chips read the one `explorer.agent` sample, so showing
+  it twice costs no extra probe. The node never reloads the tree for a chip.
 - A live change probe (`agent.treeProbe`, like `ssis.catalogProbe`: row count + checksum of the columns the tree shows
   for jobs, alerts, operators, proxies) reloads only changed folders, keeping expansion and selection, while an Agent
   folder is open.
@@ -176,7 +181,8 @@ Job dialog pages (`ObjectDialog` with pages, as Login and Database Properties):
 
 ## Job Activity Monitor and history
 
-**Job Activity Monitor** is its own document (as SSMS), opened from its tree node, the Agent node's running-jobs chip, and
+**Job Activity Monitor** is its own document (as SSMS), opened from its tree node, either running-jobs chip (server row or
+Agent node), and
 the palette (`SQL Server Agent: Job Activity Monitor`).
 
 - Live source `agent.jobs` (scope server, the " - Activity Monitor" pool in master, its prologue and gates), probe
@@ -290,7 +296,7 @@ work, M, L).
 | Lane | Scope | Depends on | Size |
 | --- | --- | --- | --- |
 | AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, limits, docs generation), capability probe and `agentRole` context key, `AgentSql` read allowlist + lint, CI `MSSQL_AGENT_ENABLED`, `VARIA_TEST_SQL_AGENT`, `ScratchAgent`, Agent live suite skeleton | — | M |
-| AG-1 | Object Explorer: Agent node and folders, listings (both paths), edition gates, state probe and chips moved to the Agent node, `agent.treeProbe`, Search Objects kinds, menus wired to "not yet" verbs hidden | AG-0 | M |
+| AG-1 | Object Explorer: Agent node and folders, listings (both paths), edition gates, state probe, Agent node chips (the server row keeps its running-jobs chip), `agent.treeProbe`, Search Objects kinds, menus wired to "not yet" verbs hidden | AG-0 | M |
 | AG-2 | Job verbs: Start Job at Step, Stop, Enable/Disable, Rename, Delete via ActionService + `AgentSql` write lint + identity guard | AG-1 | M |
 | AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, chips, filters, row actions (AG-2's verbs) | AG-1 (AG-2 for actions) | M |
 | AG-4 | Script As for Job, Alert, Operator, Proxy (SMO, goldens) | AG-1 | S |
