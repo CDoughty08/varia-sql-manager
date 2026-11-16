@@ -391,7 +391,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 ## SQL the backend runs
 
 Every path: constant text, values as parameters, names only through server-side `QUOTENAME`, checked by its offline
-lint, on its own pool or connection with a fixed prologue. Never log names, SQL, values or messages.
+lint, on its own pool or connection with a fixed prologue (the actual-plan collector has none, below). Never log names, SQL, values or messages.
 
 - **Object Explorer.** Structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters,
   version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and
@@ -507,7 +507,7 @@ lint, on its own pool or connection with a fixed prologue. Never log names, SQL,
     SQL logins answers `WINDOWS_AUTH_REQUIRED` on a box server before connecting.
   - The catalog database name comes only from internal `SsisOptions.CatalogDatabase`, never a request; there is no 32-bit
     runtime option.
-  - Server verbs (Create Catalog) are the second DDL path: same rules in `master`, commands only from
+  - Server verbs (Create Catalog) are the SSIS DDL path: same rules in `master`, commands only from
     `SsisCreateSql.ServerCommands(verb)` (`SsisCreateSql.Lint`: dynamic SQL only where SQL Server takes a literal, from
     `QUOTENAME` or `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), database name from the catalogue or internal
     `SsisOptions.CreateScratch`. Stop cancels any statement but the restore; a Stop or failure after it removes exactly

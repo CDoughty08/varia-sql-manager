@@ -86,7 +86,7 @@ npm run bench          # IPC benchmarks (after check)
 ```
 
 The default checks need no database. Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set; use a disposable
-server. [docs/testing.md](docs/testing.md) lists every variable, and [CLAUDE.md](CLAUDE.md) has the contributor and
+server. [docs/testing.md](docs/testing.md) lists the test variables, and [CLAUDE.md](CLAUDE.md) has the contributor and
 architecture rules.
 
 electron-vite bundles every npm package, so all of them are listed under devDependencies, but those devDependencies ship

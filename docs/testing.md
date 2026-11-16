@@ -14,7 +14,8 @@ rules.
   one frame a second, and every Playwright press waits for frames). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
   of each launch there; it holds the environment, so never upload one from a run with secrets.
 - `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3`
-  runs one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `backend-sidecar.test.ts` starts the
+  runs one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`); `-- --live-suite <Name>` runs one live
+  suite (names in `LiveGroups.Suites`). `backend-sidecar.test.ts` starts the
   Release backend: build it first with `npm run check` or `npm run backend:test`.
 - Benchmarks, not part of `check`: `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`,
   `npm run bench:grid [-- --live]` and `npm run bench:startup` (Electron, need `out/`). `node scripts/check-bench.mjs
@@ -121,7 +122,9 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   verified.
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
-  sessions, runs without it). Only in unpackaged smoke runs main also honours:
+  sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs
+  on Linux too). `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
+  (with `VARIA_PACKAGED_PROFILE`) and `VARIA_PORTABLE_EXECUTABLE`. Only in unpackaged smoke runs main also honours:
   - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
     prompts stay; docs/hot-exit.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test

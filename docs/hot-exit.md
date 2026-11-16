@@ -124,7 +124,7 @@ need an explicit connection choice.
 
 - `document.rename`, **Rename Tab…**: tab menu (`documentTab.context`), palette, F2 on a focused tab, or double-click a
   tab. Enter or leaving the box keeps the name; Escape keeps the old one.
-- Names are trimmed, control characters dropped, at most 128 characters (`tabNameChars`). An empty name, or the tab's
+- Names are trimmed, each run of control characters becomes a space, at most 128 characters (`tabNameChars`). An empty name, or the tab's
   default name, removes the rename.
 - The custom name is used wherever the tab is named (tab, close and session prompts, Save As). The tooltip has the file's
   path (or an untitled tab's own name). Saving keeps the rename; the saved file's name becomes the fallback.

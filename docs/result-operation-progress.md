@@ -51,7 +51,8 @@ nothing touches the grid's paint path.
 - **Profile, Pivot, Compare** show in the same strip and hold nothing off. The profile and a Pivot also use their grid's
   bar; the previous Pivot stays readable under it while the builder's fields are held off and Build turns into Cancel. A
   comparison's new result shows its progress in place of rows.
-- **Copy and Save** keep their strip in the shared look; only another Copy or Save is held off.
+- **Copy and Save** keep their strip in the shared look; a new Copy replaces a running one, and a second Save is refused
+  (`JOB_BUSY`).
 - **Cancel** (the strip's button, or Escape in the grid) keeps the previous view and leaves a notice ("Sort cancelled.
   The grid kept its previous order."). A failure is said once, by the toolbar's notice, and also leaves the previous
   view.

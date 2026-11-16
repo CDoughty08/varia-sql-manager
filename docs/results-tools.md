@@ -30,11 +30,12 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
 ## Sorting, filtering and highlighting
 
 - A column header's sort button sorts ascending, then descending, then back to SQL Server's order; Shift+click adds
-  further columns. Sorting is in memory; the query never runs again.
+  further columns; the grid menu has Sort Ascending, Sort Descending, Then Sort and Clear Sort. Text sorts by the column's
+  collation, NULL first. Sorting is in memory; the query never runs again.
 - With filters, the result's caption counts the rows kept ("34 of 100 rows") and lists each filter with a Remove button;
   a column's funnel stays filled while that column has a filter.
-- **Highlight** (grid menu) colours rows; Ctrl+Shift+H applies the last colour picked. A highlight follows its row by a
-  unique key column through sorting and re-runs; when a re-run loses the key column, the grid says so and **Clear All
+- **Highlight** (grid menu) colours rows yellow, green, blue, purple or red, while the tab is open; Ctrl+Shift+H applies the last colour picked. A highlight follows its row by a
+  unique key column (else the whole row) through sorting and re-runs; when a re-run loses the key column, the grid says so and **Clear All
   Highlights** starts again.
 - **Filter** (grid menu) keeps the selected cells' values, other values, the range from the lowest to the highest
   selected value, no NULLs in a column, or the rows that repeat in the selected columns or in every column. Values match
@@ -46,7 +47,12 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
 - **Search** (results toolbar, Ctrl+F in a grid) finds matching cells in every grid of the run, in memory, comparing text
   by its column's collation; Enter and Shift+Enter (F3 and Shift+F3 in a grid) step through them in each grid's order.
   Its **Columns** mode searches column names instead and fades the columns that do not match.
-- **Row size** draws a bar behind each row number for the row's size; hover it for the bytes.
+- **Profile** (results toolbar, or **Column Profile** on the grid menu) opens a panel with each column's NULLs, distinct
+  values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in
+  characters and bytes, and a histogram, computed in the backend over the rows the grid shows. A re-sort of a loaded
+  result keeps it; it is computed again when the filters change, the result finishes loading or the query runs again.
+- **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it
+  for the bytes.
 
 ## Keep Selected Rows
 
@@ -96,7 +102,7 @@ After a splitter between results is dragged, a later result takes an average sha
 
 ## Groups
 
-Each result is a group named by its number. The stack shows each result's grid (Table) with its **Pivot** under it once
+Each result is a group named by its number or its `#Name`. The stack shows each result's grid (Table) with its **Pivot** under it once
 built, then comparisons in the order made ("Differences: Result 1 → Result 3"). A SQL-returned plan set (`SET
 SHOWPLAN_XML ON`, say) is a numbered group too: its link opens the plan, closing it removes the plan from the Execution
 plan pane, and it has no Pivot, Compare or Transpose. The Results tab's badge and the run summary's row count cover only the query's own results. After
@@ -108,7 +114,7 @@ are not rebuilt.
 - One Pivot per result, always read from the result's own rows. The builder picks row groups, an optional column
   group and values: Count, Distinct Count, Sum, Average, Min or Max (Sum and Average for numeric columns only). Text
   groups by the column's collation, NULL is a group of its own, and decimal sums keep all 38 digits. A pivot of more than
-  256 column groups, 100,000 row groups or 4,000,000 figures is refused with a message saying which.
+  256 column groups (fewer with many values), 100,000 row groups or 4,000,000 figures is refused with a message saying which.
 - The builder belongs to the grid you last used (for a comparison or plan set, the first pivotable result) and names it.
   Each result keeps its draft, inherited by a re-run's result of the same number. **Pivot Results…** on a Pivot opens
   the builder with what that Pivot was built with.

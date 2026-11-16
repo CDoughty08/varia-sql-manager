@@ -99,7 +99,8 @@ node scripts/prepare-sqltools-service.mjs --check
 
 The language context reserves separate fields for database/default schema and project/dataset, so PostgreSQL (search
 path) or BigQuery (project, dataset) can supply their own; each must define its own authentication, quoting, catalog
-interpretation and capabilities. The reserved identifiers do not enable those engines.
+interpretation and capabilities. The reserved identifiers do not enable those engines. Implement a second provider
+before promoting any SQL Server-specific assumption into the common contract.
 
 - Each query document has a stable model URI, kept when an editor group switches models or floats. Completion and hover
   resolve the requesting model, not the active query. Responses are discarded after an edit, context change, close,
@@ -167,7 +168,7 @@ omit the path override to exercise bundled discovery.
 The backend suite covers table/column completion, hover after unsaved edits, external schema changes plus refresh,
 identical SQL in different databases, process lifetime, close, disconnect and cleanup; refresh checks preserve a real
 session's transaction and temporary table. The UI suites drive Monaco's suggestion and hover widgets in split and floating
-groups, switch to a panel's OS popout and back, then refresh and dock back keeping each query's context. Release CI runs
+groups, switch to a panel's OS popout and back, then refresh and dock back keeping each query's context. CI (`ci.yml`) runs
 the backend suite against its disposable SQL Server 2022 instance; packaging checks verify the bundled distribution and offline
 startup.
 

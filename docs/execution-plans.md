@@ -333,7 +333,8 @@ belongs to the query tab. Execute normally, then open **Client Statistics** besi
   cancellations and timeouts keep partial counters but are excluded from averages. An execution with no summary (for
   example a backend crash) has an unavailable sample.
 - History holds ten attempts per tab, including the running one, in renderer memory. Re-execution and Close Results
-  keep it; closing the tab, **Reset Statistics** (which touches neither SQL Server nor the toggle) or closing the app
+  keep it; closing the tab, **Reset Statistics** (Query › Reset Client Statistics; touches neither SQL Server nor the toggle) or closing or
+  reloading the window
   clears it; turning collection off keeps it. Changing connection or database, session loss or reconnect, and changing
   Actual or Live capture start a new comparison context. Completed samples survive backend restarts. Tabs never share
   history.
@@ -385,7 +386,7 @@ Rendering and DPI:
   popout moves redraw. If full DPI exceeds WebGL limits or the browser allocates a smaller buffer, the highest fitting
   resolution is used; if none matches, the viewer falls back to outline and XML. `PlanCanvas` deletes the `null`
   text-cache entries Pixi 8 leaves for released keys after each frame.
-- `npm run test:plan-text-quality -- --baseline <rev>` (installed Chrome or `VARIA_BROWSER_EXECUTABLE`) renders the
+- `npm run test:plan-text-quality -- --baseline <rev>` (default `origin/main`) (installed Chrome or `VARIA_BROWSER_EXECUTABLE`) renders the
   WebGL canvas at several zoom and DPI levels beside a baseline revision into `artifacts/plan-text-quality/`.
 
 Deferral and caching:

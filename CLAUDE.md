@@ -72,7 +72,7 @@ SQL the backend runs:
   its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
   Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`), object actions and
   Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
-  (`ActualPlanSql`, event-session DDL only), session actions, SSIS. Read the area's
+  (`ActualPlanSql`, its own observer connection, no prologue, event-session DDL only), session actions, SSIS. Read the area's
   bullet in docs/architecture.md before touching any of them.
 
 UI structure (each is the single source; tests enforce it):
