@@ -297,10 +297,18 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   slot without re-subscribing; service Running (XPs off while Agent runs) means the job may still run, so it shows "Agent
   XPs off, job progress unavailable", keeps its slot and recovers like the other views; service state unknown (no
   `HAS_PERMS_BY_NAME` permission, the usual case for User and Reader logins) shows "Agent stopped or Agent XPs off, job
-  progress unavailable" and keeps its slot until the first XPs-1 sample. Outcome matching: the status bar records the
-  server time when its `sp_start_job` returned (`SYSDATETIME()` in the same batch), and takes a finished job's outcome
-  only when `sp_help_job`'s `last_run_date`/`last_run_time` is at or after that start; a job seen idle with an older last
-  run (Agent stopped mid-run and left no outcome row) shows "Agent stopped, job outcome unknown". A normal end shows
+  progress unavailable" and keeps its slot until the first XPs-1 sample. Outcome matching: Agent records `last_run_date`/`last_run_time` as the
+  run's start in whole seconds, so the Start template reads the server time before `sp_start_job` in the same batch,
+  truncated to the second and returned as text (`CONVERT(char(8), @t, 112) + REPLACE(CONVERT(char(8), @t, 108), ':', '')`,
+  since `ActionService.ReadAllAsync` reads every column with `GetString`); `ActionExecuteResult` gains an optional bounded
+  `jobStarted` list (one `{ jobId, started }` per started job, so multi-select Start Jobs gets one each) in the C# record,
+  the strict zod schema and the C# bounds, with an offline contract test and a live check. The status bar takes a
+  finished job's outcome only when its last run, compared at second precision, is at or after that time (table tests: the
+  job starts in the same second, and in the next). `sp_start_job` only posts the request, so for a moment the job can read
+  idle with the previous run's `last_run`: the status bar shows "Starting…" until the job is seen running (status not 4)
+  or `agentLimits.watchStartSamples` samples pass, and only after that does idle with an older last run (Agent stopped
+  mid-run and left no outcome row) show "Agent stopped, job outcome unknown" (renderer fixture: first sample idle with an
+  older `last_run`, next running, never "outcome unknown"). A normal end shows
   "<job>: Succeeded / Failed / Canceled at <time>" for a few seconds with View History, then releases the view. Every
   status-bar job item has a Dismiss action that releases the view and slot at once, so the unknown case never holds one
   of the window's 4 status-only slots indefinitely. Renderer fixtures cover all three service states, a normal end, an
@@ -461,7 +469,8 @@ Verbs (all via ActionService, see SQL rules):
 Status bar (AG-3): a job this window started shows "Index maintenance: running step 2 of 4" with Stop in the status bar
 until it ends. Background views pause when Object Explorer or the window is hidden and yield their slot, and tables pause
 under status-only, so this uses a table-less probe, `agent.jobs.watched`. Series are static catalogue ids, so it declares
-fixed slot series (`job0Status`, `job0Step`, `job0Steps`, `job0Started` … up to `agentLimits.watchedJobs`, small), mapped to
+fixed slot series (`job0Status`, `job0Step`, `job0Steps`, `job0Started`, `job0LastOutcome` (code) and `job0LastRun`
+(numeric yyyymmddhhmmss in server local time), read through `sp_help_job @job_id`, … up to `agentLimits.watchedJobs`, small), mapped to
 the watched job ids by their order in the args. The `agent.jobs` source declares `hidden: 'statusOnly'` (the first
 production source to use it; `tests/live-service.test.ts` is the only user today), so a view of it keeps its table-less
 probes sampling while hidden. The status bar owns that view (window-scoped, the window-wide limit of 4 status-only views
@@ -555,7 +564,11 @@ node's menu and the palette.
   Explorer shows), so the `agent.jobs` source has its own table-less probe `agent.jobs.service` (the same constant
   service-state text as `explorer.agentService`, ungated, with the same `HAS_PERMS_BY_NAME` guard, plus `Agent XPs` from
   `sys.configurations`, which needs no permission).
-  Status reads "Agent stopped" for every row, Next Run is marked as not
+  Status reads by service state (see Object Explorer's Agent XPs bullet). Once `agent.jobs.list` stops: with the service
+  Stopped, the Running and Between retries tiles and the Running chip read 0, their row tones clear and no elapsed time
+  shows; with the service Running or unknown they read "—" (unknown) and elapsed time stops; in every case the live
+  indicator reads "Agent unavailable", not Live; Failed and Disabled counts stay (from msdb). The `AGENT_DISABLED`
+  renderer fixtures assert tiles, chip counts and the indicator. With the service Stopped, Next Run is marked as not
   current (Agent refreshes `sysjobschedules` about every 20 minutes and not while stopped), and a warning banner offers
   Start Agent… to sysadmin on a Windows server that is not a failover cluster instance; never an error banner. When the
   service's startup type is Disabled (`sys.dm_server_services.startup_type`), the banner says so and offers no Start
@@ -835,7 +848,7 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   state (Starting…, Stopping…, access denied, left stopped, Cancel restart), and the status-bar job with and without a
   free status-only slot.
 - **Smoke**: `scripts/agent-smoke.mjs` on the fake backend (tree, Job Activity Monitor grid with multi-select Start Jobs,
-  the status-bar running job, job dialog round trip, Log File Viewer, the Start/Stop/Restart confirmations and progress,
+  the status-bar running job with Stop, its normal end with View History, and Dismiss, job dialog round trip, Log File Viewer, the Start/Stop/Restart confirmations and progress,
   Ctrl+Q revealing a job, and the keyboard contract: Job Activity Monitor's Shift/Ctrl selection, Ctrl+Space and Ctrl+A,
   the Log File Viewer's F6 / Shift+F6 pane cycle, Space on a source and the parent's `aria-checked="mixed"`), surfaces found by ARIA role and name through `scripts/fixtures/ui.mjs`, added to `test:smoke`,
   `smoke-shards.mjs`'s times and docs/ci.md's table. Shards with a SQL Server gain the Agent node in their trees; AG-1
@@ -859,7 +872,7 @@ Smoke suites find surfaces by ARIA role and name, so these are part of the desig
 - **Dialogs**: `dialog` with the page list as a `tablist` (as Login Properties); the Start Jobs progress dialog lists one
   `listitem` per job with its result text, inside a `log` region; destructive confirmations are `alertdialog`s whose
   default button is Cancel.
-- **Status bar job**: a `status` region announcing start and end, with Stop as a button.
+- **Status bar job**: a `status` region announcing start and end, with Stop, View History and Dismiss as buttons.
 
 ## Lanes
 
