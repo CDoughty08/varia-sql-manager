@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
   backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
-  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
+  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -34,7 +34,7 @@ async function ready() {
   page.setDefaultTimeout(30000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
   await pinStackedResults(page)
 }

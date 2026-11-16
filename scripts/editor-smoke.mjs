@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, environmentPill, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, environmentPill, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -29,7 +29,7 @@ async function launch() {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
 async function close() {
