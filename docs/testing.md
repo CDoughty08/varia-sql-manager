@@ -85,7 +85,8 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
 ## Environment
 
 - Node.js 24+ and the .NET 11 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
-  installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
+  installs Node.js 24 and, when `dotnet --list-sdks` shows no 11.0 SDK, `dotnet-sdk-11.0` from apt
+  (`tests/session-start-hook.test.ts` keeps the check, the package and `global.json` on one band), runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
   `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then adds live checks to its offline ones;

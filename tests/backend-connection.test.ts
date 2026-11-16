@@ -111,6 +111,12 @@ describe('BackendConnection malformed input', () => {
     for (const server of ['reason', 'exception']) expect(await failure(connect(server)), server).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
     expect(connection.lost).toBeUndefined()
   })
+  it('states the backend concurrency the backend enforces', () => {
+    // HostOptions and SqlService.SessionLimit in C#; a stale copy here misstates what BUSY and SESSION_LIMIT mean.
+    const host = readFileSync(resolve('backend/Varia.Backend/Protocol/ProtocolHost.cs'), 'utf8'), service = readFileSync(resolve('backend/Varia.Backend/SqlService.cs'), 'utf8')
+    const value = (source: string, name: string) => Number(new RegExp(`\\b${name} \\{ get; (?:init|set); \\} = (\\d+);`).exec(source)?.[1])
+    expect({ inFlight: value(host, 'MaxInFlight'), metadataSlots: value(host, 'MetadataSlots'), sessions: value(service, 'SessionLimit'), resultReads: value(host, 'ResultSlots') }).toEqual(wire.backend)
+  })
   it('bounds error details as the backend does', () => {
     // ErrorDetailsLimits and ConnectionFailures.MaxServerLength in C#, which cut what they send to these lengths.
     const contracts = readFileSync(resolve('backend/Varia.Backend/Contracts.cs'), 'utf8'), failures = readFileSync(resolve('backend/Varia.Backend/ConnectionFailures.cs'), 'utf8')

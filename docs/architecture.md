@@ -406,7 +406,10 @@ being true.
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
   constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
-  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
+  by statement through `ActivityReader`, where a statement the login may not run fails alone, or for Live Plan's
+  `query.plan.operators` in `Plans/LivePlanSql.cs`, one text per permission scope (Azure SQL Database, SQL Server 2022 and
+  later, older versions and Managed Instance) whose lint is `LiveSql`'s except that `DB_NAME()` may appear in Azure's
+  permission check (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
   (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
