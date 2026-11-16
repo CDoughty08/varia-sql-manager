@@ -158,7 +158,11 @@ needs; `sys.dm_server_services` may need VIEW SERVER SECURITY STATE there, so AG
 with one permission; before 2022 both are VIEW SERVER STATE), `ALTER ANY CREDENTIAL`, `SERVERPROPERTY('IsClustered')`, the `Agent XPs` value from
 `sys.configurations`, and whether Database Mail can be read. It is cached per connection and re-read on Refresh, and drives
 the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator | reader | user | none`, plus
-`explorerSelectionAgentRole`) and the read path.
+`explorerSelectionAgentRole`) and the read path. It is a `CatalogSql` statement linted by `CatalogSql.Lint` with its own
+exact per-statement `literals` set (as Peek's rows batch; the role names, `N'sysadmin'`, the `HAS_PERMS_BY_NAME` object
+and permission names, `N'IsClustered'`); `Agent XPs` is read by `configuration_id = 16384`, so no option-name literal is
+needed. The `msdb.sys.sp_executesql` wrapper stays outside the linted text, as `ModuleCall`'s does. ExplorerChecks
+renders and lints it.
 
 | Login | Tree shows | Can do |
 | --- | --- | --- |
@@ -240,19 +244,23 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   sublabel, lists no folders and no Job Activity Monitor singleton (msdb's procedures fail with error 15281), and still offers Start to sysadmin on Windows
   (starting Agent turns the option on, as SSMS does). XPs at 0 with Agent running (rare; AG-0 spikes the option's value
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
-  a generic failure. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
+  a generic failure: `ExplorerErrors.Classify` and the live error mapping map 15281 to a new explorer code
+  `AGENT_DISABLED` (added to `explorerErrorCodes` in `src/shared/contracts.ts` and its C# mirror). The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
   next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision:
   the children listing is in C# only (`Explorer/ExplorerService.cs`), and the capability read is cached. Listing the
   `agent` kind runs no SQL today (static folders and singletons, no `list`, so `LoadAsync` returns before opening a
   connection), so AG-1 adds an explicit pre-folder step for `target.Kind == "agent"` beside `DatabaseProblemAsync` and
-  `HistoryAsync`: one constant `CatalogSql` batch run through `msdb.sys.sp_executesql` (as the capability read, so
+  `HistoryAsync`: one constant `CatalogSql` batch (linted with its own exact `literals` set, rendered by ExplorerChecks) run through `msdb.sys.sp_executesql` (as the capability read, so
   `IS_ROLEMEMBER` resolves in msdb rather than returning NULL in master) via `RunAsync` on the explorer pool, counted
-  against `Budget` with the usual timeout and error mapping. It reads `Agent XPs` from `sys.configurations` (no
+  against `Budget` with the usual timeout and error mapping. It reads `Agent XPs` from `sys.configurations` by `configuration_id = 16384` (no
   permission needed), `IS_SRVROLEMEMBER(N'sysadmin')` and the three Agent role memberships. At XPs 0 it adds neither the
-  folders nor the Job Activity Monitor singleton; otherwise it gates folders by the role rules above (Alerts, Operators
+  folders nor the Job Activity Monitor singleton and returns the explorer error `AGENT_DISABLED` with the `sp_configure` /
+  `mssql-conf` sentence, so the expanded node says why even when the status view is off; otherwise it gates folders by the role rules above (Alerts, Operators
   and Proxies need SQLAgentOperatorRole or sysadmin, Error Logs sysadmin; a login with no Agent role and no sysadmin gets
-  the `noAccess` node and no children). Each Agent folder listing then picks the sysadmin path or the role path from an
+  no children and the explorer error `PERMISSION_DENIED` with an Agent-specific sentence, and a login without msdb access
+  gets the existing 916 → `NO_DB_ACCESS` value; the `noAccess` badge on the node comes from the cached capability read,
+  the expanded node's message from these errors). Each Agent folder listing then picks the sysadmin path or the role path from an
   `IS_SRVROLEMEMBER(N'sysadmin')` column in its own batch, as the sampler chooses per sample, so no role fact is cached
   across listings. A re-list therefore always sees the current value and
   `explorer.children` gains no new param; `OwnsChildren` and `HasChildren` count singletons, so a kind with singletons
@@ -263,7 +271,9 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   (modelled on `DatabaseRuntimeSource`) carries `explorer.agentService`'s XPs value, and when it changes 0 → 1 or 1 → 0 it
   reconciles the `agent` node (re-lists its children, keeping expansion and selection), the one case where a status sample
   changes the tree. When the status view is not running (`liveData.explorerStatus` off or Object Explorer hidden), the
-  fallback is the 15281 mapping on any Agent read plus Refresh.
+  fallback is the listing's own `AGENT_DISABLED` error (and 15281 → `AGENT_DISABLED` on any other Agent read) plus Refresh;
+  a C# offline check covers both listing errors and a renderer vitest checks the expanded node's message with the status
+  view off.
 - The `explorer` live source gains a reader for one probe only. Today `LiveService.CreateSampler` hands an
   `ILiveSqlReader` to the Activity Monitor and `ssis.operations` sources, and `SqlSampler` then sends **every** ungated
   probe of that source to the reader and takes the session from the reader's `SessionAsync`. Routing is fixed when the
@@ -384,7 +394,9 @@ applies; when none is free the status bar shows the job without live progress, n
 watched job runs, and never polls; it does not depend on Job Activity Monitor or Object Explorer being open. Elapsed time
 shows only when the start is readable (below).
 
-Start times: `sp_help_job` returns no start time for a running job. Sysadmin reads `sysjobactivity.start_execution_date`;
+Start times: `sp_help_job` returns no start time for a running job. Sysadmin reads `sysjobactivity.start_execution_date` for the newest Agent session only
+(`session_id = MAX(syssessions.session_id)`, the filter `LiveSql.Agent` and `sp_help_jobactivity` already use, since a
+crashed session's row keeps a start with no stop);
 other logins read `sp_help_jobactivity`, which joins `sysjobs_view` and so returns every job `sp_help_job` shows the login
 (Reader and Operator see all jobs, User its own). Where no start time is readable (a NULL `start_execution_date`, or no
 row for the current Agent session in `syssessions`), Varia shows no elapsed time (tiles, status bar, In progress run),
@@ -573,7 +585,8 @@ Database Mail logs, which SSMS shows there).
   the time bounds and `N'desc'`; AG-0 confirms on Managed Instance's documentation and,
   if one is available, an instance that log type 2 returns the Agent log there). Lint tests render every allowed shape and reject near misses.
   `sp_enum_proxy_for_subsystem` is not used: sysadmin reads `sysproxies`/`sysproxysubsystem` directly, others call
-  `sp_help_proxy`. `LiveSql.Lint`, `CatalogSql.Lint` and `ActivitySql`'s lint stay as they are. `INSERT … EXEC` is never used
+  `sp_help_proxy`. `LiveSql.Lint`, `CatalogSql.Lint` and `ActivitySql`'s lint stay as they are; new `CatalogSql` Agent statements use
+  `CatalogSql.Lint`'s existing per-statement `literals` argument with exact lists. `INSERT … EXEC` is never used
   (`sp_help_job` nests one itself); results are read into backend memory, capped, and paged or filtered there.
 - **Writes**: inside `ActionService` (its own unpooled, never-retried connection, preflight in the same connection, Stop,
   `LOCK_TIMEOUT -1`, reader-only execution, no logging), templates in `Agent/AgentSql.cs` checked by
@@ -726,7 +739,8 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   SQLAgentUserRole login opens and saves its own job through the describe role path; Reader sees others' jobs read-only;
   Operator starts another's job; a default SQLAgentUserRole login is refused Delete History with
   `PERMISSION_DENIED` (229) even for its own job, and the capability read reports no EXECUTE; tests never grant EXECUTE
-  on msdb objects; a Reader login reads another owner's running job's start time through `sp_help_jobactivity`), `AgentScripting` (SMO scripts vs SSMS goldens in `tests/fixtures/scripting/`),
+  on msdb objects; an Operator login deletes the history of another owner's scratch job and the capability read reports
+  EXECUTE for it; a Reader login reads another owner's running job's start time through `sp_help_jobactivity`), `AgentScripting` (SMO scripts vs SSMS goldens in `tests/fixtures/scripting/`),
   `AgentCredentials` (secret never in a reply or script, hostile names, an identity-only edit refused), `AgentService`
   and `AgentSteps` (above; excluded from grouped runs, run by their own command).
 - **Offline**: `AgentSql.LintRead`, `LintExecutable` and `CredentialSql` lints render every variant; schedule encoding and
@@ -737,8 +751,10 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running), state
   unknown, `PERMISSION_DENIED` mid-dialog, `STALE`, `AGENT_STOPPED`, `JOB_STATE`, a save failure with no part index, empty,
   loading and failed history and Job Activity Monitor, error-log truncation, role-path history (1,024-character message,
-  no elapsed time for a running job whose `start_execution_date` is NULL, and the Delete History disabled reason
-  for a login without EXECUTE on `sp_purge_jobhistory`), the job Alerts page hidden for User and Reader, every service-control
+  no elapsed time for a running job whose `start_execution_date` is NULL, the Delete History disabled reason
+  for a login without EXECUTE on `sp_purge_jobhistory`, Delete History enabled for Operator with another owner's job
+  checked, and a sysadmin-path start time taken from the current session's row when an older session's row has a start
+  and no stop), the job Alerts page hidden for User and Reader, every service-control
   state (Starting…, Stopping…, access denied, left stopped, Cancel restart), and the status-bar job with and without a
   free status-only slot.
 - **Smoke**: `scripts/agent-smoke.mjs` on the fake backend (tree, Job Activity Monitor grid with multi-select Start Jobs,
