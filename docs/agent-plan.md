@@ -109,8 +109,9 @@ procedure has no sysadmin check, but it reads through `xp_instance_regread`, whi
 then the plan treats it as sysadmin-only, and if it works the cap text, idle-CPU and mail facts show to every role that
 can run it, with any refusal number mapped to "not read"); what
 `sp_help_job` and `xp_sqlagent_enum_jobs` return while Agent is stopped; that `xp_servicecontrol N'Start'|N'Stop',
-N'SQLServerAgent'` works under the default virtual accounts and for a named instance (the CI job installs one); the error
-number of its "Access is denied"; which msdb calls bump `sysjobs.version_number` and `sysschedules.version_number`; the
+N'SQLServerAgent'` works under the default virtual accounts and for a named instance (the CI job installs one); how its failures
+surface (a probe of `QueryState` on a missing service showed every `xp_servicecontrol` failure arrives as engine message
+22003, a reused number, with `@rc = 1` and `@@ERROR` 0, the Windows code only in the xp's fixed "returned error <n>," text); which msdb calls bump `sysjobs.version_number` and `sysschedules.version_number`; the
 msdb error numbers the action mapping needs; and what the Linux container's `sys.dm_server_services` lists.
 
 ## Servers and platform gates
@@ -187,7 +188,15 @@ renders and lints it.
 Rules: hide what SSMS hides (Alerts/Operators/Proxies below Operator; Error Logs sysadmin only), disable rather than hide
 verbs on objects the login can see but not change (others' jobs for Reader), and treat every refusal the server still
 returns as a value (`PERMISSION_DENIED`) with the dialog staying open and saying which step was refused. The owner picker
-is read-only for non-sysadmin, as in SSMS. A state the login cannot read is unknown, never a guess: Agent state without
+is read-only for non-sysadmin, as in SSMS. Properties of an object the login can see but not change opens read-only, as
+SSMS does, instead of failing on OK: the describe reply carries `readOnly` with a reason (Reader or Operator on another
+owner's job, "Owned by <owner>: SQLAgentReaderRole may view it, not change it"; Operator on an alert, operator or proxy,
+since no Agent role has EXECUTE on `sp_add_alert`/`sp_update_alert`, `sp_add_operator`/`sp_update_operator` or
+`sp_add_proxy`/`sp_update_proxy`; a non-owner, non-sysadmin on a schedule in Manage Schedules and the schedule dialog).
+`ObjectDialog` gains a read-only mode for it: every field disabled, OK replaced by Close (primary, focused), Script still
+offered, and the reason in the message bar; New and Delete stay disabled with the same reason (mock scene `job-readonly`;
+renderer vitests for each of those four cases; the live `AgentRoles` suite asserts the describe returns the flag for
+Reader on another's job and Operator on an alert). A state the login cannot read is unknown, never a guess: Agent state without
 VIEW SERVER STATE shows no state chip; Database Mail readiness without access shows no warning. Credential dialogs (AG-8b)
 need `ALTER ANY CREDENTIAL` and only add verbs to the existing Security › Credentials folder; they never hide that folder,
 whether AG-8b has landed or not.
@@ -753,15 +762,32 @@ Database Mail logs, which SSMS shows there).
   connected instance's Agent (`SQLSERVERAGENT` or `SQLAgent$<instance>`), as the QueryState fact showed; the Windows CI job
   proves it on a named instance. Catalogue shape (today's catalogue narrows only database targets): `actionKindSpecs` gains an `agent` row offering the
   three verbs; `ActionTarget` gains an optional `agent` field (service state, startup type, sysadmin, Linux, Managed
-  Instance, clustered) filled from the node's `explorer.agentService` sample and the profile; an `agentServiceActionRules`
+  Instance, clustered, and a `busy` flag) filled from the node's `explorer.agentService` sample and the profile, with
+  `busy` true while `LongRunService` holds a `startAgent`, `stopAgent` or `restartAgent` run for that server or the node
+  shows Starting…/Stopping… (its own `agentServiceActionRules` row and vitest); an `agentServiceActionRules`
   table, mirroring `databaseActionRules`, gives each verb's enablement and reason, and `actionMenuState`/`actionMenuReasons`
   apply it when the kind is `agent` (emitted in `actionsCatalogJson` and the generated docs, regenerated with
   `npx vitest run tests/object-actions-catalog.test.ts -u`; vitest per rule). The backend's preflight repeats what it can
   check itself before any statement: Linux, Managed Instance or `IsClustered` refuses `NOT_SUPPORTED`, a non-sysadmin login
-  `PERMISSION_DENIED` (offline check for each through a fake capability read). All three rows are `class: 'dialog'` with one
-  new dialog id, `agentService`, in `dialogIds`; its `dialogSpecs` entry uses a new `confirmProgress` layout (a confirmation
-  that becomes the steps table in place, footers as below, no page list, no Script button), used by no other id (vitest
-  that the layout renders no Script and no pages). Script is not offered: zod's `actions.script` schema and C#
+  `PERMISSION_DENIED` (offline check for each through a fake capability read). All three rows are `class: 'dialog'` with three
+  new dialog ids, `startAgent`, `stopAgent` and `restartAgent`, in `dialogIds` (a `DialogSpec` names one action, C#'s
+  `ActionOf(dialog)` maps one-to-one, and `ObjectDialogDefinition.longRun` is one kind, so each verb gets its own id, its
+  own `action` and its own `longRun`). Their `dialogSpecs` entries share a new optional `layout: 'confirmProgress'` field
+  on `DialogSpec` (added to the docs.ts dialog table): one hidden `general` page keeps `open()`'s `pages[0]` read valid, and
+  the layout renders a confirmation that becomes the steps table in place, footers as below, no page list and no Script
+  button (vitest that it renders no Script and no page list). Every dialog id is a describe id and `open()` always
+  describes, so the C# describe switch gains a `DescribeAgentServiceAsync` case for the three ids (on the read gate, under
+  the `AgentSql` lint: `QueryState` through the allowlisted `xp_servicecontrol` shape, the startup type from
+  `sys.dm_server_services`, sysadmin, and the profile's Linux, Managed Instance and clustered facts), returning a typed
+  `agentService` member of `ActionDescribeResult` (TS interface and strict zod schema in `src/shared/actions/schema.ts`, the
+  C# record and bounds; offline check that the switch never falls through to `DescribeJobAsync` for these ids, and a vitest
+  of the describe shape); the confirmation text and enablement are taken from that fresh describe, not only the sample.
+  `ObjectDialogService` receives step events: `ObjectDialogServiceOptions` gains `progress: ActionProgressService`, whose
+  construction in `src/renderer/src/core/workbench.ts` moves ahead of the dialogs service, and the dialog `track`s its
+  request id before sending the execute and `forget`s it after the reply (vitest that a step-2 event disables Cancel restart
+  and that each step event updates its row). Each row's `explorer.*` command feeds `actionCommandEntries()`, so the lane
+  also registers the three handlers (with `when` and `unavailable`) in `src/renderer/src/contributions/actions.ts` and
+  regenerates the commands docs with `npx vitest run tests/commands-docs.test.ts -u`. Script is not offered: zod's `actions.script` schema and C#
   `Validate(args, script: true)` refuse the three action ids (vitest and offline check), so `ScriptAsync` never reaches
   them. Three action rows: `startAgent`, `stopAgent` and `restartAgent`, each an `objectActions` entry with an
   `ObjectActionSpec` row on the Agent node kind (only object actions carry `long`; `actionDrainMs`, the long gate, step
@@ -777,7 +803,9 @@ Database Mail logs, which SSMS shows there).
   Stop are built like Restart below:
   `long: true`, fixed steps (Start: 0 Start, 1 Wait for Running; Stop: 0 Stop, 1 Wait for stopped),
   each wait bounded by `agentLimits.serviceWaitMs` (60 s), the job returning its outcome as a value from the moment the
-  statement is sent (its `QueryState` reads on a token of their own), and a long run registered for the whole action
+  statement is sent (the statement itself runs on a token of its own bounded by `serviceStatementMs`, so a drain or Stop
+  sends no attention to it, and its `QueryState` reads on a token of their own; fake-service check that a Stop during
+  the statement still returns the statement's outcome), and a long run registered for the whole action
   (`startAgent` and `stopAgent` kinds beside `restartAgent`, subjects "A start of SQL Server Agent" / "A stop of SQL
   Server Agent", with the same per-kind "Wait for it to finish" override below; both take the long gate like Restart), so close, Disconnect and Restart SQL Backend are refused
   while one runs. When a Start's wait passes `serviceWaitMs` (plain Start, Restart's step 2 and Start again alike), the action
@@ -810,8 +838,14 @@ Database Mail logs, which SSMS shows there).
   then the action itself re-reads `QueryState` (ActionService has no live
   probes) on its own connection under the `AgentSql` lint until it reads stopped, each wait bounded by `agentLimits.serviceWaitMs` and
   Stop-able, then Start. Sysadmin and Windows servers only, not on a failover cluster instance; confirmation first, through
-  ActionService. "Access is denied" (the engine's virtual account may lack the right on the Agent service) maps by its
-  error number (AG-0) to a `PERMISSION_DENIED` value with a fixed sentence: "Windows refused the request: the SQL Server service account may
+  ActionService. Failures are detected only by the template's `@rc <> 0` (the xp raises
+  message 22003 for every failure, which does not abort the batch, and leaves `@@ERROR` 0), and classified in the backend by
+  the Windows code in the xp's fixed "returned error <n>," text, a documented exception to classifying by number since the
+  engine number is the same for all of them: 5 ("Access is denied"; the engine's virtual account may lack the right on the
+  Agent service) maps to a `PERMISSION_DENIED` value, and anything else (1056 already running, 1058 disabled, 1060, 1062,
+  unparseable text) to `SQL_ERROR` with the engine's text plus the `QueryState` read (offline table check over 5, 1056,
+  1058, 1060, 1062 and unknown text; the 22003 shape itself is checked against the fake service, since `LintExecutable`
+  admits only the constant service name). The `PERMISSION_DENIED` value comes with a fixed sentence: "Windows refused the request: the SQL Server service account may
   not control the Agent service on this server. Start it in SQL Server Configuration Manager, or grant that account the
   right." (no account name: the action path has no read of `service_account`, and none is added for an error message). This deliberately differs from
   SSMS, which controls the service from the client computer through WMI: Varia goes through the engine so it needs no
@@ -828,7 +862,8 @@ Database Mail logs, which SSMS shows there).
   Agent", so the window close, Disconnect of that server and Restart SQL Backend are refused and the reload prompt names it;
   `longRunMessages` gains a per-kind override so `restartAgent`, `startAgent` and `stopAgent` each say "… Wait for it to finish." instead of "Stop it
   first", and the same override covers `close` ("… Wait for it to finish, then close the window.") and main's `reload` and
-  `restart` prompt lines (src/main/action-prompts.ts), which today describe the whole state through its first run; they
+  `restart` prompt lines (built by `stops()` and `longRunMessages.reload`/`.restart` in `src/shared/long-runs.ts`;
+  src/main/action-prompts.ts only joins them, and the `total`/`longRunLimits.runs` wording stays), which today describe the whole state through its first run; they
   become one clause per run kind present (Agent kinds first, then "… and a restore stops part way" for the rest), so a mixed
   state is worded right in either order (vitest for a mixed state in each order); for these kinds they say the backend lets a sent Start or Stop finish, and cancels a Restart only before its Start is
   sent, instead of "stops it part way", since Cancel restart is disabled in the start phase and a plain Start or Stop cannot be stopped once its statement is sent; vitest per kind over `stop`, `close`, `reload` and `restart`): during the stop phase the drain acts as Cancel restart,
