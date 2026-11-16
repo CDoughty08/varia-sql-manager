@@ -190,12 +190,19 @@ verbs on objects the login can see but not change (others' jobs for Reader), and
 returns as a value (`PERMISSION_DENIED`) with the dialog staying open and saying which step was refused. The owner picker
 is read-only for non-sysadmin, as in SSMS. Properties of an object the login can see but not change opens read-only, as
 SSMS does, instead of failing on OK: the describe reply carries `readOnly` with a reason (Reader or Operator on another
-owner's job, "Owned by <owner>: SQLAgentReaderRole may view it, not change it"; Operator on an alert, operator or proxy,
+owner's job, "Owned by <owner>: <the login's own Agent role> may view it, not change it"; Operator on an alert, operator or proxy,
 since no Agent role has EXECUTE on `sp_add_alert`/`sp_update_alert`, `sp_add_operator`/`sp_update_operator` or
-`sp_add_proxy`/`sp_update_proxy`; a non-owner, non-sysadmin on a schedule in Manage Schedules and the schedule dialog).
-`ObjectDialog` gains a read-only mode for it: every field disabled, OK replaced by Close (primary, focused), Script still
-offered, and the reason in the message bar; New and Delete stay disabled with the same reason (mock scene `job-readonly`;
-renderer vitests for each of those four cases; the live `AgentRoles` suite asserts the describe returns the flag for
+`sp_add_proxy`/`sp_update_proxy`; a non-owner, non-sysadmin on a schedule in Manage Schedules and the schedule dialog;
+SQL Server Agent Properties on Managed Instance, "Managed Instance does not allow changing SQL Server Agent properties", in
+AG-8a). The Agent node's Properties item is disabled for non-sysadmin logins with "Only sysadmin can read SQL Server Agent
+properties" until AG-0's `sp_get_sqlagent_properties` spike says another role gets values (node-menu vitest).
+`ObjectDialog` gains a read-only mode for it: every field disabled, OK replaced by Close (primary, focused), and the reason
+in the message bar; pages stay navigable; list buttons that change something (Steps' New, Insert, Delete, Move up/down;
+Schedules' New, Pick, Remove; Alerts' Add, Remove; Start step) are disabled with the same reason, while Edit stays enabled
+and opens the Step, Schedule or Alert dialog read-only the same way; Script stays offered and, since nothing can change,
+says "There is no action to be scripted." as SSMS's Script Action does with no changes; New and Delete stay disabled with
+the same reason (mock scene `job-readonly`, drawn on the Steps page; renderer vitests for each of those five cases, a nested
+step dialog opened read-only, and Script's message; the live `AgentRoles` suite asserts the describe returns the flag for
 Reader on another's job and Operator on an alert). A state the login cannot read is unknown, never a guess: Agent state without
 VIEW SERVER STATE shows no state chip; Database Mail readiness without access shows no warning. Credential dialogs (AG-8b)
 need `ALTER ANY CREDENTIAL` and only add verbs to the existing Security › Credentials folder; they never hide that folder,
@@ -378,7 +385,11 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   none), and that listing an XPs-1 `agent` node costs one round trip, and a renderer vitest feeds an `explorer.agentService` sample that flips XPs 0 → 1 (the
   `agent` node re-lists with its folders, keeping expansion and selection), then 1 → 0 (they go), and an unchanged value
   (no re-list). An `AgentStateSource` on the renderer's `src/renderer/src/explorer/ExplorerService.ts`
-  (modelled on `DatabaseRuntimeSource`) carries `explorer.agentService`'s XPs value, and when it changes 0 → 1 or 1 → 0 it
+  (modelled on `DatabaseRuntimeSource`) carries the whole `explorer.agentService` sample (XPs value, service state,
+  startup type) for each server, and `ExplorerServiceOptions` gains a long-run source (wired in
+  `src/renderer/src/core/workbench.ts` from `LongRunService`); `targetOf` fills `ActionTarget.agent` for `kind === 'agent'`
+  from both, and `updateContext()` re-publishes the context keys on either signal (vitest that the Start/Stop/Restart keys
+  flip when a sample changes and when an Agent run begins or ends). When the XPs value changes 0 → 1 or 1 → 0 it
   reconciles the `agent` node (re-lists its children, keeping expansion and selection), the one case where a status sample
   changes the tree. When the status view is not running (`liveData.explorerStatus` off or Object Explorer hidden), the
   fallback is the listing's own `AGENT_DISABLED` error (and 15281 → `AGENT_DISABLED` on any other Agent read) plus Refresh;
@@ -441,7 +452,11 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   are hidden. The Agent node's Start, Stop and Restart (sysadmin, Windows, not a failover cluster instance) follow the
   sampled service state: Running enables Stop and Restart and disables Start ("SQL Server Agent is running"); Stopped
   enables Start and disables Stop and Restart ("SQL Server Agent is stopped"); Start pending, Stop pending, Starting… and
-  Stopping…, an unreadable state, or a service action already running in this window disable all three with that reason;
+  Stopping…, a sample that says the state is unreadable, or a service action already running in this window disable all
+  three with that reason; no sample at all (the status view off or Object Explorer hidden) is unknown, not unreadable, so,
+  as the catalogue's "without a runtime the row stands" convention, all three stay enabled for sysadmin on Windows and the
+  dialog's fresh describe (`agentService`) decides the confirmation, or refuses with the state it read (vitest with the
+  status view off);
   startup type Disabled disables Start and Restart with "The SQL Server Agent service is disabled" (a running service can be
   set Disabled and keeps running; Restart's Stop would work and its Start could not). With Agent XPs at 0 (`AGENT_DISABLED`),
   New ›, Job Activity Monitor and View History on the node, and the palette's "SQL Server Agent: Job Activity Monitor" and
@@ -566,7 +581,8 @@ live check that a SQLAgentUserRole login opens and saves its own job:
     (T-SQL), Command in a Monaco editor (T-SQL gets the query editor's language features;
     Parse uses the language service's parse, never executes), Open… loads a local file through main's dialog.
   - Step dialog **Advanced**: On success / On failure action (next step, quit reporting success/failure, go to step n),
-    Retry attempts and interval, Output file (server path through the server file picker) and Append, Log to table, Include
+    Retry attempts and interval, Output file (server path through the server file picker) and Append, Log to table and "Append output to existing entry
+    in table" (`sysjobsteps.flags` 16, enabled only with Log to table), Include
     step output in history, Run as user (T-SQL). SSMS's View buttons for the output file and the table log are later.
   - SSIS steps (in AG-6b): package source (SSIS Catalog / SQL Server / file system), the SSIS Catalog tree reused for picking
     a package, environment reference and parameter overrides as a command line the backend builds; Configuration tab
@@ -694,7 +710,7 @@ Database Mail logs, which SSMS shows there).
 | Shared schedules | Schedule dialog, Pick, Jobs in Schedule, Manage Schedules: Delete offered for any schedule the login owns (sysadmin: any), never judged "unused" from Jobs in schedule counts; `sp_delete_schedule` without `@force_delete`, whose in-use refusal maps to `IN_USE` with msdb's message (an `AgentActions` check) | |
 | Job categories | Category picker | Manage Job Categories dialog |
 | Operators | List, New / Properties (General: name, enabled, e-mail, pager and on-duty schedule; Notifications: alerts and jobs; History), Enable/Disable, Rename, Delete, Script As | Fail-safe operator (Agent Properties › Alert System) |
-| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, notify operators; Options: include error text, delay between responses), Enable/Disable, Rename, Delete, Script As | WMI event alerts editable (shown read-only) |
+| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, notify operators; Options: include error text, additional notification message to send, delay between responses), Enable/Disable, Rename, Delete, Script As | WMI event alerts editable (shown read-only) |
 | Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References), Rename, Delete, Script As | |
 | Credentials | New Credential and Credential Properties on the existing Security › Credentials folder (kind `credential`) and from the Proxy dialog: name, identity, secret, encryption provider. `ALTER CREDENTIAL` resets the secret when `SECRET` is omitted, so in Properties the Identity and secret are read-only until "Change identity and password" is checked, and every ALTER sends both | |
 | Error logs | List, view in Log File Viewer, Recycle | Configure (log path, level) via Agent Properties › General |
@@ -787,9 +803,12 @@ Database Mail logs, which SSMS shows there).
   request id before sending the execute and `forget`s it after the reply (vitest that a step-2 event disables Cancel restart
   and that each step event updates its row). Each row's `explorer.*` command feeds `actionCommandEntries()`, so the lane
   also registers the three handlers (with `when` and `unavailable`) in `src/renderer/src/contributions/actions.ts` and
-  regenerates the commands docs with `npx vitest run tests/commands-docs.test.ts -u`. Script is not offered: zod's `actions.script` schema and C#
-  `Validate(args, script: true)` refuse the three action ids (vitest and offline check), so `ScriptAsync` never reaches
-  them. Three action rows: `startAgent`, `stopAgent` and `restartAgent`, each an `objectActions` entry with an
+  regenerates the commands docs with `npx vitest run tests/commands-docs.test.ts -u`. Script is not offered: the three requests get their own strict `agentServiceRequestSchema` (action enum, `connectionId`,
+  `requestId`, target `{ kind: 'agent' }` only) that joins `actionExecuteRequestSchema`'s union but not the
+  `actionRequestSchema` union that `actionScriptRequestSchema` pipes into, with the matching `ActionRequest` type and a C#
+  `ActionArgs` `Validate` rule that the request carries no other fields; zod's `actions.script` schema and C#
+  `Validate(args, script: true)` therefore refuse the three action ids (vitest and offline check), so `ScriptAsync` never
+  reaches them. Three action rows: `startAgent`, `stopAgent` and `restartAgent`, each an `objectActions` entry with an
   `ObjectActionSpec` row on the Agent node kind (only object actions carry `long`; `actionDrainMs`, the long gate, step
   events and drain registration all key off it, so a server or kind-dialog row would silently get none; a vitest that
   `actionDrainMs` is non-zero and the generated `actionsCatalogJson()` row says `long: true` for each, and a C# offline
@@ -825,26 +844,43 @@ Database Mail logs, which SSMS shows there).
   `stopPending`, `unreadable`) in `src/shared/actions/schema.ts` (the interface and the strict `actionExecuteResultSchema`), the C# record and C#
   bounds; `AgentSql` maps `QueryState`'s text to it in the backend, an offline contract check covers every value and an
   unknown text (`unreadable`), and the renderer vitests drive each ending (Start again or Close only, the wording) from
-  that field alone. A Start that fails with an error, not only one that times out, reads `QueryState` once the same way
-  before choosing its ending. A Stop statement that fails (plain Stop, or Restart's step 0) reads `QueryState` once on its
-  own token, skips the wait, sends no Start, and ends with the engine's message plus the state, Close only. "Access is
+  that field alone. A Start that fails with an error (plain Start, Restart's step 2 and Start again alike) reads `QueryState`
+  once on its own token, skips the wait, and ends with the engine's text plus the state: Running ends "SQL Server Agent is
+  already running" with Close only and success styling (the stale-sample 1056 case); Stopped ends "SQL Server Agent could
+  not be started; it is Stopped" with Start again beside Close unless the code was 1058 or the startup type is Disabled; any
+  other state, Close only (mock `start-agent-failed`; fake-service checks for a failing Start reading Stopped and one reading
+  Running, renderer vitests for both). A Stop statement that fails (plain Stop, or Restart's step 0) reads `QueryState` once on its
+  own token, skips the wait, sends no Start, and ends with the engine's message plus the state, Close only (mocks
+  `stop-agent-failed`, `restart-stop-failed`). Success endings say "SQL Server Agent is running on <server>" (Start, Start
+  again, Restart) or "SQL Server Agent is stopped on <server>" (Stop), Close only (mock `start-agent-done`; Stop's and
+  Restart's success use the same layout with their own wording, noted on that scene). "Access is
   denied" takes precedence over every state rule: it ends `PERMISSION_DENIED` with Close only and never offers Start again,
   since the same request would be refused (mock `agent-denied` in the progress layout). "Left stopped" offers Start again only
-  when the latest `explorer.agentService` sample's startup type is not Disabled; otherwise it says the service is disabled
+  when the startup type is not Disabled, taken from the dialog's describe (`agentService` carries it, so it is known
+  with no sample) and refreshed by the latest sample when there is one; otherwise it says the service is disabled
   and offers Close only. A plain Start dialog's Start again behaves like Restart's below: in place, no second confirmation, a
   new step row, its own `startAgent` long run, Close disabled with focus on the log region until it ends (mock
-  `start-agent-left-stopped`). Fake-service checks: a failing Stop in each of plain Stop and Restart step 0, access denied
+  `start-agent-left-stopped`). `ObjectDialogService.ok()` only sends the open definition's own request and registers its
+  own `longRun`, so Start again is a new service method, `startAgain()`: it builds `{ action: 'startAgent', target }` with
+  a fresh request id that it `track`s and `forget`s on `ActionProgressService`, calls `longRuns.begin({ kind:
+  'startAgent' })`, and appends its step rows to the open dialog; the three definitions set `keepOpen: true`, so a success
+  leaves the dialog open on its ending with Close focused (vitests that Start again registers a `startAgent` run, not
+  `restartAgent`, and that success keeps the dialog open). Fake-service checks: a failing Stop in each of plain Stop and Restart step 0, access denied
   on Start reading Stopped; renderer vitests for those endings, the Disabled variant and the plain dialog's Start again. Restart is Stop,
   then the action itself re-reads `QueryState` (ActionService has no live
   probes) on its own connection under the `AgentSql` lint until it reads stopped, each wait bounded by `agentLimits.serviceWaitMs` and
   Stop-able, then Start. Sysadmin and Windows servers only, not on a failover cluster instance; confirmation first, through
-  ActionService. Failures are detected only by the template's `@rc <> 0` (the xp raises
-  message 22003 for every failure, which does not abort the batch, and leaves `@@ERROR` 0), and classified in the backend by
+  ActionService. Failures arrive as a `SqlException` (the xp raises message 22003 at level 16 for every failure;
+  the batch goes on with `@rc = 1` and `@@ERROR` 0, but SqlClient still throws, since action connections do not set
+  `FireInfoMessageEventOnUserErrors`), so the Start, Stop and `QueryState` calls catch `SqlException` with `Number == 22003`
+  around the statement themselves, before `JobAsync`'s generic `ActionErrors.FromSql` could see it, with `@rc <> 0` kept
+  only as a backstop; the fake service throws a level-16 22003 `SqlException` carrying the xp's text, so the offline checks
+  run that path. They are classified in the backend by
   the Windows code in the xp's fixed "returned error <n>," text, a documented exception to classifying by number since the
   engine number is the same for all of them: 5 ("Access is denied"; the engine's virtual account may lack the right on the
-  Agent service) maps to a `PERMISSION_DENIED` value, and anything else (1056 already running, 1058 disabled, 1060, 1062,
-  unparseable text) to `SQL_ERROR` with the engine's text plus the `QueryState` read (offline table check over 5, 1056,
-  1058, 1060, 1062 and unknown text; the 22003 shape itself is checked against the fake service, since `LintExecutable`
+  Agent service) maps to a `PERMISSION_DENIED` value, and anything else (1056 already running, 1058 disabled, 1060, 1061
+  cannot accept control messages, 1062, 1069 logon failure, unparseable text) to `SQL_ERROR` with the engine's text plus the
+  `QueryState` read (offline table check over 5, 1056, 1058, 1060, 1061, 1062, 1069 and unknown text; the 22003 shape itself is checked against the fake service, since `LintExecutable`
   admits only the constant service name). The `PERMISSION_DENIED` value comes with a fixed sentence: "Windows refused the request: the SQL Server service account may
   not control the Agent service on this server. Start it in SQL Server Configuration Manager, or grant that account the
   right." (no account name: the action path has no read of `service_account`, and none is added for an error message). This deliberately differs from
