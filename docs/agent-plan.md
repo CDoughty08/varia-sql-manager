@@ -307,10 +307,12 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   (each with SSMS's one-line-per-job progress dialog) send one ordinary `actions.execute` per selected job, one after another, each with its own target, identity guard and template,
   so each job's `jobStarted`, `JOB_STATE` or `NOT_FOUND` comes back on its own reply and one refusal never fails the
   others (the progress dialog's line per job). The renderer caps a selection at `agentLimits.startJobs` (those four verbs are
-  disabled above it, with the reason), so no request shape changes. The progress dialog's Stop, and Close or Escape
-  mid-sequence, send no further requests: unsent jobs show "Not run", the request in flight finishes and reports (a
+  disabled above it, with the reason), so no request shape changes. The progress dialog's Stop (disabled once pressed; Close stays enabled), and Close or
+  Escape mid-sequence, send no further requests (mock scene `start-jobs-stopped`): unsent jobs show "Not run", the request in flight finishes and reports (a
   request is never withdrawn or re-sent), and no `sp_stop_job` is sent to jobs already started. A renderer vitest covers
-  a partial failure, the cap and Stop mid-sequence for each verb. The status bar takes a
+  a partial failure, the cap and Stop mid-sequence for each verb. Every reply in the sequence goes to the status-bar job
+  service whether or not the dialog is still open, so a successful Start becomes a watched job (or joins the overflow
+  item) with its `jobStarted` even after Close (vitest: Close mid-sequence with a Start in flight still watches that job). The status bar takes a
   finished job's outcome only when its last run, compared at second precision, is at or after that time (table tests: the
   job starts in the same second, and in the next). `sp_start_job` only posts the request, so for a moment the job can read
   idle with the previous run's `last_run`: the status bar shows "Starting…" until the job is seen running (status not 4)
@@ -473,7 +475,7 @@ Verbs (all via ActionService, see SQL rules):
 | --- | --- | --- |
 | Start Job at Step… | `sp_start_job @job_id, @step_name` | Dialog lists steps when the job has more than one, as SSMS. From Job Activity Monitor with several jobs selected (AG-3), SSMS's Start Jobs progress dialog lists one line per job. |
 | Stop Job | `sp_stop_job @job_id` | Several selected (AG-3): one line per job, as Start. |
-| Enable / Disable | `sp_update_job @job_id, @enabled` | Multi-select in Job Activity Monitor; single in the tree. |
+| Enable / Disable | `sp_update_job @job_id, @enabled` | Multi-select in Job Activity Monitor with the one-line-per-job progress dialog, as Start; single in the tree. |
 | Rename | `sp_update_job @job_id, @new_name` | Inline rename like other kinds. |
 | Delete | `sp_delete_job @job_id, @delete_history, @delete_unused_schedule` | Delete Object dialog; both options shown and on by default, as SSMS passes both as 1. |
 | New Job / Properties | `sp_add_job`, `sp_update_job`, `sp_add_jobstep`, `sp_update_jobstep`, `sp_delete_jobstep`, `sp_add_jobschedule` / `sp_attach_schedule` / `sp_detach_schedule`, `sp_add_jobserver`, `sp_update_job` notification arguments | One transaction, each call's return code checked (SQL rules); Script Action shows SSMS's `BEGIN TRANSACTION … QuitWithRollback` shape with literals, as Login's does. |
@@ -890,8 +892,8 @@ Smoke suites find surfaces by ARIA role and name, so these are part of the desig
   (a parent with some jobs checked is mixed); Space toggles. Focus order is sources → toolbar → runs grid → steps grid →
   details pane, and F6 / Shift+F6 cycle the panes, as in the query editor. Selecting a run updates the steps grid without
   moving focus. F5 refreshes; Ctrl+C copies the selected rows through `ResultTextWriter`.
-- **Dialogs**: `dialog` with the page list as a `tablist` (as Login Properties); the Start Jobs progress dialog lists one
-  `listitem` per job with its result text, inside a `log` region; destructive confirmations are `alertdialog`s whose
+- **Dialogs**: `dialog` with the page list as a `tablist` (as Login Properties); the Start, Stop, Enable and Disable Jobs progress dialog is a `table`
+  (Action, Status, Message; one row per job, as the mock and SSMS) inside a `log` region that announces each row's result; destructive confirmations are `alertdialog`s whose
   default button is Cancel.
 - **Status bar job**: a `status` region announcing start and end, with Stop, View History and Dismiss as buttons.
 
@@ -907,7 +909,7 @@ CLAUDE.md requires.
 | AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, docs generation), `agent.profile` and `agentRole` keys, `AgentReader` + `AgentSql.LintRead`, CI `MSSQL_AGENT_ENABLED` and the Agent-up wait, `VARIA_TEST_SQL_AGENT`, scratch prefix and sweep extension, Agent live suite skeleton; spikes on the owner's test instance: `sp_help_job` while stopped, the Agent XPs value after a clean Agent stop and error 15281, msdb procedures that roll back themselves (266), `xp_servicecontrol` with `SQLServerAgent` on virtual accounts and its "Access is denied" number, `version_number` bumps, msdb error numbers, the `dm_server_services` permission on 2022+ (which `HAS_PERMS_BY_NAME` guards each probe uses), the Linux DMV | — | M |
 | AG-1 | Object Explorer: catalogue singleton children and `opens` leaves (with C# `Served`, docs and tests), Agent node, Job Activity Monitor leaf, folders and `agentProxySubsystem`, the session sysadmin column and reader session facts, both listing paths, edition gate (`ExplorerProfile` edition; existing Linux and Managed Instance flags), platform-gate verification, `explorer.agentService`, Agent node chips, per-probe reader routing in `SqlSampler` and the role path of `explorer.agent` (updating `ExplorerStatusLiveChecks`), XPs-disabled state, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden (Agent node New › appears with AG-6a's Job…), Ctrl+Q reveals Agent objects | AG-0 | M |
 | AG-2 | Job verbs from the tree: Start Job at Step, Stop, Enable/Disable, Rename, Delete; `AgentSql.LintExecutable` with return-code checks, the identity guard and msdb error mapping (`AGENT_STOPPED`, `JOB_STATE` after 22022, `STALE` codes registered); Agent service Start / Stop / Restart with every state; the `AgentService` suite under the exclusive lock and the path-gated `agent-service.yml` workflow | AG-1 | M |
-| AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, tiles, view chips, filters, multi-select row actions with Start Jobs / Stop Jobs progress, loading, error and Agent-stopped states, server-time labels; status-bar running job (`agent.jobs.watched`), Agent-stopped probe (`agent.jobs.service`) | AG-1 (AG-2 for actions) | M |
+| AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, tiles, view chips, filters, multi-select row actions with Start / Stop / Enable / Disable Jobs progress, loading, error and Agent-stopped states, server-time labels; status-bar running job (`agent.jobs.watched`), Agent-stopped probe (`agent.jobs.service`) | AG-1 (AG-2 for actions) | M |
 | AG-4 | Script As for Job, Alert, Operator, ProxyAccount (UrnBuilder JobServer children, scripting catalogue rows, goldens, role check) | AG-1 | S |
 | AG-5a | Log File Viewer: `agent.history` live source (both paths), run grouping with In progress and Unknown, master/detail grids, details pane, `agent.historyMessage`, Delete History for checked jobs (all or older than), start times through `sp_help_jobactivity`, role-path message limit, cap text from `sp_get_sqlagent_properties` | AG-1, AG-2 (write path), AG-3 (`agent.jobs` source for running state) | M |
 | AG-5b | Agent error logs in the Log File Viewer: `agent.errorLogs`, `xp_readerrorlog` / `sp_readmierrorlog` capped reads with the truncation notice, Recycle | AG-5a | S |
