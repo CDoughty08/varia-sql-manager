@@ -177,38 +177,55 @@ whether AG-8b has landed or not.
 ## Object Explorer
 
 Tree (SSMS order). Jobs, alerts, operators and proxies use the existing `serverObject` scope (a server-level object named
-by name alone; their names are unique per server). The `agent` node is a singleton under the server and uses the unnamed
-`server`-style scope, as other fixed server folders do. Error logs are keyed by archive number (`0` is Current), never by
-their "Current - <date>" label, which changes on Recycle:
+by name alone; their names are unique per server). Error logs are keyed by archive number (`0` is Current), never by their
+"Current - <date>" label, which changes on Recycle.
+
+Today kind rows appear only as a folder's listed `rows`, the server kind lists only folders, and a folder with no `list` is
+an empty folder with no "opens" behaviour. Agent needs two new catalogue mechanisms, built in AG-1 with their C# `Served`
+mirror, docs.ts output and catalogue tests:
+
+- **Singleton children**: `KindSpec` gains `singletons` (kind, label, the same `editions`/`platforms` gates as folders), rendered
+  as single rows after the kind's folders, with an unnamed `server`-style scope. The server kind's singleton is `agent`
+  ("SQL Server Agent", so chips keyed by `NodeKind` work); the `agent` kind's singleton is `agentJobActivity` ("Job Activity
+  Monitor", a leaf).
+- **Opens a document**: `KindSpec` gains `opens` (a document id from the Agent catalogue); a leaf with it opens that document
+  on Enter or double-click and shows no expander. `agentJobActivity` opens Job Activity Monitor.
+
+Proxies' subsystem folders are dynamic, so they are a kind, `agentProxySubsystem` (`serverObject`, name = subsystem),
+listed by the Proxies folder, plus a static "Unassigned Proxies" folder:
 
 ```
 SQL Server Agent                (agent node: "Stopped" sublabel and chip when stopped; "Agent XPs disabled" sublabel
                                  when that option is 0 (see below); running-jobs chip)
   Jobs                          (job rows, filter by name/owner/category/created; disabled status badge; state chips)
-  Job Activity Monitor          (leaf: opens the document)
+  Job Activity Monitor          (singleton leaf kind agentJobActivity: opens the document)
   Alerts                        (alert rows, disabled badge)
   Operators                     (operator rows, disabled badge)
   Proxies
-    <one folder per subsystem in syssubsystems except TSQL>, Unassigned Proxies
+    <agentProxySubsystem rows: every subsystem except TSQL>, Unassigned Proxies (static folder)
   Error Logs                    (Current - <date>, Archive #1 - <date> ...)
 ```
 
-- `laterFolders` loses `SQL Server Agent`; folders and kinds (`agent`, `agentJob`, `agentAlert`, `agentOperator`,
-  `agentProxy`, `agentErrorLog`) go in the explorer catalogue with icons registered in `icons.ts` (Agent, alert, operator,
+- `laterFolders` loses `SQL Server Agent`; folders and kinds (`agent`, `agentJobActivity`, `agentJob`, `agentAlert`,
+  `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog`) go in the explorer catalogue with icons registered in `icons.ts` (Agent, alert, operator,
   proxy, error log, schedule; `agent-job` reused).
 - Listings, sysadmin path: `CatalogSql` queries over msdb tables/views, keyset-paged and filtered in SQL as every listing.
   Role path: Agent kinds list through `AgentReader` (`sp_help_job`, `sp_help_operator`, `sp_help_alert`, `sp_help_proxy`),
   which reads the whole result into backend memory up to `agentLimits.listRows`, marks truncation explicitly, and pages and
   filters it there; `CatalogSql` stays free of `EXEC`. Error logs list through `xp_enumerrorlogs 2` (sysadmin; Managed
-  Instance per the gates). Proxies list one folder per subsystem except TSQL (proxies cannot be assigned to it; a listing
-  test checks no TSQL folder appears).
+  Instance per the gates). Proxies list one `agentProxySubsystem` row per subsystem except TSQL (proxies cannot be assigned
+  to it; a listing test checks no TSQL row appears): sysadmin reads `syssubsystems`, others `sp_enum_sqlagent_subsystems`
+  (allowlisted; AG-0 checks which roles may run it, and below Operator the Proxies folder is hidden anyway).
 - `AgentReader` (`Agent/AgentReader.cs`) is a shared statement runner, not a service: given a connection it runs
   `AgentSql.LintRead`-checked statements one at a time (a statement the login may not run fails alone) and reads capped
   results into memory. Each caller keeps its own pool, connection and prologue: Object Explorer listings and Search
   Objects on theirs, `actions.describe` on the action read connection, and live sources through a thin `ILiveSqlReader`
   adapter.
 - Agent state: a new `explorer.agentService` probe in the `explorer` live source (added to `liveProbeIds` and the source's
-  probe list), `permission: 'serverState'` (or the 2022+ security-state kind, AG-0), reads `sys.dm_server_services`
+  probe list). It declares **no** permission gate, because a gated probe opens unavailable without the permission and its
+  ungated `Agent XPs` read (`sys.configurations`) would never run; instead its constant text guards the DMV and session
+  parts with `HAS_PERMS_BY_NAME` (the 2022+ security or performance state, settled in AG-0) and returns NULL state when the
+  login lacks it. It reads `sys.dm_server_services`
   (`servicename LIKE N'SQL Server Agent%'`, as `ExplorerStatusLiveChecks` does) and, where the DMV has no Agent row (Linux,
   to verify), an Agent session (`program_name LIKE N'SQLAgent - %'`) in `sys.dm_exec_sessions`. Without the permission the
   state is unknown and no state chip shows. Managed Instance is always running.
@@ -225,14 +242,20 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   sampler opens (`SqlSampler.OpenAsync`), often before the session has been read, so it cannot depend on the login. AG-1
   adds static per-probe routing (`ILiveSqlReader.Handles(probeId)`; probes it does not handle keep their `LiveSql` query and
   the session stays `LiveSql.Session`), and the `AgentReader` adapter always handles `explorer.agent` and **chooses per
-  sample** from the session's existing `IS_SRVROLEMEMBER(N'sysadmin')` flag (as `LiveQuery.Restricted` keys on `admin`):
+  sample** from a sysadmin flag. That flag does not exist for the explorer today (`LiveSql.Session`'s admin column is
+  SSISDB-only and 0 when `@catalog` is NULL, and `ILiveSqlReader.ReadAsync` receives no session facts), so AG-1 adds a
+  column `CONVERT(int, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0))` to `LiveSql.Session` independent of `@catalog`, keeps it
+  in a sampler field, and passes it to the reader through a new session-facts argument of `ReadAsync`; the session-shape
+  checks are updated. With that flag:
   sysadmin runs today's `LiveSql` Agent statement, other logins run `sp_help_job`, counting `current_execution_status` in
   1, 2, 3, 7, so the count is the jobs the login may see. No Agent-role columns go in `LiveSql.Session` (the explorer pool
   opens in master, where `IS_ROLEMEMBER` on msdb roles returns NULL); a login with no Agent role gets `PERMISSION_DENIED`
   from `sp_help_job` as today. The `agent.jobs` and `agent.tree` readers' own `SessionAsync` read the same flag.
   `ExplorerStatusLiveChecks` keeps its no-role `PERMISSION_DENIED` assertion and gains a check with a SQLAgentUserRole login
   that expects its own running job counted.
-- `ExplorerStatusService` builds its probe list from `statusChipKinds.database` and `.server`; it adds `.agent`.
+- `ExplorerStatusService` builds its probe list from `statusChipKinds.database` and `.server`; it adds `.agent` and builds
+  the list through a `Set`, since `explorer.agent` appears in both `.server` and `.agent` and `live.update` refuses repeated
+  probe ids (a vitest checks the list has no repeats).
 - Chips: `statusChipKinds` gains `agent: ['explorer.agentService', 'explorer.agent']`; `server` keeps `explorer.agent`.
   Both running-jobs chips read the one sample. Job rows show state chips (Running · step n/m, Failed, Between retries) from
   `agent.jobs` while the Jobs folder is open. Chips never reload the tree.
@@ -333,6 +356,14 @@ live check that a SQLAgentUserRole login opens and saves its own job:
 - **Steps**: grid of steps (order, name, type, on success, on failure), New / Insert / Edit / Delete / Move up / Move down,
   Start step. Deleting a step another step jumps to asks first and changes those to "Quit the job reporting failure", as
   SSMS does (mocked).
+  - **Save order**: msdb renumbers as it goes (`sp_delete_jobstep` lowers later step ids and rewrites go-tos that pointed at
+    the deleted step; `sp_add_jobstep @step_id` shifts later steps up and moves their go-to targets), so the dialog's step
+    numbers are never sent as they stand. The save is one pure planner in `src/shared/agent/steps.ts` with table tests: delete
+    removed steps from the highest id down; add new steps in ascending final position; then one `sp_update_jobstep` per
+    step writing its full content (subsystem, command, actions, go-to targets) into its final id, so Move up/down are only
+    changed final positions; then `sp_update_job @start_step_id`. An `AgentActions` live
+    check inserts, moves and deletes steps that other steps jump to, then reads `sysjobsteps` back and compares with the
+    dialog's model.
   - Step dialog **General**: Step name, Type (from `syssubsystems`, filtered by the platform gates and what the login can
     run), Run as (proxies the login may use for that subsystem through `sp_help_proxy @subsystem_name`, which for a
     non-sysadmin returns only proxies granted to it; sysadmin also gets "SQL Server Agent Service Account"), Database
@@ -382,7 +413,8 @@ node's menu and the palette.
   state and the reason (as Activity Monitor); `PERMISSION_DENIED` replaces the grid with the no-access state. Both mocked.
 - Agent stopped: Job Activity Monitor does not depend on Object Explorer's `explorer` view (which runs only while Object
   Explorer shows), so the `agent.jobs` source has its own table-less probe `agent.jobs.service` (the same constant
-  service-state text as `explorer.agentService`, plus `Agent XPs` from `sys.configurations`, which needs no permission).
+  service-state text as `explorer.agentService`, ungated, with the same `HAS_PERMS_BY_NAME` guard, plus `Agent XPs` from
+  `sys.configurations`, which needs no permission).
   Status reads "Agent stopped" for every row, Next Run is marked as not
   current (Agent refreshes `sysjobschedules` about every 20 minutes and not while stopped), and a warning banner offers
   Start Agent… to sysadmin on a Windows server that is not a failover cluster instance; never an error banner. When the
@@ -454,7 +486,7 @@ Database Mail logs, which SSMS shows there).
 | Error logs | List, view in Log File Viewer, Recycle | Configure (log path, level) via Agent Properties › General |
 | SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
 | Agent service | State and chips; Start / Stop / Restart | |
-| Database Mail | Readiness from `Database Mail XPs` and `sysmail_profile` (sysadmin or DatabaseMailUserRole; others see no warning; on Managed Instance the profile must be `AzureManagedInstance_dbmail_profile`): warn on e-mail notifications when not set up | Configuration wizard and Database Mail log |
+| Database Mail | Readiness (in AG-6a, where the Notifications page shows it; AG-7 reuses it): `Database Mail XPs`, `sysmail_profile`, and for sysadmin also Agent's own mail settings from `sp_get_sqlagent_properties` (`use_databasemail`, `databasemail_profile`), because Agent sends nothing without a profile set in Alert System (a Later page, so the warning says to set it in SSMS) and a restart after setting it. Only sysadmin and DatabaseMailUserRole get a warning; others see none; on Managed Instance the profile must be `AzureManagedInstance_dbmail_profile`. Warn on e-mail notifications when not set up | Configuration wizard and Database Mail log |
 | Multi-server (MSX/TSX) | Targets page shows local only | Multi-server administration |
 | Script Action to Job | | The "Agent Job…" Script As destination and dialogs' "Script Action to Job" |
 
@@ -470,7 +502,7 @@ Database Mail logs, which SSMS shows there).
   lists per procedure, such as `@mode = N'FULL'`) for a procedure in `AgentSql.ReadProcedures` (`sp_help_job`,
   `sp_help_jobhistory`, `sp_help_jobactivity`, `sp_help_jobstep`, `sp_help_jobschedule`, `sp_help_schedule`,
   `sp_help_category`, `sp_help_operator`, `sp_help_alert`, `sp_help_notification`, `sp_help_proxy`,
-  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, and sysadmin-only `sp_get_sqlagent_properties`).
+  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and sysadmin-only `sp_get_sqlagent_properties`).
   And the master procedures, which take positional arguments, each have a named shape: `EXEC master.dbo.xp_enumerrorlogs
   2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3;` and, on Managed Instance, `EXEC master.dbo.sp_readmierrorlog
   @p1, 2, @p2, @p3;` (the only literal allowed is the log type `2`; AG-0 confirms on Managed Instance's documentation and,
@@ -567,7 +599,8 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   makes it use the same Agent-up condition so it stops skipping silently on Linux. Linux Agent runs T-SQL steps only, so
   CmdExec and PowerShell steps are covered by offline lint and script tests in every CI run, live (`AgentSteps`) in the
   Windows service-control workflow when it runs and on the owner's Windows test instance; SSIS steps live only on the owner's instance
-  (the CI job installs no SSIS).
+  (the CI job installs no SSIS), in `AgentSteps` behind its own opt-in `VARIA_TEST_SQL_AGENT_SSIS=1` (it needs SSISDB and a
+  deployed scratch package, as the SSIS suites' existing opt-in does).
 - **`VARIA_TEST_SQL_AGENT=1`** (new, docs/testing.md): Agent live suites require Agent and fail if it does not come up;
   without the variable they skip with one line saying why.
 - **`VARIA_TEST_SQL_AGENT_SERVICE=1`** (new): the `AgentService` live suite really stops, starts and restarts Agent through
@@ -602,8 +635,10 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   offline checks in Program.cs that pin `JobPattern` and `LoginPattern` (rejecting `_job2`, `_x_job`, `_x`) keep passing
   and gain the new kinds' accepted and rejected names. The job sweep moves from `ExplorerStatusLiveChecks.AgentAsync` into `ScratchDatabase.SweepAsync`,
   which gains one sweep per kind; age comes from the prefix's timestamp, so kinds without a date (operators, credentials,
-  logins) are swept too. Sweep order follows dependencies: proxies, then credentials, then jobs (and their owned
-  schedules), alerts, operators, then msdb users, then logins. No scratch category is created (a shared category could not
+  logins) are swept too, except that logins keep today's `create_date` age so the existing "older than 6 hours" rule and
+  its summary hold. Sweep order follows dependencies: proxies, then credentials, then jobs (and their owned schedules),
+  alerts, operators, then msdb users, then logins; today's login sweep, which runs right after databases, moves after the
+  Agent sweeps (a login that still owns a job fails `DROP LOGIN` with 15170). No scratch category is created (a shared category could not
   be dropped while another run uses it). A check of Agent Properties' writes (server-wide) restores the old values in
   `finally`.
 - **Destructive paths**: Delete History is checked live with two scratch jobs, proving only the checked job's rows go and
@@ -611,7 +646,7 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   render its template, and its live check passes an `@oldest_date` before any history row, proving the call runs and
   deletes nothing. docs/testing.md records both. Scratch job runs add rows to Agent's server-wide history cap (default 1,000), pushing out the oldest rows of
   real jobs on a shared server: suites keep runs few (one `WAITFOR` job per suite), and docs/testing.md says so.
-- **Live suites** (each with its seconds in `LiveGroups.Suites` and docs/ci.md's table): `Agent` (tree, capability, both
+- **Live suites** (each with its seconds in `LiveGroups.Suites` and docs/ci.md's table): `Agent` (tree, capability, the Search Objects Agent batch refused for a no-role login while other kinds still index, both
   read paths with low-privilege SQL logins in each Agent role), `AgentJobs` (a scratch job with a `WAITFOR DELAY` T-SQL
   step: start at step, stop, enable/disable, status transitions through the live source, the In progress run and its
   grouping, waits on conditions only), `AgentActions` (every write template against hostile names, Script Action's script
@@ -624,8 +659,9 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   and `AgentSteps` (above; excluded from grouped runs, run by their own command).
 - **Offline**: `AgentSql.LintRead`, `LintExecutable` and `CredentialSql` lints render every variant; schedule encoding and
   sentence table tests; history grouping (the cases above) and time decoding table tests; msdb error mapping; catalogue
-  snapshot; zod/C# limit mirrors; the `ci-scope.mjs` path rule.
-- **Renderer vitest** with fixtures for states the live smoke cannot reach: each Agent role, Managed Instance, Linux,
+  snapshot; zod/C# limit mirrors; the step save planner; the `ExplorerStatusService` probe list without repeats.
+- **Renderer vitest**: `agent.tree` change samples reload only the changed folder and keep expansion and selection;
+  fixtures for states the live smoke cannot reach: each Agent role, Managed Instance, Linux,
   Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running), state
   unknown, `PERMISSION_DENIED` mid-dialog, `STALE`, `AGENT_STOPPED`, `JOB_STATE`, a save failure with no part index, empty,
   loading and failed history and Job Activity Monitor, error-log truncation, role-path history (1,024-character message,
@@ -633,7 +669,9 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   state (Starting…, Stopping…, access denied, left stopped, Cancel restart), and the status-bar job with and without a
   free status-only slot.
 - **Smoke**: `scripts/agent-smoke.mjs` on the fake backend (tree, Job Activity Monitor grid with multi-select Start Jobs,
-  the status-bar running job, job dialog round trip, Log File Viewer, the Start/Stop/Restart confirmations and progress), surfaces found by ARIA role and name through `scripts/fixtures/ui.mjs`, added to `test:smoke`,
+  the status-bar running job, job dialog round trip, Log File Viewer, the Start/Stop/Restart confirmations and progress,
+  Ctrl+Q revealing a job, and the keyboard contract: Job Activity Monitor's Shift/Ctrl selection, Ctrl+Space and Ctrl+A,
+  the Log File Viewer's F6 / Shift+F6 pane cycle, Space on a source and the parent's `aria-checked="mixed"`), surfaces found by ARIA role and name through `scripts/fixtures/ui.mjs`, added to `test:smoke`,
   `smoke-shards.mjs`'s times and docs/ci.md's table. Shards with a SQL Server gain the Agent node in their trees; AG-1
   updates the explorer smoke's expectations.
 
@@ -667,16 +705,16 @@ CLAUDE.md requires.
 | Lane | Scope | Depends on | Size |
 | --- | --- | --- | --- |
 | AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, docs generation), `agent.profile` and `agentRole` keys, `AgentReader` + `AgentSql.LintRead`, CI `MSSQL_AGENT_ENABLED` and the Agent-up wait, `VARIA_TEST_SQL_AGENT`, scratch prefix and sweep extension, Agent live suite skeleton; spikes on the owner's test instance: `sp_help_job` while stopped, the Agent XPs value after a clean Agent stop and error 15281, msdb procedures that roll back themselves (266), `xp_servicecontrol` with `SQLServerAgent` on virtual accounts and its "Access is denied" number, `version_number` bumps, msdb error numbers, the `dm_server_services` permission on 2022+ (and the probe split if needed), the Linux DMV | — | M |
-| AG-1 | Object Explorer: Agent node and folders, both listing paths, edition gate (`ExplorerProfile` edition; existing Linux and Managed Instance flags), platform-gate verification, `explorer.agentService`, Agent node chips, per-probe reader routing in `SqlSampler` and the role path of `explorer.agent` (updating `ExplorerStatusLiveChecks`), XPs-disabled state, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden (Agent node New › appears with AG-6a's Job…), Ctrl+Q reveals Agent objects | AG-0 | M |
+| AG-1 | Object Explorer: catalogue singleton children and `opens` leaves (with C# `Served`, docs and tests), Agent node, Job Activity Monitor leaf, folders and `agentProxySubsystem`, the session sysadmin column and reader session facts, both listing paths, edition gate (`ExplorerProfile` edition; existing Linux and Managed Instance flags), platform-gate verification, `explorer.agentService`, Agent node chips, per-probe reader routing in `SqlSampler` and the role path of `explorer.agent` (updating `ExplorerStatusLiveChecks`), XPs-disabled state, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden (Agent node New › appears with AG-6a's Job…), Ctrl+Q reveals Agent objects | AG-0 | M |
 | AG-2 | Job verbs from the tree: Start Job at Step, Stop, Enable/Disable, Rename, Delete; `AgentSql.LintExecutable` with return-code checks, the identity guard and msdb error mapping (`AGENT_STOPPED`, `JOB_STATE` after 22022, `STALE` codes registered); Agent service Start / Stop / Restart with every state; the `AgentService` suite under the exclusive lock and the path-gated `agent-service.yml` workflow | AG-1 | M |
 | AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, tiles, view chips, filters, multi-select row actions with Start Jobs / Stop Jobs progress, loading, error and Agent-stopped states, server-time labels; status-bar running job (`agent.jobs.watched`) | AG-1 (AG-2 for actions) | M |
 | AG-4 | Script As for Job, Alert, Operator, ProxyAccount (UrnBuilder JobServer children, scripting catalogue rows, goldens, role check) | AG-1 | S |
 | AG-5a | Log File Viewer: `agent.history` live source (both paths), run grouping with In progress and Unknown, master/detail grids, details pane, `agent.historyMessage`, Delete History for checked jobs (all or older than), start times through `sp_help_jobactivity`, role-path message limit, cap text from `sp_get_sqlagent_properties` | AG-1, AG-2 (write path) | M |
 | AG-5b | Agent error logs in the Log File Viewer: `agent.errorLogs`, `xp_readerrorlog` / `sp_readmierrorlog` capped reads with the truncation notice, Recycle | AG-5a | S |
-| AG-6a | Job dialog shell: describe (both paths), General, Notifications, Targets (local), Alerts list (Add hidden until AG-7), one-transaction save with `STALE`, Script Action, New Job (also from the Agent node's New ›, which appears with it), Ctrl+Q opens job Properties | AG-2 | M |
-| AG-6b | Steps page and step dialog (T-SQL with editor features and Parse, CmdExec, PowerShell, SSIS package, Advanced) | AG-6a | L |
+| AG-6a | Job dialog shell: describe (both paths), General, Notifications (with the Database Mail readiness warning), Targets (local), Alerts list (Add hidden until AG-7), one-transaction save with `STALE`, Script Action, New Job (also from the Agent node's New ›, which appears with it), Ctrl+Q opens job Properties | AG-2 | M |
+| AG-6b | Steps page, the step save planner, and step dialog (T-SQL with editor features and Parse, CmdExec, PowerShell, SSIS package, Advanced) | AG-6a | L |
 | AG-6c | Schedules: `schedule.ts` encoding and sentences, schedule dialog (CPU-idle warning), Pick, Jobs in Schedule, Manage Schedules, Remove with delete offer; Agent node New › Schedule… | AG-6a | M |
-| AG-7 | Operators and Alerts: dialogs (all pages), Enable/Disable, Rename, Delete; performance counter picker; Database Mail readiness warning; Agent node New › Operator… and Alert…; job dialog Alerts page Add | AG-1, AG-6a (shared dialog parts) | M |
+| AG-7 | Operators and Alerts: dialogs (all pages), Enable/Disable, Rename, Delete; performance counter picker; Agent node New › Operator… and Alert…; job dialog Alerts page Add | AG-1, AG-6a (shared dialog parts) | M |
 | AG-8a | SQL Server Agent Properties (General, History) through `sp_set_sqlagent_properties`, read-only on Managed Instance; the one-shot "Remove agent history older than" purge with its confirmation | AG-1, AG-2 (write path) | S |
 | AG-8b | Proxies: New / Properties (General, Principals, References), Rename, Delete, Agent node New › Proxy…; New Credential and Credential Properties (`CredentialSql`, generalised secret slot, identity and secret always sent together) | AG-1, AG-6a | M |
 | AG-9 | Getting Started guide and sample for Agent, parity re-check of the Agent rows | all | S |
