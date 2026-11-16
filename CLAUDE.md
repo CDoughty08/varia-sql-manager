@@ -71,7 +71,8 @@ SQL the backend runs:
 - Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
   its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
   Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`), object actions and
-  Table Designer (`ActionService`, the only DDL path besides `SsisActionService`), session actions, SSIS. Read the area's
+  Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
+  (`ActualPlanSql`, event-session DDL only), session actions, SSIS. Read the area's
   bullet in docs/architecture.md before touching any of them.
 
 UI structure (each is the single source; tests enforce it):
@@ -115,8 +116,8 @@ Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
 Keep the docs lean:
 - README.md is a short project overview (highlights, install, quick start, links). Feature detail goes in the area's
   doc under docs/, not the README.
-- Docs describe how things work now. Revision logs, decision histories, dated measurement rounds, review findings and
-  PR/issue/commit references belong in PR descriptions, not in docs/. A plan for work in progress may live in docs/
+- Docs describe how things work now. Revision logs, decision histories, past measurement rounds (keep only the current
+  baseline), review findings and PR/issue/commit references belong in PR descriptions, not in docs/. A plan for work in progress may live in docs/
   until it ships; then fold what still matters into the area's doc and delete the plan.
 - State a rule once and link to it; keep the why to a sentence.
 

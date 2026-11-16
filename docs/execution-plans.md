@@ -111,7 +111,8 @@ removes such collectors; there is no background timer.
   day old. Running legacy collectors younger than a day, and stopped ones whose session id is held, are left alone.
 - Immediately before each DROP, SQL Server rechecks the definition ID, name, predicates, shape and both connection
   identities. The identifier is built server-side with `QUOTENAME`; all DDL values are parameters, and the statements
-  are held to `ActualPlanSql.Lint`.
+  are held to `ActualPlanSql.Lint` (dynamic SQL only through `sys.sp_executesql` of literals, `QUOTENAME(@name)` and
+  server-side `CONVERT`s; only known variables; no DDL but event sessions').
 - Inspection, permission or DROP failures produce a bounded notice and are retried on a later capture.
 
 Limitations: database-scoped collectors (including Azure SQL, whose database-scoped DMVs cannot prove global absence
@@ -152,9 +153,11 @@ Behaviour:
   backoff. Statements that finish between samples appear through Actual capture when available. SQL Server can return
   NULL when profiling is unavailable or the plan exceeds its XML nesting limit.
 - The first sample (or a changed plan or batch) carries the parsed plan; later samples carry counters only. Live and
-  completed statements match by StatementId, QueryHash, a SQL text hash, NodeId, batch and GO iteration; ambiguous
-  snapshots stay partial, and repeated runs of an identical statement between samples cannot be told apart. A
-  recompilation with a new structure gets a new layout; camera and matching selections persist.
+  completed statements match by StatementId, QueryHash, a SQL text hash, NodeId, batch and GO iteration. The text and
+  literal-expression hashes together separate different SQL that reuses IDs and query hashes; a statement with an
+  unknown batch identity is kept separate. Ambiguous snapshots stay partial, and repeated runs of an identical
+  statement between samples cannot be told apart. A recompilation with a new structure gets a new layout; camera and
+  matching selections persist.
 - An operator is highlighted as active when its output rows increased since the previous sample. Blocked operators, or
   ones that consumed work without producing rows, are not shown as active.
 - Live samples do not carry per-thread diagnostics, spill or grant details; those appear from the captured Actual XML.
@@ -223,13 +226,15 @@ appear in the pane; Varia never falls back to executing the query and never retr
 
 Every capture turns SHOWPLAN off under its own cleanup budget, and isolated connections are always disposed. In
 query-session mode, Varia then checks that a sentinel SELECT executes and restores context; after errors, cancellation
-or timeouts the session stays open if cleanup succeeds. If cleanup or transport fails, the session is closed (SQL
-Server rolls back its transaction and drops its temporary objects) and the next execution opens a new one.
+or timeouts the session stays open if cleanup succeeds, and the error text tells that apart from `SESSION_LOST`. If
+cleanup or transport fails, the session is closed (SQL Server rolls back its transaction and drops its temporary
+objects) and the next execution opens a new one. A previously unfinished commit keeps its unknown-outcome warning.
 
 Nothing queues on a busy session gate: a running query blocks both modes, and a session estimate blocks state reads,
 commits and execution until it settles. Closing a tab during an isolated estimate shows the normal commit-or-rollback
-prompt, then cancels the estimate. During a session estimate, closing uses the **running query** prompt; proceeding
-cancels, waits, then closes with rollback.
+prompt; cancelling the prompt keeps the estimate running, and proceeding cancels it without forcing a rollback of the
+ordinary transaction. During a session estimate, closing uses the **running query** prompt: **Keep Running** leaves
+capture running, and proceeding cancels, waits, then closes with rollback.
 
 ## Plan history
 
@@ -300,15 +305,15 @@ persisted.
   warnings, highlighting changed rows. Each viewer's Properties pane remains available.
 - **Link selection, zoom and pan** is on by default: selecting an operator selects its counterpart (or clears the other
   side), selecting a statement pair moves both outlines, and both canvases share camera coordinates. Turn it off for
-  independent views.
+  independent views; Differences still follows the last inspected pair.
 
 ### Units
 
 - Deltas are **right minus left**; percentage is `(right − left) / left × 100`. Two zeros give 0 and 0%; a nonzero value
   against zero says **zero baseline**. Missing, invalid, negative, non-finite or overflowing values are unavailable.
 - Counters and estimates use the scopes in [Properties and diagnostics](#properties-and-diagnostics). Operators are not
-  summed into query totals, GO repetitions are separate inputs, and no per-worker normalisation or statistical
-  significance is inferred. Partial captures stay partial.
+  summed into query totals, costs are optimizer cost units (not milliseconds), GO repetitions are separate inputs,
+  and no per-worker normalisation or statistical significance is inferred. Partial captures stay partial.
 - A reported empty parameter value is a measured empty string; missing is unavailable. Unavailable or omitted lists
   never become zero; an empty list says None reported.
 

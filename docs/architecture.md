@@ -25,7 +25,7 @@ only when a summary line stops being true.
 - **Logs and secrets.** Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text,
   credentials or connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the
   environment, logs, traces or previews.
-  - A remembered password is only Electron `safeStorage` ciphertext (async API, `src/main/secret-cipher.ts`) in
+  - A remembered password is only Electron `safeStorage` ciphertext (async API only, `src/main/secret-cipher.ts`) in
     `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
@@ -40,13 +40,13 @@ only when a summary line stops being true.
     replies; Script writes `<password>`.
 - **Clipboard and permissions.** The page reads the clipboard only through the Paste role, which main runs only within
   1 s of a click, key press or tap in the focused window (`UserActivation`, `src/main/window-roles.ts`); main cannot tell
-  which input chose Paste. The session's only granted permission is a sanitized clipboard write from the main window's
+  which input chose Paste, so a page script can read it while the user types or clicks. The session's only granted permission is a sanitized clipboard write from the main window's
   main frame; the request and check handlers answer alike (`src/main/permissions.ts`), since Electron's default check
   grants everything. On Linux, Chromium pastes the PRIMARY selection on middle-click with no role or gate, so in each
-  window the page cancels every middle-button release (pointerup and mouseup) and middle-button pointermove, and hides any
+  window the page cancels every middle-button release (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and middle-button pointermove, and hides any
   `paste` from other listeners while the middle button is held or in a release's task (`blockPrimaryPaste`,
   `src/renderer/src/core/primary-selection.ts`). Monaco's `selectionClipboard` is off only so a middle-drag selects a
-  column as elsewhere.
+  column as elsewhere: standalone Monaco has no selection clipboard.
 - **Bounds.** 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests per backend
   generation, a deadline per method (`methodPolicies`), stream credit (16 MiB per stream, 64 MiB per port), explicit
   truncation of results and messages. New string inputs need max lengths in both zod and C#. A request is written to at
@@ -107,7 +107,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   it fails; accepted targets finish attachment unless cancelled. Every capture/checkpoint includes the target workspace
   (target-only sessions too) and revalidates it after async writes before final close/reload; main's
   `ConnectionSessionCheckpoint` checks the authentication pins' revision around the write and final close, credential
-  settlement drains before approval, and no admission races an approved close.
+  settlement drains before approval, and no admission races an approved close. A renderer-only checkpoint comparison
+  cannot prove that main's saved credential revision stayed current.
 - **Disconnect** lives in `services/disconnect.ts` behind `DisconnectHost` (`disconnect-workbench.ts` adapts services and
   owns no connection state; App mounts one prompt service and coordinator for Explorer, palette and popouts). Save and
   transaction choices finish before cancellation, session completion or teardown; revisions, associations, management
@@ -137,13 +138,15 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **Go To Definition** (`language.definition`, `DefinitionService`) never goes through SQL Tools; docs/language-services.md
   has the user-facing rules.
   - ScriptDom finds the name under the caret (white space and comments allowed around dots) in the caret's batch, or the
-    widest parsing run of statements around it, and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
+    widest parsing run of statements around it (statements starting after a semicolon or at a statement keyword), and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
     does: a level's tables are its own FROM and DML target, never a subquery's; an alias hides a same-named object only
-    in a column qualifier; CTEs, derived tables, table variables, PIVOT, trigger pseudo-tables and declared columns name
-    no object; TVF, MERGE and OUTPUT aliases stand for their function or DML target; columns in INSERT, OUTPUT INTO,
-    index, key and ALTER TABLE lists belong to that table, which is never a source of the statement's columns;
-    correlated subqueries and APPLY may see outer tables (offered after their own), derived tables and CTEs may not; a
-    method on a column is its table's column; an earlier USE (never USE HINT) sets the database.
+    in a column qualifier, while a table reference's own name is always the object it names; CTEs, derived tables, table variables, PIVOT, trigger pseudo-tables and declared columns name
+    no object; a TVF's alias stands for the function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML
+    target; a column in an INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER
+    COLUMN, DROP COLUMN and PERIOD FOR SYSTEM_TIME) belongs to that table; an INSERT's or OUTPUT INTO's table is never a
+    source of the statement's columns; a correlated subquery's or APPLY's bare column may be an outer table's (offered
+    after its own, with the column checked), a derived table's or CTE's may not; a method on a column is its table's
+    column and a qualified star's qualifier (o.*) is its table; an earlier USE (never USE HINT) sets the database.
   - Constant `DefinitionSql.Lookup` resolves on the Object Explorer pool (names as parameters, other databases through
     `QUOTENAME(@db)`; default schema, then dbo, then sys; server-level objects in the login's default database) within
     10 s. Not found or unavailable is `null` (a status-bar notice, never an error banner); an unreachable server or login
@@ -188,8 +191,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     carries it; a result's identity stays its ordinal.
 - **Visibility** reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from the grids
   `ResultGrid` registers (one ResizeObserver per window, PaneService for hidden dock tabs, document visibility, no
-  timers): the whole set when it changes and again on backend ready or results-port generation change, only while main
-  and the port agree on the generation, ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`,
+  timers): the whole set when it changes and again on backend ready or results-port generation change, and, once main has
+  reported a state, only while main and the port agree on the generation (until then the backend is taken as ready), ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`,
   outside page code, as a hint: it never releases, pins or changes a result by itself.
 - **Budget figures** change only through `ResultStore.Resize` (`results.setMemoryLimit`, sent by main alone when the
   Options limit changes, as each generation becomes ready and after each successful settings read,
@@ -277,15 +280,18 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
   - The policy runs on its own thread, not the workers' gate: it compresses at the lowest priority and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
-    the events `ResultStore.Settled` names, never on a poll, and stops between pages when the result is shown, touched,
+    a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
+    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown, touched,
     held, released or the service disposed.
   - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
     at once and counts toward `CollectNow`'s next collection, never a compacting one.
   - Packing for room: a query row its own half or the global budget refuses (never a live table's or derived set's)
     waits outside every lock (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`, `WaitForRoomAsync`,
-    `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`) while the
+    `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`; rows committed before the waiting row
+    are sealed only once it ends) while the
     policy packs at normal priority on the workers' gate the complete, unheld results of 1 MiB or more that could make
-    room, never one the user is working with (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
+    room, never one the user is working with (a shown result with an open view, or one an operation unpacked and still uses)
+    (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
     With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
   - Reads: a packed page unpacks into a six-page per-result cache (`CachePages`) only while the budget has spare room
@@ -434,7 +440,8 @@ lint, on its own pool or connection with a fixed prologue. Never log names, SQL,
   - Statements come only from linted constant templates and builders: `ActionSql`, `Actions/DatabaseAlter`,
     `Actions/TableAlter` (extended property procedures via `QUOTENAME(@db)`, `TableAlter.LintProcedure`) and
     `Designer/DesignerSql` under `ActionSql.LintExecutable`; `Actions/CreateDatabaseSql` (own `Lint`: file names and
-    paths as server-quoted N'' literals under a binary collation, plus `Actions/JsonBuilderLint`'s OPENJSON rules);
+    paths as server-quoted N'' literals under a binary collation, plus `Actions/JsonBuilderLint`'s OPENJSON rules: number or `nvarchar(max)` columns, text only inside
+    `QUOTENAME`);
     `Actions/AttachSql` (`AttachSql.Lint`, paths only in one server-quoted JSON parameter, `DBCC CHECKPRIMARYFILE (@mdf,
     n)`); `Actions/RestoreSql` for RESTORE and BACKUP, binding only variables (`RestoreSql.LintMedia`); `Actions/LoginSql`
     (`LoginSql.LintExecutable`, chained by `ActionSql.Lint`; the password only as `@password` behind a NULL guard through
@@ -479,6 +486,10 @@ lint, on its own pool or connection with a fixed prologue. Never log names, SQL,
   one guarded batch per session that checks identity (login time, host process id), refuses its own, system and this
   backend's pool sessions (every connection, any Application Name), then runs a server-built KILL from an int
   parameter. Neither logs session ids, logins, hosts or SQL.
+- **Actual-plan collector** (`ActualPlanSql`, docs/execution-plans.md) runs on the observer's own connection, never the
+  query's. Its SQL is constant text per scope and version variant, rendered once and held to `ActualPlanSql.Lint`:
+  dynamic SQL only through `sys.sp_executesql` of text built from literals, `QUOTENAME(@name)` and server-side `CONVERT`s
+  of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters.
 - **SSIS Catalog.** Code tables, `ssis.describe` views, `ssis.execute` verbs, Explorer verbs and commands, documents,
   error codes, features and limits live only in `src/shared/ssis/catalog.ts` (tree kinds and folders are Object
   Explorer's); it generates `docs/integration-services.md` below its marker line only.
@@ -577,7 +588,7 @@ CLAUDE.md has the summary. In addition:
   backpressure, MessagePort with transferable ArrayBuffers to the renderer.
 - Menus: custom-rendered themed title bar and context menus on Windows/Linux; native global menu bar and context menus
   on macOS.
-- Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft Entra ID next.
+- Authentication: SQL, Integrated (Windows SSPI; Kerberos on Linux/macOS) and Microsoft Entra ID.
 - Visuals: Compact density by default with Comfortable as an option. Dense Power's environment and status indicators
   are in (the red Production tag on connections, live Object Explorer status chips), showing only what a probe produces.
   Icons are codicons (bundled with Monaco) plus custom SVGs. Themes: Dark and Light (plus follow System), customizable

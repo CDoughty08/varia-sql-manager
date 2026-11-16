@@ -83,9 +83,10 @@ A missing name is better than a wrong one. The cases:
 | --- | --- |
 | Named `SELECT`, then an unnamed `SELECT` | "Sample Query", then "Result 2". |
 | Named statement that returns no set (`UPDATE`) | The name is unused. Messages says so. |
-| Named `EXEC` that returns three sets | The first is named. With three markers stacked before it, all three are, in order. |
+| Named `EXEC` that returns three sets | The first is named. With three markers stacked before it, all three are, in order. Applies only when no later statement in the batch can return a set. |
 | More stacked markers than sets | The extra names are unused. Messages says so. |
-| Name before `IF` or `WHILE` | The first set the statement returns takes it, if it returns one. |
+| Name before `IF` or `WHILE` | The first set the statement returns takes it, if it returns one and no later statement in the batch can return a set. |
+| Named `EXEC`, `IF` or `WHILE` followed in the same batch by a statement that can return a set | Not applied: which sets are its own cannot be known. Messages names the later statement and suggests `GO` after the named one. |
 | Name inside `BEGIN … END`, a branch, a loop or a `TRY` | Not applied: how often the statement runs is not known. Messages says so. |
 | Name inside a statement (before a `UNION` branch, in a subquery) | Not applied. Messages says so. |
 | Named statement after an `EXEC`, `IF` or `WHILE` in the same batch | Not applied: the sets before it cannot be counted. Messages names the statement in the way and suggests a `GO` between them. |
@@ -97,7 +98,8 @@ A missing name is better than a wrong one. The cases:
 | Actual plan from the toolbar | Captured on another connection; no extra sets, nothing changes. |
 | `SET STATISTICS XML ON` in the script | Plan sets are recognised and left out of the count, so rows keep their names. Plan sets are not named. A plan that arrives where a `SELECT *` stood stops naming for the rest of the batch. A batch that selects a column named like the XML plan column gets no names. |
 | A trigger that returns rows | Its set can still shift a name when it has the same number of columns as the named statement's. A documented limit. |
-| The batch does not parse, or is over the parse bounds | No names for that batch; one Messages line says so. The server reports a syntax error itself. |
+| The batch does not parse | No names for that batch; one Messages line says so. The server reports a syntax error itself. |
+| The batch is over the parse bounds (length, parenthesis depth) or selects the XML plan column | No names for that batch; each marker gets a Messages note saying why. |
 
 ```sql
 -- #Name="Order"

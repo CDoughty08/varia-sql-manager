@@ -318,8 +318,10 @@ managed identity cache; Azure.Identity credentials), never on disk or IPC.
   `.databases` then sign in through the system browser (MSAL, public client `2fd908ad-0664-4344-b9be-cd3e8b574c38`,
   redirect `http://localhost`, no WAM), one at a time within 3 minutes, then open again. MFA without a user name opens
   unpooled, and the stored connection string names the account the token was for.
-- An unrecorded provider failure (SqlClient error 0, class 11) answers `AUTH_ENTRA` with SqlClient's text; any other
-  failed open answers `AUTH_ENTRA` ("Your Microsoft Entra sign-in for this server has expired or was revoked…").
+- An unrecorded provider failure (SqlClient error 0, class 11) answers `AUTH_ENTRA` with SqlClient's text; a recorded
+  failure answers its own code and sentence (`EntraFailures.Describe`). Only when a browser sign-in would be needed
+  (`InteractionRequired`) on a method other than connect or Load databases does it answer `AUTH_ENTRA` ("Your Microsoft
+  Entra sign-in for this server has expired or was revoked…").
 - Authority hosts and resources the server names must be on an allowlist (public, US Government and China clouds; SQL
   audiences). It does not limit which server receives the token: as in SSMS, silent modes (cached MFA, Integrated,
   Managed Identity, Default) send it to the named server with no prompt, so a hostile server could replay it until it
@@ -367,7 +369,7 @@ gate (2 per connection, 4 in all) until its thread ends; failures are `result.er
 
 **Object action cancellation.** Stop and a disconnect cancel `actions.*` by `requestId` with an attention (which rolls
 the statement back). Describe, script and disconnect answer `CANCELLED` at once; the job keeps gate and connection until
-the statement ends. A user CANCEL of `actions.execute` is answered by the handler (`IRequestDispatcher.AnswersStop`): it
+the statement ends. A user CANCEL (reason 1) of `actions.execute` is answered not by the protocol host but by the handler (`IRequestDispatcher.AnswersStop`): it
 waits up to 10 s (`stopGraceMs`), then answers its result with steps `done`, `cancelled` or `skipped` and
 `error: CANCELLED` (or success if the last statement finished first); past the grace, envelope `CANCELLED` (unknown
 outcome). DDL runs after a preflight on its own unpooled connection (`ConnectRetryCount=0`, `LOCK_TIMEOUT -1`); describe
@@ -394,12 +396,16 @@ up to 30 s, then `BUSY` ("Another restore or backup is running on this connectio
 running on other connections."). Action statements use a data reader, never `ExecuteNonQuery`
 (`tests/action-reader-lint.test.ts`).
 - Message 3211 (`STATS`) becomes droppable `{ type: 'action.progress', step: 0–519, percent: 0–100 }` EVENTs: a step's
-  start as 0, then at most every 250 ms (`progressEventMs`). 3211 lines are not kept messages; each step's `progress`
+  start at once as 0, then at most every 250 ms (`progressEventMs`); a percent held inside the interval goes out when it
+  ends or before the next step's start. 3211 lines are not kept messages; each step's `progress`
   holds its last percent.
 - Stop goes through `ActionService.StatementStop` on the reader's thread, falling back to the Stop's thread after a
   second; a statement stopped before its reader reported the end is `cancelled`, never done.
-- Main drops an invalid EVENT (`actionProgressEventSchema`) and pushes `varia:actions-progress { requestId, step,
-  percent }` (`actionProgressSchema`) to the requesting window, ≤ 4/s per request (`onActionProgress`).
+- Main drops an invalid EVENT (`actionProgressEventSchema`; failing the request would CANCEL a restore part way) and
+  pushes `varia:actions-progress { requestId, step, percent }` (`actionProgressSchema`) to the requesting window, ≤ 4/s
+  per request: a new step at once, a percent held inside the interval when it ends, never after the request ended
+  (`actionProgressRelay`, `onActionProgress`). The renderer's `ActionProgressService` keeps the latest percent of at most
+  128 requests.
 - On generation close, CancelAll stops long actions and shutdown waits (`DrainCommitted`) up to 10 s plus each one's
   cleanup budget.
 
@@ -413,13 +419,17 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
   reopens after 2 s doubling to 60 s unless it ended `PERMISSION_DENIED`, `LOGIN_FAILED`, `NOT_SUPPORTED`,
   `INVALID_PARAMS` or `PORT_CLOSED` (`catalogProbeFinalCodes`), until a refresh (`explorer.refreshed`) or reopen.
 - `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment', target }`
-  answers `{ model?, revision?, elapsedMs, error? }`: one batch on the same pool, READ COMMITTED under RCSI else READ
+  (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
+  `{ model?, revision?, elapsedMs, error? }`: one batch on the same pool, READ COMMITTED under RCSI else READ
   UNCOMMITTED, retried once after error 601. `model.view` names it: the catalog's profile (`band`, `cloud`,
-  `hostPlatform`, `auth`, `rcsi`, `features`, `roles`: `sysadmin`, `admin`, `ssisAdmin`, `ssisLogreader`), folder count
-  and admin-only `properties`; a folder's row and counts; a project's row, packages, parameters and references; a
+  `hostPlatform`, `auth`: sql, integrated or entra, `rcsi`, `features`, `roles`: `sysadmin`, `admin` for sysadmin or
+  ssis_admin, and `ssisAdmin`/`ssisLogreader`, read only for logins that are not sysadmin), folder count and, for
+  ssis_admin and sysadmin, `properties`; a folder's row and counts; a project's row, packages, parameters and references; a
   package's row and parameters; an environment's row and variables.
 - Lists ≤ 2,048 rows, answer ≤ about 4,000,000 bytes (else `truncated`, and no `revision`); values ≤ 4,000 characters,
-  never for sensitive parameters or variables. `revision` (64 hex) is a SHA-256 of what a later write depends on.
+  never for sensitive parameters or variables. `revision` (64 hex) is a SHA-256 of what a later write depends on (names, descriptions, a project's
+  `object_version_lsn` and last deployment, parameter values, references, variables, catalog properties; never validation
+  results, counts or the profile).
 - The SSIS profile is read once per connection (role checks `LOCK_TIMEOUT 1000`). `result.error` codes:
   `CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`,
   `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `SQL_ERROR`.
@@ -455,13 +465,16 @@ pool. Refusals: cloud editions, before 2016, Linux (`NOT_SUPPORTED`, before conn
   restore on, the reply waits up to 120 s past the grace (`createDrainMs`), then `CANCELLED` (outcome unknown). A failed
   or stopped step after the restore adds "Remove the incomplete catalog" (≤ 30 s per lock). 27135 is `CATALOG_EXISTS`,
   removing nothing.
-- A long run (`varia:long-runs`): the renderer refuses close, quit, disconnect and restart; a backend whose stdin ends
+- A long run (`varia:long-runs`): the renderer refuses close, quit, disconnect and a restart of a backend that answers;
+  a backend whose stdin ends
   waits up to 120 s, and main waits 130 s (`createCatalogDrainMs`) instead of 2 s before killing it.
-- Pending dynamic `sp_configure` changes answer `CONFIGURATION_PENDING` from both methods; each `RECONFIGURE` statement
-  runs behind `SsisCreateSql.PendingGuard` (error 50000 state 42).
+- Other dynamic `sp_configure` changes waiting for a `RECONFIGURE` (CLR in use or not) answer `CONFIGURATION_PENDING`
+  from both methods, since enabling CLR runs `RECONFIGURE` and `sys.sp_procoption` ends with `RECONFIGURE WITH OVERRIDE`;
+  each of those statements runs in its own batch behind `SsisCreateSql.PendingGuard` (error 50000 state 42), refusing a
+  change staged after the preflight the same way.
 
 **Activity Monitor session actions** (docs/activity-monitor.md) name a session by id and login time
-(`YYYY-MM-DDTHH:MM:SS[.fffffff]`, server local, ≤ 40 characters; outside `datetime`'s range is `INVALID_PARAMS`).
+(`YYYY-MM-DDTHH:MM:SS[.fffffff]`, server local, ≤ 40 characters; the backend refuses a time outside `datetime`'s range, 1753-01-01 to 9999-12-31T23:59:59.997, as `INVALID_PARAMS`).
 - `activity.details { connectionId, requestId, sessionId: 1–32,767, loginTime, text?: statement | batch | inputBuffer,
   locks?: bool }` (not `text` with `locks`) reads on the Activity Monitor pool (READ UNCOMMITTED, `LOCK_TIMEOUT` 1000)
   under one live gate within 10 s. Answers `{ sessionId, state: present | ended | changed | unknown, session?,
@@ -487,15 +500,15 @@ absent without VIEW SERVER STATE.
 
 | Dialog | Describe answers | Script / execute |
 | --- | --- | --- |
-| **Database Properties** (`databaseProperties`) | `{ general (id, created), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel, pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }` | `action: 'properties'`, `closeConnections`, `changes: { owner?, options?, scoped? }` (only changed values, 1–512 statements), `identity?` |
-| **Take Offline and Bring Online** (`takeOffline`, `bringOnline`) | `databaseState { name, identity, state, userAccess, readOnly, standby, sessions?, withTransaction?, sessionList (≤ 8), sessionsTruncated, warnings }` | `takeOffline` with `dropConnections`, or `bringOnline`; `identity?` |
-| **Detach Database** (`detachDatabase`) | `databaseState` plus `files: [{ fileId, name, type: rows \| log \| filestream, path }]` (≤ 256), `filesTruncated`, `confirmOffline` | `detach`, `dropConnections`, `updateStatistics`, `detachOffline?`, `identity?` |
-| **Rename of a database** (`renameDatabase`) | `{ name, identity, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose, connections (≤ 64) }` | `rename`, `newName`, `closeConnections?`, `identity?` |
+| **Database Properties** (`databaseProperties`) | `{ databaseProperties: { general (id, created), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel, pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? } }` | `action: 'properties'`, `closeConnections`, `changes: { owner?, options?, scoped? }` (only changed values, 1–512 statements), `identity?` |
+| **Take Offline and Bring Online** (`takeOffline`, `bringOnline`) | `{ databaseState: { name, identity, state, userAccess, readOnly, standby, sessions?, withTransaction?, sessionList: [{ sessionId, login?, program?, host?, openTransactions }] (≤ 8, names ≤ 128), sessionsTruncated, warnings } }`; Take Offline's read after closing idle pools | `takeOffline` with `dropConnections`, or `bringOnline`; `identity?` |
+| **Detach Database** (`detachDatabase`) | `databaseState` (after closing idle pools) plus `files: [{ fileId, name, type: rows \| log \| filestream, path }]` (≤ 256), `filesTruncated`, `confirmOffline` | `detach`, `dropConnections`, `updateStatistics`, `detachOffline?`, `identity?` |
+| **Rename of a database** (`renameDatabase`) | `{ renameDatabase: { name, identity, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose, connections (≤ 64) } }`, after closing idle pools | `rename`, `newName`, `closeConnections?`, `identity?` |
 
 - **Database Properties.** Any database. Each change key is a settable option with one of its tokens;
   `closeConnections` (`WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script writes
-  `WITH NO_WAIT`, `database: 'master'`; execute runs one step per statement after recounting sessions (retrying every
-  50 ms up to a second): such an option without `closeConnections` while others are in is `IN_USE`. Read-Only with a
+  `WITH NO_WAIT`, `database: 'master'`; execute runs one step per statement after recounting sessions (when execute has just closed
+  idle pools, a count above zero is retaken every 50 ms for up to a second): such an option without `closeConnections` while others are in is `IN_USE`. Read-Only with a
   change SQL Server then refuses is `NOT_SUPPORTED`. Open Connections' Yes comes from main's
   `varia:confirm-open-connections` box.
 - **Take Offline and Bring Online.** User databases, read in master. `NOT_SUPPORTED` where the catalogue greys the
@@ -507,9 +520,11 @@ absent without VIEW SERVER STATE.
   `detachOffline` is required for a database not online on Windows; `updateStatistics: true` is refused when not online,
   read-only or standby. Steps: `Close existing connections` (with `dropConnections`), `Detach the database`
   (`sp_detach_db`), and a compensation restoring access (`compensates: true`) after a failure or Stop. A detach that SQL
-  Server completed anyway is `done`. The result carries `filesKept` (≤ 256). 3703 `IN_USE`, 3709 `DEPENDENTS`, 3707
+  Server completed anyway is `done`. Once `Detach the database` is done, the result carries `filesKept` (≤ 256) and the
+  backend forgets its pooled connections to the database. 3703 `IN_USE`, 3709 `DEPENDENTS`, 3707
   `NOT_SUPPORTED`, 7983 `PERMISSION_DENIED`.
-- **Rename of a database.** The page sends the describe with the rename's own `requestId` before renaming.
+- **Rename of a database.** The page sends the describe with the rename's own `requestId` (so Stop cancels it before
+  anything runs); the execute reuses that id only once the describe has answered (`DUPLICATE_REQUEST` before).
   `connections` lists this backend's connections to the same server. Refusals: not online, read-only, standby (902), an
   availability group, or Managed Instance with `closeConnections` `NOT_SUPPORTED`; single-user in use `IN_USE`;
   `PERMISSION_DENIED`; `NAME_IN_USE`; changed identity `NOT_FOUND`. With `closeConnections`: close, `Rename`, restore
@@ -526,7 +541,8 @@ under READ UNCOMMITTED; missing is `NOT_FOUND`.
 - A database's `delete` takes `identity?`, re-checked in each by-name batch (50010, `NOT_FOUND`).
 - A login's `delete` takes `dropMappedUsers?` and `loginIdentity` (required on execute). Refusals before DDL: sessions
   `IN_USE`; owned databases, jobs, roles, endpoints, availability groups or granted permissions `DEPENDENTS` (also 15173);
-  uncountable sessions or unlisted users `NOT_SUPPORTED`; an unreadable database `BLOCKED`. Steps `Drop the database
+  with `dropMappedUsers`, uncountable sessions or more mapped users than listed `NOT_SUPPORTED` and a database the scan
+  could not read again `BLOCKED`. Steps `Drop the database
   user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`). 15434 is `IN_USE`.
 
 **Unlock Login.** `dialog: 'unlockLogin'` answers `{ login, lock: { locked, badPasswords?, lockoutTime?, mustChange,
@@ -543,7 +559,9 @@ sysadmin, connections?: 1–8 names of ≤ 260 }`. Main answers the button id (`
 or `cancel`, also for Escape, close, reload or crash).
 
 **Long runs** (`src/shared/long-runs.ts`): `varia:long-runs { runs: [{ kind, server: 1–256 }] (≤ 16), total:
-0–1,000,000 ≥ runs }` (strict, no answer); main's reload and Restart SQL Backend prompts name the first run.
+0–1,000,000 ≥ runs }` (strict, no answer); main's reload and Restart SQL Backend prompts name the first run. The page
+lets a long run reach Restart only while the backend does not answer (a run on a hung backend cannot stop); a reload or
+crash resets the list.
 
 **Table Designer** (docs/table-designer.md). `dialog: 'tableDesigner'` (database target) answers `{ tableDesigner:
 { database, band, schemas (≤ 2,048), schemasTruncated, defaultSchema, defaultFilegroup, caseSensitiveNames,
@@ -565,8 +583,10 @@ growth (5169), platform-valid distinct file names). Execute refuses `NAME_IN_USE
 `QUOTENAME(@db) + N'.sys.sp_executesql'`. Long run kind `newDatabase`.
 
 **Server file picker.** `dialog: 'serverFiles'`, `files: { purpose: backup | database | log | folder, path?, allFiles?,
-exists? }`. Paths are `serverPathSchema` / `ServerPath.Valid`: 1–260 UTF-16 units, no control characters or `*?"<>|`,
-rooted. Answers `{ serverFiles: { separator, path?, roots: [{ path, kind: drive | folder, defaults?, freeMb? }], entries:
+exists? }` (`files` only with that dialog, `allFiles` never with `folder`, `exists` only with a path and no `allFiles`).
+Paths are `serverPathSchema` / `ServerPath.Valid`: 1–260 UTF-16 units, well formed, no control characters or `*?"<>|`, a
+drive, a share or `/`. Without a path it lists drives and default folders, else one level; `exists` checks the path
+itself (`entries` its own entry or none). Answers `{ serverFiles: { separator, path?, roots: [{ path, kind: drive | folder, defaults?, freeMb? }], entries:
 [{ name, directory, sizeBytes?, modified? }] (≤ 2,000), truncated, notice?: 'legacyEmpty' } }`. 15 s deadline; one listing
 per connection (`browsePerConnection`). `PATH_NOT_FOUND`; cloud `NOT_SUPPORTED`.
 
@@ -574,7 +594,7 @@ per connection (`browsePerConnection`). `PATH_NOT_FOUND`; cloud `NOT_SUPPORTED`.
 (≤ 1,024), loginsTruncated, separator, dataPath? }, database?: { mdf, databaseName, version?, files: [{ original, type,
 current, found? }] (≤ 1,000) } } }` via `DBCC CHECKPRIMARYFILE`; `NOT_SUPPORTED`, `FILE_ACCESS` (5120, 5123),
 `PERMISSION_DENIED` (2571). `action: 'attach', databases: [{ name, owner?, files (1–1,000), rebuildLog }] (1–16)`:
-execute checks all first, then per database `Attach the database` and `Set the database owner`, compensating with
+execute checks all first, then per database `Attach the database` and, with an owner, `Set the database owner`, compensating with
 `Detach the database again` newest first. A long run.
 
 **Restore Database.** `dialog: 'restoreDatabase', restore: { kind: 'history', database? } | { kind: 'devices', devices }
@@ -582,47 +602,60 @@ execute checks all first, then per database `Attach the database` and `Set the d
 historyDatabases?, sets?, files?, …Truncated } }` (130 s deadline, 120 s budget, `restoreLimits`; 2 reads per
 connection). Script takes the plan (≤ 1,024 sets, 1,000 moves), uses no connection, and answers SMO's script
 (≤ 4,000,000 characters). Execute (database target, `identity` over an existing one) is a long action (30 s cleanup); its
-preflight checks identity, permission, tail-log, the chain (`RestoreChain`), WITH REPLACE (`BACKUP_MISMATCH`), a
-database not online (`DATABASE_UNAVAILABLE`) and target files (`NAME_IN_USE`). The reply adds `restored`: `{ state,
+preflight checks identity, permission, tail-log, the chain (`RestoreChain`), WITH REPLACE (`BACKUP_MISMATCH`),
+Close existing connections over a database not online (`DATABASE_UNAVAILABLE`) and target files (`NAME_IN_USE`). The reply adds `restored`: `{ state,
 userAccess }` or `{ absent: true, filesLeft? (≤ 16), filesUnknown? }`.
 
 **Restore Files and Filegroups.** `action: 'restoreFiles'`, `identity` required, `restoreFiles: { sets, files,
 filegroups, relocate, replace, restrictedUser, recovery, standbyFile?, logBackup?: { file } }` (≤ 1,024 sets, ≤ 256 files
-and filegroups, 1,000 moves, ≤ 2,100 parameters). Extra refusals: `NOT_FOUND`, `NOT_SUPPORTED`, `RESTORE_SEQUENCE`,
+and ≤ 256 filegroups with at least one of them, 1,000 moves, ≤ 2,100 parameters). Extra refusals: `NOT_FOUND`, `NOT_SUPPORTED`, `RESTORE_SEQUENCE`,
 `DATABASE_UNAVAILABLE`, `NAME_IN_USE`. `restored` adds `filesRestoring` (≤ 16).
 
 **New Login.** `dialog: 'newLogin'` answers `{ newLogin }` (databases, languages, server roles, certificates, asymmetric
-keys, credentials ≤ 1,024 each; `engine`). `dialog: 'loginDatabaseRoles'` (database target) answers `{ roles (≤ 256),
-rolesTruncated, guest, schemas (≤ 1,024), schemasTruncated }`. `dialog: 'windowsPrincipal'` (Check Names) answers
-`{ accountName, access, type?, via? }` or `NOT_FOUND` / `SQL_ERROR` (15404) / `PERMISSION_DENIED` (229). `action:
+keys, credentials ≤ 1,024 each; `engine`). `dialog: 'loginDatabaseRoles'` (database target) answers `{ loginDatabaseRoles: { roles
+(≤ 256), rolesTruncated, guest, schemas (≤ 1,024), schemasTruncated } }`, or `NOT_FOUND` / `DATABASE_UNAVAILABLE`.
+`dialog: 'windowsPrincipal'` (Check Names, a `DOMAIN\name` login target) answers `{ windowsPrincipal: { accountName,
+access, type?, via? } }` or `NOT_FOUND` / `SQL_ERROR` (15404) / `PERMISSION_DENIED` (229). `action:
 'createLogin', login: { auth: windows | sql | entra | certificate | asymmetricKey, name, defaultDatabase?,
 defaultLanguage?, checkPolicy?, checkExpiration?, mustChange?, certificate?, asymmetricKey?, credentials? (≤ 16) },
-serverRoles, status, mappings (≤ 256 { database, user, defaultSchema?, rolesAdd })`, ≤ 512 statements; only execute
-carries `secrets`.
+serverRoles, status, mappings (≤ 256 { database, user, defaultSchema?, rolesAdd (≤ 256, never public) }, one per
+database)`, ≤ 512 statements; only execute carries `secrets`. The defaults go exactly with `windows`, `sql` and `entra`;
+the policy options are all or none for `sql` (none on Managed Instance, all on SQL Server) and never for the others;
+`certificate`/`asymmetricKey` exactly for their kind; `credentials` distinct, never for `entra`; no `defaultSchema` for a
+certificate or key login. The backend re-validates all of it and refuses a kind or policy options the engine does not
+take (`NOT_SUPPORTED`) before connecting.
 
 **Table Properties.** `dialog: 'tableProperties'` (table target) answers `{ tableProperties: { general, storage,
 changeTracking, permissions (≤ 1,024), permissionsTruncated, securityPredicates?, extendedProperties,
 extendedPropertiesTruncated, temporal?, ledger?, level, readOnlyReason? } }`. `action: 'tableProperties', tableChanges:
 { lockEscalation?, changeTracking?, extendedProperties?: [{ op: add | update | drop, name, value? }] }, identity?`
 (limits in `src/shared/actions/tables.ts`), one transaction; another table `NOT_FOUND`, changed plan or unsupported table
-`NOT_SUPPORTED`.
+(SQL Server's own, external, dropped ledger) `NOT_SUPPORTED`. A read-only database is `NOT_SUPPORTED` to Execute only
+(Script still answers).
 
 **Login Properties.** `dialog: 'loginProperties'` answers `{ login, lock?, newLogin, loginProperties: { defaultDatabase,
-defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users, read, credentials (≤ 1,024), credentialsTruncated,
-certificate?, asymmetricKey? } }`; `loginDatabaseRoles` takes an optional `login` and adds `user?` and `memberOf`.
+defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users: [{ database, user, defaultSchema?, owner }], read
+(databases Delete's scan read), credentials (≤ 1,024), credentialsTruncated,
+certificate?, asymmetricKey? } }`; `loginDatabaseRoles` takes an optional `login` (≤ 128; no other describe takes it) and adds `user? { name,
+defaultSchema?, owner }` and `memberOf`.
 `action: 'loginProperties', loginIdentity?, loginChanges, secrets?`; `loginChanges` holds only changes:
 `defaultDatabase?`, `defaultLanguage?`, `checkPolicy?`, `checkExpiration?`, `password? { oldPassword, unlock, mustChange
-}`, `rolesAdd?`/`rolesDrop?` (≤ 256), `mappings?` (≤ 256), `credentialsAdd?`/`credentialsDrop?` (≤ 16), `connect?`,
-`enabled?`; 1–512 statements. Execute needs `loginIdentity` and carries `secrets: { password, oldPassword? }` exactly
-with `password`. No transaction; 15151 with an old password is `PERMISSION_DENIED`.
+}` (the old password never with UNLOCK or MUST_CHANGE), `rolesAdd?`/`rolesDrop?` (≤ 256 distinct server roles, never
+public, never both), `mappings?` (≤ 256 `{ database, change: map | unmap | update, user, newName?, defaultSchema?,
+rolesAdd?, rolesDrop? }`, one per database), `credentialsAdd?`/`credentialsDrop?` (≤ 16 distinct, never both, never for
+an Entra login), `connect? (grant | deny)`, `enabled?`; 1–512 statements. Execute needs `loginIdentity` and carries
+`secrets: { password, oldPassword? }` exactly with `password` (`oldPassword` exactly with `password.oldPassword`); script
+refuses `secrets`. No transaction; 15151 with an old password is `PERMISSION_DENIED`.
 
 **Securables.** `newLogin.securables: { server, permissions, objects (≤ 1,024 names each), truncated }`;
 `loginProperties` adds `permissions` (≤ 1,024 `{ securable, permission, state, grantor }`) and `permissionsTruncated`.
-`createLogin` and `loginChanges` take `permissions` (≤ 512 `{ securable: { type, name? }, permission, state: grant |
-withGrant | deny (| revoke | revokeGrantOption for Login Properties), cascade? }`, never CONNECT SQL).
+`createLogin` and `loginChanges` take `permissions` (≤ 512 `{ securable: { type, name? (1–128, exactly when the type is
+not server) }, permission, state: grant | withGrant | deny (| revoke | revokeGrantOption for Login Properties), cascade? }`,
+never CONNECT SQL, each securable's permission once, `cascade: true` only with `deny` or `revoke`; each counts against the
+512 statements). A request with permissions for sa or the connection's own login is refused before anything runs.
 `dialog: 'loginEffectivePermissions', securable` answers `{ effectivePermissions: { permissions (≤ 256), truncated } }`,
-`PERMISSION_DENIED` (15406, 15517, 15151), `NOT_SUPPORTED`, or `NOT_FOUND`. A permission step without effect (4624)
-fails `NOT_SUPPORTED`.
+`PERMISSION_DENIED` (15406, 15517, 15151), `NOT_SUPPORTED`, or `NOT_FOUND`. A permission step without effect (4624, or
+another grantor's row left in place) fails `NOT_SUPPORTED`.
 
 ## Streams and credits
 
@@ -686,10 +719,12 @@ server changes, or it is lost.
   `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
   repetition {k}, raised an error; execution continued with the next repetition." or "… next batch."). Severity 17–19
-  errors come from SqlClient as exceptions: after the batch's first result set later sets and messages still follow in
-  order (one raised mid-rows, such as 701, ends that set `incomplete`); before it, SqlClient discards the batch's later
-  result sets (row counts remain) and lists its later messages before the error, a known difference from SSMS pinned by
-  a live check. With `stopOnError: true` (SQLCMD's `:on error exit`) the first erroring batch ends the script. Nothing
+  errors do not stop the batch on the server either (SQL Server runs the whole batch; only SqlClient's view differs), but
+  SqlClient raises them as exceptions: after the batch's first result set later sets and messages still follow in order
+  (one raised mid-rows, such as 701, ends that set `incomplete`); before it, SqlClient reads the rest of the batch inside
+  `ExecuteReader` (SqlClient 7.1.1), discarding the batch's later result sets (row counts remain) and listing its later
+  messages before the error. `FireInfoMessageEventOnUserErrors` routes only severity ≤ 16 and no SqlClient switch changes
+  this, so it is a known difference from SSMS, pinned by a live check that fails if a SqlClient update changes it. With `stopOnError: true` (SQLCMD's `:on error exit`) the first erroring batch ends the script. Nothing
   runs after a cancel, the deadline, a severity 20+ error, or any failure that closes the session.
 - **Stop.** A cancel stops a batch wherever it is, also mid-message stream (`PRINT` loops, `RAISERROR … WITH NOWAIT`),
   by cancelling from inside the next message (`StatementStop`). A `query.cancel` that overtakes its `query.execute` is
@@ -703,8 +738,8 @@ server changes, or it is lost.
 | `cancelled` | `query.cancel`, a closed tab, a disconnect, or a CANCEL frame other than main's backstop | "Query was cancelled." |
 | `timedOut` | `timeoutSeconds` passed, or main's backstop cancelled the request | "Query timed out." |
 
-`completedBatches` counts finished batch executions, erroring ones included (not the one that stopped a `stopOnError`
-script). Validation errors and a missing, busy or invalid session or connection use the error envelope, and nothing runs.
+`completedBatches` counts finished batch executions, erroring ones included (also a batch whose output a severity 17–19
+error raised before its first result set cut short; not the one that stopped a `stopOnError` script). Validation errors and a missing, busy or invalid session or connection use the error envelope, and nothing runs.
 
 **Session identity.** On open, the prologue and `SELECT SUSER_SNAME();` go in one command; `spid` is
 `SqlConnection.ServerProcessId`. Every summary returns `spid` and `login` (≤ 128 characters) while the session is open
@@ -714,15 +749,16 @@ sees the previous `@@ROWCOUNT` and `@@ERROR`, and `DBCC INPUTBUFFER` shows the u
 **Transaction state.** `query.session.state { sessionId }` runs `SELECT @@TRANCOUNT;` in an idle session and answers
 `{ transactionCount, checked }` (control lane, 5 s, never waits). Running: `SESSION_BUSY`; unknown: `SESSION_CLOSED`
 ("This query has no open SQL session."); found lost: closed, `SESSION_LOST` ("The SQL session was lost, so SQL Server
-rolled back its transaction."), which main also answers for an ended generation. Under `SET SHOWPLAN_XML`, `_TEXT`,
+rolled back its transaction."); for an ended generation main answers `SESSION_LOST` itself (`sentences.sessionEnded`:
+"The SQL session ended with the SQL backend, so SQL Server rolled back its transaction."). Under `SET SHOWPLAN_XML`, `_TEXT`,
 `_ALL`, `NOEXEC`, `PARSEONLY` or `FMTONLY ON` it answers `{ transactionCount: 0, checked: false }`, options untouched.
 The read is a statement in the session (a kept session then sees `@@ROWCOUNT` 1, `@@ERROR` 0). A cancel does not roll
 back; an `XACT_ABORT`-doomed transaction ends by the batch's end (3998).
 
 **Ending a session.** `query.session.close { sessionId, transaction? }`. Without `transaction`, or with `'rollback'`, it
 cancels any running script and closes the session; SQL Server rolls back, unwaited. `'commit'` reads `@@TRANCOUNT`
-(turning SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off if no row came back), then runs
-`WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;` and checks 0 is left.
+(turning SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off if no row came back), then, only with a transaction open,
+runs `WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION; SELECT @@TRANCOUNT;` and checks 0 is left.
 
 | Case | Answer; session |
 | --- | --- |
@@ -736,8 +772,8 @@ cancels any running script and closes the session; SQL Server rolls back, unwait
 
 A severity 20 error counts the session lost even while its connection still reads open.
 
-**Session limit.** At most 1,000 query sessions, a backstop (running scripts are bounded by main's 256 pending requests
-plus 32 reserved for control requests, so the renderer sends state reads and cancels 8 at a time and closes one at a
+**Session limit.** At most 1,000 query sessions, a backstop (running scripts are bounded by main's 256 pending requests,
+with 32 more reserved for control-lane requests (cancels, state reads, closes), so the renderer sends state reads and cancels 8 at a time and closes one at a
 time). The next is refused with `SESSION_LIMIT`: "This query was not executed: 1,000 query tabs already hold SQL
 sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query >
 Connection > Disconnect), then execute again." Idle sessions are never reclaimed: their state is invisible from outside.
@@ -754,9 +790,15 @@ composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page 
 - Open transactions ask SSMS's "There are uncommitted transactions. Do you wish to commit these transactions before
   closing the window?" (or before changing the connection, disconnecting, disconnecting the server, closing Varia SQL
   Manager), **Yes** (commit, default), **No** (roll back), **Cancel** (Escape); unread ones say "There may be
-  uncommitted transactions". Running queries are asked first, **Cancel Query and Close** or **Keep Running** (default),
-  and are cancelled (up to 15 s), never committed. Then `query.session.close` runs with the chosen `transaction`; a
-  failed commit stops the flow. Wording details: `src/shared/sessions.ts`.
+  uncommitted transactions" and are listed as "not checked". Several queries are asked about once, listing up to 10 by
+  name with their nesting.
+- Running queries are asked first, in a box of their own, **Cancel Query and Close** or **Keep Running** (default and
+  Escape); the open transactions go in a second request only after Cancel Query and Close, and nothing is cancelled
+  until both are answered. A running query is cancelled (up to 15 s), never committed. (A request mixing both lists the
+  running queries under "Still executing" and defaults to Cancel.) Then `query.session.close` runs with the chosen
+  `transaction`; a failed commit stops the flow. Close All and Disconnect All Queries leave running queries alone; one
+  that finished after the prompt opened is read then, and if it may hold a transaction it stays open and is reported. A
+  run that settles after its tab closed still has its results released. Wording details: `src/shared/sessions.ts`.
 
 ## Query events
 
@@ -844,12 +886,16 @@ Results stay in backend memory, never on disk (`ResultStore`).
   use half. Main passes it at launch (`VARIA_RESULT_MEMORY_MIB`) and sends `results.setMemoryLimit` as each generation
   becomes ready, on change, and after each successful settings read. Lowering it drops nothing: reservations are
   refused (storing queries stop with `globalBudget`/`queryBudget`; queries, sorts, pivots and live revisions are refused)
-  until use falls under it. A stopped query never resumes (operations on it answer `BUDGET_STOPPED`). Test hooks'
+  until use falls under it; raised, the room is there for the next reservation. A stopped query never resumes (operations
+  on it answer `BUDGET_STOPPED`). A query's own ceiling fixed when it began (an actual plan's) stays: the smaller of it and
+  the current half holds. Test hooks'
   `VARIA_RESULT_BUDGET_BYTES` fixes the figure and turns off the memory-load check.
 - **Working memory** of operations (sort keys, profile figures) is charged to the same budget (pinned by
   `tests/working-memory-lint.test.ts`). Reservations of 64 MiB or more, and stepped ones (`WorkSteps`) at each further
-  64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory). Nothing more is stored while the
-  OS reports high memory load (checked at every page seal).
+  64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory); refused Distinct Count bounds are not an
+  error (the pivot sorts by cell and value instead), and a profile refused on several threads is read again on one.
+  Nothing more is stored while the OS reports high memory load (checked at every page seal; the load is the runtime's
+  reading at its last GC, refreshed by a gen0 collection when more than a second old).
 - **Charges.** A sealed page costs its length (packed length once packed) + 96 bytes + its cell lengths
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a set's metadata 512 bytes + 2 per name character + 64
   per column; the page builder's space in 256 KiB steps. A failed reservation rolls back the current row; later rows
@@ -890,8 +936,10 @@ Results stay in backend memory, never on disk (`ResultStore`).
   the packer packs other unheld complete results on the results' workers; then it retries, or the query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
-  reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released triggers a gen2 collection,
-  compacting only when what remains is no more than was released since and ≤ 8 GiB (waived under high memory load).
+  reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
+  as does a release that empties the store once 16 MiB were released since the last compacting one
+  (`ResultStore.CompactWhenEmpty`); it compacts only when what remains is no more than was released since and ≤ 8 GiB
+  (waived under high memory load), else it does not compact.
 
 Notes appended to the summary's messages:
 
@@ -938,10 +986,13 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
   vector, sql_variant, estimates; estimates flagged by the column's sign bit), and 16-byte `(row, bytes)` entries for
   rows of 4 GiB or more (`uint32` = `uint.MaxValue`). Charged with the page: 4 bytes a row, 24 per entry, 96 a page.
 - **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
-  rowsAvailable, estimated: number[] }` for sealed rows only; `estimated` lists, ascending, rows whose sum includes an
-  estimate. Main forwards it only for a result the renderer owns in the current, ready generation (else
-  `RESULT_UNAVAILABLE`) and checks the answer (`rowBytesResultSchema`, else `BACKEND_ERROR`). `ResultHandle.rowBytes`
-  answers an empty range itself and refuses a malformed one (`INVALID_PARAMS`) without sending it.
+  rowsAvailable, estimated: number[] }` for sealed rows only: fewer than `count` past `rowsAvailable` (none for a range
+  past it). `estimated` lists, ascending, rows whose sum includes an estimate. Main forwards it only for a result the
+  renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only an answer that passes
+  `rowBytesResultSchema`, starts at `firstRow`, has at most `count` and at most `rowsAvailable - firstRow` rows, and lists
+  estimated rows in order within them (else `BACKEND_ERROR`). `ResultHandle.rowBytes`
+  answers an empty range itself and refuses a malformed one (`INVALID_PARAMS`) without sending it (main closes the port
+  after 100 invalid messages).
 - **Estimates** also cover: live tables (text as nvarchar; cut cells), xml without `SequentialXml` internals,
   fallback-reader values of non-character types, and _UTF8 values holding invalid bytes (U+FFFD). Synthetic test rows
   are not measured.
@@ -983,9 +1034,10 @@ view is an order of some or all of a result's base rows, read through the result
 - **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, baseRows,
   complete, approximate, filters? }`; at least one key or filter. A key is `{ column, descending, mode: 'value' | 'chars'
   | 'bytes' }`, columns distinct and in range (`INVALID_PARAMS`). The view covers the rows sealed when built (`baseRows`;
-  `rows` counts what filters kept); `complete`: every row of a finished set (otherwise the renderer rebuilds it when the
-  set completes). `approximate`: a key compared a truncated prefix or an estimated length. `replaces` names a view of the
-  same result dropped once the new one is built. At most 8 views a result; a ninth drops the oldest.
+  `rows` counts what filters kept); `complete`: every row of a finished set (otherwise the view is stale: a filtered
+  caption reads "so far" and the renderer rebuilds it when the set completes). `approximate`: a key compared a truncated prefix or an estimated length. `replaces` names a view of the
+  same result dropped once the new one is built (left as it was when the sort fails or is cancelled). At most 8 views a
+  result; a ninth drops the oldest.
 - **Order.** Stable, as ORDER BY: NULL and unreadable cells lowest; exact numerics by value, real/float as doubles,
   uniqueidentifier in SQL Server's byte order, datetimeoffset by UTC instant, other date/time types by fixed-width text,
   binary bytewise, character columns by collation (code points for _BIN/_BIN2) ignoring trailing spaces, other types by
@@ -1010,17 +1062,31 @@ view is an order of some or all of a result's base rows, read through the result
 - **Keep Selected Rows.** `{ op: 'keepRows', cells: { ranges: 1 – 256 [first, count], viewId? } }` keeps rows by position,
   not value. More than 4,095 rows (`limits.transpose.maxRows`) is `TOO_LARGE` before reading; none is `INVALID_PARAMS`.
   It answers `{ op: 'keepRows', rows }` (ascending base rows), the form sent afterwards (`rows: 1 – 4,095`; an unsealed
-  row is `INVALID_PARAMS`). It keeps earlier filters' order. A `column`, `nulls`, `columns` or `snapshotId`, or both or
+  row is `INVALID_PARAMS`). It keeps earlier filters' order, and a later filter sees only its rows. Made while rows stream,
+  it resolves to rows already sealed, so the view rebuilt once the result completes keeps those and none that arrived
+  later. A `column`, `nulls`, `columns` or `snapshotId`, or both or
   neither of `rows` and `cells`, is `INVALID_PARAMS`.
 - **Threads.** Keys are built a page at a time and rows sorted in merged slices on several threads, giving one thread's
   order. All running operations (sorts, filters, distinct lists, pivots, profiles, searches, identities, diffs) share the
   worker threads (three quarters of the machine's, at most 16) fairly (`ViewSorter.WorkerGate`, `Results/WorkerGate.cs`):
-  each runs a step's items on its own thread plus granted workers; shares fill from the smallest demand up; between
-  items a worker over its share hands its thread to the operation furthest below its share; busy threads never exceed
-  the limit plus one per extra operation. Steps are cut finer than the thread count where free (up to four sort slices
-  or identity parts a thread); profiles and searches use one run per thread and hand threads back only as runs end. A
-  failure or cancel stops the step's workers and is rethrown once all have stopped and disposed. The limit is re-read at
-  each gate event. Measurements: [Worker threads measured](#worker-threads-measured).
+  - Each runs a step's items on its own thread plus granted workers; shares fill from the smallest demand up. Workers
+    start only while fewer than the limit are busy, so busy threads never exceed the limit plus one per extra operation
+    (its own); none ever has no thread.
+  - Between items a worker over its share hands its thread to the operation furthest below its share; a step out of
+    items hands its threads back as its workers find none. So an operation alone gets every thread, and a second gets
+    half after the first's next items. Steps are cut finer than the thread count where free (a page an item for keys and
+    identities, up to four sort slices or identity-check parts a thread); profiles and searches use one run per thread
+    and hand threads back only as runs end.
+  - A failure or cancel stops the step's workers at their next item and is rethrown, as itself, once all have stopped and
+    disposed their state. A state whose Dispose throws fails the step too, rethrown by the owner only when no body or
+    state factory failed and no worker met a cancellation; it stops no other worker and is never thrown on a worker's
+    thread. Workers still queued to the thread pool when a step closes are given back at once (never awaited), a lease
+    over its share hands back a queued worker before a running one, and a worker the pool refuses counts as never
+    granted. A returned step lets go of its body and state, so queued workers hold nothing it captured.
+  - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
+    lowering it takes effect at the workers' next items, raising it at the next such event.
+
+  Measurements: [Worker threads measured](#worker-threads-measured).
 - **Keys.** `date`, `time`, `datetime`, `datetime2` and `smalldatetime` keys are 8-byte ticks from the fixed-width text.
   A byte-ordered key (collation sort key, or raw bytes for _BIN/_BIN2, binary and other text) samples 4,096 scattered
   rows: repeating values are ranked (at most 65,536 ranks, or one per 32 rows) and compared as integers; otherwise it
@@ -1040,7 +1106,9 @@ view is an order of some or all of a result's base rows, read through the result
   `keys`, resolved `filters`, `rows`, `baseRows`, `complete`, `approximate`). `ResultsService` keeps one view per grid
   and sends no `replaces`: the shown view stays readable until the grid swaps (`viewShown`), then closes. A loading set
   is re-sorted when it completes, and changing Sort text columns by re-sorts text, xml, json and binary keys. Main closes
-  a view built after its port went. Copy, Save and opening a value follow the view.
+  a view built after its port went. Copy, Save and opening a value follow the view; Save waits until a running or pending
+  sort is built. A filter by the selection sends ranges of what the grid shows (with its view's id) and keeps the resolved
+  filter for later views; a failed view keeps the last view, keys and filters.
 
 ### Worker threads measured
 
@@ -1058,9 +1126,21 @@ rows; a sort by `name`, a pivot by `active` and a profile of all columns, alone 
 | Sort and pivot | 114 – 121 / 151 – 159 ms |
 | Pivot and profile | 244 – 255 / 293 – 307 ms |
 
+| `DOTNET_PROCESSOR_COUNT=4`, 3 workers | Time |
+| --- | ---: |
+| Sort / pivot / profile alone | 309 – 404 / 253 – 275 / 840 – 1,593 ms (one round 1.6 s, the others 840 – 897) |
+| Two pivots | 268 – 487 / 383 – 660 ms |
+| Two sorts | 423 – 807 / 609 – 1,166 ms |
+| Sort, then profile | 718 – 1,005 / 845 – 2,520 ms |
+| Profile, then sort | 705 – 885 / 833 – 2,118 ms |
+| Sort and pivot | 369 – 416 / 395 – 504 ms |
+| Pivot and profile | 416 – 484 / 798 – 1,120 ms |
+
 Conclusion: against first come, first served, the slower of a pair finishes 1.3 to 2.9 times sooner and an operation
-alone is unchanged; at most 17 threads were busy. With `DOTNET_PROCESSOR_COUNT=4` (3 workers) shares are too small to
-split and totals are unchanged. "Profile, then sort" gains least, since a profile hands threads back only as runs end.
+alone is unchanged; at most 17 threads were busy (16 workers and the second operation's own thread). With
+`DOTNET_PROCESSOR_COUNT=4` (3 workers) shares are too small to split and totals are about unchanged, with more spread.
+`DOTNET_PROCESSOR_COUNT` only tells .NET it has four processors; the threads still ran on 24 cores, so this measures the
+gate's sharing, not a four-core machine's speed. "Profile, then sort" gains least, since a profile hands threads back only as runs end.
 `--pivot-bench --only parallel` (5,000,000 rows): concurrent builds take 0.76 – 1.1 s each.
 
 ## Row identities and highlights
@@ -1076,10 +1156,10 @@ the renderer never compares rows.
   cell's normalized value (collation sort key, trailing spaces trimmed; canonical digits; UTC instant; stored bytes), so
   collation-equal rows match. `approximate`: a truncated prefix was hashed. A second identify replaces the first. It
   keeps 8 bytes a row, charged to the query budget (`TOO_LARGE`) and freed with the result.
-- **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }`, -1 past the
-  identified rows; without an identify, `IDENTITY_NOT_FOUND`.
+- **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }` (by view position with `viewId`), -1
+  past the identified rows; without an identify, `IDENTITY_NOT_FOUND`.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated,
-  rows }`: ascending positions of matching rows, each with its index in `ids`, at most 100,000 (`truncated`).
+  rows }`: ascending positions (view positions with `viewId`) of matching rows, each with its index in `ids`, at most 100,000 (`truncated`).
 - **Renderer.** `HighlightsService` keeps highlights per tab and result (a re-run's result of the same number takes them
   over and is identified the same way). Searches failing with `BUSY`, `TOO_MANY_REQUESTS` or `TIMEOUT` retry after 1, 4
   and 16 s. At most 10,000 rows per command and per set. Highlights live only in renderer memory.
@@ -1111,7 +1191,7 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
   released with the query's results or at once when its answer is not delivered. A source released meanwhile:
   `RESULT_RELEASED`. Building holds about 55 bytes a row of both results (`ResultDiffer.WorkingBytes`) plus 12 bytes per
-  differing cell. Work is split across threads with one thread's result.
+  differing cell, charged to the budget as they grow (`TOO_LARGE` without room). Work is split across threads with one thread's result.
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"); `GridView`
   colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`).
 
@@ -1138,7 +1218,7 @@ Pivot groups and aggregates a result's rows in the backend (`Results/ResultPivot
 - **Bounds.** At most 256 column groups (fewer past a page's 4,096 columns), 100,000 row groups and 4,000,000 figures,
   checked once groups are known and never shown in part: `INVALID_PARAMS` naming bound, count and remedy ("The column
   group has 1,204 distinct values, and a pivot can have at most 256 column groups. Choose a column with fewer values, or
-  move it to Rows."). Main checks the answer's shape (one row per row group; row columns + (column groups + 1) × values).
+  move it to Rows."). The messages name no column or value. Main checks the answer's shape (one row per row group; row columns + (column groups + 1) × values).
 - **Memory and stopped queries.** A derived set of the source query, charged to its budget, stored whole or not at all
   (`TOO_LARGE`), released as a diff is; a refusal never stops the query. Figures (4 to 25 bytes per cell and value) are
   charged before computing ("There is not enough result memory to pivot these rows. Close other results and try
@@ -1177,7 +1257,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
 - **`results.search { resultId, text: 1 – 1,024 characters, fromRow, maxMatches: 1 – 10,000, backward?, viewId? }`**
   answers `{ rows, total, first, matchRows, matchColumns, complete, approximate }`, over the rows sealed now or a view's
   positions (`VIEW_NOT_FOUND`), in parallel runs (one per 32,768 rows). It counts every match (`total`) and returns whole
-  rows from `fromRow` on (with `backward`, before it) until it holds `maxMatches`. `matchRows[k]`/`matchColumns[k]` are
+  rows from `fromRow` on (with `backward`, the last rows before it) until it holds `maxMatches`, so a run passes
+  `maxMatches` by at most its last row's columns (main accepts up to `maxMatches` + `page.maxColumns`). `matchRows[k]`/`matchColumns[k]` are
   cells in row, column order; `first` counts matches before the run (or before `fromRow` when empty). `approximate`: a
   truncated prefix did not match. It reserves no budget (at most 1 MiB of page layouts), except one- or two-page rooms to
   read a packed result (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
@@ -1202,8 +1283,9 @@ The column profile panel and the row-size bar use `results.profile`, which answe
   else the rows sealed now. Main forwards an answer only when it names the asked columns in order.
 - **Per column** `{ column, values, nulls, distinct, distinctExact, min?, max?, approximate, chars?, bytes?, histogram? }`,
   compared as a sort does (NULL never `min`/`max`; 1.50 = 1.5). `distinct` is exact to 16,384 values, then a HyperLogLog
-  estimate (about 1 %, `distinctExact: false`). `min`/`max` are display text cut to 256 characters with "…". `chars` and
-  `bytes` (`{ min, max, average, exact }`) come from stored lengths for text, xml, json and binary. `histogram`
+  estimate (about 1 %, `distinctExact: false`). `min`/`max` are display text (binary as `0x` hex) cut to 256 characters with "…"; `approximate`: a truncated
+  cell's stored prefix took part. `complete`: the rows described were every row of a finished set. `chars` and
+  `bytes` (`{ min, max, average, exact }`) come from stored lengths: text, xml and json get both, binary only `bytes`. `histogram`
   `{ basis, low, high, counts }`: 20 equal buckets by `value` (numbers), instant (dates; `time` in .NET ticks), `chars`
   (text) or `bytes` (binary).
 - **`rowBytes`** `{ min, max, average, exact }` from page row sums; the row-size bar scales to `max`.
@@ -1277,7 +1359,7 @@ escaping is ASCII (plus U+2028/U+2029 as their three bytes).
 | --- | --- |
 | Lines | One per source column, each with one field per source row; a JSON save is one object per source column. |
 | Rows written | View positions 0 to 4,094 (`limits.transpose.maxRows`); rows past them are counted in `capped`; a part wholly past them writes no values. |
-| Headers on (Copy with Headers, saves with headers, JSON always) | A first line `Column`, then one name per row; each line starts with its column's name (blank → `(No column name)`). |
+| Headers on (Copy with Headers, saves with headers, JSON always) | A first line `Column`, then one name per row; each line starts with its column's name (blank → `(No column name)`, in JSON too, unlike the untransposed `Column{ordinal}`). |
 | Field names | `Row N` (view place from 1, no grouping), or with `headerColumn` that column's header text: `NULL` (also a read error), `(blank)`, binary as `0x` hex, line breaks/TAB/NUL as one space, at most 128 characters (no split surrogate pair), then made distinct with `_2`, `_3`… (`Column` included). |
 | Headers off | Values only; `headerColumn` changes nothing; a part with no rows writes nothing. |
 | Values | As the table above, except JSON writes every value as a string (NULL as `null`). |
@@ -1291,17 +1373,20 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   end) by 1 – 64 column ranges; up to 64 parts. Open-ended rows end at the rows available at start (`partial`: set still
   open). An upper-bound `EstimateBytes` (text spans, `2 × bytes + 2` per binary cell, 4 per NULL, separators, headers)
   over `maxBytes` answers `TOO_LARGE` ("The selection is too large to copy ({n} MB; the limit is {m} MB). Use Save Results
-  As instead.") with no DATA. Otherwise DATA bodies of at most 1 MiB under credit, then `{ rows, bytes, truncatedCells,
-  partial, capped }`. `headerColumn` (0 to 4,095) only with `transposed: true` (`INVALID_PARAMS`).
+  As instead.") with no DATA. Otherwise DATA bodies of at most 1 MiB under credit, checked for cancellation per page,
+  then `{ rows, bytes, truncatedCells, partial, capped }`. `headerColumn` (0 to 4,095, a shown column) only with
+  `transposed: true` (`INVALID_PARAMS`).
 - **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId,
   viewId?, transposed?, headerColumn? }`** (unary; answer includes `capped`). The path must be fully qualified, without
   NUL or a `\\.\` / `\\?\` prefix, and `temporaryId` 32 hex digits from main (`INVALID_PARAMS`); the set must be complete
-  (`RESULT_OPEN`). It writes `{folder}/.varia-{temporaryId}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB chunks), flushes,
+  (`RESULT_OPEN`). It writes `{folder}/.varia-{temporaryId}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB chunks), checking
+  cancellation per page, flushes,
   and renames it over the target (a symlink is replaced, not followed), never touching the target before. A replaced file
   keeps its permissions (Unix: the target's mode, never wider; Windows: `File.Replace` keeping attributes and ACLs, with
   `.varia-{temporaryId}.bak` until success, so the old or new file always exists). Failure or cancel deletes the
-  temporary file; if the backend stops first the export fails `BACKEND_LOST` and main removes the temporary and backup
-  files. Failures are `EXPORT_FAILED` with a one-token message, never a path: `ACCESS` (0x80070005), `IN_USE`
+  temporary file; if the backend stops first the export fails `BACKEND_LOST` and main removes the temporary file at once
+  and again after the stop grace period, and the backup only once the target exists. Failures are `EXPORT_FAILED` with a
+  one-token message, never a path or an OS message: `ACCESS` (0x80070005), `IN_USE`
   (0x80070020, 0x80070021, 0x80070497), `DISK_FULL` (0x80070070, 0x80070027, errno 28), `NOT_FOUND`, `IS_DIRECTORY`,
   else `IO`.
 - **Progress.** Droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms (transposed:
@@ -1314,7 +1399,8 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   streaming `TextDecoder`, regrants credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB, and writes the clipboard once on
   the RESPONSE unless cancelled (then `CANCELLED`); a new copy cancels the running one. One save at a time (`JOB_BUSY`):
   the native "Save Grid Results" dialog gets a sanitised name (`src/main/file-names.ts`, keeping `suggestedSuffix` such
-  as `-Result2-Pivot` whole), the format follows the chosen extension, ownership is checked again, and only the file name
+  as `-Result2-Pivot` whole), the format follows the chosen extension (an unknown extension keeps the requested format and nothing is appended,
+  so the dialog's overwrite confirmation stays valid), ownership is checked again, and only the file name
   returns (`EXPORT_FAILED` tokens become sentences naming only it). `varia:results-job-cancel` sends CANCEL reason 1; a
   reload or closed window, reason 3. Dialogs are shown one at a time (`src/main/dialog-queue.ts`). Paths come only from
   the dialog and reach only the backend.
@@ -1347,18 +1433,20 @@ live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs
 - Sort names catalogue column ids of the probe's snapshot tables (the row key breaks ties). A key with `table` sorts only
   that table and must name one of its columns; without it, every snapshot table with the column. Each column once per table.
 - A view must be one the probe declares; a filter needs a probe with a filter mode.
-- `args` is checked by the source's schema (`liveArgsSchemas`); new args replace the old whole:
+- `args` is checked by the source's schema (`liveArgsSchemas`):
   - `debug.synthetic`: `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000, errorEvery?: 1..1,000,
     logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }` (a period below the 1 s minimum for fast tests).
   - `activity`: `{ filters?: activity filter[1..7], focusSession?: 0..32,767 }` (`activityLiveArgsSchema`, at least one
     member). One filter per table (`activityFilterSchema`: view chip, System and Varia chips, filter box ≤ 400 characters,
     ≤ 8 column value filters of ≤ 50 values ≤ 256 characters on facet columns, Hide benign waits). An update replaces the
-    filters of the tables it names; a table without one uses the catalogue defaults. `focusSession` is the session the
+    filters of the tables it names and keeps the others (an absent member keeps its value); a table without one uses the
+    catalogue defaults. `focusSession` is the session the
     sessions probe's two series follow (0 for none); the first sample after it changes is marked `gap: 'reset'`. Column ids
     are unique within a probe (the first table keeps catalogue ids, others take a prefix: `chainSessionId`, `activeCpuMs`).
   - `ssis.operations`: `{ kinds?: ('execution' | 'validation' | 'deploy' | 'other')[1..4], statuses?: (1..9)[1..9],
     folder?: str 1..128, project?: str 1..128, package?: str 1..260, prefix?: boolean, caller?: str 1..128,
-    windowHours?: 1..8,760, limit?: 1..10,000 }` (kinds and statuses distinct; `Live/SsisOperations.cs` checks again).
+    windowHours?: 1..8,760, limit?: 1..10,000 }` (kinds and statuses distinct; `Live/SsisOperations.cs` checks again); new
+    args replace the old whole (an absent member does not filter) and read the window again.
 - `start` (`liveStartSchema`, sources whose append tables can start mid-way): `'beginning'`, `{ tail: 1..200,000 }` or
   `{ before: 1..2^53−1 }` (the rows before an id, ending there).
 - `track` names a keyed snapshot table by index; each key is the key cells' stored texts joined with U+001F; `linger` is how
@@ -1385,7 +1473,8 @@ A probe error is a value, so other probes carry on: `{ probe, code, message ≤ 
 values), number?, retryInMs, terminal, tables?, series? }`. `tables`/`series` name what one failed statement would have
 filled; a probe may report several errors in a tick; `terminal` is true only when the probe stopped, never beside a sample.
 `code` is one of `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_SUPPORTED`, `DATABASE_UNAVAILABLE`, `CONNECTION_LOST`,
-`SQL_ERROR`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `BUDGET`, `BUSY`, `CATALOG_MISSING`, `NOT_FOUND` or `LOGIN_FAILED`.
+`SQL_ERROR`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `BUDGET`, `BUSY`, `CATALOG_MISSING`, `NOT_FOUND` or
+`LOGIN_FAILED`.
 
 A `resorted` sample is not a sample: after an update changes a probe's sort, the next tick re-sends its snapshot tables in the
 new order (see Re-sort) with `costMs` 0 and nothing else; the renderer keeps the last sample's time, cost and error. A probe
@@ -1401,8 +1490,9 @@ with `BACKEND_ERROR`.
 **Tables** (`Live/LiveTables.cs`; per-table settings in docs/live.md). Every table is a stored result read with
 `results.read`: cells are CellFormat text, every column `text` on the wire, so Copy and Save treat it as any result.
 - **Snapshot tables.** Each sample writes a new result (a revision). The newest and the one before stay readable; writing
-  k+1 releases k−1 and names it in `retired`. A revision applies the probe's view, then its filter (`filterMode: 'memory'`:
-  case-insensitive contains over the named columns of that table, or all), sorts by the probe's keys (numbers as numbers,
+  k+1 releases k−1 and names it in `retired` (one that could not be stored names it in the next that is). A revision applies the probe's view, then its filter (`filterMode: 'memory'`:
+  case-insensitive contains over the named columns of that table, or all; columns of another of the probe's tables leave
+  this one whole), sorts by the probe's keys (numbers as numbers,
   NULL first ascending, text case-insensitively then exactly), then by the key, and stores at most the row cap (`rowLimit`,
   rows left out counted in `rowsRead`). `diff` counts keys added, removed and changed (a 64-bit hash of their texts);
   `tracked` gives each key of the latest track list its new row or −1. A key is its key cells' texts joined with U+001F, NULL
@@ -1424,16 +1514,20 @@ with `BACKEND_ERROR`.
   above `@after` = settled id) and skips rows already appended. An id settles once seen for the table's settle ticks and
   milliseconds (2 and 5 s by default); unsettled ids stay within twice the rows a tick reads. Each write seals its rows; a
   sample carries the table only when it changed. At 200,000 rows or 32 MiB a segment completes and a new one starts
-  (`rolledFrom`); completed segments beyond one segment's worth are retired, at most 8 stored results per table. A read opens
-  at most one new segment. Filter mode `restart` passes the filter to SQL Server as an escaped LIKE pattern (`@filter`,
+  (`rolledFrom`); on a roll the oldest completed segments are retired while the completed ones hold more than one segment's worth and two
+  or more are left (a segment stopped early for memory counts only what it holds); at most 8 stored results per table,
+  past which the oldest goes whatever it holds. A read opens at most one new segment. Filter mode `restart` passes the filter to SQL Server as an escaped LIKE pattern (`@filter`,
   `ESCAPE N'\'`); a new filter or args that change what is read retire every segment (`retired` up to 8) and the next sample
-  says `restarted` (old segments stay readable until the new first read arrives). A tail or before-id start begins with a
+  says `restarted` (old segments stay readable until the new first read arrives, and are released only together with the
+  new segment's open, their bytes paying for its metadata when the budget refuses it). A tail or before-id start begins with a
   note row ("n earlier rows are not shown."); before-id also ends there (`@before`). Rows not stored (budget, or past a second
   segment) never count as seen, so a later read stores them once.
 - **Memory.** Each revision and segment has its own budget; a subscription's tables share 64 MiB, and all live tables stay
   within a quarter of the result budget (`queryBudget` past the subscription's limit, `globalBudget` past the live share).
-  A table that ran out stores what fits and its probe reports `BUDGET`; it stores again once memory frees, keeping what it
-  holds. Live results seal 64 KiB pages, and their releases do not count toward the store's forced gen2 collection.
+  A table that ran out stores what fits and its probe reports `BUDGET` (alone if it stored nothing); it stores again once
+  memory frees, keeping what it holds: an append table whose segment ran out keeps it (complete) and opens the next only
+  once a row fits, never retiring a segment to make room. Live results seal 64 KiB pages (under the large object heap's
+  threshold), and their releases do not count toward the store's forced gen2 collection after every 64 MiB released.
 - **Ends.** A source that ends keeps each snapshot table's newest revision and each append table's segments (within 64 kept
   results); every other end releases them all.
 
@@ -1484,8 +1578,8 @@ connection id is accepted; other scopes need a connected one (`NOT_CONNECTED`). 
   attempt. A backing-off probe keeps its delay and failure count; one a terminal error stopped restarts with a clean count.
 - **Error back-off.** The first failure retries at the interval; after f failures the next try is
   min(interval × 2^(f−1), cap) × U(0.9, 1.1), cap 60 s or the asked interval if longer. A sample resets the count. `BUDGET`
-  retries at the interval; a terminal error (`PERMISSION_DENIED`, `NOT_SUPPORTED`, `LOGIN_FAILED`) stops its probe
-  (`retryInMs` 0).
+  retries at the interval; a terminal error (`LiveErrors.IsTerminal`: `PERMISSION_DENIED`, `NOT_SUPPORTED`,
+  `LOGIN_FAILED`, `CATALOG_MISSING`, `NOT_FOUND`, `AUTH_IDENTITY`) stops its probe (`retryInMs` 0).
 - **Load guard.** An EWMA (α 0.3) of `costMs` over the catalogue `maxDutyCycle` (0.25, 0.2 for `activity.*`) of the interval
   for 3 samples doubles the interval up to the cap; under 10 % for 10 samples halves it back. Samples and the update answer
   report it as `effectiveIntervalMs`. A new interval from `live.update` restarts the guard.
@@ -1505,7 +1599,9 @@ connection id is accepted; other scopes need a connected one (`NOT_CONNECTED`). 
   ssis_admin (`IS_SRVROLEMEMBER` first): only they read `catalog.catalog_properties`, through one of two parameterless
   constant texts. An SSISDB open failing with 4060 or 916 reads why in the login's own database: no row is
   `CATALOG_MISSING` (terminal; `PERMISSION_DENIED` for a login without VIEW ANY DATABASE), not online, single-user or
-  restricted `DATABASE_UNAVAILABLE` (retried), online but not openable `PERMISSION_DENIED` (terminal). The Activity Monitor
+  restricted `DATABASE_UNAVAILABLE` (retried), online but not openable `PERMISSION_DENIED` (terminal). The renderer's
+  `LiveHandle.refresh` (Retry) subscribes again to a view that ended `failed` or was refused, never to one that was
+  disconnected or whose source ended. The Activity Monitor
   runs `Activity/ActivitySql.cs` `Capabilities` instead (server state, ALTER ANY CONNECTION, VIEW ANY DEFINITION, spills),
   sending `serverState` and `canKill` as status values with every sessions sample.
 - **Gating.** A probe whose catalogue gates (band, Managed Instance as newest; EngineEdition) exclude the server opens
@@ -1556,7 +1652,8 @@ no server permission (row-level security). Its probe `ssis.operations.list` keep
 | 207, 208 | `NOT_SUPPORTED` (terminal) |
 | 4060, 911, 942, 952 and other offline, restoring and single-user numbers | `DATABASE_UNAVAILABLE` |
 | severity ≥ 20, transport errors | `CONNECTION_LOST` |
-| Kerberos or Entra failure while reconnecting | `AUTH_KERBEROS`, `AUTH_ENTRA` |
+| Kerberos or Entra failure while reconnecting | `AUTH_KERBEROS`, `AUTH_ENTRA` (retried with back-off) |
+| a changed or unprovable account identity while reconnecting | `AUTH_IDENTITY` (terminal) |
 | 18456, 18486, 18487, 18488, 18452 while reconnecting | `LOGIN_FAILED` (terminal: retries could lock the login out) |
 | anything else | `SQL_ERROR` with SQL Server's text |
 
@@ -1568,11 +1665,14 @@ within 1 s); otherwise it is dropped and its pool cleared, and the next due tick
 **Deltas** (`Live/LiveDeltas.cs`): the backend keeps baselines only; history is the renderer's. Counter kinds: `gauge`,
 `rate` and `msPerSecond` (per second), `ratio` (change over a base counter's change; none if the base did not move) and
 `cpuPercent` (100 × Δ CPU ms / (elapsed × schedulers), 0 to 100). Elapsed time is the server's (Δ`ms_ticks` of
-`sys.dm_os_sys_info`) when the probe reads it, else the backend's; `elapsedMs` reports it. A changed start time drops every
-baseline (`gap: 'reset'`), as does a reader's series switching target (the focus session); a counter that went down
-rebaselines alone (null, `reset`); the first sample, the first after a pause and after a lost connection have no rates
-(`baseline`, `resumed`); a sample over 3 intervals late is `late`. `LiveKeyedDeltas` keeps per-row baselines keyed by an
-identity column, bounded by the row cap, dropped after two absent samples. The Activity Monitor's per-session CPU and reads
+`sys.dm_os_sys_info`) when the probe reads it, else the backend's; `elapsedMs` reports it. A changed start time (a restart) drops every
+baseline (`gap: 'reset'`); a reader whose series follow something else from a sample on (`SeriesReset`: the Activity
+Monitor's focus session) marks that sample `reset` without dropping other baselines; a counter that went down rebaselines
+alone (null, `reset`); the first sample, the first after a pause and after a lost connection have no rates (`baseline`,
+`resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
+while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines keyed by an identity column, bounded by the row
+cap, dropped after two absent samples, each with the time it was read on the probe's sample clock (a returning row's rate
+spans its own gap). The Activity Monitor's per-session CPU and reads
 use `SessionRates` (`Activity/ActivityRows.cs`): each running request counts by its own change, ended ones only beyond what
 they counted.
 
@@ -1589,21 +1689,34 @@ behaviour.
   is visible while its tab is the active document, follows the tab's connection and closes with it. The SSIS tree's views
   (`SsisTreeProbe`) belong to Object Explorer and hold ordinary slots. At most 16 views hold a slot per window (main's 16
   port streams). A `background` view (`LiveSpec.background`: Object Explorer status via `ExplorerStatusService`) takes only a
-  free slot, at most 8: it waits `dormant` without one, and yields its slot to a new non-background view, resubscribing
-  when a slot frees. With no slot, or unknown probes, the handle ends at once with `TOO_MANY_REQUESTS` or `INVALID_PARAMS`
-  as a value. A view the backend refuses with `BUSY` takes the newest running background view's slot on the same server
-  (`serverOf`) and retries once.
+  free slot, at most 8: without one it waits (`dormant`, `waiting: true`, running nothing). A view opening when all 16 are
+  taken takes the newest running background view's slot, which stops and waits again; the new view subscribes once that
+  stream's end has arrived, so main never sees a 17th. A closing view hands its slot to the oldest waiting background view,
+  which subscribes after the closed stream ended (or stays dormant while hidden). With every slot held by other views, or
+  unknown probes, the handle ends at once with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value. A view the backend
+  refuses with `BUSY` before it opens takes the newest running background view's slot on the same server (`serverOf`: the
+  server the connection names, else the same connection) and subscribes once more after that stream ended (a second
+  refusal, or no such view, ends it `BUSY`); a refused background view waits and retries when a view of the window closes.
 - **Frames.** Each event is applied synchronously (states, history ring, tables as `ResultHandle`s), then `onTick` listeners
   run, then it is acknowledged. Snapshot listeners hear at most once an animation frame.
 - **Hidden.** Hidden (owner or `document.visibilityState`) for `liveData.pauseAfterSeconds` (2 s) sends
-  `live.update { paused: true }`, shown again `paused: false`. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) cancels
-  (`dormant`); shown again it subscribes with a new id and the last resume token. `liveData.pauseWhenHidden` off keeps hidden
-  views running. A source allowing `hidden: 'statusOnly'` lets up to 4 views a window with `whileHidden` keep table-less probes
-  at `limits.live.hiddenIntervalMs` (30 s) or slower.
+  `live.update { paused: true }`, shown again `paused: false` at once; a view opened or reconnected while hidden counts from then, and a changed delay
+  applies to views already hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) cancels
+  (`dormant`, the backend releasing what it held); shown again it subscribes with a new id and the last resume token, its
+  history continuing after a gap. `liveData.pauseWhenHidden` off keeps hidden views running. A source allowing
+  `hidden: 'statusOnly'` (none does yet; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
+  table-less probes at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never going dormant, with
+  their table probes paused; the rest pause, and a view that ends, is lost, closes or shows hands its slot to the oldest
+  view that paused only for want of one.
 - **Pause, settings, refresh.** The user's Pause is `paused: true`, never undone by visibility. Settings changed within
-  150 ms go as one update (with `clear`). Updates wait for `live.opened` and go one at a time, each from what the backend last
-  accepted. `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT` and `BACKEND_UNAVAILABLE` refusals retry after 1 s doubling to 30 s.
-  `setArgs` changes `args` in place; Refresh sends `refresh: true`; `track` sends tracked keys with a new `seq`.
+  150 ms go as one update (with `clear`). Updates wait for `live.opened` (an earlier one is refused `NOT_FOUND`) and go one
+  at a time, in order, each from what the backend last accepted, so a resume never overtakes its pause. A refused update
+  leaves the view showing what the backend still runs, with the reason in `error`; `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT`
+  and `BACKEND_UNAVAILABLE` refusals retry after 1 s doubling to 30 s, others with the view's next change, and the next
+  accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe`; one opened
+  with `paused: true` is user-paused from the start.
+  `setArgs` changes `args` in place (history and state carry on); Refresh sends `refresh: true` (a dormant view
+  subscribes again); `track` sends tracked keys with a new `seq`, sent again with new ones by a new subscription.
 - **Ends.** A lost backend (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost` with its
   history; nothing resubscribes by itself. A retargeted owner resubscribes once the old stream's end arrives; a lost owner
   connection ends it `disconnected`; other ends are `ended`. Closing the view releases every kept result.
@@ -1613,7 +1726,8 @@ behaviour.
 - **Charts.** `ChartView` (`live/ChartView.ts`, imperative like `GridView`) draws one probe's ring on a canvas; `LiveChart`
   (`live/LiveChart.tsx`) adds the legend and "View as table". It draws at most once an animation frame, only when something
   it shows changed and the canvas is on screen and the page visible; each series is reduced to min and max per device pixel
-  column, so a draw is O(samples in window). Colours come only from the theme's `charts.*` keys (forced colours: `CanvasText`,
+  column (stacked bands to each column's mean), so a draw is O(samples in window); a gap flag or a missing value breaks a
+  line, and a series index the ring lacks reads as no value. Colours come only from the theme's `charts.*` keys (forced colours: `CanvasText`,
   `Canvas`, `GrayText`); at most 12 series (`chartLimits.series`). The canvas is `role="img"` with a name updated at most
   every 5 s, keyboard crosshair keys and a polite status region; text is Text nodes, never markup. Times read "now" only
   while the probe is `fresh` or `limited` and its newest sample is within twice its effective interval. `scaledRing(ring,
@@ -1705,8 +1819,10 @@ older pages.
 The worker also relays live subscriptions: the page sends `live { id, params }`, `liveUpdate { id, live, params }`,
 `liveAck { id, bytes }`, `cancel { id }` and `forget { generation, resultIds }`; the worker answers
 `live { id, bytes, event }`, `liveEnd { id, result }`, `liveUpdated { id, result }` or `error`. Streams go to the
-generation main last announced; requests made while no generation is ready wait for the next ready one (never more than
-one), and with no backend (generation 0) fail `BACKEND_UNAVAILABLE`. An update for an ended or cancelling stream fails
+generation main last announced; main takes a stream only for a ready generation (an `unresponsive` one still is), so
+requests made before main's first `backend` message or while it is `starting` or `restarting` wait and go to the
+generation that becomes ready (never more than one), and with no backend (generation 0) fail `BACKEND_UNAVAILABLE`,
+waiting ones included. An update for an ended or cancelling stream fails
 `NOT_FOUND`; a stream cancelled before it was sent ends `cancelled`. Events are relayed undecoded; `liveAck` becomes
 `credit` only within the bytes outstanding. A new generation ends older streams with `RESULT_UNAVAILABLE` ("This live
 view ended because the SQL backend restarted."), a replaced port with `PORT_CLOSED`. `forget` drops pages of
@@ -1727,10 +1843,13 @@ the port is down, and `TOO_MANY_REQUESTS` refusals are re-sent after 250 ms. A f
 reattached at most 3 times a minute; after that, results show "Results cannot be displayed; reload the workbench."
 
 `live(params, onEvent)` returns a `LiveStream`: `done` (settles once with the `LiveEnd` or a failure value, never a
-rejection), `update(patch)`, `cancel()` and `ack(bytes)`. Before `onEvent(event, bytes)` runs, the event's tables are
+rejection), `update(patch)` (`live.update` with the stream's subscription id and source; failures are values, an ended
+stream answers `NOT_FOUND`), `cancel()` (`done` settles `cancelled` at once for a stream never sent, even if the port
+never attaches) and `ack(bytes)`. Before `onEvent(event, bytes)` runs, the event's tables are
 applied (`applyLive`) and the results it retires (only this stream's) are forgotten; the caller applies the event
 synchronously, then calls `ack(bytes)`, and nothing more arrives until then (an exception from `onEvent` leaves it
-unacknowledged). On end its results are forgotten, except those a finished source kept, readable until `release`. A
+unacknowledged). A cancelled stream's events still count its results but no longer reach `onEvent`. On end its results
+are forgotten, except those a finished source kept, readable until `release`. A
 failed worker ends streams with `RESULT_DECODER_FAILED`, `dispose` with `PORT_CLOSED`. `forget(keys)` marks
 backend-released results released and drops their windows and pages, without `results.close`.
 
@@ -1795,16 +1914,20 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 - **Silence.** Main sends PING every 5 s; any frame counts as liveness. After 15 s without one the state is
   `unresponsive` and a banner offers **Restart now**; only a frame returns it to `ready`. A silent backend is never
   killed automatically (a restart rolls back open transactions). The watchdog ticks every second; a tick more than 2 s
-  late (main stalled), and `powerMonitor` suspend/resume, restart the window.
+  late (main stalled) restarts the silence window, and every silence decision first yields one turn for frames already
+  in the pipe. `powerMonitor` suspend pauses silence decisions entirely; resume restarts the window.
 - **Manual restart** (**Restart SQL Backend…**, **Restart now**) asks first when servers are connected ("Restart the SQL
   backend?" / "All {n} connections close and uncommitted transactions are rolled back.", or "The connection closes…" for
   one), closes the generation gracefully (stdin end, 2 s, then kill; 130 s while a Create Catalog is pending), starts the
   next at once and resets the breaker. **Reload** of the workbench restarts the backend the same way, without a notice,
   so no session outlives its page.
 - **Lost renderer.** When the workbench renderer stops, main resets the page's state, restarts the backend once, then
-  asks "Workbench stopped" (**Reload** or **Close**; the details name AutoRecover's copies). On Windows a backend spawned
-  during a renderer launch can inherit its channel handle and hide its exit, so main also polls the renderer process
-  every second; **Reload** waits up to 5 s for Chromium to see the stop, else opens a new window in the same place.
+  asks "Workbench stopped" (**Reload** or **Close**; the details name AutoRecover's copies); the reload that follows
+  restarts nothing. On Windows a backend spawned during a renderer launch can inherit its channel handle and hide its
+  exit, so main also polls the renderer process every second and handles an exit Chromium has not reported exactly as
+  Chromium's own report, once per renderer (whichever comes second is ignored). **Reload** waits up to 5 s for Chromium
+  to see the stop, else opens a new window in the same place (a close or quit the lost page could not finish goes to that
+  window's page); **Close** closes such a window at once.
 - **Quitting** waits for the backend to stop (stdin end, 2 s, then kill; up to 130 s with a pending Create Catalog) and
   for any generation a restart is still closing. Meanwhile the app has no window and releases the single-instance lock.
   Closing the last window starts no new backend unless the app keeps running (macOS).
@@ -1839,18 +1962,18 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
-| Distinct values | every distinct value of a column in a snapshot, 24 snapshots a result, windows of 1 – 512 values and ticks of 1 – 512 groups, 1 – 64 ids a close (`limits.distinct`), values cut to 256 characters, search 1 – 1,024 characters; working memory and snapshots under the query budget | zod and backend |
+| Distinct values | every distinct value of a column in a snapshot, 24 snapshots a result, windows of 1 – 512 values and ticks of 1 – 512 groups, 1 – 64 ids a close (`limits.distinct`), values cut to 256 characters, search 1 – 1,024 characters; working memory and each snapshot under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
-| Action progress | EVENTs every ≥ 250 ms plus each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (new step at once); step 0 – 519, percent 0 – 100; renderer tracks ≤ 128 requests | backend, main and renderer |
+| Action progress | EVENTs every ≥ 250 ms plus each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (new step at once, the latest held one at the interval's end); step 0 – 519, percent 0 – 100; renderer tracks ≤ 128 requests | backend, main and renderer |
 | Long object actions | 1 per Varia connection, 2 in all, waited ≤ 30 s, then `BUSY`; a closing generation waits 10 s plus the action's cleanup budget plus 5 s | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
-| Connection environment | `environment` option: absent (None) or 1 – 32 characters after trimming, no control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, changes only that entry's label), never in the connection string | zod (main) and backend |
+| Connection environment | `environment` option: absent (None) or 1 – 32 characters after trimming, no control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (Open, command line, second instance, macOS open-file, drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 at a time (counting those past their 2 s), none again for a file whose last has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
-| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
+| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, absolute, no U+0000 – U+001F or `*?"<>|`; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
 | Restore Database | 1 – 64 backup files (server paths as above); ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files, 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only kinds without folders or rows of their own); other identity names (SSIS folders, projects) 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
@@ -1907,7 +2030,8 @@ is missing (what to install), or `AUTH_KERBEROS` for a missing or expired ticket
 reach the server (the SPN). On Windows, SSPI failures stay `SQL_ERROR`. A ticket expiring while connected maps the same
 way, without `details`, on every later open: a query tab's session (`query.execute` answers `AUTH_KERBEROS` like
 `SESSION_LOST`; the next execution opens a new session), `databases.list`, `tables.columns` (error response), and
-`explorer.children` and `scripting.script` (a retryable `AUTH_KERBEROS` value). Connect sets `Pool Blocking
+`explorer.children` and `scripting.script` (a retryable `AUTH_KERBEROS` value: on the node, and as Script As'
+`result.error`, "Could not script dbo.Orders: " then the advice). Connect sets `Pool Blocking
 Period=NeverBlock` so a retry after `kinit` is not answered with SqlClient's cached failure.
 
 **Microsoft Entra** failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before
@@ -1941,6 +2065,7 @@ terminal for live probes. Display login text is never identity proof.
 | `CONNECTION_LOST` | "This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone." |
 | `BACKEND_UNAVAILABLE` | "The SQL backend is not running. Use Restart SQL Backend from the command palette."; while closing, "The application is closing."; for a failed start, the spawn or incompatible sentence below |
 | `RESULT_UNAVAILABLE` | "These results are no longer available because the SQL backend restarted." |
+| `SESSION_LOST` (main, `query.session.state` of an ended generation or with no backend) | "The SQL session ended with the SQL backend, so SQL Server rolled back its transaction." |
 | `TIMEOUT` (main) | "The SQL backend did not answer within {n} seconds. The request was cancelled." |
 | `TIMEOUT` (backend) | "The operation exceeded its time limit of {n} seconds." ("…its time limit." for the backend's own limits) |
 | `TOO_LARGE` (main) | "The request is too large to send to the backend. Execute a smaller script or selection." |
@@ -2014,9 +2139,13 @@ way nothing near a huge value's size is held, and a cancel stops it.
 **xml streaming** (`Results/SequentialXml.cs`). XmlReader parses the sequential stream as UTF-16 as it arrives; text
 is copied out in 8,192-character chunks and, past the cap, the rest is read as bytes without parsing (a 200 MB value
 allocates under 32 MB). Because XmlReader buffers a whole start tag, comment or processing instruction, the stream ends
-once 8 MiB pass with no new output. A cut value keeps its first 2,097,152 characters, marked truncated: what was written
+once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about
+50 MB allocated in all. A cut value keeps its first 2,097,152 characters, marked truncated: what was written
 before the cut node, the parent's start tag closed, then the node's raw text (`<r><a b="yyy…`, or `<a b="yyy…` for the
-root), kept from each node's `<` in pooled 32 Ki-character chunks. A NameTable past 4,096 names or 262,144 characters is
+root), kept from each node's `<` in pooled 32 Ki-character chunks. A cut node whose start the feed could not keep (it starts
+in the same 4,096-character read as the end of a start tag read whole that had passed the cap, and was shrunk below it by
+character references or white space between attributes) keeps only what was written before it, the parent's start tag
+closed; a node starting after that read keeps its start again. A NameTable past 4,096 names or 262,144 characters is
 dropped at the cell's end; a set's xml cells share one buffer (a small cell allocates about 28 KB; the live suite checks
 under 36 KB). SqlClient 7.1's `GetXmlReader` mis-detects encoding, so the stream is opened through SqlClient internals
 (pinned by an offline check) with `GetXmlReader` as fallback; a malformed tail past the cap keeps the prefix with a
@@ -2040,18 +2169,29 @@ and reports that block skipped.
 - **Paths.** The renderer never names a file: main takes paths from its own dialogs, the command line, a second
   instance, macOS open-file, Recent Files and its own stored records, and the page uses opaque file ids. A drop is read
   in the preload's isolated world from trusted events only and sent on `varia:files-dropped` (not on `window.varia`);
-  main accepts at most 32 absolute paths to regular files, read as Open does (5 MB). A packaged smoke run that keeps its
+  main accepts at most 32 absolute paths to regular files, read as Open does (5 MB). Main also reopens paths it stored
+  in its profile (hot exit's session, an AutoRecover record's file, Recent Files). A packaged smoke run that keeps its
   debugging port (`VARIA_PACKAGED_SMOKE=1`) opens only paths its own dialogs returned in that run, refusing handed-in
-  files (`launchFilesRefused`) and profile paths (`profilePathsRefused`).
+  files (`launchFilesRefused`) and profile paths (`profilePathsRefused`): the session and AutoRecover stores hand out
+  records without the file's path (a kept query reopens with its text and no file; a clean tab that kept only its path
+  does not reopen), and Recent Files neither reads nor writes `recent-files.json`, listing only that run's dialogs'
+  files. Other store content (text, names, settings, layouts, themes) is still read from the profile.
 - **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, strict zod) writes query text only, never
-  results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (folder 0700, records 0600 on POSIX,
-  atomic, never logged). The page names records by uuid and files by opaque id. A record belongs to the main process and
-  renderer generation that wrote it; a page may write only new or owned records and is offered the others, which taking
-  moves to it once. Invalid records are quarantined; expired ones are deleted at startup after settings were read.
+  results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid; a file named in upper case still counts against the caps,
+  is quarantined rather than offered, and is purged; folder 0700, records 0600 on POSIX, atomic, never logged). The page
+  names records by uuid and files by opaque id. A record belongs to the main process and renderer generation that wrote
+  it (the page the main frame had committed when the message arrived); a page may write only new or owned records and is
+  offered the others, which taking moves to it once: a record is handed over only while it is offered, so it never backs
+  two tabs. Writes stop while AutoRecover is off and once a close is approved; an approved close deletes the page's
+  records first. Invalid records are quarantined and never offered; records, quarantined records and interrupted writes
+  older than the retention are deleted at startup, only once settings were read, and not when settings.json held a
+  retention that was reset because the file or that value was invalid.
 - **Hot exit** (`varia:session-write`, `varia:session-take`, strict zod; docs/hot-exit.md) writes open text tabs' names,
   unsaved text, line endings, file paths, server and database names to `<userData>/Session/session.json` on an approved
   close (0700/0600 on POSIX, atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never
-  logged), kept as `previous.json` until the next run closes; an invalid file is quarantined.
+  logged), kept as `previous.json` until the next run closes; an invalid file is quarantined. A close with hot exit off keeps only
+  pinned tabs, or deletes both files when there are no pins. Startup and Reload Window hold their checkpoint until a
+  renderer has reopened the tabs and acknowledges it with `varia:session-restored`.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password is Electron `safeStorage` ciphertext in `saved-passwords.json`, bound to its server,
@@ -2081,8 +2221,8 @@ docs/testing.md has the environment variables and rules; the protocol-specific p
   `wrong-version`, `missing-method`, `late`, `credit-overrun`, `seq-gap`, `unknown-id`, `contained`, `unresponsive`,
   `live-overrun`, `live-data`, `live-big`, `live-seq-gap`, and others) and a `workbench` mode for the Electron smoke
   tests, controlled through `VARIA_TEST_BACKEND_DIR` (`calls.jsonl`, `hold/<method>`, `allow/audits`, `crash-next`,
-  `fail-commit`, `silent-<generation>`). A script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,
-  X1*5000,L1*3 messages=40 errors=2 memory=0.92 hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`;
+  `fail-commit`, `silent-<generation>`). A script whose first line is
+  `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92 hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`;
   `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `text-writer.mjs`.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets with the exact Copy, CSV,
   TSV and JSON bytes; the C# writer (through the real jobs) and the JavaScript twin are both checked against them.
@@ -2176,6 +2316,7 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Results picker: 1,251 views of 1,000 results listed, filtered and windowed per keystroke | ≥ 2,000 ops/s | ≥ 500 ops/s | – | – |
 | Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95 | ≤ 75 ms | ≤ 500 ms | 55 ms (Windows, 24 CPUs) | not measured |
 | Object search: memory allocated by that search, median | ≤ 16 MB | ≤ 64 MB | 9 MB | not measured |
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |

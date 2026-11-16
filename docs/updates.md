@@ -9,6 +9,15 @@ version; if its notes are not bundled, the reader says so and offers the install
 opens the fixed GitHub releases page for manual installation. Missing notes never block an update. See
 [Release Notes](release-notes.md).
 
+## Installing
+
+The Windows Setup opens a wizard that installs for the current user or for all users. For unattended deployment, run
+`Varia-SQL-Manager-<version>-Windows-x64-Setup.exe --silent`; the standard NSIS `/S` also works (`build/installer.nsh`).
+A fresh silent installation defaults to the current user; `/allusers` requests an all-users installation and may need
+elevation. The Portable executable runs without installing: it extracts the application to a temporary directory and
+uses the normal user profile for settings and saved connections. The Linux AppImage and the extracted macOS ZIP also
+run without installing.
+
 ## How a release is found
 
 Every release carries `varia-update-v2.json`, written by the release job (`scripts/update-manifest.mjs`): the version and,

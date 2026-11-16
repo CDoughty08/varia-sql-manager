@@ -1,8 +1,8 @@
 # CI cost and speed
 
 How CI and `npm run check` spend their time, the mechanisms that keep them lean, what is left to cut, and the rules.
-Re-measure with `node scripts/ci-timings.mjs` (`--steps` for per-step times) before and after any CI change, and update
-this page.
+Re-measure with `node scripts/ci-timings.mjs` (`--steps` for per-step times) before and after any CI change, and replace
+the Measurements below with the new baseline.
 
 ## Layout
 
@@ -75,7 +75,8 @@ this page.
 - Manual runs execute the selected `regression-suite`: `docs` runs the exact documentation lane on any branch, `none`
   runs full CI, the others run focused Electron regressions. Every manual run reports `Manual CI result`; only automatic
   runs report the required `CI result`, so a manual success cannot stand in for it. Never require `Manual CI result`.
-- The main ruleset requires the single check `CI result` (strict). The result job runs with `always()` and fails if
+- The main ruleset requires the single check `CI result`, not strict: a PR need not be up to date with main, so
+  merge only when the head SHA's run is green. The result job runs with `always()` and fails if
   classification or any selected job fails, is cancelled, missing or unexpectedly skipped, and on failures in
   unselected jobs. CI has no workflow-level `paths-ignore`, so the required check always reports.
 - Docs-only skipping applies to PRs only. Every main push runs full CI and packaging, so cancelling a superseded main
@@ -87,8 +88,8 @@ this page.
 - **Queueing, not jobs, sets the wall time.** In the 2026-11-07 baseline (50 runs) a busy PR's CI took 25.4 min median
   while its longest job took 10; the median job waited 16 min for a runner (up to 50). Several agent sessions push at
   once, so every job and slot-minute a push adds delays every other run. **Removing whole jobs beats shaving steps.**
-- A PR push then started 15 jobs (4 of them packaging) and about 89 runner-minutes, 3 macOS jobs. After PR #166 a PR
-  that does not touch packaging ran 12 CI jobs, 64.5 runner-minutes, 1 macOS job (one run, 2026-11-08). Packaging every
+- A PR push then started 15 jobs (4 of them packaging) and about 89 runner-minutes, 3 macOS jobs. Once packaging ran only
+  for PRs that touch it, one that does not ran 12 CI jobs, 64.5 runner-minutes, 1 macOS job (one run, 2026-11-08). Packaging every
   PR had caught nothing CI missed in 232 runs.
 - Main on 2026-11-11 (3 runs, `--workflow ci.yml --workflow release.yml --branch main`): CI 10.8 min wall, 47 Linux +
   26 Windows + 5 macOS runner-minutes; packaging 14.1 min, 3 + 14 + 4.
@@ -128,7 +129,7 @@ this page.
 
 ## What is left, in order
 
-Savings are corrected figures from an adversarial review against CI logs. "Owner" marks changes that contradict a rule
+Savings are estimates checked against CI logs. "Owner" marks changes that contradict a rule
 in CLAUDE.md, which the owner decides.
 
 1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about
@@ -222,4 +223,4 @@ Considered and rejected (do not re-propose without new numbers):
   `LiveGroups.BudgetSeconds`), and the per-suite watchdog (four times the weight, at least 300 s) rises with a weight.
   When a run skipped a suite (no SQL endpoint), keep its existing weight.
 - **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs`
-  (runner-minutes, job count, queue) in its PR and here.
+  (runner-minutes, job count, queue) in its PR, and replaces the baseline under Measurements.

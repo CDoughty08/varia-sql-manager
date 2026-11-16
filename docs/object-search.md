@@ -38,7 +38,8 @@ Explorer, which takes focus. The last row, *See all in Search Objects*, opens a 
 servers when several are connected). New text drops stale hits at once, so Enter never reveals a stale object; a row
 stays active on its object as other servers answer. The search ends when the widget closes or changes mode.
 
-In all of them the hits are a listbox announcing the selected option, and each hit has a [context menu](#a-hits-menu).
+In all of them the hits are a listbox announcing the selected option, and each hit has a [context menu](#a-hits-menu):
+right-click (which selects the hit), or Shift+F10 or the context-menu key on the selected hit.
 
 ## The index
 

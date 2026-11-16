@@ -52,7 +52,7 @@ minute. Hidden results keep 5 s.
 - **No thrash.** A read stops a pass at its next page (the set's touch count changed) and keeps the pages already
   packed: the result shows as `partial` in the Memory panel and falls due again 30 s later. Plain reads never unpack a
   result whole. Each operation that unpacks it whole (see [Operations that unpack first](#operations-that-unpack-first))
-  doubles the wait, up to eight times (`MaxBackoff`, 4 minutes).
+  doubles the wait, up to eight times as long (`MaxBackoff`, 4 minutes).
 - **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
   row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (p99 about 145 ms against 21 ms), enough
   to show while scrolling. A shown result with an open view is not packed (a hidden one is). One already packed when its
@@ -207,8 +207,9 @@ above the result:
 | Diff, second result in the same order | 0.32 | 0.38 | 0.49 | 1,067 MiB | 35 MiB | 1.16 | 1.83 | 2.06 |
 | Diff, second result shuffled | 0.67 | 0.76 | 0.84 | 1,060 MiB | 562 MiB | 2.99 | 3.50 | 3.97 |
 
-Fused reads cost from 25 % less to 27 % more time than rehydrating, about 0.05 s per GiB unpacked on 16 workers, paid
-in each operation. Results that are not packed read as before (raw times matched `main` within noise).
+Against rehydrating, fused reads cost from 10 % less to 26 % more time on the workers' operations (sort, filter, profile,
+pivot) and from 25 % less to 27 % more on most whole-result operations; Save and a diff in the same order cost more, as the
+table shows. That is about 0.05 s per GiB unpacked on 16 workers, paid in each operation. Results that are not packed read as before (raw times matched `main` within noise).
 
 The policy, with the real `ResultPacker` (`--policy`: one 1 GiB result; `--stage2`: four of 256 MiB, the first shown):
 

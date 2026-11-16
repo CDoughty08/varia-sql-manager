@@ -3,6 +3,20 @@
 The query editor panel holds the open documents in editor groups, as VS Code does: each group has its own tab strip and
 Monaco editor, and groups split side by side, stack, or float over the editor area.
 
+## In the editor
+
+- **Execute.** With text selected, the Execute button reads **Execute selection** with its line range and runs only the
+  selection; a click inside the selection clears it and places the caret. Otherwise it reads **Entire query** and runs
+  the whole document (`QueryBar.tsx`).
+- **Zoom.** Ctrl+wheel over the editor (Cmd+wheel also works on macOS) enlarges or shrinks the text in every editor tab
+  for this session. The **View** menu's zoom commands resize the whole workbench.
+- **Status bar.** Click **Ln/Col** to go to a line, or **INS/OVR** to switch between insert and overtype mode.
+- **SSMS query shortcuts.** SSMS's Alt+F1 `sp_help`, Ctrl+1 `sp_who` and Ctrl+2 `sp_lock` are the palette commands
+  **New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock**. Each opens a new query on the
+  connection and database New Query would use, holding the `EXEC` call, ready to run with F5. `sp_lock` is deprecated
+  and does not exist in Azure SQL Database; query `sys.dm_tran_locks` there. The commands have no keys: Ctrl+1 to Ctrl+9
+  (Cmd on macOS) pick query tabs and results, and Alt+F1 opens the desktop menu on some Linux desktops.
+
 ## Model
 
 - **Editor area.** `src/renderer/src/editor-groups/EditorArea.tsx` is a Dockview nested in the workspace's "Query editor"

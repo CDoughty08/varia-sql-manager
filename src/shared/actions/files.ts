@@ -39,7 +39,7 @@ export interface ServerFilesListing {
 }
 
 /** Characters Windows refuses in a path, and control characters, which no SQL Server path holds; Linux allows `*?"<>|`, but
- *  Varia cannot pick such a file (README). */
+ *  Varia cannot pick such a file (docs/ipc.md, Server file picker). */
 const forbidden = /[\u0000-\u001f*?"<>|]/
 const brokenPair = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 /** A drive (C:\), a UNC share (\\server\share), or an absolute Linux path. */

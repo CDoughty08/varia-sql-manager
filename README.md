@@ -54,13 +54,13 @@ Press **F1** for the command palette, and see **Help › Getting Started** for o
 [command reference](docs/commands.md) lists every command and shortcut.
 
 Certificate validation is on by default; enable **Trust server certificate** only for a trusted server with a
-self-signed certificate. Windows authentication on Linux and macOS needs the system Kerberos library and a ticket from
-`kinit`; Entra Integrated authentication is Windows-only. Remembered passwords are encrypted with the OS credential store.
+self-signed certificate. Windows authentication on Linux and macOS needs the system Kerberos library, a ticket from
+`kinit` and a server name or SPN registered for Kerberos; Entra Integrated authentication is Windows-only. Remembered passwords are encrypted with the OS credential store.
 
 ## Not yet available
 
 SQLCMD mode, Results to Text and Results to File (grid results can be exported), IntelliSense for Entra connections,
-and backup, security and job management. Results are kept in memory under a budget with explicit truncation; nothing
+backup, SQL Server Agent job management, and database user and role dialogs (logins are supported). Results are kept in memory under a budget with explicit truncation; nothing
 spills to disk.
 
 ## Build from source

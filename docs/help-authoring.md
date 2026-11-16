@@ -36,7 +36,9 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
 ## Verify behavior
 
 Guides use the existing document provider/frame, catalogs, settings store and effective shortcut/gesture services.
-There is no help-specific preference store, remote loader, MDX compiler or progress database. Preserve that boundary.
+There is no help-specific preference store, remote loader, MDX compiler or progress database. Preserve that boundary:
+fetching notes or guides from the network, opening Help automatically on first run, and persisting reading progress
+each need a separate proposal first.
 Commands in prose are passive references; real entry points use catalog commands and clearly describe their effect.
 
 `scripts/fixtures/help.mjs` shares the updates smoke launch. It checks menu/palette navigation, guide search, lazy page

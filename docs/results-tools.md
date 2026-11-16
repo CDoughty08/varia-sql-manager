@@ -5,7 +5,7 @@
 A marker comment just before a statement names its result set: `/* #Name="Sample Query" */` or
 `-- #Name="Open orders"` (`#Name` in any case, name in double quotes, inner quotes doubled, at most 128 characters).
 Unnamed results keep their numbers, so naming one never renumbers another. Markers stacked before one `EXEC` name its
-result sets in order. To SQL Server a marker is an ordinary comment.
+result sets in order, when no later statement in the batch can return a set. To SQL Server a marker is an ordinary comment.
 
 A name is applied only when the batch's text shows which result set the statement returns. Messages says why one was
 not (put `GO` between statements to name both) when the marker is inside `BEGIN … END`, a branch or a loop; after an
@@ -26,6 +26,14 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   (first 4,096 rows plus visible rows, within width limits). From the keyboard menu, the active column.
 - **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages.
   Unavailable while executing. Hiding the results pane keeps results. The toolbar never switches or closes documents.
+
+## Keep Selected Rows
+
+**Keep Selected Rows** (grid menu › Filter) keeps exactly the rows the selection covers, whatever their values, on a
+Table, a Pivot or a comparison. It is one filter (one of the 16 a grid can stack), shown as "N selected rows"; a grid
+has at most one, and keeping a new selection replaces it in place, or last when a duplicates filter follows it, so the
+grid shows exactly the rows selected. It takes at most 4,095 rows in 256 separate ranges; a larger selection says so and
+changes nothing. Rows that arrive after it was applied to a running query are not kept.
 
 ## Closing one result
 

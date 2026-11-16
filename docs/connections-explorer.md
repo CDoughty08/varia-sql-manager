@@ -1,5 +1,9 @@
 # Connection roots in Object Explorer
 
+In Connect, a single click or Space selects a saved connection for editing; Enter or a double-click connects. Object
+Explorer's recovery rows offer **Retry** after a failed load, **Continue loading** after a stopped or paused one, and
+**Filter** on a folder that reached its item cap.
+
 ## Disconnect, reconnect and remove
 
 - Disconnect keeps the server at its position, collapsed and marked Disconnected; its metadata (pending loads included)
@@ -51,6 +55,13 @@ When queries are attached, Disconnect asks to keep their tabs, close query tabs 
   Tabs** leaves custom-document drafts open.
 - A query disconnected through its own command keeps its target label but is not reattached by a later server reconnect.
   Query Change Connection chooses another target or clears it.
+
+## Dependent documents
+
+Database Properties, Table Designer, SSIS and other dependent documents keep their drafts when disconnected. They follow
+only their exact target, never another login or other connection settings merely because the server name matches. A
+legacy document without an exact target binding stays unavailable after its connection is replaced; reopen it
+explicitly and keep the old draft for reference.
 
 ## Automatic reconnect
 

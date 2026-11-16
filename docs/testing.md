@@ -9,7 +9,7 @@ rules.
   otherwise (CI's runners) two chains side by side so time-bounded tests are not starved; `VARIA_CHECK_CPUS=<n>` tries
   either. `VARIA_CHECK_SKIP=typecheck` (CI's Windows and macOS jobs) leaves out tsc. Off CI it first takes the machine
   lock (below). A stopped check prints its running lanes' output.
-- `npm run test:smoke` runs the suites in package.json's `test:smoke`; `node scripts/smoke-shards.mjs 2/2` runs one CI
+- `npm run test:smoke` runs the suites in package.json's `test:smoke`; `node scripts/smoke-shards.mjs 2/3` runs one CI
   shard. The fixture launches the hidden smoke window with `--disable-frame-rate-limit` (Chromium otherwise draws it at
   one frame a second, and every Playwright press waits for frames). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
   of each launch there; it holds the environment, so never upload one from a run with secrets.
@@ -78,6 +78,12 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   SQL authentication with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. Which checks
   run depends on server version and authentication (Mixed Mode adds the low-privilege login checks). Never print the
   password, and never record check counts in docs.
+- **Kerberos.** `VARIA_TEST_KERBEROS_NO_TICKET=1` (with `VARIA_TEST_SQL_SERVER`, Linux or macOS only; CI's Linux job sets
+  `KRB5CCNAME` to a cache that does not exist) runs `tests/kerberos-live.test.ts`: Integrated authentication without a
+  ticket must fail cleanly. A real Kerberos round trip needs a KDC and a domain-joined SQL Server, so it is a manual
+  check: `kinit`, then connect with Windows authentication to a server name or SPN registered for Kerberos.
+- **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner
+  fixtures from the live server's backup history.
 - **Scratch.** `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the session hook) adds the Object Explorer, Script As and object
   action scratch-database checks (actions in their own `VariaScratch_…_act`), the script goldens in
   `tests/fixtures/scripting/`, and lets live vitest files create and drop a uniquely named, marked `varia_scratch_…`

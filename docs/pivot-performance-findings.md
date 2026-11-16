@@ -112,9 +112,9 @@ says otherwise.
 
 ## Working memory
 
-A build reserves `rows x (16.125 x key columns + 16)` bytes from the query's budget for every stored row of the source,
-whatever the Table's view keeps: about 32 bytes a row for the first key column and 16 more for each further one. At the
-500,000-row threshold that is about 8 MB a key column plus 8 MB. A source that leaves no
+A build reserves `ResultPivoter.WorkingBytes` from the query's budget for every stored row of the source, whatever the
+Table's view keeps: about `rows x (16.25 x key columns + 20)` bytes, so about 36 bytes a row for the first key column and
+16 more for each further one. At the 500,000-row threshold that is about 8 MB a key column plus 10 MB. A source that leaves no
 room for it is refused in about 0.1 ms with nothing reserved and the source untouched. Every refusal measured happened
 before anything changed, so the previous Pivot stays intact. At 1 GiB a query a single 20-million-row build no longer
 fits beside its source (725 MB of keys and 347 MB stored) and is refused in under 0.1 s.
