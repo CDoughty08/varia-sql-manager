@@ -385,8 +385,9 @@ outcome). DDL runs after a preflight on its own unpooled connection (`ConnectRet
 and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unknown outcome).
 - `result.error` codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every action on Azure SQL Database, before connecting),
   `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`, `NAME_IN_USE`, `PATH_NOT_FOUND`, `FILE_ACCESS` (a file SQL Server
-  cannot open), `MEDIA` (unusable backup media), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
-  `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA` (docs/object-actions.md).
+  cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
+  `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
+  refused a password) (docs/object-actions.md).
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
@@ -442,7 +443,7 @@ the SSIS read pool (program name + " - Integration Services", Initial Catalog th
   results, counts or the profile).
 - The SSIS profile is read once per connection (role checks `LOCK_TIMEOUT 1000`). `result.error` codes:
   `CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`,
-  `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `SQL_ERROR`.
+  `NOT_SUPPORTED` (before 2016, Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `SQL_ERROR`.
 - **SSIS cancellation** is `varia:ssis-cancel`: an attention, answered `CANCELLED`.
 
 **SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId: 1 – 2^53 − 1 },
@@ -498,7 +499,7 @@ pool. Refusals: Azure SQL Database, Managed Instance and other cloud editions, b
   `own`, 6106 `ended`, 6107 `system`); untried sessions are absent and `error` says why (`CONNECTION_LOST`, `TIMEOUT`
   past its 25 s budget, a sign-in failure); a session whose batch was cut off by either is `failed` with an unknown outcome.
 - Value codes: `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `CONNECTION_LOST`, `DATABASE_UNAVAILABLE`, `LOGIN_FAILED`,
-  `AUTH_KERBEROS`, `AUTH_ENTRA`, `NOT_SUPPORTED`, `SQL_ERROR`. Envelope: `INVALID_PARAMS`, `NOT_CONNECTED`, `BUSY`,
+  `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `NOT_SUPPORTED`, `SQL_ERROR`. Envelope: `INVALID_PARAMS`, `NOT_CONNECTED`, `BUSY`,
   `CANCELLED`, `TIMEOUT`, `BACKEND_ERROR`. Nothing about a session is logged.
 
 **Object action dialogs.** The dialogs below add no method: each is `actions.describe { connectionId, requestId, dialog,
@@ -559,7 +560,7 @@ under READ UNCOMMITTED; missing is `NOT_FOUND`.
   `IN_USE`; owned databases, jobs, roles, endpoints, availability groups or granted permissions `DEPENDENTS` (also 15173);
   with `dropMappedUsers`, uncountable sessions or more mapped users than listed `NOT_SUPPORTED` and a database the scan
   could not read again `BLOCKED`. Steps `Drop the database
-  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`), each DROP checking it before and after in its own transaction (steps share none); a mismatch (50010) is `NOT_FOUND` and
+  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`), each DROP checked first, then dropped and re-checked in a transaction of its own (steps share none); a mismatch (50010) is `NOT_FOUND` and
   that step drops nothing. 15434 is `IN_USE`.
 
 **Unlock Login.** `dialog: 'unlockLogin'` answers `{ login, lock: { locked, badPasswords?, lockoutTime?, mustChange,
@@ -2140,7 +2141,7 @@ actions.
 
 **`AUTH_IDENTITY`**: a newly authenticated native connection has no usable stable principal proof, or its verified
 SQL/Windows SID or Entra tenant/object identity differs from the target's pinned account. The backend closes it before
-any caller SQL; an explicit reconnect must resolve it. Nonretryable in Explorer, scripting, object actions and SSIS;
+any caller SQL; an explicit reconnect must resolve it. Nonretryable in Explorer, scripting, object actions, SSIS and Activity Monitor;
 terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
