@@ -783,14 +783,14 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
-    // A menu command does nothing while a modal is open, and with no single live connection it asks instead of opening:
-    // click once the server's row shows it connected (its version) and nothing modal is left.
+    // A menu command does nothing while a modal is open (a dialog the connect left behind), and the monitor opens only on a
+    // live connection: click once the server's row shows it connected (its version) and nothing modal is left.
     await expect(explorerTree(page).getByRole('treeitem', { level: 1, name: /\(SQL Server \d/ })).toHaveCount(1, { timeout: 30000 })
     await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
     await menu('activity.open')
     try { await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1) } catch (error) {
       // Each way activity.open can end without a tab leaves a trace: the Connect dialog again, the server picker, a banner.
-      const seen = { dialogs: await page.getByRole('dialog').evaluateAll(dialogs => dialogs.map(dialog => dialog.getAttribute('aria-label'))), picker: await quickInput(page).isVisible(), banners: await page.getByRole('alert').allInnerTexts(), servers: await serverRows(page).allInnerTexts(), tabs: await queryTabs().allInnerTexts() }
+      const seen = { dialogs: await page.getByRole('dialog').evaluateAll(dialogs => dialogs.map(dialog => dialog.getAttribute('aria-label') ?? document.getElementById(dialog.getAttribute('aria-labelledby') ?? '')?.textContent ?? null)), picker: await quickInput(page).isVisible(), banners: await page.getByRole('alert').allInnerTexts(), servers: await serverRows(page).allInnerTexts(), tabs: await queryTabs().allInnerTexts() }
       error.stack = `${error.stack}\nAfter activity.open: ${JSON.stringify(seen)}`
       throw error
     }
