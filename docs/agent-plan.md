@@ -172,10 +172,15 @@ permission kind; before 2022 both are VIEW SERVER STATE), `ALTER ANY CREDENTIAL`
 children are first listed, so the collapsed Agent node already has it, and before that the role is `unknown`: the
 `noAccess` badge is absent, Start/Stop/Restart and Properties are disabled with "Reading this login's Agent role…", and
 the read is also started when the Agent node's context menu or an Agent palette command opens (vitest of the node menu
-before the profile arrives), re-read on Refresh of the Agent node and on reconnect, dropped on disconnect) that
+before the profile arrives); if the read fails with 916 (no msdb access: it runs through `msdb.sys.sp_executesql`) the
+role is `none` with a no-msdb flag, so the `noAccess` badge still shows; any other failure (deadline, error) is
+`profileFailed`, whose disabled reason is "Could not read this login's Agent role: <reason>. Refresh to retry." and
+Refresh re-reads it (vitests for 916, a failure and the retry; a live `AgentRoles` check with guest CONNECT revoked on a
+scratch database login where practical; mock note on `oe-unknown`), re-read on Refresh of the Agent node and on reconnect, dropped on disconnect) that
 `ExplorerService` takes through `useAgentProfiles`, re-publishing context keys when it changes (vitest that the role and
 service-control keys follow it), and drives
-the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator | reader | user | none`, plus
+the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator | reader | user | none | unknown | profileFailed`, each in the menu `when` and
+reason tables, plus
 `explorerSelectionAgentRole`) and the read path. It is a `CatalogSql` statement linted by `CatalogSql.Lint` with its own
 exact per-statement `literals` set (as Peek's rows batch; the role names, `N'sysadmin'`, the `HAS_PERMS_BY_NAME` object
 and permission names, `N'IsClustered'`); `Agent XPs` is read as `value_in_use` (not `value`, which
@@ -520,7 +525,10 @@ again."), `JOB_STATE` ("The job is already running." / "The job is not running."
 retryable; `ActionsCatalog.Retryable` throws on an unknown code) and `ActionErrors.Numbers` gains `["STALE"] = [50011]`.
 
 Each THROW in a template carries the call's index as its state, a constant 1-255. A save's calls are bounded so they fit:
-`agentLimits` caps steps and schedules per job (SSMS-sized, well under 255 calls in all), and zod and C# enforce it. C#
+`agentLimits` caps steps and schedules per job (SSMS-sized, well under 255 calls in all), and zod and C# enforce it.
+The standalone schedule save carries a `scheduleJobs` list (job id, its `version_number`, attach or detach) capped by
+`agentLimits.scheduleJobChanges`, and Delete History's job list by `agentLimits.historyJobs`; both are set so a save stays
+under 255 calls guards included (vitest and offline check at each cap). C#
 reads the msdb number from the first error and the index from the THROW, and the dialog says which part was refused
 ("Saving step 2 'Rebuild' was refused: …"). An error that aborts the batch before the THROW (a severe error under
 `XACT_ABORT`, or error 266 from an msdb procedure that rolls back itself, which AG-0 probes) has no index; the dialog then
@@ -536,7 +544,8 @@ Verbs (all via ActionService, see SQL rules):
 | Rename | `sp_update_job @job_id, @new_name` | Inline rename like other kinds. |
 | Delete | `sp_delete_job @job_id, @delete_history, @delete_unused_schedule` | Delete Object dialog; both options shown and on by default, as SSMS passes both as 1. |
 | Write procedures | `AgentSql.WriteProcedures` in `src/shared/agent/catalog.ts` lists every procedure `LintExecutable` admits, with its owning lane: jobs (AG-4, AG-6a/b): `sp_start_job`, `sp_stop_job`, `sp_update_job`, `sp_delete_job`, `sp_add_job`, `sp_add_jobstep`, `sp_update_jobstep`, `sp_delete_jobstep`, `sp_add_jobschedule`, `sp_attach_schedule`, `sp_detach_schedule`, `sp_add_jobserver`, `sp_purge_jobhistory`, and
-`sp_update_alert` for the job Alerts page's Remove (AG-6a); schedules (AG-6c): `sp_add_schedule`, `sp_update_schedule`, `sp_delete_schedule`; operators and alerts (AG-7): `sp_add_operator`, `sp_update_operator`, `sp_delete_operator`, `sp_add_alert`, `sp_update_alert`, `sp_delete_alert`, `sp_add_notification`, `sp_update_notification`, `sp_delete_notification`; proxies (AG-8b): `sp_add_proxy`, `sp_update_proxy`, `sp_delete_proxy`, `sp_grant_proxy_to_subsystem`, `sp_revoke_proxy_from_subsystem`, `sp_grant_login_to_proxy`, `sp_revoke_login_from_proxy`; Agent properties (AG-8a): `sp_set_sqlagent_properties`; service (AG-5a): `xp_servicecontrol` | Lint render and a near-miss test per entry; the generated docs list it. |
+`sp_update_alert` for the job Alerts page's Remove (AG-6a); schedules (AG-6c): `sp_add_schedule`, `sp_update_schedule`, `sp_delete_schedule`; operators and alerts (AG-7): `sp_add_operator`, `sp_update_operator`, `sp_delete_operator`, `sp_add_alert`, `sp_update_alert`, `sp_delete_alert`, `sp_add_notification`, `sp_update_notification`, `sp_delete_notification`; proxies (AG-8b): `sp_add_proxy`, `sp_update_proxy`, `sp_delete_proxy`, `sp_grant_proxy_to_subsystem`, `sp_revoke_proxy_from_subsystem`, `sp_grant_login_to_proxy`, `sp_revoke_login_from_proxy`; Agent properties (AG-8a): `sp_set_sqlagent_properties`; error logs (AG-5b): `sp_cycle_agent_errorlog`
+(sysadmin; not offered where the gates read logs through `sp_readmierrorlog` unless AG-0 shows it works there); service (AG-5a): `xp_servicecontrol` | Lint render and a near-miss test per entry; the generated docs list it. |
 | New Job / Properties | `sp_add_job`, `sp_update_job`, `sp_add_jobstep`, `sp_update_jobstep`, `sp_delete_jobstep`, `sp_add_jobschedule` / `sp_attach_schedule` / `sp_detach_schedule`, `sp_add_jobserver`, `sp_update_job` notification arguments, `sp_update_alert` for the Alerts page's sysadmin Remove | One transaction, each call's return code checked (SQL rules); Script Action shows SSMS's `BEGIN TRANSACTION … QuitWithRollback` shape with literals, as Login's does. |
 | Script Job as › CREATE / DROP / DROP And CREATE To › New Query, File, Clipboard | SMO `Server/JobServer/Job[@Name and @CategoryID]` through `ScriptPipeline` | Also Alert, Operator and `ProxyAccount`. Never executes. |
 
@@ -630,6 +639,21 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   transaction, each guarded by that job's `sysjobs.version_number`; rows for jobs the login may not change (another owner's,
   below sysadmin) are disabled with "Owned by <owner>" (mock note on `jobs-in-schedule`; renderer vitests; `AgentActions`
   checks for standalone add, update with a stale version, attach and detach).
+  - **Manage Schedules** (AG-6c; Jobs folder menu): an `ObjectDialog` with dialog id `manageSchedules` and a new
+    `layout: 'list'` (one page, Close only, no Script), opened through the object-target form on the server. Its rows come
+    from a page-scoped describe `scheduleList` (`sp_help_schedule` on the role path, which returns the schedules the login
+    may see; ID, name, owner, enabled, jobs in schedule, description), re-read after every row action and child save. Row
+    actions are separate `actions.execute` requests, each on target `{ kind: 'schedule', id, version }` with the
+    `version_number` guard (`STALE` re-reads the list and says so): `enableSchedule` / `disableSchedule`
+    (`sp_update_schedule @enabled` only) and `deleteSchedule` (`sp_delete_schedule` without `@force_delete`; in-use maps to
+    `IN_USE` with msdb's message), behind the destructive confirmation below ("Delete schedule <name>? This cannot be
+    undone."). New… and Properties open the `schedule` dialog through `openChild`, then re-read `scheduleList` and select
+    the row; Jobs in Schedule opens the same child on its Jobs page. Role matrix: sysadmin, every button on every schedule;
+    a schedule's owner, Properties (editable), Enable, Disable, Delete on their own; SQLAgentOperatorRole, Enable and Disable
+    on any schedule, others' Properties read-only, Delete only on their own; Reader and User, their own as the owner, others'
+    Properties read-only with Enable, Disable and Delete disabled with "Owned by <owner>" (vitests per role's buttons, the
+    child re-read, Delete refused as `IN_USE`, `STALE` on a row action; smoke step: Manage Schedules › New… and back; mock
+    `manage-schedules` and a note on its Delete confirmation).
   - Schedule dialog: Name, type (Recurring, One time, Start automatically when SQL Server Agent starts, Start whenever the
     CPUs become idle where the gates allow, with a warning that the idle condition is set in Agent Properties ›
     Advanced, which Varia does not edit yet, so set it in SSMS; sysadmin, whose `sp_get_sqlagent_properties` read shows
@@ -653,8 +677,16 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   `refreshListing` uses `listingFolderOf(nodeId)`), but Job Activity Monitor's row Properties, Ctrl+Q, the palette's New
   Job and these children have no tree node, so AG-6a adds an object-target form, `open(dialog, { connectionId, target,
   label })`, alongside the node form: focus returns to the invoking control, and `afterSuccess` reveals through
-  `folderNode(connectionId, { kind: 'server' }, folder)` as `reveal()` does today instead of `listingFolderOf` (vitests
-  for each node-less opener). Job Activity Monitor's Properties row action is hidden until AG-6a lands. It gains one
+  `folderNode(connectionId, owner, folder)` with the folder's real owner (`{ kind: 'agent' }` for Agent folders, the
+  server for Security › Credentials), instead of `listingFolderOf`, which also finds nothing for a New Job opened from the
+  Agent node's New › (its parent is the server, not a folder), so that path reveals the same way (vitest that a node-less
+  New Job selects the job in an expanded Jobs folder) (vitests
+  for each node-less opener). Job Activity Monitor's Properties row action is hidden until AG-6a lands. The child is a second
+  dialog controller with its own snapshot (today every service method acts on `this.current` and `App.tsx` mounts one
+  `<ObjectDialog />` reading one snapshot): a second `<ObjectDialog />` bound to the child controller renders it, the pages
+  take their controller from props instead of the service singleton, and the frame derives its element ids
+  (`object-dialog-title`, `-steps`, `-progress`, `-blocked`, `-script-*`) from the dialog's id so the child's
+  `aria-labelledby` names its own title while the parent is `inert` (vitest of both accessible names). It gains one
   child slot, built in AG-6a: `openChild(dialog, { connectionId, target, label }, preset)` (always the object-target form) runs the child's own describe, execute,
   Cancel, long-run and secret handling (its secret cleared on close like the parent's), while the parent stays open,
   inert and unchanged with its draft kept; on the child's success the parent re-reads only the affected page through a page-scoped describe id that returns just
@@ -668,10 +700,11 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   its own dialog to use it" (a child alert's Response New Job…, View Job, New Operator… and View Operator; a child job's
   Alerts Add and Edit; a child proxy's New Credential), while pickers, `SubDialog`s (steps, schedules) and read-only views
   keep working (vitests: a child alert's New Operator… disabled, a View Job child's Alerts Add disabled). In a New Job,
-  which has no job id until it is saved, Alerts Add and Edit are disabled with "Save the job first, then add alerts", since
-  the child's `sp_add_alert` needs an existing job (vitest; mock note on `new-job`). Users: the job's Alerts page Add (New Alert with the job
+  which has no job id until it is saved, Alerts Add and Edit are disabled for sysadmin with "Save the job first, then add
+  alerts", since the child's `sp_add_alert` needs an existing job; for every other role the role reason above takes
+  precedence, since saving would not help (vitests for sysadmin's and an Operator's New Job; mock note on `new-job`). Users: the job's Alerts page Add (New Alert with the job
   preset) and Edit (AG-7), an alert's Response page New Job…, View Job, New Operator… and View Operator (AG-7, the job
-  dialog from AG-6a), and the Proxy dialog's New Credential (AG-8b). Focus moves into the child and returns to the
+  dialog from AG-6a), the Proxy dialog's New Credential (AG-8b), and Manage Schedules' New…, Properties and Jobs in Schedule (AG-6c). Focus moves into the child and returns to the
   invoking button on close; Escape closes only the child (vitests: child Cancel, child success re-reading the parent page,
   a disconnect while the child is open, the secret cleared, focus return; smoke: New Alert from the job's Alerts page and
   back; mock scene `job-alerts-child`).
@@ -779,7 +812,8 @@ Database Mail logs, which SSMS shows there).
 | Shared schedules | Schedule dialog, Pick, Jobs in Schedule, Manage Schedules: Delete offered for any schedule the login owns (sysadmin: any), never judged "unused" from Jobs in schedule counts; `sp_delete_schedule` without `@force_delete`, whose in-use refusal maps to `IN_USE` with msdb's message (an `AgentActions` check) | |
 | Job categories | Category picker | Manage Job Categories dialog |
 | Operators | List, New / Properties (General: name, enabled, e-mail, pager and on-duty schedule; Notifications: alerts and jobs; History), Enable/Disable, Rename, Delete (Delete Object offers "Reassign to" another operator, sending `sp_delete_operator @reassign_to_operator` so its alert and job notifications move instead of being dropped; AG-7 confirms SSMS's dialog; vitest and `AgentActions` check), Script As | Fail-safe operator (Agent Properties › Alert System) |
-| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, with New Job… and View Job opening the job dialog nested, and notify operators, with New Operator… and View Operator opening the operator dialog nested, the new object selected on return, New buttons hidden for roles that cannot create, read-only from a read-only alert, vitest; Options: include error text, additional notification message to send, delay between responses; History: date of last alert, date of last response, number of occurrences from `sp_help_alert`, and Reset Count, sysadmin only, which as in SSMS is applied with the alert's save (OK sends `@occurrence_count = 0` in
+| Alerts | List, New / Properties (General: SQL Server event by error number or severity with database and message text; performance condition with object, counter and instance from `sys.dm_os_performance_counters` when the login has VIEW SERVER STATE, typed otherwise; Response: run job, with New Job… and View Job opening the job dialog nested, and notify operators, with New Operator… and View Operator opening the operator dialog nested, the new object selected on return, New buttons hidden for roles that cannot create, read-only from a read-only alert, vitest; Options: include error text, additional notification message to send, delay between responses; History: date of last alert, date of last response, number of occurrences from `sp_help_alert`, History is hidden in New Alert, which has nothing to show (AG-7
+confirms SSMS's page set, vitest), and Reset Count, sysadmin only, which as in SSMS is applied with the alert's save (OK sends `@occurrence_count = 0` in
 the same `sp_update_alert`, under the alert's identity guard; the page shows 0 pending and Cancel discards it; an
 `AgentActions` check reads the count back as 0), with mock scene `alert-history` and a vitest), Enable/Disable, Rename, Delete, Script As | WMI event alerts editable (shown read-only) |
 | Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References: job steps that run as this proxy, read by sysadmin from `sysjobsteps` joined to `sysproxies`; other roles, which cannot read `sysjobsteps`, see "Only sysadmin can list the job steps that use this proxy", with a fixture per role), Rename, Delete, Script As | |
@@ -1067,6 +1101,28 @@ grouping, `AgentSql.ReadProcedures`, documents, limits (`agentLimits`), embedded
 explorer catalogue; verbs and dialogs in the actions catalogue (regenerated with its test); live sources in the live
 catalogue; commands in the commands catalogue; icons in `icons.ts`.
 
+Actions catalogue rows (today's catalogue knows none of these kinds, `enable`/`disable` serve only logins and are titled
+"Enable Login"/"Disable Login", and `delete` refuses `deleteHistory` for anything but a database):
+- `actionKindSpecs` gains `agentJob`, `agentAlert`, `agentOperator`, `agentProxy`, `agentErrorLog` and `schedule` rows,
+  each listing its verbs. The shared `enable`/`disable` verbs take per-kind titles ("Enable Job", "Disable Alert", …) from
+  the kind row, so no Agent kind shows "Disable Login"; C#'s `enable`/`disable` refusal widens from `login` to the Agent
+  kinds, each kind mapped to its own template (`sp_update_job`, `sp_update_alert`, `sp_update_operator`, `@enabled`).
+- New object actions: `startJob` (with the Start Job at Step… dialog id `startJobAtStep`, whose describe lists the steps),
+  `stopJob`, `enableSchedule`, `disableSchedule`, `deleteSchedule`, `recycleAgentErrorLog` (AG-5b; sysadmin; on
+  `agentErrorLog`), `deleteJobHistory` (Delete History), plus the service rows above.
+- New dialog ids: `agentJob` (job Properties and New Job), `agentAlert`, `agentOperator`, `agentProxy`, `credential`,
+  `agentProperties`, `schedule`, `manageSchedules`, the page-scoped describes (`jobAlerts`, `credentialList`,
+  `alertJobPicker`, `alertOperatorPicker`, `scheduleList`), and `startJobAtStep`.
+- `ActionArgs` (zod and C#, strict, bounded) gain `agentIdentity` (the job, schedule, alert, operator or proxy id with its
+  version or modified date), `deleteUnusedSchedule`, `reassignTo` (operator name, `sysname` bound) and a `scheduleJobs` list
+  (below); `deleteHistory` widens from databases to `agentJob`, where it means `@delete_history` (both on by default, as
+  SSMS).
+- Describes for Agent kinds, Delete Object's included, route through `AgentReader` on the role path, never the default
+  `DescribeJobAsync` over `CatalogSql`, so a role-path login's Delete Object describe works (offline check per kind that
+  the switch reaches the Agent case; vitest per verb's title and enablement).
+Owned by AG-2 (rows, args, routing), AG-6a (job), AG-6c (schedules), AG-7 (alerts, operators), AG-8b (proxies,
+credentials), AG-5b (error logs).
+
 ## Testing
 
 - **CI**: add `MSSQL_AGENT_ENABLED: 'true'` to the live and smoke `mssql/server:2022-latest` services in `.github/workflows/ci.yml` (not bench-linux's, where Agent would add noise and no benchmark needs it)
@@ -1184,7 +1240,14 @@ Smoke suites find surfaces by ARIA role and name, so these are part of the desig
   moving focus. F5 refreshes; Ctrl+C copies the selected rows through `ResultTextWriter`.
 - **Dialogs**: `dialog` with the page list as a `tablist` (as Login Properties); the Start, Stop, Enable and Disable Jobs progress dialog is a `table`
   (Action, Status, Message; one row per job, as the mock and SSMS) inside a `log` region that announces each row's result; destructive confirmations are `alertdialog`s whose
-  default button is Cancel.
+  default button is Cancel. One mechanism per confirmation: Delete History, Recycle ("Close the current SQL Server Agent
+  error log and start a new one? The current log becomes Archive #1 and the oldest archive is deleted."), the Agent
+  Properties purge, Remove schedule with "delete if unused", and Manage Schedules' Delete use `SubDialog`'s `destructive`
+  mode (focus on Cancel; Enter acts as Cancel everywhere but the destructive button); Stop and Restart use the
+  `confirmProgress` rule above; Delete on an Agent kind keeps the existing `deleteObject` dialog unchanged (`dialog`, OK and
+  Cancel, as SSMS and every other kind). A vitest per `SubDialog` confirmation asserts that Enter on the form sends nothing
+  destructive (mocks `delete-job` redrawn as the existing Delete Object, `remove-schedule` with Cancel the default,
+  `recycle-errorlog`, `delete-operator`).
 - **Status bar job**: a `status` region announcing start and end, with Stop, View History and Dismiss as buttons.
 
 ## Lanes
