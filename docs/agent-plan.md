@@ -101,8 +101,9 @@ From Microsoft's documentation (re-checked in AG-0 and AG-1, never assumed):
 Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job:
 which Agent reads raise 15281 with Agent XPs off (`sp_help_job` does, through `sp_get_composite_job_info`'s
 `xp_sqlagent_*` calls; `sp_help_jobactivity` and `sp_help_jobhistory @mode = N'FULL'` contain no `xp_sqlagent` call, and
-the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable: if so, the Log File Viewer
-drops its `AGENT_DISABLED` banner, the `agent.history.service` probe and their tests);
+the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable; the Log File Viewer's running state comes from `agent.jobs`, which does fail,
+so its banner stays either way, and if a history read also raises 15281 the history probe is restarted by the same
+refresh);
 whether `sp_get_sqlagent_properties` returns values to a SQLAgentUserRole login (msdb grants that role EXECUTE and the
 procedure has no sysadmin check, but it reads through `xp_instance_regread`, which may refuse non-sysadmin callers; until
 then the plan treats it as sysadmin-only, and if it works the cap text, idle-CPU and mail facts show to every role that
@@ -162,8 +163,10 @@ same built-ins the SSIS profile and live session probe already use) reads `IS_SR
 (Delete History below Operator), `HAS_PERMS_BY_NAME` for the permissions the state probe needs (on 2022+ the
 live catalogue's `serverState` already means VIEW SERVER PERFORMANCE STATE, which the `sys.dm_exec_sessions` fallback
 needs; `sys.dm_server_services` may need VIEW SERVER SECURITY STATE there, so AG-0 settles it and, if so, adds a
-`serverSecurityState` permission kind and splits `explorer.agentService` into a DMV probe and a session-fallback probe, each
-with one permission; before 2022 both are VIEW SERVER STATE), `ALTER ANY CREDENTIAL`, `SERVERPROPERTY('IsClustered')`, the `Agent XPs` value from
+`serverSecurityState` permission kind and splits `explorer.agentService` into a DMV probe and a session-fallback probe, both
+still ungated, each guarding its DMV part with `HAS_PERMS_BY_NAME` (a catalogue `permission` would make the probe
+unavailable and lose the ungated `Agent XPs` read that recovery, the re-list and the sublabel need), with
+`agent.jobs.service` split the same way; before 2022 both are VIEW SERVER STATE), `ALTER ANY CREDENTIAL`, `SERVERPROPERTY('IsClustered')`, the `Agent XPs` value from
 `sys.configurations`, and whether Database Mail can be read. It is cached per connection and re-read on Refresh, and drives
 the tree, the menus (target-scoped context key `agentRole`: `sysadmin | operator | reader | user | none`, plus
 `explorerSelectionAgentRole`) and the read path. It is a `CatalogSql` statement linted by `CatalogSql.Lint` with its own
@@ -267,20 +270,29 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   larger of `backoffMs` and the interval) and `LiveService.Refresh` never shortens a backing-off probe's delay, whereas a
   terminally stopped probe is restarted by a refresh with its failures reset. So the failing probe stops and the view shows
   the banner. Every view that can stop this way carries its own XPs signal in the same subscription, so the subscription
-  never ends by `AllStopped()` and recovery needs nothing else to be open: Job Activity Monitor has `agent.jobs.service`,
-  the Log File Viewer's `agent.history` source gains the table-less `agent.history.service` probe (only if AG-0 finds a
-  history read that raises 15281; see Facts) (the same constant text
-  as `agent.jobs.service`), and Object Explorer's status view has `explorer.agentService`. When that probe reports XPs
-  0 → 1 (also after a Start whose service reached Running before Agent turned the option on), the view sends
-  `live.update` with `refresh: true`, which restarts the stopped probes; for Object Explorer that is
+  never ends by `AllStopped()` and recovery needs nothing else to be open: Job Activity Monitor has `agent.jobs.service`; the
+  Log File Viewer holds, beside its `agent.history` view, an `agent.jobs` view of `agent.jobs.list` and
+  `agent.jobs.service` for the running state its In progress grouping needs (below), so it gets the same signal; the
+  status bar's view of `agent.jobs.watched` also includes `agent.jobs.service`; and Object Explorer's status view has
+  `explorer.agentService`. Recovery is level-triggered, not
+  edge-triggered (a stop and start inside one signal interval, or a 15281 the signal probe never saw as 0, leaves no
+  0 → 1 edge): while the view holds a probe stopped with `AGENT_DISABLED`, the first signal sample taken after that stop
+  that reports XPs 1 (also after a Start whose service reached Running before Agent turned the option on) makes the view
+  send one `live.update` with `refresh: true`, once per stop, which restarts the stopped probes; for Object Explorer that is
   `ExplorerStatusService`, so the role-path `explorer.agent` probe (`sp_help_job`, terminal on 15281) and the running-jobs
   chips come back by themselves alongside `AgentStateSource`'s re-list. A C# offline LiveService check asserts that after
   an `AGENT_DISABLED` stop a refresh makes the probe due at once; renderer vitests cover each view: Job Activity Monitor
   and the Log File Viewer (with Object Explorer hidden, including a 15281 right after their own Start that recovers on the
-  later 0 → 1 sample) and Object Explorer (a role-path `explorer.agent` stop, then an `explorer.agentService` 0 → 1
-  sample, a `refresh: true`, and the chip back). The status-bar watched job does not recover: Agent's stop ended the job,
-  so on `AGENT_DISABLED` or Agent stopped it shows "Agent stopped, job outcome unknown" once and releases its view and
-  status-only slot without re-subscribing. Job Activity Monitor and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
+  next XPs-1 sample, and a stop followed by signal samples that read 1 and never 0) and Object Explorer (a role-path
+  `explorer.agent` stop, then an `explorer.agentService` sample reading 1, one `refresh: true` and no second one, and the
+  chip back). The status-bar watched job tells the two cases apart through
+  `agent.jobs.service`: with Agent stopped the job ended, so it shows "Agent stopped, job outcome unknown" once and
+  releases its view and status-only slot without re-subscribing; with `AGENT_DISABLED` and the service Running the job may
+  still run, so it shows "Agent XPs off, job progress unavailable", keeps its slot and recovers like the other
+  views (renderer fixtures cover both, and the mock's `running-status-stopped` scene shows both texts). In the Log File
+  Viewer, while `agent.jobs` reports `AGENT_DISABLED` the running state is unknown, so step rows after the last job outcome
+  row show as "In progress or unknown (Agent XPs off)", never as Unknown (no job outcome); a renderer vitest covers that
+  with history readable, the banner, and recovery on the next XPs-1 sample. Job Activity Monitor and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
   state; the banner offers Start (sysadmin on Windows, not a failover cluster instance, startup type not Disabled) only
   while the service state is Stopped, and with Agent running it offers no Start, only the `sp_configure` /
   `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `LiveErrors.IsTerminal("AGENT_DISABLED")`,
@@ -692,8 +704,7 @@ its `MethodNames` entry and C# record; string inputs get max lengths in both zod
 | `agent.historyMessage` | One history row's full message (`instance_id`) | Metadata slot |
 | `agent.errorLogs` | Error log list (`xp_enumerrorlogs 2`) for the Log File Viewer's sources | Metadata slot |
 | Existing `actions.describe` / `actions.execute` | Job, alert, operator, proxy, credential, schedule, Agent Properties describes and every write, service control included | As other object actions; credential execute is sensitive |
-| Existing `explorer.*`, `live.subscribe` | Agent kinds; new live sources `agent.jobs` (probes `agent.jobs.list`, `agent.jobs.watched`, `agent.jobs.service`), `agent.history` (plus probe
-  `agent.history.service`), `agent.tree` (probe `agent.treeProbe`), and the new `explorer.agentService` probe in the existing `explorer` source | Each new source needs a `liveSourceIds` entry, probe ids in `liveProbeIds`, a `LiveService.CreateSampler` case and a C# args check; args bounded in the live catalogue's schemas |
+| Existing `explorer.*`, `live.subscribe` | Agent kinds; new live sources `agent.jobs` (probes `agent.jobs.list`, `agent.jobs.watched`, `agent.jobs.service`), `agent.history`, `agent.tree` (probe `agent.treeProbe`), and the new `explorer.agentService` probe in the existing `explorer` source | Each new source needs a `liveSourceIds` entry, probe ids in `liveProbeIds`, a `LiveService.CreateSampler` case and a C# args check; args bounded in the live catalogue's schemas |
 
 Error codes: action code `STALE` (the name already exists for the shortcuts save; the action row adds its own message,
 not retryable) and new action codes `AGENT_STOPPED` and `JOB_STATE` (decided after msdb 22022 by a re-read, and 15281);
