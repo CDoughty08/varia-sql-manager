@@ -310,7 +310,8 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   disabled above it, with the reason), so no request shape changes. The progress dialog's Stop (disabled once pressed, moving focus to Close, which stays enabled), and Close or
   Escape mid-sequence, send no further requests (mock scene `start-jobs-stopped`): unsent jobs show "Not run", the request in flight finishes and reports (a
   request is never withdrawn or re-sent), and no `sp_stop_job` is sent to jobs already started. A renderer vitest covers
-  a partial failure, the cap and Stop mid-sequence for each verb, Stop pressed by keyboard leaving focus on Close, and a
+  a partial failure, the cap and Stop mid-sequence for each verb, Stop becoming disabled when the last reply arrives with
+  focus on it moving to Close, Stop pressed by keyboard leaving focus on Close, and a
   multi-step job in a multi-select Start opening no step dialog and sending no `@step_name` (multi-select Start sends
   `sp_start_job @job_id` alone, so each job starts at its own start step, as SSMS). Every reply in the sequence goes to the status-bar job
   service whether or not the dialog is still open, so a successful Start becomes a watched job (or joins the overflow
@@ -750,7 +751,9 @@ Database Mail logs, which SSMS shows there).
   Starting… / Stopping… on the node and in the dialog until `QueryState` agrees (the next `explorer.agentService` sample
   then takes over); "Access is denied" naming the engine's service account; a Restart whose Stop succeeded but whose Start
   failed or timed out, which says "SQL Server Agent was left stopped" and offers Start again; and Cancel restart (the
-  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so.
+  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. When
+  Restart ends by itself (success, left stopped or timed out) Cancel restart becomes disabled and Close enabled, and
+  focus on Cancel restart moves to Close (renderer vitest for success and left stopped).
 - **Script As**: SMO through `ScriptPipeline`. `UrnBuilder` gains JobServer children (`Server/JobServer/Job[@Name=… and
   @CategoryID=…]`, `Alert`, `Operator`, `ProxyAccount`), the scripting catalogue gains rows and preflight ids (the job
   preflight reads `category_id` from `sysjobs_view`), never executing, `HeaderGuard` applied. AG-4 verifies SMO can script a
