@@ -190,7 +190,7 @@ mirror, docs.ts output and catalogue tests:
   tests assert SSMS's order, so Job Activity Monitor sits between Jobs and Alerts; `tests/explorer-catalog.test.ts`'s
   sibling-order uniqueness check, which today covers only `folderSpecs` and `laterFolders` and skips `owner === 'object'`,
   counts singletons as siblings, below kind owners too; a kind's children are merged by `order` rather than taken from its
-  `folders` array; `ExplorerCatalog.cs`'s ordering and the generated catalogue JSON's `CatalogFolder` reader carry
+  `folders` array; `ExplorerCatalog.cs`'s ordering and the generated catalogue JSON's kind reader (`CatalogKind`, not `CatalogFolder`) carry
   singletons with their `order`), with an unnamed `server`-style scope. The server kind's singleton is `agent`
   ("SQL Server Agent", so chips keyed by `NodeKind` work); the `agent` kind's singleton is `agentJobActivity` ("Job Activity
   Monitor", a leaf).
@@ -242,7 +242,13 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   a generic failure. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
   next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision: the TS and C#
-  listings read the `agent` node's XPs input, seeded from the capability read. An `AgentStateSource` on `ExplorerService`
+  listing is in C# only (`ExplorerService.cs`), and the capability read is cached, so the backend reads the value itself
+  when it lists the `agent` node: one constant `CatalogSql` read of `Agent XPs` from `sys.configurations` (no permission
+  needed) in the same listing batch, so a re-list always sees the current value and `explorer.children` gains no new
+  param; `OwnsChildren` and `HasChildren` count singletons, so a kind with singletons reports children. A C# offline
+  check covers both XPs values, and a renderer vitest feeds an `explorer.agentService` sample that flips XPs 0 → 1 (the
+  `agent` node re-lists with its folders, keeping expansion and selection), then 1 → 0 (they go), and an unchanged value
+  (no re-list). An `AgentStateSource` on `ExplorerService`
   (modelled on `DatabaseRuntimeSource`) carries `explorer.agentService`'s XPs value, and when it changes 0 → 1 or 1 → 0 it
   reconciles the `agent` node (re-lists its children, keeping expansion and selection), the one case where a status sample
   changes the tree. When the status view is not running (`liveData.explorerStatus` off or Object Explorer hidden), the
@@ -278,8 +284,13 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   return `undefined` for kinds with no listed chips, adds a `sublabel` field to `RowStatus` rendered for the agent row (as
   `liveDatabase` does for databases), and puts the status words into the agent row's accessible name and tooltip (chips
   are `aria-hidden`; today only the root row's `serverWords` does this). The vitest renders the row and asserts its
-  accessible name ("SQL Server Agent, Stopped, Agent XPs disabled"), not just `rowStatus`'s output. Job rows show state chips (Running · step n/m, Failed, Between retries) from
-  `agent.jobs` while the Jobs folder is open. Chips never reload the tree, except the Agent XPs change above.
+  accessible name ("SQL Server Agent, Stopped, Agent XPs disabled"), not just `rowStatus`'s output. Job rows show state chips (Running · step n/m, Failed, Between retries) in AG-3,
+  which builds `agent.jobs`: `ExplorerStatusService` opens a background `agent.jobs` view (`agent.jobs.list` is a
+  table probe opened in a background view with no grid, counted against the background-view budget and paused
+  with Object Explorer like the existing status view) while any Agent Jobs folder is expanded, and drops it when none is;
+  `ServerStatus` gains a per-job map keyed by `job_id`; `rowStatus` gains an `agentJob` branch whose words go into the job
+  row's accessible name and tooltip; a vitest checks a running job's chip and name and that collapsing the folder closes
+  the view. Chips never reload the tree, except the Agent XPs change above.
 - A live change source `agent.tree` with probe `agent.treeProbe` (as source `ssis.catalog` has probe `ssis.catalogProbe`):
   row count and checksum of the columns the tree shows. Sysadmin computes them in SQL; the role path cannot (`INSERT …
   EXEC` is never used), so the backend computes them from the capped `sp_help_job` read. It reloads only changed folders,
@@ -521,7 +532,7 @@ Database Mail logs, which SSMS shows there).
 | Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References), Rename, Delete, Script As | |
 | Credentials | New Credential and Credential Properties on the existing Security › Credentials folder (kind `credential`) and from the Proxy dialog: name, identity, secret, encryption provider. `ALTER CREDENTIAL` resets the secret when `SECRET` is omitted, so in Properties the Identity and secret are read-only until "Change identity and password" is checked, and every ALTER sends both | |
 | Error logs | List, view in Log File Viewer, Recycle | Configure (log path, level) via Agent Properties › General |
-| SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation; the cut-off uses Delete History's server-computed `CASE @unit … DATEADD(…, GETDATE())` template with the same bounds and NULL guard, and the confirmation labels it "(server time)" when the offsets differ (renderer test; AG-8a's live check covers the cut-off) | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
+| SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation; it is its own allowlisted template with its own lint entry (it passes no `@job_id`, which Delete History's template refuses) and shares only the server-computed `CASE @unit … DATEADD(…, GETDATE())` cut-off statement, its bounds and its NULL-date THROW, and the confirmation labels it "(server time)" when the offsets differ (renderer test; AG-8a's live check covers the cut-off) | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
 | Agent service | State and chips; Start / Stop / Restart | |
 | Database Mail | Readiness (in AG-6a, where the Notifications page shows it; AG-7 reuses it): `Database Mail XPs`, `sysmail_profile`, and for sysadmin also Agent's own mail settings from `sp_get_sqlagent_properties` (`use_databasemail`, `databasemail_profile`), because Agent sends nothing without a profile set in Alert System (a Later page, so the warning says to set it in SSMS) and a restart after setting it. Only sysadmin and DatabaseMailUserRole get a warning; others see none; on Managed Instance the profile must be `AzureManagedInstance_dbmail_profile`. Warn on e-mail notifications when not set up | Configuration wizard and Database Mail log |
 | Multi-server (MSX/TSX) | Targets page shows local only | Multi-server administration |
@@ -684,8 +695,9 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   `finally`.
 - **Destructive paths**: Delete History is checked live with two scratch jobs, proving only the checked job's rows go and
   that "older than" keeps newer rows. The server-wide purge (AG-8a) never deletes real history in a test: offline tests
-  render its template, and its live check passes an `@oldest_date` before any history row, proving the call runs and
-  deletes nothing. docs/testing.md records both. Scratch job runs add rows to Agent's server-wide history cap (default 1,000), pushing out the oldest rows of
+  render its template, and its live check passes the largest allowed count with unit 3 (months; the count bound in zod
+  and C# is 1,200, far before any history and far from `DATEADD` overflow) and asserts the `sysjobhistory` row count is
+  unchanged, proving the call runs and deletes nothing. docs/testing.md records both. Scratch job runs add rows to Agent's server-wide history cap (default 1,000), pushing out the oldest rows of
   real jobs on a shared server: suites keep runs few (one `WAITFOR` job per suite), and docs/testing.md says so.
 - **Live suites** (each with its seconds in `LiveGroups.Suites` and docs/ci.md's table): `Agent` (tree, capability, the Search Objects Agent batch refused for a no-role login while other kinds still index, both
   read paths with low-privilege SQL logins in each Agent role), `AgentJobs` (a scratch job with a `WAITFOR DELAY` T-SQL
