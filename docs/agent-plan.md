@@ -307,10 +307,12 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   (each with SSMS's one-line-per-job progress dialog) send one ordinary `actions.execute` per selected job, one after another, each with its own target, identity guard and template,
   so each job's `jobStarted`, `JOB_STATE` or `NOT_FOUND` comes back on its own reply and one refusal never fails the
   others (the progress dialog's line per job). The renderer caps a selection at `agentLimits.startJobs` (those four verbs are
-  disabled above it, with the reason), so no request shape changes. The progress dialog's Stop (disabled once pressed; Close stays enabled), and Close or
+  disabled above it, with the reason), so no request shape changes. The progress dialog's Stop (disabled once pressed, moving focus to Close, which stays enabled), and Close or
   Escape mid-sequence, send no further requests (mock scene `start-jobs-stopped`): unsent jobs show "Not run", the request in flight finishes and reports (a
   request is never withdrawn or re-sent), and no `sp_stop_job` is sent to jobs already started. A renderer vitest covers
-  a partial failure, the cap and Stop mid-sequence for each verb. Every reply in the sequence goes to the status-bar job
+  a partial failure, the cap and Stop mid-sequence for each verb, Stop pressed by keyboard leaving focus on Close, and a
+  multi-step job in a multi-select Start opening no step dialog and sending no `@step_name` (multi-select Start sends
+  `sp_start_job @job_id` alone, so each job starts at its own start step, as SSMS). Every reply in the sequence goes to the status-bar job
   service whether or not the dialog is still open, so a successful Start becomes a watched job (or joins the overflow
   item) with its `jobStarted` even after Close (vitest: Close mid-sequence with a Start in flight still watches that job). The status bar takes a
   finished job's outcome only when its last run, compared at second precision, is at or after that time (table tests: the
@@ -488,7 +490,11 @@ fixed slot series (`job0Status`, `job0Step`, `job0Steps`, `job0Started`, `job0La
 (numeric yyyymmddhhmmss in server local time, the last run's start), read through `sp_help_job @job_id, @job_aspect = N'JOB'` (one result set instead of four), … up to `agentLimits.watchedJobs`, small), mapped to
 the watched job ids by their order in the args. The `agent.jobs` source declares `hidden: 'statusOnly'` (the first
 production source to use it; `tests/live-service.test.ts` is the only user today), so a view of it keeps its table-less
-probes sampling while hidden. The status bar owns that view (window-scoped, the window-wide limit of 4 status-only views
+probes sampling while hidden when the view also opens with `whileHidden: 'statusOnly'`
+(`LiveSpec`; `statusOnlyAllowed()` needs both). Only the status bar's `agent.jobs.watched` + `agent.jobs.service` view
+passes it; Job Activity Monitor's and the Log File Viewer's `agent.jobs` views do not, so they pause when hidden as today
+and never take one of the window's status-only slots (the status-bar renderer fixture asserts the spec carries it and
+the other two do not). The status bar owns that view (window-scoped, the window-wide limit of 4 status-only views
 applies; when none is free the status bar shows the job without live progress, never an error). It watches at most
 `agentLimits.watchedJobs` jobs: when one Start Jobs launches more, or this window starts another while every slot is in
 use, the extra jobs join an "n more jobs started" item with View in Job Activity Monitor, without live progress, and the
