@@ -1,6 +1,6 @@
 # BigQuery support plan (0.10.0)
 
-Status: **agreed with the owner on 2026-11-15**; the results section was revised the same day at the owner's request (in-memory and windowed residences). Nothing here is implemented yet. The lanes below become PRs.
+Status: **agreed with the owner on 2026-11-15**; the owner asked for the results section to be revised the same day (in-memory and windowed residences) and agreed the revision. Nothing here is implemented yet. The lanes below become PRs.
 [Decisions](#decisions) records the owner's answers.
 
 0.10.0 is meant to deliver two things: BigQuery support and SQL Server Agent support. Agent is planned separately. This
@@ -445,3 +445,7 @@ Recorded on 2026-11-15, from the owner's answers to the draft's open questions.
    is opt-in. Search Objects gets the BigQuery enhancements in [Search Objects for BigQuery](#search-objects-for-bigquery-bq-6a).
 6. **Live tests:** the emulator runs in CI. Real-project checks stay local and opt-in, with no repository secret.
 7. **Plan location:** this page, landed as a docs-only PR.
+8. **Results:** in memory or windowed, as [section 2](#2-results-in-memory-or-windowed) describes, at the owner's
+   request. The details are agreed as written: the half-of-budget projection, a 64 MiB block cache of 4,096-row blocks,
+   switching to windowed on a misestimate, windowed sort and filter going through the cost prompt, and Load sample in
+   0.10.0. Pivot and profile pushed down to BigQuery, and Save to a BigQuery table, are 0.11.
