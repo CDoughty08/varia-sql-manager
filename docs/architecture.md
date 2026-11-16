@@ -186,8 +186,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     PARSEONLY or FMTONLY anywhere, or names SQL Server's plan column, gets none. At run time `ResultNameBinder` stops at
     the first error, a column-count mismatch, SHOWPLAN or STATISTICS PROFILE text, a plan set where a `*` statement
     stood, or a full budget.
-  - A name not applied (cancel, timeout, `GO n` repetitions, and one a cancel, timeout or ended script never reached, in a
-    later batch too) is an informational Messages line quoting the
+  - A name not applied (including one a cancel, timeout or ended script never reached, in a later batch or `GO n`
+    repetition too; a repetition's notes name it) is an informational Messages line quoting the
     name and line, never an error or logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name`
     carries it; a result's identity stays its ordinal.
 - **Visibility** reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from the grids
@@ -279,7 +279,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
     (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
     delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
-  - The policy runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
+  - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
     of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown, touched,
@@ -399,7 +399,7 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and
   the embedded `Explorer/explorer-catalog.json`). SQL is constant per query, band and filter shape; no metadata
   built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The `CatalogSql` lint renders and checks
-  every variant. Pinned server shortcuts use the same canonical target as ordinary rows.
+  every variant.
 - **Peek definitions** are never cut. Text comes in pages of `peekLimits.definitionPageChars` UTF-16 code units, far
   under the 16 MiB response bound: `explorer.peek` carries the first page with the facts; a longer text
   (`definitionLength`, `definitionStamp` = `modify_date`) is read a page at a time with `explorer.peekDefinition`
@@ -538,7 +538,8 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   focused window or within 1 s of input there, and send back a token and an id. Menu targets
   (`src/renderer/src/menus/targets.ts`, `useMenuTarget`) never cross IPC. `MenuService` is the only `contextmenu`
   listener, and only `.menu-layer` reaches z-index 30000. A closed shortcut popover leaves its visible invoker as menu
-  anchor and focus destination; deferred Connect focus yields to newer input recorded by `WindowRegistry` (popouts too).
+  anchor and focus destination; deferred Connect focus yields to newer input recorded by `WindowRegistry` (popouts too). Pinned server shortcuts use the
+  same canonical connection target as ordinary rows.
 - **Settings** live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area aggregated by `catalog.ts`;
   the Scripting page from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod schemas built from
   the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read before every

@@ -185,14 +185,14 @@ Considered and rejected (do not re-propose without new numbers):
   changed files may skip Release builds silently: run them by hand (`workflow_dispatch`) when it touches packaging.
 - **Audit gate.** `npm audit` runs in its own workflow (`audit.yml`: one job that installs nothing), not in CI, where an
   advisory-endpoint outage or a new advisory failed every PR whatever it changed. It runs on PRs and main pushes that
-  change `package.json` or `package-lock.json`, and daily on main. `scripts/audit.mjs` retries an endpoint that gives no
+  change `package.json`, `package-lock.json`, `scripts/audit.mjs` or `.github/workflows/audit.yml`, and daily on main. `scripts/audit.mjs` retries an endpoint that gives no
   report, then warns without failing. Its paths filter means it must never be a required check (a PR it skips would wait
   forever), so look at it before merging a dependency change. A high or critical advisory fails the job: upgrade or
   override the package and add its floor to `tests/dependency-floors.test.ts`. Moderate and low ones only report
   (minimatch's GHSA-g3hv-75wg-m249 has no fix below 11.0.1, a major version under electron-builder, and its patterns come
   only from Varia's build configuration).
 - **Cancel superseded PR and main runs.** Every workflow a PR triggers has a concurrency group keyed by `github.ref` with
-  `cancel-in-progress`; CI and Release builds also cancel superseded main runs. Tags and manual runs keep unique groups.
+  `cancel-in-progress`; CI, Release builds and Audit also cancel superseded main runs. Tags and manual runs keep unique groups.
 - **Don't starve small runners.** CI's runners have 3 or 4 vCPUs; running every check lane at once there made tsc 13
   times slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), say what it waits for, and
   never chain new phases with `&&` in `check`. Only the vitest files in its `needsBackend` list need the Release backend,

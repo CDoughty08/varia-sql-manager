@@ -178,7 +178,7 @@ the picked result old (−); **Swap old and new** turns them. Names read old →
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed
 the popover or switched pair meanwhile; with the palette over it, it stays and offers Show It). **Cancel** shows while it
 runs; failures show in the popover, or the toolbar once it has closed. An existing identical comparison is shown (**Show
-It**).
+It**); asking again while it runs does nothing.
 
 The comparison is a unified, git-style diff after the results: each changed row as its old row (−) and new row (+)
 with the changed values marked, added and removed rows, and one unchanged row of context around each change, with each

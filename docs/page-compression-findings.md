@@ -27,7 +27,7 @@ so the delay only avoids packing results the user is still moving between.
   thread). Everything done under a lock or that allocates (the visibility lookup, renting and copying the page's buffer,
   replacing a page, charging the budget) runs at normal priority, because a lowest-priority thread preempted while
   holding the store's or a set's lock would stall reads and new queries until the scheduler boosted it. The thread packs
-  at 275 to 400 MB/s, about 3 s a GiB. On a machine whose processors are all busy it may barely run (the offline stress
+  at 200 to 400 MB/s, 3 to 5 s a GiB. On a machine whose processors are all busy it may barely run (the offline stress
   run showed it waiting tens of seconds); the result then stays raw a while longer.
 - **One reused encoder, streamed.** The thread keeps one encoder, warmed at normal priority, so it does not allocate a
   native context per page while lowered, and compresses each page as a stream of unknown length. With the length
@@ -90,7 +90,7 @@ A packed page's body is replaced by its Zstandard bytes with the raw length besi
 A page whose packed size saves less than 10 % stays raw.
 
 **Zstandard level 2**, built into .NET 11's `System.IO.Compression` (window 18). It is not in .NET 10, which is why the
-backend moved to .NET 11 (#459); a NuGet wrapper would have added a native library. Why level 2:
+backend moved to .NET 11; a NuGet wrapper would have added a native library. Why level 2:
 
 - **Decompression is what every read pays,** and zstd's is about four times Brotli's at the same or better ratio. LZ4
   and zstd's negative levels decompress faster again, but by then decompression no longer matters (0.15 ms a page) while
@@ -115,7 +115,7 @@ the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 
 Per page, zstd 2 decompresses in a median 136 to 198 µs (p99 0.2 to 0.9 ms) and compresses in 0.7 to 1.0 ms. A packed
 result takes 36 to 52 % of its raw memory in these shapes; random keys, hashes or GUIDs compress 1.1 to 1.5 times or not
-at all. At 8 GiB the ratios and per-page speeds were the same. Packing on the workers would take about 0.2 s of 16
+at all. At 8 GiB the ratios and per-page speeds were the same. Packing on the workers (for room) takes about 0.2 s of 16
 workers a GiB (1.5 to 2.0 s for 8 GiB).
 
 ## Reading a packed result
@@ -177,8 +177,8 @@ If the reservation is refused, the operation answers `TOO_LARGE`, as a sort that
   collection gives back almost nothing (0.1 to 0.3 GiB), yet the freed space is reused: 4.2 to 5.3 GiB of new pages
   fitted with no growth in the GC heap's commit. So the saving is real for the process even without compaction, and
   charging the budget the packed size at once is honest. A compacting collection gives everything back (down to the
-  packed bytes plus about 100 MiB) but pauses 1.0 to 1.4 s for 3 to 4 GiB that remains, about 0.3 s a GiB on the busy
-  benchmark machine (`ResultStore` notes 0.1 to 0.2 s), so `ResultStore.MayCompact` will often decline after packing alone. Unpacking
+  packed bytes plus about 100 MiB) but pauses 1.0 to 1.4 s for 3 to 4 GiB that remains, 0.1 to 0.3 s a GiB (about 0.3 s on the busy
+  benchmark machine), so `ResultStore.MayCompact` will often decline after packing alone. Unpacking
   and packing again leaves no residue.
 - **Views** (sort orders, filter masks, `KeyMemory`) are not pages and are not packed. Pivots and diffs are results
   (`Derived`) and follow the same rules. Live tables are never packed.
@@ -212,7 +212,7 @@ above the result:
 
 Against rehydrating, fused reads cost from 10 % less to 26 % more time on the workers' operations (sort, filter, profile,
 pivot) and from 25 % less to 27 % more on most whole-result operations; Save and a diff in the same order cost more, as the
-table shows. That is about 0.05 s per GiB unpacked on 16 workers, paid in each operation. Results that are not packed read as before (raw times matched `main` within noise).
+table shows. That is about 0.05 s per GiB unpacked on 16 workers, paid in each operation. Results that are not packed read as before.
 
 The policy, with the real `ResultPacker` (`--policy`: one 1 GiB result; `--stage2`: four of 256 MiB, the first shown):
 
@@ -237,7 +237,7 @@ what matters.
 ## Running the benchmark
 
 `dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench <GiB> <shape>
-[options]` (`PageCompressionBench.cs`, `PageCompressionBench.Fused.cs`), one size and shape a process so each memory
+[options]` (`PageCompressionBench.cs`, `PageCompressionBench.Fused.cs`, `PageCompressionBench.Stage2.cs`), one size and shape a process so each memory
 reading is its own. It fills a query budget as ingestion does (`ResultSetBuffer.BeginRow`/`TryCommitRow`, real
 `PageBuilder` pages and lengths sidecars), prints one JSON line per metric, measures only and checks nothing, and is
 not part of `npm run check` or CI. Every run warms the JIT with an untimed pass and reports the median of three.

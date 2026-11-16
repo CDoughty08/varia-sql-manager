@@ -17,7 +17,7 @@ the plan document.
 - Row flow labels describe the **child's output into its consuming parent**; arrows point toward the parent. Actual
   values include measured zero; estimates say `Est.` (or `rows/exec` without estimated executions); live values say
   `Live partial`, even after a stopped execution. Line width is logarithmic and capped and does not show provenance.
-- **Collapse inputs**, **Expand inputs** and **Expand all** act on the selected branch; Left and Right collapse/expand
+- **Collapse inputs** and **Expand inputs** act on the selected branch, **Expand all** expands every collapsed branch; Left and Right collapse/expand
   before moving to the parent/first input. Collapsing selects the branch root. Selecting a hidden input from the
   outline, search or rankings expands only its ancestors.
 - The minimap (at most 80 × 48 cells) centres the viewport on click or drag; when focused, arrow keys pan and Home fits
@@ -78,7 +78,7 @@ The model follows Microsoft's [Showplan schemas](https://schemas.microsoft.com/s
 
 ## Actual plans and capture
 
-**Include Actual Execution Plan** (Ctrl+M, query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
+**Include Actual Execution Plan** (Ctrl+M on Windows/Linux, query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
 separate connection. No capture SQL runs on the user's query connection, so `@@ROWCOUNT` and `@@ERROR` behave as in
 ordinary execution across runs. Statistics collection starts after capture setup and finishes before observer
 collection.

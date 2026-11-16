@@ -30,7 +30,7 @@ builds and, in brackets, the slowest.
 
 ## Threshold cases
 
-`--pivot-bench --only threshold`, raw and with `--packed`, on 2026-11-14 at `cd91e31c` (.NET 11, compressed pages,
+`--pivot-bench --only threshold`, raw and with `--packed`, on 2026-11-14 (.NET 11, compressed pages,
 fused reads and threaded sorts). Raw is `ResultPivoter.Build` as the bench's stages time it; packed is the whole host
 method. A Table is packed when only its Pivot has been shown for five seconds, which is when a hidden Pivot is shown and
 rebuilds, so both cases matter.
@@ -76,7 +76,7 @@ build is 60 to 96 ms); read the 100,000-row figures for small sources.
 ## A million rows
 
 `--pivot-bench` on 2026-11-12, after text, date and binary sort keys became ranked or whole, keys and sorts became
-multi-threaded and dates are read as ticks (#432, #435, #439). Median of warm builds, a million rows unless the case
+multi-threaded and dates are read as ticks. Median of warm builds, a million rows unless the case
 says otherwise.
 
 | Case | Build |

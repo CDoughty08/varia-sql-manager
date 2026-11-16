@@ -216,7 +216,7 @@ backend schedules it:
 | `control` | At once. |
 | `metadata` | One of 8 slots, waited for at most 30 s or the remaining deadline, then `BUSY`. |
 | `query` | The per-tab session path. |
-| `results` | One of 16 read slots. |
+| `results` | One of 16 read slots, waited for at most 30 s or the remaining deadline, then `BUSY`. |
 | `explorer` | At once, under Object Explorer's gates (4 statements per connection, 8 in all; static folders need neither). |
 | `actions` | At once, under the action service's gates: execute 1 per Varia connection, 2 in all; long actions (restore, backup) a separate long gate, also 1 and 2; each waited for at most 30 s, then `BUSY`. `activity.kill` has its own gates (1 and 2, waited for at most 5 s, then `BUSY`), so it never queues behind a DROP waiting on the session it kills. A DROP waiting on a lock never holds a metadata slot. |
 | `live` | No slot. A subscription samples on its own task; its statements and unary `live` methods (`activity.details`, via `LiveService.RunGatedAsync`) run under the live gates (2 per connection, 8 in all, waited for at most the statement's budget, Details' 10 s, then `BUSY`; an unconnected id is `NOT_CONNECTED`). |
@@ -239,6 +239,9 @@ noted where it matters.
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `databases.list` | invoke | unary | metadata | 45 s |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
+| `language.status`, `language.close` | invoke | unary | control | 10 s |
+| `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
+| `language.refresh` | invoke | unary | control | 30 s; on the control lane so it can cancel stale language work while the metadata slots are full |
 | `language.definition` | invoke (F12, Alt+F12) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
@@ -845,7 +848,7 @@ it when no port is open).
 | `session.opened` | Before the first batch, once a live query session is acquired; carries `spid` and optional `login`. The summary still says whether the session survived |
 | `resultSet.opened` | When a kept set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 a second per query, latest wins; up to 64 sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set stopped storing. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once |
-| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept set, with its final descriptor |
 
 Progress and messages are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
@@ -1861,14 +1864,24 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'cancel'; rid }
 { t: 'close'; rid; generation; resultIds: u32[1..1024] }
 { t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384; viewId?: u32 }
-{ t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[1..16]; replaces?: u32 }
+{ t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[0..16]; filters?: ViewFilter[1..16]; replaces?: u32 }  // a sort key or a filter
 { t: 'viewClose'; rid; generation; resultId: u32; viewIds: u32[1..64] }
 { t: 'search'; rid; generation; resultId: u32; text: string[1..1024]; fromRow; maxMatches: 1..10000; backward?: boolean; viewId?: u32 }
+{ t: 'identify'; rid; generation; resultId: u32; by: 'auto' | 'column' | 'row'; column? }  // column only with by: 'column'
+{ t: 'rowIds'; rid; generation; resultId: u32; firstRow; count: 1..limits.identity.maxRows; viewId?: u32 }
+{ t: 'findRows'; rid; generation; resultId: u32; ids: id[1..limits.identity.maxFind]; viewId?: u32 }
+{ t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext }  // main sends { left, right }
+{ t: 'profile'; rid; generation; resultId: u32; columns: distinct column[≤ limits.profile.maxColumns]; … }
+{ t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
+{ t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
+{ t: 'distinctRead'; rid; generation; resultId: u32; snapshotId: u32; order: 'count' | 'value'; offset; count: 1..limits.distinct.maxWindow; search? }
+{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true (search? only with all); nulls? }
+{ t: 'distinctClose'; rid; generation; resultId: u32; snapshotIds: u32[1..limits.distinct.maxClose] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
 
-A read, close, rowBytes, view or viewClose must name the current generation and a result the renderer owns (from a
+Every request naming a result (all but credit, cancel, live and liveUpdate; diff checks both ids) must name the current generation and a result the renderer owns (from a
 query summary or event, at most 100,000 per generation), else `RESULT_UNAVAILABLE`; at most 64 requests may be
 outstanding. A `live` request needs the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not
 already running on the port (`DUPLICATE_REQUEST`); at most 16 live streams per port (`TOO_MANY_REQUESTS`), counted
@@ -2032,7 +2045,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (plus a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters (at least one), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (plus ranked or whole text, date or binary key values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transposed Copy and Save | `transposed` boolean; `headerColumn` 0 – 4,095, a shown column, only with `transposed`; at most 4,095 source rows a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
@@ -2051,7 +2064,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, absolute, no U+0000 – U+001F or `*?"<>|`; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
-| Restore Database | 1 – 64 backup files (server paths as above); ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files, 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
+| Restore Database | 1 – 64 backup files (server paths as above); ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 1,024 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files, 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only kinds without folders or rows of their own); other identity names (SSIS folders, projects) 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
 | SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for write verbs that take one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000 or lone surrogate, server paths ≤ 1,024 characters; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project, caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window ≤ 10,000 rows, ≤ 20,000 (2 × limit) read a sample and as many open ones with a baseline, ≤ 256 open ids re-read a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
