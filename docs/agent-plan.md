@@ -627,7 +627,22 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   links are written through `sp_update_alert`, which no Agent role may run, so for any non-sysadmin, even on a job the
   login owns, Add and Remove are disabled with the role-named reason ("SQLAgentOperatorRole may view alerts, not change
   them") and Edit opens the alert read-only; the describe marks alert links not editable (renderer vitest for an Operator on
-  their own job; `AgentRoles` check of the describe flag).
+  their own job; `AgentRoles` check of the describe flag). Edit, like Add, needs the Alert dialog, so until AG-7 lands the
+  page lists the alerts with Remove (sysadmin) only.
+- **Stacked child dialogs** (owner, 2026-11-16, over closing the parent; SSMS opens these on top of the parent):
+  `ObjectDialogService` holds one dialog today (`open()` refuses a second, with one `request`, `lookup` and secret slot),
+  and `SubDialog` only edits the parent's draft, which is right for Step and Schedule but not for dialogs that save on their
+  own. It gains one child slot, built in AG-6a: `openChild(dialog, node, preset)` runs the child's own describe, execute,
+  Cancel, long-run and secret handling (its secret cleared on close like the parent's), while the parent stays open,
+  inert and unchanged with its draft kept; on the child's success the parent re-reads the affected page (the Alerts list,
+  the credential picker, the Response page's job or operator picker) and selects the new object; on the child's Cancel
+  nothing changes; a disconnect or backend loss ends the child first, then the parent, as today; only one child at a time
+  (a child's own nested opens use `SubDialog` or are disabled). Users: the job's Alerts page Add (New Alert with the job
+  preset) and Edit (AG-7), an alert's Response page New Job…, View Job, New Operator… and View Operator (AG-7, the job
+  dialog from AG-6a), and the Proxy dialog's New Credential (AG-8b). Focus moves into the child and returns to the
+  invoking button on close; Escape closes only the child (vitests: child Cancel, child success re-reading the parent page,
+  a disconnect while the child is open, the secret cleared, focus return; smoke: New Alert from the job's Alerts page and
+  back; mock scene `job-alerts-child`).
 - **Notifications**: E-mail / Page / Net send operator with When (succeeds, fails, completes), Write to the Windows
   Application event log, Automatically delete job. Kinds the platform gates refuse are disabled with the reason.
 - **Targets**: "Target local server" only in 0.10.0; multi-server (MSX/TSX) targets are later and shown disabled.
@@ -1145,7 +1160,7 @@ CLAUDE.md requires.
 | AG-4 | Script As for Job, Alert, Operator, ProxyAccount (UrnBuilder JobServer children, scripting catalogue rows, goldens, role check) | AG-1 | S |
 | AG-5a | Log File Viewer: `agent.history` live source (both paths), run grouping with In progress and Unknown, master/detail grids, details pane, `agent.historyMessage`, Delete History for checked jobs (all or older than), start times through `sp_help_jobactivity`, role-path message limit, cap text from `sp_get_sqlagent_properties` | AG-1, AG-2 (write path), AG-3 (`agent.jobs` source for running state) | M |
 | AG-5b | Agent error logs in the Log File Viewer: `agent.errorLogs`, `xp_readerrorlog` / `sp_readmierrorlog` capped reads with the truncation notice, Recycle | AG-5a | S |
-| AG-6a | Job dialog shell: describe (both paths), General, Notifications (with the Database Mail readiness warning), Targets (local), Alerts list (Add hidden until AG-7), one-transaction save with `STALE`, Script Action, New Job (also from the Agent node's New ›, which appears with it), Ctrl+Q opens job Properties | AG-2 | M |
+| AG-6a | Stacked child dialogs in `ObjectDialogService`; job dialog shell: describe (both paths), General, Notifications (with the Database Mail readiness warning), Targets (local), Alerts list (Add hidden until AG-7), one-transaction save with `STALE`, Script Action, New Job (also from the Agent node's New ›, which appears with it), Ctrl+Q opens job Properties | AG-2 | M |
 | AG-6b | Steps page, the step save planner, and step dialog (T-SQL with editor features and Parse, CmdExec, PowerShell, SSIS package, Advanced) | AG-6a | L |
 | AG-6c | Schedules: `schedule.ts` encoding and sentences, schedule dialog (CPU-idle warning), Pick, Jobs in Schedule, Manage Schedules, Remove with delete offer; Agent node New › Schedule… | AG-6a | M |
 | AG-7 | Operators and Alerts: dialogs (all pages), Enable/Disable, Rename, Delete; performance counter picker; Agent node New › Operator… and Alert…; job dialog Alerts page Add | AG-1, AG-6a (shared dialog parts) | M |
