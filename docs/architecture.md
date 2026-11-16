@@ -282,7 +282,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
-    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown, touched,
+    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
     held, released or the service disposed.
   - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
     at once and counts toward `CollectNow`'s next collection, never a compacting one.
@@ -375,7 +375,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
   `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
-  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan` probe is the one exception: its SQL is inline in
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators` probe (source `query.plan`) is the one exception: its SQL is inline in
   `Plans/LivePlanSampler.cs` (the server pool with `LiveSql.UncommittedPrologue`, a permission check in the same batch,
   three per-edition and version variants, `DB_NAME()` on Azure) and no offline lint covers it. Probes run on their scope's
   own pool (" - Activity Monitor" for server DMVs, " - Integration Services" in the catalog's database) with its prologue
@@ -495,7 +495,8 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   `ActualPlanCapture` is not):
   dynamic SQL only through `sys.sp_executesql` of text built from literals, `QUOTENAME(@name)` and server-side `CONVERT`s
   of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters. It has no
-  prologue: it only creates, starts, reads and drops its own event session.
+  prologue: besides a permission check and a connection-id read it only creates, starts, reads and drops its event
+  session, and drops abandoned Varia collectors it recovers.
 - **SSIS Catalog.** Code tables, `ssis.describe` views, `ssis.execute` verbs, Explorer verbs and commands, documents,
   error codes, features and limits live only in `src/shared/ssis/catalog.ts` (tree kinds and folders are Object
   Explorer's); it generates `docs/integration-services.md` below its marker line only.

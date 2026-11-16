@@ -559,7 +559,8 @@ under READ UNCOMMITTED; missing is `NOT_FOUND`.
   `IN_USE`; owned databases, jobs, roles, endpoints, availability groups or granted permissions `DEPENDENTS` (also 15173);
   with `dropMappedUsers`, uncountable sessions or more mapped users than listed `NOT_SUPPORTED` and a database the scan
   could not read again `BLOCKED`. Steps `Drop the database
-  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`), in no common transaction; a mismatch (50010) is `NOT_FOUND` and drops nothing. 15434 is `IN_USE`.
+  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`), each DROP checking it before and after in its own transaction (steps share none); a mismatch (50010) is `NOT_FOUND` and
+  that step drops nothing. 15434 is `IN_USE`.
 
 **Unlock Login.** `dialog: 'unlockLogin'` answers `{ login, lock: { locked, badPasswords?, lockoutTime?, mustChange,
 expired, daysUntilExpiration? } }` (`ActionSql.LoginLock`, the only `LOGINPROPERTY` caller; `BLOCKED` after 10 s).
@@ -1050,7 +1051,7 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
 ## Messages
 
 The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' |
-'error' }` in order, under the caps (1,000 entries, 1,000,000 characters); the summary is authoritative. Past the caps,
+'error', line? }` (`line`: the absolute script line of an error in a submitted batch) in order, under the caps (1,000 entries, 1,000,000 characters); the summary is authoritative. Past the caps,
 "Messages were truncated by the display limit; …" marks the cut, and up to 20 more error entries (each ≤ 16,384
 characters) are kept, so the error, cancel or timeout that stopped a script still shows. An event carries at most 1,000
 entries; a summary at most 1,028 (stored entries, late errors, up to 8 notes). A summary with an `error` but no error
@@ -1245,7 +1246,7 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   (`ResultStore.Open(derived: true)`) charged to the query's budget and stored whole or not at all (`TOO_LARGE`, "There is
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
   released with the query's results or at once when its answer is not delivered. A source released meanwhile:
-  `RESULT_RELEASED`. Building holds about 55 bytes a row of both results (`ResultDiffer.WorkingBytes`) plus 12 bytes per
+  `RESULT_RELEASED`. Building holds about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) plus 12 bytes per
   differing cell, charged to the budget as they grow (`TOO_LARGE` without room). Work is split across threads with one thread's result.
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
@@ -1516,7 +1517,8 @@ live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs
     folder?: str 1..128, project?: str 1..128, package?: str 1..260, prefix?: boolean, caller?: str 1..128,
     windowHours?: 1..8,760, limit?: 1..10,000 }` (kinds and statuses distinct; `Live/SsisOperations.cs` checks again); new
     args replace the old whole (an absent member does not filter) and read the window again.
-  - `query.plan`: `{ queryId: uuid }`, required: the running query whose live plan is sampled.
+  - `query.plan`: `{ queryId: uuid }`, required by the backend: the running query whose live plan is sampled; an update cannot
+    change it (`INVALID_PARAMS`).
 - `start` (`liveStartSchema`, sources whose append tables can start mid-way): `'beginning'`, `{ tail: 1..200,000 }` or
   `{ before: 1..2^53−1 }` (the rows before an id, ending there).
 - `track` names a keyed snapshot table by index; each key is the key cells' stored texts joined with U+001F; `linger` is how
@@ -1871,7 +1873,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'rowIds'; rid; generation; resultId: u32; firstRow; count: 1..limits.identity.maxRows; viewId?: u32 }
 { t: 'findRows'; rid; generation; resultId: u32; ids: id[1..limits.identity.maxFind]; viewId?: u32 }
 { t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext }  // main sends { left, right }
-{ t: 'profile'; rid; generation; resultId: u32; columns: distinct column[≤ limits.profile.maxColumns]; … }
+{ t: 'profile'; rid; generation; resultId: u32; columns: distinct column[≤ limits.profile.maxColumns]; viewId?: u32 }
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
 { t: 'distinctRead'; rid; generation; resultId: u32; snapshotId: u32; order: 'count' | 'value'; offset; count: 1..limits.distinct.maxWindow; search? }
@@ -1881,15 +1883,17 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
 
-Every request naming a result (all but credit, cancel, live and liveUpdate; diff checks both ids) must name the current generation and a result the renderer owns (from a
+Every request naming a result (all but credit, cancel, close, live and liveUpdate; diff checks both ids; a `close` of unowned
+or earlier-generation ids answers `{ closed: 0, usedBytes: 0 }`) must name the current generation and a result the renderer owns (from a
 query summary or event, at most 100,000 per generation), else `RESULT_UNAVAILABLE`; at most 64 requests may be
 outstanding. A `live` request needs the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not
 already running on the port (`DUPLICATE_REQUEST`); at most 16 live streams per port (`TOO_MANY_REQUESTS`), counted
 apart from the 64. A `liveUpdate` counts among the 64 and must name a live stream of the port and generation
-(`NOT_FOUND`) with the same source (`INVALID_REQUEST`). `credit` acknowledges a live event; `cancel` ends a live stream.
+(`NOT_FOUND`) with the same source (`INVALID_REQUEST`). `credit` grants a read stream more bytes or acknowledges a live event; `cancel` stops the read, operation or live stream
+with that rid.
 
 **Main → worker:** `backend { generation, status }` on every change, `page { rid, seq, body: ArrayBuffer }`,
-`end { rid, ok, result | code, message }`, `query { queryId, event }`, `memory { usedBytes, globalBytes, generation, seq }`
+`end { rid, ok, result | code, message }`, `query { queryId, event }`, `memory { feature: 'results' | 'index', usedBytes, globalBytes, detail?, generation, seq }`
 (the sending backend's generation, possibly one being replaced), `progress { rid, phase, percent? }` (a view, profile,
 distinct, pivot or diff request's `op.progress`, only while that request is in flight on this port; dropped once the
 page gave the request up), and `live { rid, bytes, event }` (a validated live event and its EVENT body length, granted
@@ -2062,7 +2066,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (Open, command line, second instance, macOS open-file, drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 at a time (counting those past their 2 s), none again for a file whose last has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
-| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
+| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value, 8,388,608 for a plan); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, absolute, no U+0000 – U+001F or `*?"<>|`; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
 | Restore Database | 1 – 64 backup files (server paths as above); ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 1,024 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files, 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only kinds without folders or rows of their own); other identity names (SSIS folders, projects) 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
@@ -2278,8 +2282,9 @@ and reports that block skipped.
   retention that was reset because the file or that value was invalid.
 - **Hot exit** (`varia:session-write`, `varia:session-take`, strict zod; docs/hot-exit.md) writes open text tabs' names,
   unsaved text (untitled tabs included), line endings, file paths, server and database names to `<userData>/Session/session.json` on an approved
-  close (0700/0600 on POSIX, atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never
-  logged), kept as `previous.json` until the next run closes; an invalid file is quarantined. A close with hot exit off keeps only
+  close (0700/0600 on POSIX, atomic, at most 64 tabs and 64 MB, also the non-secret connection workspace: targets' sanitized options, expected account,
+  reconnect intent and credential reference; never results, live connections, session ids, passwords, tokens or connection
+  strings, never logged), kept as `previous.json` until the next run closes; an invalid file is quarantined. A close with hot exit off keeps only
   pinned tabs, or deletes both files when there are no pins. Startup and Reload Window hold their checkpoint until a
   renderer has reopened the tabs and acknowledges it with `varia:session-restored`.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
