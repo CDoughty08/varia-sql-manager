@@ -244,8 +244,14 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   sublabel, lists no folders and no Job Activity Monitor singleton (msdb's procedures fail with error 15281), and still offers Start to sysadmin on Windows
   (starting Agent turns the option on, as SSMS does). XPs at 0 with Agent running (rare; AG-0 spikes the option's value
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
-  a generic failure: `ExplorerErrors.Classify` and the live error mapping map 15281 to a new explorer code
-  `AGENT_DISABLED` (added to `explorerErrorCodes` in `src/shared/contracts.ts` and its C# mirror). The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
+  a generic failure: `ExplorerErrors.Classify` maps 15281 to a new explorer code `AGENT_DISABLED` (added to
+  `explorerErrorCodes` in `src/shared/contracts.ts` and its C# mirror), and the live path, which has its own list, gets the
+  same code: `AGENT_DISABLED` joins `liveErrorCodes` (`src/shared/live/schema.ts`) and `LiveErrors.Classify` maps 15281 to
+  it with the `sp_configure` / `mssql-conf` sentence. It is deliberately not in `LiveErrors.IsTerminal`: the probe keeps
+  sampling at its interval so a view recovers by itself once Start turns the option on. Job Activity Monitor, the
+  status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped" (with Start for
+  sysadmin on Windows), never the error state; a C# offline check covers `LiveErrors.Classify(15281)` and a renderer
+  vitest feeds Job Activity Monitor an `AGENT_DISABLED` sample. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
   next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision:
   the children listing is in C# only (`Explorer/ExplorerService.cs`), and the capability read is cached. Listing the
@@ -259,7 +265,8 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   `mssql-conf` sentence, so the expanded node says why even when the status view is off; otherwise it gates folders by the role rules above (Alerts, Operators
   and Proxies need SQLAgentOperatorRole or sysadmin, Error Logs sysadmin; a login with no Agent role and no sysadmin gets
   no children and the explorer error `PERMISSION_DENIED` with an Agent-specific sentence, and a login without msdb access
-  gets the existing 916 → `NO_DB_ACCESS` value; the `noAccess` badge on the node comes from the cached capability read,
+  (only where msdb's guest CONNECT has been revoked) gets the existing 916 → `NO_DB_ACCESS` value, created with
+  `database: "msdb"` so its message names msdb; the `noAccess` badge on the node comes from the cached capability read,
   the expanded node's message from these errors). Each Agent folder listing then picks the sysadmin path or the role path from an
   `IS_SRVROLEMEMBER(N'sysadmin')` column in its own batch, as the sampler chooses per sample, so no role fact is cached
   across listings. A re-list therefore always sees the current value and
@@ -748,7 +755,8 @@ catalogue; commands in the commands catalogue; icons in `icons.ts`.
   snapshot; zod/C# limit mirrors; the step save planner; the `ExplorerStatusService` probe list without repeats.
 - **Renderer vitest**: `agent.tree` change samples reload only the changed folder and keep expansion and selection;
   fixtures for states the live smoke cannot reach: each Agent role, Managed Instance, Linux,
-  Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running), state
+  Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running; tree, and `AGENT_DISABLED` in Job Activity Monitor, the status bar and the
+  Log File Viewer), state
   unknown, `PERMISSION_DENIED` mid-dialog, `STALE`, `AGENT_STOPPED`, `JOB_STATE`, a save failure with no part index, empty,
   loading and failed history and Job Activity Monitor, error-log truncation, role-path history (1,024-character message,
   no elapsed time for a running job whose `start_execution_date` is NULL, the Delete History disabled reason
