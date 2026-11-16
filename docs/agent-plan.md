@@ -300,16 +300,20 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   progress unavailable" and keeps its slot until the first XPs-1 sample. Outcome matching: Agent records `last_run_date`/`last_run_time` as the
   run's start in whole seconds, so the Start template reads the server time before `sp_start_job` in the same batch,
   truncated to the second and returned as text (`CONVERT(char(8), @t, 112) + REPLACE(CONVERT(char(8), @t, 108), ':', '')`,
-  since `ActionService.ReadAllAsync` reads every column with `GetString`); `ActionExecuteResult` gains an optional bounded
-  `jobStarted` list (one `{ jobId, started }` per started job, so multi-select Start Jobs gets one each) in the C# record,
+  since `ActionService.ReadAllAsync` reads every column with `GetString`); `ActionExecuteResult` gains an optional
+  `jobStarted` list, at most `agentLimits.startJobs` entries (the cap on jobs one multi-select Start or Stop accepts,
+  enforced in zod and C# on the request too, with over-limit contract tests), (one `{ jobId, started }` per started job, so multi-select Start Jobs gets one each) in the C# record,
   the strict zod schema and the C# bounds, with an offline contract test and a live check. The status bar takes a
   finished job's outcome only when its last run, compared at second precision, is at or after that time (table tests: the
   job starts in the same second, and in the next). `sp_start_job` only posts the request, so for a moment the job can read
   idle with the previous run's `last_run`: the status bar shows "Starting…" until the job is seen running (status not 4)
-  or `agentLimits.watchStartSamples` samples pass, and only after that does idle with an older last run (Agent stopped
+  or an idle sample's last run is at or after the start time (a job that finished inside one interval: Starting… ends at
+  once with its outcome; renderer fixture), or `agentLimits.watchStartSamples` samples pass, and only after that does idle with an older last run (Agent stopped
   mid-run and left no outcome row) show "Agent stopped, job outcome unknown" (renderer fixture: first sample idle with an
-  older `last_run`, next running, never "outcome unknown"). A normal end shows
-  "<job>: Succeeded / Failed / Canceled at <time>" for a few seconds with View History, then releases the view. Every
+  older `last_run`, next running, never "outcome unknown"). Stop is disabled during Starting… (until the job is seen
+  running), since `sp_stop_job` refuses a job that is not yet running; Dismiss stays (mock scene `running-status-starting`). A normal end shows
+  "<job>: Succeeded / Failed / Canceled at <time>", the time being `job0LastRun` plus `job0LastDuration` (Agent's
+  `last_run_*` is the run's start; table test), for a few seconds with View History, then releases the view. Every
   status-bar job item has a Dismiss action that releases the view and slot at once, so the unknown case never holds one
   of the window's 4 status-only slots indefinitely. Renderer fixtures cover all three service states, a normal end, an
   Agent stop and restart while the service state is unknown with an older `last_run_outcome` (shows outcome unknown),
@@ -469,12 +473,17 @@ Verbs (all via ActionService, see SQL rules):
 Status bar (AG-3): a job this window started shows "Index maintenance: running step 2 of 4" with Stop in the status bar
 until it ends. Background views pause when Object Explorer or the window is hidden and yield their slot, and tables pause
 under status-only, so this uses a table-less probe, `agent.jobs.watched`. Series are static catalogue ids, so it declares
-fixed slot series (`job0Status`, `job0Step`, `job0Steps`, `job0Started`, `job0LastOutcome` (code) and `job0LastRun`
-(numeric yyyymmddhhmmss in server local time), read through `sp_help_job @job_id`, … up to `agentLimits.watchedJobs`, small), mapped to
+fixed slot series (`job0Status`, `job0Step`, `job0Steps`, `job0Started`, `job0LastOutcome` (code), `job0LastRun`
+(numeric yyyymmddhhmmss in server local time) and `job0LastDuration` (seconds, decoded from `last_run_duration`'s
+hhmmss), read through `sp_help_job @job_id, @job_aspect = N'JOB'` (one result set instead of four), … up to `agentLimits.watchedJobs`, small), mapped to
 the watched job ids by their order in the args. The `agent.jobs` source declares `hidden: 'statusOnly'` (the first
 production source to use it; `tests/live-service.test.ts` is the only user today), so a view of it keeps its table-less
 probes sampling while hidden. The status bar owns that view (window-scoped, the window-wide limit of 4 status-only views
-applies; when none is free the status bar shows the job without live progress, never an error), holds it only while a
+applies; when none is free the status bar shows the job without live progress, never an error). It watches at most
+`agentLimits.watchedJobs` jobs: when one Start Jobs launches more, or this window starts another while every slot is in
+use, the extra jobs join an "n more jobs started" item with View in Job Activity Monitor, without live progress, and the
+watched view's args never change past the bound (renderer fixture: starting `watchedJobs + 1` jobs gives no subscribe
+error and one summary item), holds it only while a
 watched job runs, and never polls; it does not depend on Job Activity Monitor or Object Explorer being open. Elapsed time
 shows only when the start is readable (below).
 
@@ -566,9 +575,10 @@ node's menu and the palette.
   `sys.configurations`, which needs no permission).
   Status reads by service state (see Object Explorer's Agent XPs bullet). Once `agent.jobs.list` stops: with the service
   Stopped, the Running and Between retries tiles and the Running chip read 0, their row tones clear and no elapsed time
-  shows; with the service Running or unknown they read "—" (unknown) and elapsed time stops; in every case the live
+  shows; with the service Running or unknown they read "—" (unknown), elapsed time stops and the renderer clears the
+  running and between-retries row tones too (the backend's tones are stale once the probe stopped); in every case the live
   indicator reads "Agent unavailable", not Live; Failed and Disabled counts stay (from msdb). The `AGENT_DISABLED`
-  renderer fixtures assert tiles, chip counts and the indicator. With the service Stopped, Next Run is marked as not
+  renderer fixtures assert tiles, chip counts, row tones and the indicator. With the service Stopped, Next Run is marked as not
   current (Agent refreshes `sysjobschedules` about every 20 minutes and not while stopped), and a warning banner offers
   Start Agent… to sysadmin on a Windows server that is not a failover cluster instance; never an error banner. When the
   service's startup type is Disabled (`sys.dm_server_services.startup_type`), the banner says so and offers no Start
@@ -663,7 +673,7 @@ Database Mail logs, which SSMS shows there).
   procedure statements one by one, and every Agent read that `EXEC`s, in any caller (live, listing, Search Objects,
   describe), is checked by `AgentSql.LintRead`, a new rule: `LiveSql.Lint`'s rules plus two exemptions. A statement may
   be exactly `EXEC msdb.dbo.<procedure> @arg = @param, …` (named arguments, parameters or the constants the catalogue
-  lists per procedure, such as `@mode = N'FULL'`) for a procedure in `AgentSql.ReadProcedures` (`sp_help_job`,
+  lists per procedure, such as `@mode = N'FULL'` for `sp_help_jobhistory` and `@job_aspect = N'JOB'` for `sp_help_job`) for a procedure in `AgentSql.ReadProcedures` (`sp_help_job`,
   `sp_help_jobhistory`, `sp_help_jobactivity`, `sp_help_jobstep`, `sp_help_jobschedule`, `sp_help_schedule`,
   `sp_help_category`, `sp_help_operator`, `sp_help_alert`, `sp_help_notification`, `sp_help_proxy`,
   `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and `sp_get_sqlagent_properties`, sysadmin-only unless AG-0's spike says otherwise).
