@@ -119,8 +119,9 @@ dialog's Alerts page, Proxies folder, alert types (event, performance condition,
 notification kinds (e-mail, pager, net send), event log notification, error logs (and which reader), Agent Properties
 writes, Windows-identity credentials, service control. Initial values from Microsoft's documentation:
 
-- **Linux**: no alerts at all (folder, job Alerts page, New › Alert…, operator Notifications › Alerts), no proxies, step
-  types without CmdExec, PowerShell, Queue Reader, SSIS, SSAS or merge replication, no event log notification, no service
+- **Linux**: no alerts at all (folder, job Alerts page, New › Alert…, operator Notifications › Alerts), step types without
+  CmdExec, PowerShell, Queue Reader, SSIS, SSAS or merge replication; the Proxies folder shows (Microsoft's list does not
+  exclude proxies) with the subsystems `syssubsystems` lists, which AG-1 checks against the CI container; no event log notification, no service
   control.
 - **Managed Instance**: no alerts (folder, job Alerts page, New › Alert…, notifications from alerts), no proxies, step types
   limited to T-SQL, SSIS, log reader, snapshot and distributor (no CmdExec, PowerShell, Queue Reader, merge or SSAS), no
@@ -184,8 +185,9 @@ Today kind rows appear only as a folder's listed `rows`, the server kind lists o
 an empty folder with no "opens" behaviour. Agent needs two new catalogue mechanisms, built in AG-1 with their C# `Served`
 mirror, docs.ts output and catalogue tests:
 
-- **Singleton children**: `KindSpec` gains `singletons` (kind, label, the same `editions`/`platforms` gates as folders), rendered
-  as single rows after the kind's folders, with an unnamed `server`-style scope. The server kind's singleton is `agent`
+- **Singleton children**: `KindSpec` gains `singletons` (kind, label, the same `editions`/`platforms` gates as folders), and an
+  `order` that sorts with `FolderSpec.order` among the owner's children (in TS and in the C# children listing; catalogue
+  tests assert SSMS's order, so Job Activity Monitor sits between Jobs and Alerts), with an unnamed `server`-style scope. The server kind's singleton is `agent`
   ("SQL Server Agent", so chips keyed by `NodeKind` work); the `agent` kind's singleton is `agentJobActivity` ("Job Activity
   Monitor", a leaf).
 - **Opens a document**: `KindSpec` gains `opens` (a document id from the Agent catalogue); a leaf with it opens that document
@@ -257,7 +259,12 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   the list through a `Set`, since `explorer.agent` appears in both `.server` and `.agent` and `live.update` refuses repeated
   probe ids (a vitest checks the list has no repeats).
 - Chips: `statusChipKinds` gains `agent: ['explorer.agentService', 'explorer.agent']`; `server` keeps `explorer.agent`.
-  Both running-jobs chips read the one sample. Job rows show state chips (Running · step n/m, Failed, Between retries) from
+  Both running-jobs chips read the one sample. `statusChipKinds` only feeds the probe list and docs; rows get chips through
+  `ExplorerStatusService.rowStatus`, which today serves only the server row and database rows, and its tick drops
+  table-less samples other than `explorer.agent`. So AG-1 adds an `agent` field to `ServerStatus`, reads the
+  `explorer.agentService` sample in `ServerView`, adds an `agentChips(...)` builder in `src/shared/explorer/status.ts` with
+  its docs entry, and a `rowStatus` branch for `node.kind === 'agent'`; a vitest checks the Agent row's Stopped chip, XPs
+  sublabel and running-jobs chip, and that unknown state shows no chip. Job rows show state chips (Running · step n/m, Failed, Between retries) from
   `agent.jobs` while the Jobs folder is open. Chips never reload the tree.
 - A live change source `agent.tree` with probe `agent.treeProbe` (as source `ssis.catalog` has probe `ssis.catalogProbe`):
   row count and checksum of the columns the tree shows. Sysadmin computes them in SQL; the role path cannot (`INSERT …
@@ -358,12 +365,18 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   SSMS does (mocked).
   - **Save order**: msdb renumbers as it goes (`sp_delete_jobstep` lowers later step ids and rewrites go-tos that pointed at
     the deleted step; `sp_add_jobstep @step_id` shifts later steps up and moves their go-to targets), so the dialog's step
-    numbers are never sent as they stand. The save is one pure planner in `src/shared/agent/steps.ts` with table tests: delete
-    removed steps from the highest id down; add new steps in ascending final position; then one `sp_update_jobstep` per
-    step writing its full content (subsystem, command, actions, go-to targets) into its final id, so Move up/down are only
-    changed final positions; then `sp_update_job @start_step_id`. An `AgentActions` live
-    check inserts, moves and deletes steps that other steps jump to, then reads `sysjobsteps` back and compares with the
-    dialog's model.
+    numbers are never sent as they stand. msdb also keeps step names unique per job and checks a new name against every
+    step, the one being updated included (`sp_verify_jobstep`, error 14261). The save is one pure planner in
+    `src/shared/agent/steps.ts` with table tests: (1) delete removed steps from the highest id down; (2) give every
+    surviving step whose final name or position changes a unique temporary name (a constant prefix plus a GUID, under 128
+    characters); (3) add new steps in ascending final position, also under temporary names; (4) one `sp_update_jobstep`
+    per step writing its full content (name, subsystem, command, actions, go-to targets) into its final id; (5)
+    `sp_update_job @start_step_id`. Move up/down are therefore changed final positions: content moves between ids, while
+    history keeps the `step_id` and `step_name` recorded at run time (as SSMS's own reorder behaves; AG-0 confirms) and a
+    step's `step_uid`, which only the "Log to table" output keys on, stays with the id; the step dialog says so when a step
+    with table logging moves. Table tests cover a swap, a rotation, a rename into another step's old name and an insert
+    reusing a renamed step's name. An `AgentActions` live check runs those cases with steps that other steps jump to, then
+    reads `sysjobsteps` back and compares with the dialog's model.
   - Step dialog **General**: Step name, Type (from `syssubsystems`, filtered by the platform gates and what the login can
     run), Run as (proxies the login may use for that subsystem through `sp_help_proxy @subsystem_name`, which for a
     non-sysadmin returns only proxies granted to it; sysadmin also gets "SQL Server Agent Service Account"), Database
@@ -384,8 +397,10 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   own the schedule, so the option is offered only to the schedule's owner and sysadmin. Jobs in Schedule says "Only your
   own jobs are listed" for those logins.
   - Schedule dialog: Name, type (Recurring, One time, Start automatically when SQL Server Agent starts, Start whenever the
-    CPUs become idle where the gates allow, with a warning that the idle condition is set in Agent Properties › Advanced,
-    which Varia does not edit yet), frequency (daily / weekly days / monthly day-or-relative), daily frequency
+    CPUs become idle where the gates allow, with a warning that the idle condition is set in Agent Properties ›
+    Advanced, which Varia does not edit yet, so set it in SSMS; sysadmin, whose `sp_get_sqlagent_properties` read shows
+    whether a condition is defined, gets the specific sentence "No idle CPU condition is defined on <server>", and no
+    warning once one is), frequency (daily / weekly days / monthly day-or-relative), daily frequency
     (once / every n hours-minutes-seconds between times), duration, Jobs in Schedule, and SSMS's live **Description**
     sentence. The sentence and the `sysschedules` encoding live in `src/shared/agent/schedule.ts`, pure, with table tests
     against SSMS's own sentences.
@@ -462,12 +477,17 @@ Database Mail logs, which SSMS shows there).
   `msdb.dbo.sp_get_sqlagent_properties` (undocumented, sysadmin, allowlisted read). Other logins see no cap text.
 - Delete History (Operator or sysadmin) from the Log File Viewer's toolbar for the jobs checked in its sources: all their
   history, or only rows **older than** a date (SSMS's option; `@oldest_date`). One `sp_purge_jobhistory @job_id [,
-  @oldest_date]` call per job in one transaction. Without a job argument msdb purges every job on the server, so zod and C#
+  @oldest_date]` call per job in one transaction. The cut-off is computed on the server, in the server's local time that
+  `sysjobhistory` uses: the template sets `@oldest_date` by a constant `CASE @unit WHEN 1 THEN DATEADD(day, -@count,
+  GETDATE()) WHEN 2 THEN DATEADD(week, …) WHEN 3 THEN DATEADD(month, …) END`, with count and unit as parameters, so a
+  client in another time zone cannot shift it; the dialog shows the cut-off labelled "(server time)" when the offsets
+  differ. A renderer test covers the label and the live Delete History check covers the cut-off. Without a job argument msdb purges every job on the server, so zod and C#
   require 1 to `agentLimits.historyJobs` job ids and the template refuses a NULL `@job_id` before calling. The confirmation
   names the jobs, the cut-off and that it cannot be undone. Server-wide purges exist only in Agent Properties (AG-8a).
 - Agent error logs: `xp_readerrorlog <n>, 2` with the search text as its parameters, sysadmin only (Managed Instance:
-  `sp_readmierrorlog` per the gates). It cannot page, so `AgentReader` reads at most `agentLimits.logRows` rows, cancels
-  the rest and shows a truncation notice (mocked). Same grid, filters and export (Copy / Save through `ResultTextWriter`).
+  `sp_readmierrorlog` per the gates). It cannot page, so it is read newest first (sort `N'desc'`) and `AgentReader`
+  reads at most `agentLimits.logRows` rows, cancels the rest and shows a notice that only the newest rows were read
+  (mocked). Same grid, filters and export (Copy / Save through `ResultTextWriter`).
   Recycle: `sp_cycle_agent_errorlog`, behind a confirmation.
 - Empty, loading and error states (mocked): "No history for the selected jobs in this window", "This job has never run",
   a skeleton while loading, and a failed read shown in place with its reason and Retry. History is never "off" (an unlimited
@@ -504,8 +524,10 @@ Database Mail logs, which SSMS shows there).
   `sp_help_category`, `sp_help_operator`, `sp_help_alert`, `sp_help_notification`, `sp_help_proxy`,
   `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and sysadmin-only `sp_get_sqlagent_properties`).
   And the master procedures, which take positional arguments, each have a named shape: `EXEC master.dbo.xp_enumerrorlogs
-  2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3;` and, on Managed Instance, `EXEC master.dbo.sp_readmierrorlog
-  @p1, 2, @p2, @p3;` (the only literal allowed is the log type `2`; AG-0 confirms on Managed Instance's documentation and,
+  2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3, NULL, NULL, N'desc';` and, on Managed Instance, `EXEC
+  master.dbo.sp_readmierrorlog @p1, 2, @p2, @p3` (with the same sort arguments if it accepts them, which AG-0 checks;
+  otherwise it caps from the oldest and the notice says so) (the only literals allowed are the log type `2`, `NULL` for
+  the time bounds and `N'desc'`; AG-0 confirms on Managed Instance's documentation and,
   if one is available, an instance that log type 2 returns the Agent log there). Lint tests render every allowed shape and reject near misses.
   `sp_enum_proxy_for_subsystem` is not used: sysadmin reads `sysproxies`/`sysproxysubsystem` directly, others call
   `sp_help_proxy`. `LiveSql.Lint`, `CatalogSql.Lint` and `ActivitySql`'s lint stay as they are. `INSERT … EXEC` is never used
