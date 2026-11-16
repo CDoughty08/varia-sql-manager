@@ -1,384 +1,225 @@
 # CI cost and speed
 
-How CI and `npm run check` spend their time, what was cut, what is left to cut, and the rules that keep them lean. Re-measure
-with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and after any CI change, and update this page.
+How CI and `npm run check` spend their time, the mechanisms that keep them lean, what is left to cut, and the rules.
+Re-measure with `node scripts/ci-timings.mjs` (`--steps` for per-step times) before and after any CI change, and replace
+the Measurements below with the new baseline.
 
 ## Layout
 
-- CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
-  push to main and manual runs (newer PR/main pushes cancel their earlier runs; manual runs always finish); the
-  repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS). A scope job classifies the complete change before the 13 full-validation jobs start together;
-  a final `CI result` job checks their outcomes. Each validation job builds
-  what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
-  Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
-  service; the first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container and Kerberos); the smoke suites in three shards on Linux (sandboxed,
-  under xvfb, with SQL Server) and three on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
-  in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work stays off PRs: Linux's 1024x768
-  repeats of the scripting and results suites (Windows runners' own display is 1024x768) run on main pushes, and the
-  Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
-  this layout.
-  The Windows suite weights already totaled 719 seconds across two shards against a 360-second budget each. The new
-  language-service UI suite adds a third Windows shard, keeping the budget rather than reducing existing estimates.
-  Release builds (`release.yml`, through `package.yml`) package every main push, tags and manual runs, and a pull request only when
-  it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
-  main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
-  over 3,000 changed files may skip Release builds (GitHub reads only its first 3,000 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
-  `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+`tests/ci-workflow.test.ts` holds this layout.
 
-  SQL Tools Service is a build-time dependency pinned in `build/sqltools-service.json` for every release RID. Preparation
-  verifies the official archive's SHA-256 before extraction and retains upstream notices, the component's MIT license and
-  an inventory of file hashes. Development launch/build commands prepare the host's distribution; packaging prepares its
-  exact target and includes the complete runtime beside the backend. Packaged smoke tests check those files and start the
-  bundled language server without a path override. Live group 1 additionally tests schema completion and hover against its
-  disposable SQL Server container; the other live groups remain Node-free. Linux smoke shard 3 also exercises real Monaco
-  completion and hover in split/floating editors against SQL Server 2022 with SQL Login, including focus return from a
-  panel's OS popout, targeted cache refresh and docking back. It reuses that shard's server, build and display, with a
-  five-minute deadline.
-  The language widget suite also checks overflowing hover/suggestion placement in short panels and at viewport edges.
-  `language-diagnostics-smoke.mjs` runs with the regular smoke shards and verifies rendered red/yellow squiggles, messages,
-  current-query issue navigation, foreground scheduling with preserved markers and stale-result cleanup. Its initial budgets
-  are 20 seconds on Linux and 25 on Windows; the local Windows run took 7.5 seconds. The SQL language live suite additionally
-  validates real syntax/binding issues, qualified joined completions and diagnostic cache refresh against marked fixtures.
-
-  `grouped-results-smoke.mjs` covers the results' Tabs layout (grouped results PR 13) in its own launch, because
-  `results-smoke.mjs` is already near the split guideline; the existing results suites pin the Stacked layout by setting.
-  PR #467's run measured it at 4 seconds on Linux and 6 on Windows; with PR #509's narrow-pane and popout steps (9 and 10)
-  [that PR's run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/43739577663) measured 7 and 9, which the
-  shard weights record.
-
-  About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
-  browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took
-  5.1 seconds locally on Windows. PR #406's CI measured 6 seconds on Linux and 7 seconds on Windows; the shard weights
-  record those measurements.
-
-  The release reader's installed/history, same-release section/scroll preservation, exact-version/unavailable, About
-  navigation and light/dark checks also share that launch. PR #408's initial CI measured 6 seconds on Linux and 7 on
-  Windows. Content checks validate the checked-in archive with the same loader as publication; generic publication
-  fixtures and archive-derived smoke expectations allow new releases without changing test prose. Curated release-body
-  compilation uses the existing tag-publication job, with a script-free
-  dependency install for the shared schema. It creates no new job and does not run that install on ordinary PR checks.
-
-  Getting Started also shares `updates-smoke.mjs`, including search, lazy routing/focus, interactive fictional samples,
-  live shortcut/gesture/settings changes, Options navigation and a narrow layout under reduced motion. The expanded
-  suite took 9.1 seconds locally on Windows. [PR #424's successful run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/42976652703)
-  measured 11 seconds on both Linux and Windows; the shard weights record those measurements. This adds no launch or
-  job. Registration/reference checks load every bundled page without SQL.
-  DOM checks hold and reject real guide-module imports to cover focus ownership, failure recovery and closing during
-  a load; scroll checks cover hidden tabs and reflow on remount. The shared smoke also checks numeric sample ordering
-  under each text-sort mode and focus/section restoration after a tab switch.
-
-  Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
-  within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
-  Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent
-  locks and other filesystem errors still fail preparation; checksum and file-inventory verification remain required.
-  Packaged smoke reports its current phase, bounds application/window/CDP cleanup, and has a ten-minute runner-level
-  timeout in addition to its five-minute body watchdog. The outer limit also catches synchronous work before that watchdog
-  starts. It adds no jobs or normal-path waits; an earlier macOS smoke remained active beyond fourteen minutes.
+- **Triggers.** CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are
+  tested), every push to main and manual runs. Newer PR and main pushes cancel their earlier runs; manual runs always
+  finish (tags run release.yml, not CI). The repository is public, so minutes cost nothing, but GitHub runs only 20 of its jobs at once (5 on
+  macOS).
+- **Jobs.** A scope job classifies the complete change, then the 13 validation jobs start together, and a final
+  `CI result` job checks their outcomes. Each validation job builds what it needs, so one failure hides nothing and the
+  run takes as long as its longest job:
+  - `npm run check` on Linux, Windows and macOS.
+  - The live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server service); the
+    first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container, and Kerberos. The other
+    groups stay Node-free.
+  - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server) and three on Windows
+    (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times in its `suiteSeconds`). macOS skips
+    the smoke tests until they cover its window chrome.
+  - The Linux benchmarks (floors enforced).
+- **Report-only work stays off PRs.** Linux's 1024x768 repeats of the scripting and results suites (Windows runners'
+  own display is 1024x768) run on main pushes; the Windows and macOS benchmarks run daily and by hand
+  (`bench-desktop.yml`).
+- **Release builds** (`release.yml`, through `package.yml`, held by `tests/release-workflow.test.ts`) package every main
+  push, tags and manual runs, and a pull request only when it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on main (Intel alone, every Monday), so an x64-only
+  break shows before the tag it would block. Installers upload only for tags and manual runs; a typecheck runs only for
+  tags. GitHub reads only a pull request's first 3,000 changed files for `paths`, so a larger pull request may skip
+  Release builds: run them by hand then. The Windows package also publishes the update helper (NativeAOT), builds the
+  archive installed copies stage from, and its installer smoke stages and swaps that archive into the installation it
+  made. Every workflow a pull request triggers cancels its superseded runs.
+- `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- **SQL Tools Service** is a build-time dependency pinned in `build/sqltools-service.json` for every release RID.
+  Preparation verifies the official archive's SHA-256 before extraction and keeps upstream notices, the MIT license and
+  an inventory of file hashes. Development commands prepare the host's distribution; packaging prepares its exact target
+  and includes the complete runtime beside the backend. Packaged smoke checks those files and starts the bundled language
+  server without a path override. Live group 1 tests schema completion and hover against its container. Linux smoke
+  shard 3 exercises real Monaco completion and hover in split and floating editors against SQL Server 2022 with SQL
+  Login (focus return from a panel's OS popout, targeted cache refresh, docking back), reusing that shard's server,
+  build and display, with a five-minute deadline.
+- **Suites that share a launch instead of adding a job.** The language widget suite also checks hover and suggestion
+  placement in short panels and at viewport edges. `language-diagnostics-smoke.mjs` runs in the regular shards (rendered
+  squiggles, messages, issue navigation, foreground scheduling with preserved markers, stale-result cleanup); the SQL
+  language live suite validates real syntax and binding issues, qualified joined completions and diagnostic cache
+  refresh against marked fixtures. `grouped-results-smoke.mjs` covers the results' Tabs layout in its own launch because
+  `results-smoke.mjs` is near the split guideline; the other results suites pin the Stacked layout by setting.
+  `updates-smoke.mjs` also carries About (Help and palette opening, focus, clipboard, fixed browser destinations, update
+  states, restart), the release reader (installed and history, section and scroll preservation, exact-version and
+  unavailable, light and dark) and Getting Started (search, lazy routing and focus, fictional samples, live
+  shortcut/gesture/settings changes, Options navigation, narrow layout under reduced motion, sample ordering under each
+  text-sort mode, focus and section restoration after a tab switch). Release-notes content checks use the publication
+  loader; curated release-body compilation runs in the existing tag-publication job with a script-free install.
+- **Downloads and hangs in packaging.** Smoke builds and packaging prepare Electron from its npm-pinned checksums,
+  retrying transient download failures within three attempts and three minutes and seeding the shared archive cache so
+  packaging verifies offline. Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations
+  up to seven times; other filesystem errors still fail, and checksum and inventory verification stay required. Packaged
+  smoke reports its phase, bounds application, window and CDP cleanup, and has a ten-minute runner-level timeout outside
+  its five-minute body watchdog (which catches synchronous work before the watchdog starts).
 
 ## Documentation-only changes
 
-`scripts/ci-scope.mjs` sends PR changes limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md` and Markdown files
-under `docs/` through a Linux documentation lane. It installs npm dependencies with lifecycle scripts disabled (no Electron
-download) and runs source-only vitest, preserving generated-document, README and published-changelog assertions. It skips
-.NET builds/tests, typechecking, production builds, SQL services, smoke shards and benchmarks. Other paths, including
-`release-notes/*.json`, schema JSON, scripts, workflow files, build resources, tests and dependencies, still run full CI.
-Release builds retain their existing PR packaging-input filter and package every main push. Tags, manual
-runs and the weekly Intel package are unaffected. There is no app behavior change, so no README or changelog entry is needed.
+- `scripts/ci-scope.mjs` sends a PR whose changes are limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`
+  and Markdown under `docs/` through a Linux documentation lane: `npm ci --ignore-scripts` (no
+  Electron download), then source-only vitest, which keeps the generated-document, README and published-changelog
+  assertions. It skips .NET, typechecking, production builds, SQL services, smoke and benchmarks. Anything else
+  (`release-notes/*.json`, schema JSON, scripts, workflows, build resources, tests, dependencies) runs full CI.
+- For PRs the scope job fetches full history but checks out only its classifier, and reads an untruncated,
+  NUL-delimited diff from the merge-base to head (stacked PRs and earlier commits included; renames count both paths).
+  Unknown or empty changes and missing history fall back to full CI. Git is used directly to avoid `paths`' 3,000-file
+  limit. Scope and result jobs check out only their scripts and use the runner's bundled Node; test jobs select Node 24.
+- Manual runs execute the selected `regression-suite`: `docs` runs the exact documentation lane on any branch, `none`
+  runs full CI, the others run focused regressions through `ci-regressions.yml` (`dialogs`, `results`, `tail`, `all`:
+  Electron suites; `activity`: live SQL checks). That workflow has manual entry points only and adds no automatic runs. Every manual run reports `Manual CI result`; only automatic
+  runs report the required `CI result`, so a manual success cannot stand in for it. Never require `Manual CI result`.
+- The main ruleset requires the single check `CI result`, not strict: a PR need not be up to date with main, so
+  merge only when the head SHA's run is green. The result job runs with `always()` and fails if
+  classification or any selected job fails, is cancelled, missing or unexpectedly skipped, and on failures in
+  unselected jobs. CI has no workflow-level `paths-ignore`, so the required check always reports.
+- Docs-only skipping applies to PRs only. Every main push runs full CI and packaging, so cancelling a superseded main
+  run is safe: the surviving run repeats the complete workload (installers, packaged smoke, 1024x768 repeats). Tag
+  publication requires both packaging jobs to succeed.
 
-For PRs, the scope job fetches full Git history but checks out only its classifier, then reads an untruncated, NUL-delimited
-diff from PR merge-base to head (including stacked PRs and earlier commits). Other events need only a shallow checkout.
-Renames include both old and new paths. Unknown/empty changes or missing
-history fall back to full CI. Manual runs execute the selected suite: `regression-suite=docs` exercises the exact documentation
-lane on any branch, `none` runs full CI, and the other choices run focused Electron regressions. Scope and result jobs use
-the Ubuntu runner's bundled Node for their dependency-free scripts; application test jobs still select Node 24 explicitly.
-The result job checks out only its script. Every manual run reports `Manual CI result`, even when it selects full CI;
-only automatic PR/main runs report the required `CI result`. Manual docs or regression success therefore cannot supply
-the required check name while the automatic matrix is still running. Do not require `Manual CI result` in the ruleset.
+## Measurements
 
-**Main-run tradeoff:** automatic docs-only skipping applies to PRs. Every main push runs full CI and packaging, including
-docs-only merges. This retains cancellation of superseded main runs and its measured runner savings: whichever main run
-remains includes installers, packaged smoke and the main-only 1024x768 repeats for all preceding code changes. A docs push
-can replace a code push only because it repeats that complete workload. Tags and manual runs are never superseded.
-The packaging classifier is removed; tag publication still explicitly requires both packaging jobs to succeed.
+- **Queueing, not jobs, sets the wall time.** In the 2026-11-07 baseline (50 runs) a busy PR's CI took 25.4 min median
+  while its longest job took 10; the median job waited 16 min for a runner (up to 50). Several agent sessions push at
+  once, so every job and slot-minute a push adds delays every other run. **Removing whole jobs beats shaving steps.**
+- Packaging runs only for PRs that touch it: packaging every PR had caught nothing CI missed in 232 runs.
+- Main on 2026-11-11 (3 runs, `--workflow ci.yml --workflow release.yml --branch main`): CI 10.8 min wall, 47 Linux +
+  26 Windows + 5 macOS runner-minutes; packaging 14.1 min, 3 + 14 + 4.
+- In `npm run check` on CI the critical path is the vitest chain, which shares 3 or 4 vCPUs with the .NET chain; speeding
+  up vitest under that contention is the next gain in Check.
+- Most of an offline .NET run used to be waiting, not work (`VARIA_TEST_SLOW_MS=300` found about 64 s of 75.6 s in
+  connect timeouts and budget waits), hence `Unreachable.Source` and the lanes below.
 
-**Required-check rollout:** after this PR's full checks pass, replace the main ruleset's 13 individual matrix check
-requirements with the single GitHub Actions check `CI result`. Keep strict/up-to-date checking enabled. The result job
-runs with `always()` and fails if classification or any selected job fails, is cancelled, is missing or is unexpectedly
-skipped. It also rejects failures in unselected jobs. Do this when merging the change; otherwise docs-only PRs will wait
-for the old matrix check names, which GitHub does not emit when an entire matrix is skipped. Repository rules are not
-changed by this PR. Workflow-level `paths-ignore` is deliberately absent from CI so its required check always reports. See
-[GitHub's required-check guidance](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
-The existing release PR filter still has GitHub's
-[3,000-file limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons);
-PR CI classification uses Git directly to avoid that limit. Main validation and packaging have no file filter.
+## Mechanisms in place
 
-Before this change, the three latest successful main runs measured with
-`node scripts/ci-timings.mjs --runs 3 --workflow ci.yml --workflow release.yml --branch main` on 2026-11-11 had median CI
-wall time **10.8 min**, with **47 Linux + 26 Windows + 5 macOS runner-minutes**. Packaging added **14.1 min** wall time and
-**3 Linux + 14 Windows + 4 macOS runner-minutes**. Documentation-only PR CI schedules three Linux jobs (scope, docs,
-result). Main pushes retain full CI and packaging; no main-push packaging savings are claimed. The source-only lane passed all
-296 test files locally without Electron installed in **35.0 s** (Windows; not a GitHub measurement). Code changes add the two short routing/result jobs to the existing 13;
-measure their overhead and the documentation lane on GitHub after deployment rather than treating these baseline savings
-as measured results.
-PR #431's original scope job took 8 seconds on GitHub (including a 4-second checkout). The follow-up removes setup-node
-from the routing jobs and checks out only their scripts. The manual Linux documentation run and updated timings are
-recorded in [PR #431](https://github.com/CDoughty08/varia-sql-manager/pull/431).
-
-## Where the time goes (baseline, 2026-11-07)
-
-Measured over the 50 most recent successful runs of `ci.yml` and `release.yml` (25 each) with the method of
-`scripts/ci-timings.mjs`.
-
-**Queueing, not jobs, sets the wall time.** A busy pull request's CI run took **25.4 min** (median) while its longest job
-took **10 min**. The median job waited **16 min** for a runner (up to 50). GitHub runs 20 jobs at once for the account (5 on
-macOS), and several agent sessions push pull requests at the same time, so every job and slot-minute a push adds delays
-every other run. **Removing whole jobs beats shaving steps.**
-
-Each pull request push started 15 jobs and used about 89 runner-minutes:
-
-| Workflow | Jobs | Runner-min | Linux | Windows | macOS |
-| --- | --- | --- | --- | --- | --- |
-| CI (`ci.yml`) | 11 | 68 | 40 | 23 | 5 |
-| Release builds (`release.yml`) | 4 | 21 | 2 | 6 | 13 |
-
-Median job run times (minutes): Check ubuntu 4.0, windows 5.3, macos 4.7; Live groups 5.5 to 5.9; Smoke Linux 8.1 and
-8.3, Windows 8.1 and 10.0; Bench Linux 4.0; Package linux 2.4, osx-arm64 4.0, win 6.0, osx-x64 8.9.
-
-Release builds packaged every pull request push. It had no concurrency group, so a superseded push kept packaging.
-Measured over 232 PR runs: 0 failures that CI had not also caught, and 3 infrastructure false failures, all on Intel macOS.
-Its uploaded installers were never downloaded.
-
-**`npm run check`** ran its four phases one after another. In CI, the step took 165 to 253 s:
-
-| Phase | CI (s) | Local, 24 cores (s) |
-| --- | --- | --- |
-| `tsc --noEmit` | 3 to 6 | 3.6 |
-| .NET Release build plus the offline checks | 87 to 109 | 75.6 (checks only) |
-| vitest (227 files) | 57 to 114 | 32.3 |
-| electron-vite build | 18 to 28 | 23.5 |
-| Total | 165 to 253 | 136.7 |
-
-Most of the offline .NET run is waiting, not work. `VARIA_TEST_SLOW_MS=300` found 73 checks reached more than 300 ms after
-the previous one, about 64 s of the 75.6 s. The waits:
-
-- 24 one-second connect timeouts.
-- 9 waits of 1.5 to 3.4 s each for a request's budget to run out.
-- 40 shorter waits.
-
-## What was cut (PR #166)
-
-| Change | Measured effect |
-| --- | --- |
-| `scripts/check.mjs` runs tsc, the electron-vite build, vitest, and the .NET build followed by the offline checks and the Release-backend vitest files as concurrent lanes: all at once with 8 or more CPUs, two chains side by side on CI's 3 and 4 vCPU runners | Local `npm run check` 136.7 s to **32.9 s** (with the two items below). In CI, all at once took Check ubuntu's step from about 205 s to 107 s but starved macOS (tsc 66 s instead of 5, vite 147 s instead of 20) until time-bounded tests failed, hence the chains there. |
-| The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`), after the few that change or measure process-wide state run alone; each prints its time | Offline run 65 s to **22 to 24 s** locally (1 lane 65 s, 4 lanes 26 s, 6 lanes 22 s, 8 lanes 19 s; Host's 10 s is the floor) |
-| `npm run build:smoke` builds the Release backend and electron-vite side by side | Estimate: 8 to 20 s per smoke and bench job (5 a push) |
-| Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer. `tests/idle-waits.test.ts` holds the rule. | updates-smoke 34.2 s to **7.0 s**, live-smoke 39.0 s to **24.1 s** (local). About 123 s of idle timers per OS per run, about **4 runner-min a PR push**. The packaged and portable smoke tests, and both Electron benches, had the same leak. |
-| The offline .NET result suites run a second time with every result's pages packed (Program.cs `packedPass`), after the first run's lanes, because only that pass reaches every reader through packed pages | About **+13 s** of offline wall time locally (35.9 s of suite time in six lanes; Packed ParallelResult 9.5 s and Packed View 7.8 s are the longest) |
-| The offline .NET checks fail their connections on a malformed named-pipe address on Windows instead of `tcp:127.0.0.1,1` (`Unreachable.cs`) | Windows offline run 75.6 s to **65.6 s** |
-| Release builds: packages main pushes, tags, manual runs, and only pull requests that touch packaging inputs. Superseded runs are cancelled. Intel macOS packages only for tags, manual runs and a weekly run on main. A typecheck runs only for tags. Installers upload only for tags and manual runs. The Windows package also publishes the update helper (NativeAOT) before packaging, builds the archive installed copies stage from, and its installer smoke stages and swaps that archive into the installation it made. On its first run (one measurement) the helper publish took 19 s, Package application 467 s against 327 to 353 s on main (the archive), and the installer smoke 73 s against 54 to 85 s: about 2.5 min more on the Windows package job. `tests/release-workflow.test.ts` holds the layout. | About 21 runner-min, 13 of them macOS, and 4 jobs removed from about 9 in 10 PR pushes. A packaging PR runs 3 jobs (1 macOS) instead of 4 (2 macOS). |
-| Live groups 2 and 3 skip setup-node and `npm ci` | About 20 runner-s a push |
-| `npm ci --no-audit --no-fund` | Cleaner logs. About 1 s a job, unmeasured. |
-| `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one (offline suites then run in one lane) | A tool for finding waits |
-| Smoke `suiteSeconds` refreshed from PR #166's run, after the idle timers went | Declared weights matched reality again: shards 338/336 s (Linux) and 342/340 s (Windows) against the 360 s budget, where the old weights had drifted 12 to 21% low. Main then added the 64 s Live Plan suite and a third Linux shard (about 250 s each) |
-| The Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`), not on every main push | 2 jobs (1 macOS) and about 5.7 runner-min off each of 9 to 20 main pushes a day, for one daily run |
-| A newer main push cancels the older main run, as pull requests already did. Every main push still runs full CI and packaging, even after a docs-only merge. | Up to 74 runner-min per superseded push in the original estimate; retaining the complete replacement workload preserves this saving. |
-
-After these changes, a PR push that does not touch packaging runs 11 jobs (12 since main's third Linux smoke shard), an estimated 55 to 60 runner-min, and 1 macOS job (from 15
-jobs, 89 runner-min, 3 macOS). That is about a quarter fewer jobs and 30% fewer runner-minutes. Since queueing dominates,
-expect most of that to show up as wall time on busy days.
-
-### Measured on CI after the change (2026-11-08)
-
-One green run of PR #166's head (CI run 42440066461, commit a699ed39), against the baseline medians above. One run is a single
-sample: re-measure with `node scripts/ci-timings.mjs` once a few PRs have run on this layout.
-
-| Per PR push | Before (median of 25) | After (1 run) |
-| --- | --- | --- |
-| Jobs | 15 (11 CI, 4 packaging) | 12 CI, no packaging for a PR that does not touch packaging |
-| Runner-min | 89 | **64.5** (Linux 40.1, Windows 20.1, macOS 4.3): 28% fewer |
-| macOS jobs, runner-min | 3, 18 | **1, 4.3** |
-| Longest job | 10.0 min | 8.2 min (Smoke Windows) |
-| Wall time | 25.4 min | 25.9 min: jobs queued up to 20 min for runners, so the gain is slots freed for other runs |
-
-The 12 jobs include main's third Linux smoke shard and its 64 s Live Plan suite, both added while this PR was open. This PR
-changes `release.yml`, so it also packaged (3 jobs, 9.8 runner-min: win 4.3, osx-arm64 3.8, linux 1.6 min, against 6.0, 4.0
-and 2.4 before, without the typecheck).
-
-| Job (minutes) | Before | After |
-| --- | --- | --- |
-| Check ubuntu, Windows, macOS | 4.0, 5.3, 4.7 | 3.3, 3.7, 4.3 |
-| Smoke Linux | 8.1, 8.3 (2 shards) | 5.3, 5.8, 5.9 (3 shards) |
-| Smoke Windows | 8.1, 10.0 | 8.2, 8.2 |
-| Live groups | 5.5 to 5.9 | 4.9, 5.5, 6.0 |
-| Bench Linux | 4.0 | 3.3 |
-
-`npm run check` in CI took 168 s (ubuntu), 165 s (Windows) and 213 s (macOS), against 165 to 253 s. Its critical path is now
-the vitest chain: vitest took 132 to 163 s there, against 57 to 114 s before, because it shares the 3 or 4 vCPUs with the
-.NET chain (Release build 33 to 50 s, then the offline checks in lanes, 31 to 52 s). Speeding up vitest under that contention
-is the next gain in Check. Locally: 32.9 s on 24 cores (136.7 s before), 54 to 70 s with `VARIA_CHECK_CPUS=4`.
-
-Not measured yet: cancelling superseded main runs and the daily desktop benchmarks (estimated above) show only in main's
-history; check them with `node scripts/ci-timings.mjs --branch main` after a week.
-
-### Second review (2026-11-08): coverage kept, chains balanced, hangs bounded
-
-An adversarial review of the change against `b610758f` and CI logs found these, now fixed (estimates from a replay of that
-run's lane times; re-measure on the next CI run):
-
-- **Check chains rebalanced.** The two-chain layout ran the electron-vite build after vitest, the longest lane, while the
-  .NET chain idled 24 to 69 s. It now runs after the .NET chain, and Text's weight (2.3 s alone, 9.6 to 20 s contended on
-  CI, where it padded the Explorer lane) is 12. Estimated Check: ubuntu 168 to about 163 s, Windows 165 to about 138 s,
-  macOS 213 to about 178 s.
-- **tsc only on Linux** (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS). It reads only sources and installed types, and
-  Linux's case-sensitive paths are the strictest. About 6 s off Windows and 13 to 15 s off macOS's critical chain.
-- **Hangs report themselves.** A smoke suite whose `app.close()` never finished (live-plan-smoke after a failed assertion)
-  ran Smoke (Linux 3/3) to its 25 minute timeout seven times, printing nothing. The fixture now kills an app that has not
-  closed in 45 s and fails the suite with its own error shown (`boundedClose`), and `smoke-shards.mjs` kills a suite past
-  four times its weight (at least 5 min), so the shard's later suites still run. A `npm run check` stopped by the step
-  timeout prints what its running lanes held, where it used to lose the hung lane's output. Playwright's close waits for
-  the app's stdio pipes as well as its exit, and the backend and its language server inherit two of them. A SQL Tools
-  Service the backend's exit had left stopped in the middle of its tree kill kept language-services-live-smoke waiting out
-  those 45 s after main had exited with code 0; the backend's exit now waits for the kill (`ExitGate`), and on Linux a
-  hung close names the processes still in the app's process group. It still fails the suite: a process left behind after
-  quit is a product bug. The gate could not cover a backend that main kills: retained-plans-smoke closes every query and
-  then kills the backend, and Smoke (Linux 3/3) failed again with the service stopped, so Linux and macOS now kill it
-  with one signal instead of a tree kill.
-- **A hung offline suite names itself.** A Windows runner stalled for about 20 s (Diff took 22.6 s against 0.4 s), the
-  ActionProgress gate check's 15 s wait for its two holding actions ran out unnoticed, and the probe it then awaited took
-  the free gate and waited for a release that came only after it: Check (windows-latest) ran to the step's 20 minute
-  timeout. The check now waits 60 s for its holders and fails by name without probing when they are late, and
-  `OfflineSuites` names any suite still running after 3 minutes and exits.
-- **Coverage restored or pinned.** The Host shutdown check proves again that Dispose comes before the exit (by sequence, or
-  by the exit waiting out DrainTimeout for a starved Dispose); three timing bounds widened for starved runners were tightened
-  back to what their regressions need (Host's deadline < 1 s, Entra's connect bound < 8 s, DrainLong < 5 s). Tests now pin
-  package.yml's packaged checks against ref or event conditions, bench-desktop.yml's steps and timeouts, the check's wide and
-  build layouts, ci.yml's stated job count, and fixtures that start the Release backend.
-- **Intel macOS weekly.** osx-x64 packages every Monday on main (Intel only, about 9 macOS runner-min a week), so an x64-only
-  break shows before the tag it would block.
-- **Smaller fixes.** offline-stress.mjs strips the SQL and Entra variables, so its copies never run the live suites against a
-  shared server; packaged and portable smoke check whether the app already exited before waiting for its exit (Node ended
-  with 13 otherwise).
-
-Flaky failures on other pull requests and main in the week before (92 failed jobs in 56 runs): most were real regressions
-their branches fixed, or flakes main had already fixed. Fixed here: files-smoke's Ctrl+W racing a file task (it closed the
-wrong query), menus-smoke's renderer watchdog losing its holder race three times on Windows (now up to eight tries there),
-and session prompts pressing F5 during a connection change.
+- `scripts/check.mjs` runs tsc, the electron-vite build, vitest, and the .NET build followed by the offline checks and the
+  Release-backend vitest files as concurrent lanes: all at once with 8 or more CPUs, two chains side by side on CI's 3 and
+  4 vCPU runners (all at once starved macOS until time-bounded tests failed). The electron-vite build runs after the
+  .NET chain, not after vitest. tsc runs only on Linux (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS): it reads only
+  sources and installed types, and Linux's case-sensitive paths are the strictest. A check stopped by the step timeout
+  prints what its running lanes held.
+- The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`) after the few that change or measure
+  process-wide state run alone; each prints its time. `OfflineSuites` names any suite still running after 3 minutes and
+  exits. The result suites run a second time with every result's pages packed (Program.cs `packedPass`), since only that
+  pass reaches every reader through packed pages.
+- Offline checks fail their connections on a malformed named-pipe address on Windows instead of `tcp:127.0.0.1,1`
+  (`Unreachable.cs`).
+- `npm run build:smoke` builds the Release backend and electron-vite side by side.
+- Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer
+  (`tests/idle-waits.test.ts`). A close not finished in 45 s kills the app and fails the suite with its own error
+  (`boundedClose`; on Linux it names the processes left in the app's process group), and `smoke-shards.mjs` kills a
+  suite past four times its weight (at least 5 min), so the shard's later suites still run. Playwright's close also waits
+  for the stdio pipes the backend and its language server inherit, so the backend's exit waits for its language-server
+  kill (`ExitGate`), and Linux and macOS kill that child with one signal instead of a tree kill. A process left behind
+  after quit is a product bug.
+- Live groups 2 and 3 skip setup-node and `npm ci`; `npm ci --no-audit --no-fund` everywhere.
+- `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one
+  (offline suites then run in one lane).
+- `offline-stress.mjs` strips the SQL and Entra variables, so its copies never run live suites against a shared server.
+- Tests pin package.yml's packaged checks against ref or event conditions, bench-desktop.yml's steps and timeouts, the
+  check's wide and build layouts, ci.yml's stated job count, and the fixtures that start the Release backend.
 
 ## What is left, in order
 
-Savings are corrected figures from an adversarial review of each proposal against CI logs. "Owner" marks changes that
-contradict a rule written in CLAUDE.md, so the owner decides them (the owner chose to move the desktop benchmarks and
-cancel superseded main runs, both retained).
+Savings are estimates checked against CI logs. "Owner" marks changes that contradict a rule
+in CLAUDE.md, which the owner decides.
 
-1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about 15.6 ms.
-   ssis-tree-probe takes 16.7 s on Windows against 2.2 s on Linux (425 timer hops, about 34 ms each). 45 files use the
-   pattern, about 32 s of Windows test time and about 10 s of wall time. Put a shared `settle()` in `tests/fixtures/`.
-2. **Profile object-actions-smoke and the Windows-only slow checks** (M). object-actions takes 106 s (Linux) and 149 s
-   (Windows, PR #166), the longest suite and what leaves the Windows shards only 18 s of budget,, over the roughly 90 s split guideline. Its login block (lines 1504 to 1839) is about 10 times slower per line
-   than its neighbours. A Windows excess of about 15 s usually means an assertion runs out its 15 s Windows expect timeout.
+1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about
+   15.6 ms; ssis-tree-probe takes 16.7 s there against 2.2 s on Linux. 45 files use the pattern, about 32 s of Windows
+   test time. Put a shared `settle()` in `tests/fixtures/`.
+2. **Profile object-actions-smoke and the Windows-only slow checks** (M). object-actions is the longest suite (106 s
+   Linux, 149 s Windows), over the roughly 90 s split guideline; its login block is about 10 times slower per line than
+   its neighbours. A Windows excess of about 15 s usually means an assertion runs out its 15 s Windows expect timeout.
    Use `VARIA_SMOKE_PROFILE`.
-3. **Start the SQL Server container in the background** (M). Each Linux job with `services: sql` spends 20 to 24 s in
-   "Initialize containers" before checkout. A `docker run -d` as the first step, and a health wait right before the first
-   SQL step, hides that behind `npm ci` and the build. About 45 to 60 s per push for the smoke and bench jobs, and more for
-   live if its `dotnet build` moves into its own step.
-4. **Two SQL Server containers in one live job** (M). This keeps "each group against a server of its own" and removes one
-   job: about 1 runner-min, one slot, and one container start a push. Prerequisite: the live checks with hard sub-2 s bounds
-   (ExplorerLiveChecks 266/272/284, ScriptingLiveChecks 217/230/260/432/439/515) need load tolerance first
-   (`LiveResultChecks.CancelBound`/`OnceMore`).
-5. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). This would end the Intel image, which
-   GitHub is retiring, even for tags. Packaging at `--dir` skips the DMG and hdiutil step behind 2 of the 3 false failures.
-6. **Split the Host offline suite** (S). At 10 s it is the floor of the offline lanes (its `Thread.Sleep(1200)` and
-   budget waits); split in two, 8 lanes would reach about 15 s.
-7. **Shrink the CPU-bound vitest files** (S). Explorer-service's 99,000-row reconcile tests take 3 to 4 s locally and ran
-   out vitest's 20 s default on a shared 4-vCPU Windows runner. They now pass `heavyTimeout` (90 s,
-   `tests/fixtures/work-meter.ts`, required by `tests/idle-waits.test.ts` for every test of 50,000 rows or more), which
-   stops the false failures but not the minutes: explorer-service.test.ts is about 33 s of Windows's vitest lane. Their
-   work bounds come from the meter, not the size, so a smaller input (10,000 rows) may prove the same bound.
-8. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each for their whole run, so
-   async timing checks wait on a starved pool, not only a busy CPU. `TaskCreationOptions.LongRunning` lanes (or a raised
-   `ThreadPool.SetMinThreads`) may let some widened bounds tighten again; measure with `scripts/offline-stress.mjs`.
-9. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42 times,
-   about 0.5 s each); the pre-connection validation tests could share one, about 9 s of the .NET chain's tail.
+3. **Start the SQL Server container in the background** (M). `services: sql` spends 20 to 24 s in "Initialize
+   containers" before checkout; a `docker run -d` first step and a health wait before the first SQL step hide it behind
+   `npm ci` and the build (about 45 to 60 s a push).
+4. **Two SQL Server containers in one live job** (M). Keeps a server per group and removes a job (about 1 runner-min and
+   a slot a push). First give the live checks with hard sub-2 s bounds (ExplorerLiveChecks, ScriptingLiveChecks) load
+   tolerance (`LiveResultChecks.CancelBound`/`OnceMore`).
+5. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). Ends the Intel image GitHub is
+   retiring; `--dir` skips the DMG and hdiutil step behind 2 of the 3 infrastructure false failures.
+6. **Split the Host offline suite** (S). It is the floor of the offline lanes (its `Thread.Sleep(1200)` and budget waits).
+7. **Shrink the CPU-bound vitest files** (S). explorer-service's 99,000-row reconcile tests (about 33 s of Windows's
+   vitest lane) pass `heavyTimeout`, which stops false failures but not the minutes; their bounds come from the work
+   meter, so 10,000 rows may prove the same.
+8. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each, starving async timing
+   checks; `TaskCreationOptions.LongRunning` lanes or a raised `ThreadPool.SetMinThreads` may let widened bounds tighten.
+   Measure with `scripts/offline-stress.mjs`.
+9. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42, about
+   0.5 s each).
 10. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
-   but module state leaking between files can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded
-   against mocks, timers, globals and `process.env`.
+    but leaked module state can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded against
+    mocks, timers, globals and `process.env`.
 
 Considered and rejected (do not re-propose without new numbers):
 
-- **A well-formed named pipe in `Unreachable.Source`.** Its single backslash makes SqlClient refuse the address before any
-  open (SNI error 25). With two, every fake's open enters the Named Pipes provider and SqlClient's throttle of non-pooled
-  opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open the connection", against
-  none. The checks assert only that the failure is retryable, which both forms are.
-
-- **One shard per OS.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). A third shard added about
-  1.5 runner-min and one slot per OS per push in the original measurements; Windows now needs it to accommodate the
-  language-service UI suite within the 360-second shard budget.
-- **Build once and fan out artifacts.** This needs `needs:` and adds 1 to 3 min of serial wall time before the smoke
-  shards, which are the critical path, to save about 2 runner-min.
-- **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux. The 637 MB tree
+- **A well-formed pipe address in `Unreachable.Source`.** The single backslash makes SqlClient refuse the address before
+  any open (SNI error 25). A well-formed one sends every fake's open through the Named Pipes provider and SqlClient's
+  throttle of non-pooled opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open
+  the connection". The checks assert only that the failure is retryable, which both forms are.
+- **One shard per OS.** Makes 12 to 13 min jobs and smoke the critical path; Windows needs its third shard to stay within
+  the 360-second shard budget.
+- **Build once and fan out artifacts.** Needs `needs:` and adds 1 to 3 min of serial wall time before the smoke shards,
+  the critical path, to save about 2 runner-min.
+- **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux; the 637 MB tree
   restores slower than that on Windows, and Electron downloads in 0.6 to 3.4 s.
-- **Skipping all checks for docs.** Generated docs, README and the published changelog have test assertions. The documentation
-  lane above retains source-only vitest checks while omitting builds and runtime checks.
+- **Skipping all checks for docs.** Generated docs, README and the published changelog have test assertions; the
+  documentation lane keeps them.
 - **Folding bench-linux into Check ubuntu.** `services:` cannot be conditional on a matrix that includes Windows and
   macOS, and the fold saves at most 1 runner-min.
 - **Path-filtering the live or smoke jobs.** A safe filter (anything under `src/`) skipped 0 of 40 recent PRs.
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A code-changing pull request push starts at most 13 validation jobs, 1 of them macOS,
-  plus two short Linux scope/result jobs
-  (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
-  (`tests/release-workflow.test.ts`). The scope and result jobs do not overlap their own validation jobs. GitHub matches a pull request's `paths`
-  against its first 3,000 changed files only, so a pull request over 3,000 changed files may skip Release builds silently: run
-  them by hand (`workflow_dispatch`) when it touches packaging.
-- **Audit gate.** `npm audit` runs in a workflow of its own (`audit.yml`: one job that installs nothing), not in CI: as
-  a step of Check (ubuntu), an outage of npm's advisory endpoint or a new advisory against any installed package failed
-  every open pull request and main push, whatever it changed. It runs on pull requests and main pushes that change
-  `package.json` or `package-lock.json`, and daily on main, which is what reports an advisory published since.
-  `scripts/audit.mjs` retries an endpoint that gives no report, then warns without failing. Its paths filter means it must
-  not become a required check (a pull request it skips would wait for it forever), so look at it before merging a
-  dependency change. A high or critical advisory fails the job,
-  so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
-  report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
-  electron-builder's own dependencies, and its patterns come only from Varia's build configuration.
-- **Cancel superseded PR and main runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref`
-  with `cancel-in-progress`. CI and Release builds also cancel superseded main runs because every replacement performs
-  the complete workload. Tags and manual runs retain unique groups.
-- **Don't starve small runners.** CI's runners have 3 or 4 vCPUs. Running every check lane at once there made tsc 13 times
-  slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), and give waits that return as soon
-  as their condition holds generous bounds.
-- **Stress timing checks before pushing them.** Even in chains, the offline lanes share CI's 3 or 4 vCPUs with vitest, and
-  timers there fire 300 ms to over 1 s late. Three rounds of PR #166's CI each failed on a different offline check with a
-  sub-second race (a 300 ms budget against a 50 ms delay, a 200 ms grace against a 20 ms job, a 2 s exit wait). A sweep of
-  every offline suite then made 65 such changes, adding about 9 s of suite time (Host is now 12.5 s, still the lanes'
-  floor). `node scripts/offline-stress.mjs` runs five copies of the offline checks on three CPUs at once. Before the sweep,
-  three copies failed every run; after it, every run of five copies passed. Give two racing timers about a second between them, and
-  make a wait that returns early generous. A CancellationTokenSource timer cancels from the thread pool, which the lanes saturate: when the work it stops can finish first, cancel from a dedicated thread (SearchChecks.Deadline). Vitest's CPU-bound tests take `heavyTimeout` (`tests/fixtures/work-meter.ts`).
-- **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its weight in
-  `OfflineSuites.Weights`, and in `OfflineSuites.Alone` if it touches process-wide state.
+- **Budget per push across all workflows.** A code-changing PR push starts at most 13 validation jobs, 1 of them macOS,
+  plus the two short Linux scope and result jobs, which do not overlap their validation jobs (`tests/ci-workflow.test.ts`),
+  plus at most 3 packaging jobs, only when it changes packaging (`tests/release-workflow.test.ts`). A PR over 3,000
+  changed files may skip Release builds silently: run them by hand (`workflow_dispatch`) when it touches packaging.
+- **Audit gate.** `npm audit` runs in its own workflow (`audit.yml`: one job that installs nothing), not in CI, where an
+  advisory-endpoint outage or a new advisory failed every PR whatever it changed. It runs on PRs and main pushes that
+  change `package.json`, `package-lock.json`, `scripts/audit.mjs` or `.github/workflows/audit.yml`, and daily on main. `scripts/audit.mjs` retries an endpoint that gives no
+  report, then warns without failing. Its paths filter means it must never be a required check (a PR it skips would wait
+  forever), so look at it before merging a dependency change. A high or critical advisory fails the job: upgrade or
+  override the package and add its floor to `tests/dependency-floors.test.ts`. Moderate and low ones only report
+  (minimatch's GHSA-g3hv-75wg-m249 has no fix below 11.0.1, a major version under electron-builder, and its patterns come
+  only from Varia's build configuration).
+- **Cancel superseded PR and main runs.** Every workflow a PR triggers has a concurrency group keyed by `github.ref` with
+  `cancel-in-progress`; CI, Release builds and Audit also cancel superseded main runs. Tags and manual runs keep unique groups.
+- **Don't starve small runners.** CI's runners have 3 or 4 vCPUs; running every check lane at once there made tsc 13
+  times slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), say what it waits for, and
+  never chain new phases with `&&` in `check`. Only the vitest files in its `needsBackend` list need the Release backend,
+  and nothing reads `out/`.
+- **Stress timing checks before pushing them.** The offline lanes share CI's vCPUs with vitest, and timers there fire
+  300 ms to over 1 s late. `node scripts/offline-stress.mjs` runs five copies of the offline checks on three CPUs at once;
+  a timing check that passes there survives CI. Give two racing timers about a second between them, and make a wait that returns early
+  generous. A CancellationTokenSource timer cancels from the thread pool, which the lanes saturate: when the work it
+  stops can finish first, cancel from a dedicated thread (SearchChecks.Deadline). Vitest's CPU-bound tests take
+  `heavyTimeout` (`tests/fixtures/work-meter.ts`; `tests/idle-waits.test.ts` requires it for every test of 50,000 rows
+  or more).
+- **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its measured seconds
+  in `OfflineSuites.Weights` if over 0.3 s (shorter suites count as 0.1 s), and in `OfflineSuites.Alone` if it touches process-wide state.
 - **Fold work into an existing job before adding one.** Each job costs 40 to 70 s of setup (plus about 23 s with a SQL
   Server container) and a slot.
-- **Never repeat on one commit what another job already proved.** Packaging does not re-run tsc or vitest. Report-only work
-  (unenforced benchmarks, repeats of covered suites) runs on a schedule or by hand.
-- **Never chain new phases with `&&` in `check`.** Add a lane in `scripts/check.mjs` and say what it waits for. Only the
-  vitest files in its `needsBackend` list need the Release backend, and nothing reads `out/`.
+- **Never repeat on one commit what another job already proved.** Packaging does not re-run tsc or vitest. Report-only
+  work (unenforced benchmarks, repeats of covered suites) runs on a schedule or by hand.
 - **No idle timers.** Race a close or an exit only through `within()` or an unreferenced delay. In tests, settle on
   microtasks, `setImmediate` or a condition, never `setTimeout` loops. A fixed wait is allowed only for a negative check
   bounded by a product timer, and at most that timer plus 0.5 s.
 - **Fail connections without waiting.** Offline checks use `Unreachable.Source`, never a real TCP address.
-- **Look for waits before blaming the work.** Use `VARIA_TEST_SLOW_MS=500` for the .NET checks, and `VARIA_SMOKE_PROFILE`
-  for smoke. A check that is more than 10 s slower on Windows usually runs out a timeout.
-- **Keep the tables current.** After adding or changing a smoke suite or live suite, copy its CI seconds into
-  `suiteSeconds` or `LiveGroups.Suites`. Both budget checks trust those tables.
-  [PR #469's run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/43540439831) measured the expanded connections,
-  Activity Monitor, Explorer, results, live-plan and menus suites. Their weights now use those CI seconds. Windows live
-  plans keep their existing weight because that run had no SQL endpoint and skipped them. Hot exit uses its last green
-  Linux/Windows measurements of 17/18 seconds plus the five-second grace now exercised by its forced replacement-window
-  regression. The resulting modeled shard totals are 301/301/302 seconds on Linux and 310/310/310 on Windows, within the
-  existing 360-second budget, and no job was added. The per-suite watchdog (four times the weight, at least 300 seconds)
-  rose with the weights: Activity Monitor to 364 seconds on both platforms, results to 364 on Linux and 372 on Windows, and menus to 304 on
-  Linux and 412 on Windows. The job
-  timeouts did not change.
-- **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs` (runner-minutes,
-  job count, queue) in its PR and here.
+- **Look for waits before blaming the work.** `VARIA_TEST_SLOW_MS=500` for the .NET checks, `VARIA_SMOKE_PROFILE` for
+  smoke. A check more than 10 s slower on Windows usually runs out a timeout.
+- **Keep the tables current.** After adding or changing a smoke or live suite, copy its CI seconds (each shard's
+  summary, each `Live suite name: n s` line) into `suiteSeconds` (Linux and Windows) or `LiveGroups.Suites`. Both budget
+  checks trust those tables: each smoke shard and live group has 360 s (`shardBudgetSeconds`,
+  `LiveGroups.BudgetSeconds`), and the per-suite watchdog (four times the weight, at least 300 s) rises with a weight.
+  When a run skipped a suite (no SQL endpoint), keep its existing weight.
+- **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs`
+  (runner-minutes, job count, queue) in its PR, and replaces the baseline under Measurements.

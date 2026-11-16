@@ -1,672 +1,603 @@
 # Architecture invariants
 
-The full rules behind the summary in CLAUDE.md. Each area's own page in docs/ has its user-facing behaviour; this page
-holds the rules code must keep. Update the bullet here when a rule changes, and CLAUDE.md only when a summary line stops
-being true.
+The full rules behind CLAUDE.md's summary: one bullet per area, naming what enforces it. User-facing behaviour lives in
+each area's own page in docs/; protocol detail in docs/ipc.md. Update the bullet here when a rule changes, and CLAUDE.md
+only when a summary line stops being true.
 
+## Security boundary
 
-- The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
-  It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
-  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`, which
-  accepts only `app://varia/index.html` in built apps). Built pages load only from the privileged `app://varia/` scheme
-  (`src/main/app-protocol.ts`: files under `out/renderer` alone, traversal refused), never `file:`, whose origin reaches
-  every local file. Packaged builds set the Electron fuses in `build/fuses.cjs` (flipped in afterPack, read back by
+- **Renderer and windows.** The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked
+  navigation and popups. It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose
+  generic IPC or shell APIs, and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in
+  `src/main/index.ts`, which accepts only `app://varia/index.html` in built apps). Built pages load only from
+  `app://varia/` (`src/main/app-protocol.ts`: files under `out/renderer` only, traversal refused), never `file:`, whose
+  origin reaches every local file. Packaged builds set the fuses in `build/fuses.cjs` (flipped in afterPack, read back by
   `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
   checked.
   The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
-  `about:blank` child named `varia-popout-<uuid>` with exact bounds on a display, explicit preferences (no preload,
-  sandboxed, isolated), no popups or navigation of its own, closed with the page. Its content is the page's DOM through
-  React portals, so it sends no IPC, and `trusted()` still accepts only the main window's main frame.
-- A backend method must be added in all five places: `RpcMethods` in `src/shared/contracts.ts`, a strict zod schema in
+  `about:blank` child named `varia-popout-<uuid>`, exact bounds on a display, no preload, sandboxed, isolated, no popups
+  or navigation of its own, closed with the page. Its content is the page's DOM through React portals, so it sends no
+  IPC, and `trusted()` still accepts only the main window's main frame.
+- **Backend methods.** Add one in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema in
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
-  and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.
-  Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
-- SQL language features belong to each Monaco model, never the globally active editor. The engine-neutral broker and
-  context contract route to provider-specific adapters; SQL Server authentication, metadata readiness and dialect rules
-  stay in its adapter. Only typed language operations cross IPC. Executables and arguments come from the trusted app;
-  packaged SQL Tools Service is a pinned, checksum-verified build artifact, and the app never downloads one at runtime.
-  Metadata uses independent connections, stale responses are discarded, and management actions release those connections.
-  Service tracing is disabled so upstream exception logging cannot persist document text or connection details.
-  Diagnostics carry their model version and use a dedicated marker owner; edits, context changes and backend loss clear
-  obsolete markers immediately. SQL Tools' unversioned diagnostic notifications are correlated to immutable snapshot URIs
-  on a serialized analysis child, isolated from completion's global debounce. Its retained context and idle/churn lifetime
-  are bounded and released on close, disconnect, reset and relevant cache refresh. Foreground language requests preempt
-  background diagnostics for their document; analysis resumes after those requests settle. Analysis never executes the buffer.
-  A language server child is killed only through `ExitGate`, which the backend's exit also takes: .NET's tree kill stops a
-  process (SIGSTOP) before it kills it, and an exit in between would leave the child stopped for good. The gate cannot
-  cover a backend that main kills, so only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send the
-  one signal, which has no stopped state.
-  Go To Definition (`language.definition`, `DefinitionService`) never goes through SQL Tools: ScriptDom finds the name under
-  the caret (white space and comments allowed around its dots) and, from the caret's batch only (or, when that does not
-  parse, the widest run of statements around the caret that does, statements starting after a semicolon or at a statement
-  keyword),
-  whether it is a column (whose table is the target) and which tables its aliases name (`DefinitionNames`, at most 8
-  candidates). Each query level's tables are its own FROM clause and DML target, never a subquery's; in a column's qualifier
-  an alias hides an object of its name, while a table reference's own name is always the object it names; a CTE, derived
-  table, table variable, PIVOT or trigger's inserted names no object; a table-valued function's alias stands for the
-  function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML target, and a column in an
-  INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER COLUMN, DROP COLUMN and PERIOD FOR SYSTEM_TIME) for
-  that table. A correlated subquery's or APPLY's bare column may be
-  an outer table's (offered after its own, with the column checked); a derived table's or CTE's may not. A call on a column
-  (t.Doc.value(), x.Doc.nodes()) is its table's column, a qualified star's qualifier (o.*) is its table, an INSERT's or
-  OUTPUT INTO's table is never a source of the statement's columns, a declared column (a table's, CTE's or derived table's
-  column list, a select-list alias) names no object, and USE earlier in the script (never a query's USE HINT) is the database
-  for names without one. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
-  Explorer pool, names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, a one-part name in the
-  default schema, then dbo, then sys, within a 10 s budget. A missing object or a database that is gone or closed to the
-  login is `null`, which the renderer shows as a status-bar notice, never an error banner; a server or login that cannot be
-  reached is an error. A newer F12 on a document supersedes one still waiting, and a query with no connection says so.
-  F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
-  `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions (loaded with hover), and each
-  editor drops Monaco's Ctrl+hover link, which would ask the backend for every word under a Ctrl-held pointer (`create-editor.ts`).
-  F12 scripts the object as CREATE to a new query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
-  precondition, so they work in Peek's editor without enabling query commands there.
-  The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
-  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover and Go To Definition only, never
-  completion or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
-  context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
-  (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
-  documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
-  Script As, `actions.describe` and `connections.connect`, so stalled Peek hovers can hold two of them until their deadline.
-  A server-level object has no database, so its names resolve in the login's default.
-- Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
-  connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
-  logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
-  (async API only, in `src/main/secret-cipher.ts`) in `saved-passwords.json` (atomic, 0600, quarantined if unreadable),
-  keyed by its history entry's id and bound to its server, login and TLS settings by a hash beside it and a check inside
-  the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
-  it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
-  safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
-  fallback key, tag `v10`; only `v11`/`v12` count, not yet confirmed on a Linux desktop, so any other tag disables it).
-  Microsoft Entra tokens stay in the backend's memory for its lifetime (MSAL and Azure.Identity through Varia's own
-  `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and never sent to
-  main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
-  (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
-- Durable connection targets use `src/shared/connection-targets.ts`: a stable target ID, saved-profile hint and
-  backend handle are distinct. Persist only the strict nonsecret target/workspace shapes; live lifecycle, handles,
-  operation epochs and main-only comparison keys never enter persisted snapshots. `ConnectionIdentityRegistry`
-  (`src/main/connection-identity.ts`) compares candidates only with authenticated live handles, using actual
-  credentials and trusted resolved-account evidence; neither the saved-profile key nor server-name equality proves
-  equivalence. The target registry (`src/renderer/src/services/connection-targets.ts`) returns stale successful
-  handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
-  membership separate from document references. Session v2 stores the strict workspace and exact query association,
-  database and attachment intent; v1 server names remain display hints and never establish identity. Reload capture
-  shares hot-exit's eligibility and pin validation. Workbench exposes one `connectionTargets` registry;
-  ConnectionService projects its authenticated targets for runtime-handle consumers. `connection-open.ts` in main
-  owns validation, credential resolution, live/pending reuse and receipt acceptance. Cancellation releases only that
-  request's ownership; it cannot close a transport another accepted caller uses. The renderer adopts only verified
-  receipts and acknowledges them through the bounded main-only IPC. `docs/connection-ownership.md` describes main's
-  authentication, receipt, checkpoint and pruning contracts. Replacement pages reconcile obsolete pins against their
-  trusted saved workspace while protecting current live/pending/delivered owners, including late credential settlement.
-  A disk restore pins Windows/Entra accounts only when `connection-workspace-seal.ts`'s OS-key HMAC proves main wrote
-  them; an unproven silent target never reconnects in the background.
-- Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
-  targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
-  validate that pinned principal before caller SQL. Entra uses target-private token-callback pool keys while preserving
-  the submitted Application Name. Identity-bound connections disable idle connection recovery so a newly selected
-  account cannot silently replace the pinned one. Failed identity
-  checks close the physical connection and invalidate language context. Entra token acquisition requires an explicit
-  request scope: initial Connect/database discovery may establish an account, while later native opens carry the
-  pinned principal. Unscoped driver background replenishment cannot acquire a token or seed a target's pool.
-  An unapproved library reopen permanently fences that exact connection's commands before scheduling physical cleanup:
-  closing synchronously inside SqlClient's Open state callback can wait on the same unfinished Open. The existing
-  SqlClient diagnostic listener enforces the command fence, with synchronous single-instance initialization; real-driver
-  regressions must continue to prove refusal before command send when upgrading the driver.
-  Initial SQL, Windows/Kerberos and Entra authentication use a fresh physical session; later guarded opens retain the
-  requested pooling preference. Known password rotation retires affected old pools before publishing its binding.
-  A SID probe preserves transient/session-lost SQL errors; only missing or different account proof becomes AUTH_IDENTITY.
-  Cancelled or failed guarded opens dispose their connection; pool retirement is reserved for rejected identity.
-  A missing logical registration/profile fails closed at factory ownership and Open admission, including during
-  Disconnect. Optional metadata fallback must preserve fatal connection errors and their authentication details.
-  SQL Tools Service remains a separate process
-  with its existing SQL/Windows credential contract and unsupported Entra modes; it does not provide the native
-  connection owner's cross-open identity proof. No token, raw password or secret-derived comparison key enters a
-  workspace snapshot or renderer receipt.
-- Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
-  dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
-  password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
-  connect timeout; an interaction-required response never escalates to browser sign-in. A server login refusal can
-  quarantine its exact saved revision without deleting ciphertext; coarse SQL client states need not identify whether
-  the secret itself was wrong. Fresh typed authentication and exact stored-secret verification can readmit it.
-  Unavailable keyring, network, certificate and database failures retain ciphertext.
-  The initial startup/reload pass starts only after session restoration, successfully loaded settings and backend
-  readiness; it runs at most two attempts concurrently with no timer retries. An unexpected backend restart in the
-  same window does not start another pass. Explicit disconnect, Stop and removal clear resume intent. Background
-  attachment follows only exact query targets with attachment intent; it never resumes custom-document sampling.
-  Document tasks pause admission and defer receipt adoption/attachment without spending queued eligibility. Manual
-  Connect preempts unaccepted work temporarily; unrelated interrupted targets resume afterward. Its exact target is
-  superseded even when that manual attempt fails, and accepted targets finish attachment unless explicitly cancelled.
-  Every capture/checkpoint includes the target workspace, including target-only sessions, and revalidates it after
-  asynchronous writes before allowing final close/reload.
-  Main's `ConnectionSessionCheckpoint` separately projects current authentication pins and checks their revision
-  around the write and final close. Credential settlement must drain before approval; new admissions cannot race an
-  approved close. A renderer-only checkpoint comparison cannot prove that main's saved credential revision stayed current.
-- Disconnect orchestration lives in `services/disconnect.ts`, behind `DisconnectHost`; `disconnect-workbench.ts` adapts
-  existing services without owning connection state. Save and transaction choices finish before cancellation,
-  session completion or backend teardown. Revalidate document revisions/associations, management blockers and target
-  operation/backend generation at mutation boundaries. A failed save, cancellation, commit or disconnect closes no
-  tab; completed session changes are reported, not described as undone. Close Query Tabs uses a synchronous local
-  close only after successful teardown, through normal close events for result/file release. Keep Tabs retains output
-  and immutable `QueryState.provenance` from its original execution, independently of the current SQL session.
-  App mounts one prompt service and coordinator; Explorer, palette and popout commands use the same path. Custom
-  providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
-  reject replies from replaced handles, and retain drafts with dependent operations disabled while disconnected.
-  A failed native disconnect restores the same operation's prior resume preference. New work requires a connected
-  lifecycle; a retained disconnecting handle may still be inspected for transaction teardown. Cached database lists
-  remain available for failed-disconnect rollback, without admitting new metadata reads during teardown.
-- Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
-  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
-  exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
-  (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
-  messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
-- Named result sets (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` marker
-  comment names the next top-level statement's first result set in its batch. The user's SQL is still sent unchanged: a
-  marker is a comment to the server, found by `SqlScript.Parse`'s own masking (so one in a string, a quoted name or a
-  nested comment is not a marker). Only a batch with a well-formed marker is parsed, once before its first execution
-  however often `GO n` repeats it, by ScriptDom on a thread of its own with a large stack, and only within
-  `ResultNames.MaxParseChars` and `MaxParenDepth`: ScriptDom's recursion can overflow a normal stack and end the process.
-  Each top-level statement is classed None, One or Unknown; a name binds by position (the batch execution's sets with
-  columns, plans left out) only where every statement before it is known, an Unknown statement's names only when nothing
-  after it can return a set; a batch that sets NOEXEC, PARSEONLY or FMTONLY anywhere (nested too) applies none, since an earlier ON can make
-  SQL Server skip its statements without an error, nor does one whose text names SQL Server's plan column (a set in it is
-  shown as a plan and left out of the count). While the batch runs, `ResultNameBinder` stops naming after the first error (a statement
-  that fails returns no set), at a set whose column count its statement does not select, and at SHOWPLAN or STATISTICS
-  PROFILE text, at a plan set where a statement with * (whose columns could include the plan column) stood, and when
-  the result budget keeps no more sets. A name not applied (also one a cancel, timeout or ended
-  script never reached, in a later batch too; a GO n repetition's notes name it) is an informational Messages line quoting the name and its line, never an error and
-  never logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name` carries it; a name never
-  changes a result's identity, which stays its ordinal.
-- Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
-  the grids `ResultGrid` registers (one shared ResizeObserver per window, PaneService for the dock's `visibility:
-  hidden` tabs, document visibility, no timers), as the whole set when it changes and again each time the backend
-  becomes ready or the results port's generation changes; once main has reported a state, only while it and the results
-  port agree on the generation; ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`, outside the
-  store's page code, as a hint: it never releases, pins or changes a result by itself.
-- The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
-  sent by main alone when Tools › Options' limit changes, as each generation becomes ready and after each settings read that
-  succeeds, `SettingsStore.onDidLoad`). They are replaced whole and
-  each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
-  store and memory budget). Every operation on a whole result reserves its working memory before it builds (search reserves only its
-  rooms for a packed result, or what unpacking takes through a sorted view; its comment says why); small steps go
-  through `WorkSteps`, which asks the memory load once per 64 MiB held. `tests/working-memory-lint.test.ts` pins each
-  operation's reservations in `SqlService`.
-- Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
-  `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
-  to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
-  Result diffs (`Results/ResultDiff.cs`, `results.diff`) align and compare rows in the backend too and store the unified
-  diff as a new derived result of the same query; the grid reads it like any result and marks its rows and cells from its
-  hidden tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in
-  the backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
-  budget, a pivot past its bounds is refused rather than shown in part,
-  and main owns it only once it has the answer (one not sent is released at once). A derived set (a diff, a pivot) is stored
-  whole or not at all, and its own refusals never stop its query's budget: a row the budget refuses, or a page sealed under low system memory with
-  rows still to store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its
-  budget (the query or global budget full, or low system memory at a page seal; a row limit never does); while a query is
-  still reading, what a derived build holds counts against that budget like anything else. A derived set asked of a
-  stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped, and one refused
-  memory or cut short because its query stopped, or its source was released, while it was built answers that
-  (`BUDGET_STOPPED`, `RESULT_RELEASED`), not `TOO_LARGE`. Nothing looks again once the set is written whole: a source
-  closed during the write still leaves its derived set.
-- The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
+  and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
+  Unknown methods and members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
+- **Logs and secrets.** Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text,
+  names, values, credentials or connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the
+  environment, logs, traces or previews.
+  - A remembered password is only Electron `safeStorage` ciphertext (async API only, `src/main/secret-cipher.ts`) in
+    `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
+    server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
+    the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
+    for a matching binding. Remember password is disabled where safeStorage is unavailable, Linux's backend is
+    `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key; the tags are not yet confirmed on a Linux desktop).
+  - Entra tokens stay in backend memory for its lifetime (MSAL and Azure.Identity through Varia's
+    `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main
+    or the renderer. Only connect and Load databases open a browser sign-in, under the request's token (Stop); sign-in
+    hosts and token resources the server names are allowlisted.
+  - New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels
+    only in the sensitive `actions.execute`, reaches SQL only as one parameter in a constant batch, and is scrubbed from
+    replies; Script writes `<password>`.
+- **Clipboard and permissions.** The page reads the clipboard only through the Paste role, which main runs only within
+  1 s of a click, key press or tap in the focused window (`UserActivation`, `src/main/window-roles.ts`); main cannot tell
+  which input chose Paste, so a page script can read it while the user types or clicks. The session's only granted permission is a sanitized clipboard write from the main window's
+  main frame; the request and check handlers answer alike (`src/main/permissions.ts`), since Electron's default check
+  grants everything. On Linux, Chromium pastes the PRIMARY selection on middle-click with no role or gate, so in each
+  window the page cancels every middle-button release (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and middle-button pointermove, and hides any
+  `paste` from other listeners while the middle button is held or in a release's task (`blockPrimaryPaste`,
+  `src/renderer/src/core/primary-selection.ts`). Monaco's `selectionClipboard` is off only so a middle-drag selects a
+  column as elsewhere: standalone Monaco has no selection clipboard.
+- **Bounds.** 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests per backend
+  generation, a deadline per method (`methodPolicies`), stream credit (16 MiB per stream, 64 MiB per port), explicit
+  truncation of results and messages. New string inputs need max lengths in both zod and C#. A request is written to at
+  most one backend generation and never re-sent. UI result caches are 256 windows and 16 Mi units; the worker cache is
+  64 MiB.
+- **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
+- **Preferences files** (`settings.json`, `appearance.json`, `connections.json`, `workspace-layouts.json`,
+  `saved-passwords.json` (0600), `shortcuts.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+  quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
+  `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
+
+## Connections
+
+docs/connection-ownership.md describes main's authentication, receipt, checkpoint and pruning contracts.
+
+- **Targets.** `src/shared/connection-targets.ts`: target ID, saved-profile hint and backend handle are distinct. Persist
+  only the strict nonsecret target/workspace shapes, never lifecycle, handles, operation epochs or main-only comparison
+  keys. `ConnectionIdentityRegistry` (`src/main/connection-identity.ts`) compares only authenticated live handles by
+  actual credentials and trusted resolved-account evidence; a saved-profile key or equal server names prove nothing.
+  The renderer's registry (`src/renderer/src/services/connection-targets.ts`, Workbench's one `connectionTargets`,
+  projected by ConnectionService for handle consumers) returns stale successful handles for the backend owner to close
+  and keeps intentional disconnect apart from loss, and Explorer membership apart from document references. Session v2
+  stores the strict workspace and exact query association, database and attachment intent; v1 server names are display
+  hints only. Reload capture shares hot exit's eligibility and pin validation. Main's `connection-open.ts` owns
+  validation, credential resolution, live/pending reuse and receipt acceptance; cancelling releases only that request's
+  ownership, never a transport another accepted caller uses. The renderer adopts only verified receipts, acknowledged
+  through bounded main-only IPC. Replacement pages reconcile obsolete pins against their trusted saved workspace without
+  touching live, pending or delivered owners (late credential settlement too). A disk restore pins Windows/Entra
+  accounts only when `connection-workspace-seal.ts`'s OS-key HMAC proves main wrote them; an unproven silent target
+  never reconnects in the background.
+- **Account identity** is evidence from successful authentication, never a display name or group mapping: SQL and
+  Windows targets pin the login's SID, Entra targets the token's tenant/object GUIDs.
+  - Native connections validate the pinned principal before caller SQL. Initial SQL, Windows/Kerberos and Entra
+    authentication uses a fresh physical session; later guarded opens keep the requested pooling. Identity-bound
+    connections disable idle connection recovery. A failed check closes the physical connection and invalidates language
+    context; only missing or different proof is AUTH_IDENTITY (a SID probe keeps transient and session-lost SQL errors).
+    Failed or cancelled guarded opens dispose their connection; only rejected identity retires a pool. Known password
+    rotation retires affected pools before publishing its binding.
+  - Entra pools use target-private token-callback keys (submitted Application Name kept). Token acquisition needs an
+    explicit request scope: Connect/database discovery may establish an account, later opens carry the pinned
+    principal, and unscoped driver replenishment cannot acquire a token or seed a pool.
+  - An unapproved library reopen fences that connection's commands (the SqlClient diagnostic listener, synchronous
+    single-instance initialization) before scheduling cleanup, since closing inside SqlClient's Open callback can wait on
+    the unfinished Open. On a driver upgrade, real-driver regressions must still prove refusal before command send.
+  - A missing registration/profile fails closed at factory ownership and Open admission, during Disconnect too; metadata
+    fallback keeps fatal connection errors and their authentication details. SQL Tools Service keeps its own SQL/Windows
+    credential contract (no Entra, no cross-open identity proof). No token, raw password or secret-derived key enters a
+    workspace snapshot or renderer receipt.
+- **Background connect** is noninteractive: it needs a pinned prior principal and, for passwords, the exact opaque
+  credential revision, independent of Remember Password. Each attempt is bounded even with an unlimited stored timeout,
+  and interaction-required never opens a browser. A login refusal quarantines that saved revision without deleting
+  ciphertext until fresh typed authentication or exact stored-secret verification; keyring, network, certificate and
+  database failures keep it. The startup/reload pass starts only after session restoration, loaded settings and backend
+  readiness, runs at most two attempts at once, never retries on timers, and does not rerun after an unexpected backend
+  restart in the same window. Disconnect, Stop and removal clear resume intent. Only exact query targets with attachment
+  intent attach, never custom-document sampling. Document tasks pause admission and defer adoption/attachment without
+  spending eligibility. Manual Connect preempts unaccepted work (others resume after) and supersedes its target even if
+  it fails; accepted targets finish attachment unless cancelled. Every capture/checkpoint includes the target workspace
+  (target-only sessions too) and revalidates it after async writes before final close/reload; main's
+  `ConnectionSessionCheckpoint` checks the authentication pins' revision around the write and final close, credential
+  settlement drains before approval, and no admission races an approved close. A renderer-only checkpoint comparison
+  cannot prove that main's saved credential revision stayed current.
+- **Disconnect** lives in `services/disconnect.ts` behind `DisconnectHost` (`disconnect-workbench.ts` adapts services and
+  owns no connection state; App mounts one prompt service and coordinator for Explorer, palette and popouts). Save and
+  transaction choices finish before cancellation, session completion or teardown; revisions, associations, management
+  blockers and generations are revalidated at mutation boundaries. A failed save, cancel, commit or disconnect closes no
+  tab, and completed session changes are reported, not called undone. Close Query Tabs closes only after successful
+  teardown, through normal close events; Keep Tabs keeps output and immutable `QueryState.provenance`. Custom providers
+  bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity, reject replies from replaced
+  handles, and keep drafts with dependent operations disabled. A failed native disconnect restores the prior resume
+  preference. New work needs a connected lifecycle; a disconnecting handle may be inspected for transaction teardown, and
+  cached database lists stay for rollback without new metadata reads.
+
+## Query editor and language services
+
+- **Language features** belong to each Monaco model, never the globally active editor. The engine-neutral broker routes
+  to provider adapters; SQL Server authentication, metadata readiness and dialect rules stay in its adapter. Only typed
+  language operations cross IPC. Executables and arguments come from the trusted app; SQL Tools Service is a pinned,
+  checksum-verified build artifact, never downloaded at runtime. Metadata uses independent connections, discards stale
+  responses, and management actions release them. Service tracing is off so upstream exception logging cannot persist
+  document text or connection details. Analysis never executes the buffer.
+  - Diagnostics carry their model version and a dedicated marker owner; edits, context changes and backend loss clear
+    obsolete markers at once. SQL Tools' unversioned notifications are correlated to immutable snapshot URIs on a
+    serialized analysis child, apart from completion's debounce, with bounded retained context and lifetime, released on
+    close, disconnect, reset and relevant cache refresh. Foreground requests preempt a document's background diagnostics, which resume once they settle.
+  - A language server child is killed only through `ExitGate`, which the backend's exit also takes (.NET's tree kill
+    SIGSTOPs before killing, and an exit between would leave it stopped). The gate cannot cover a backend main kills, so
+    only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send one signal.
+- **Go To Definition** (`language.definition`, `DefinitionService`) never goes through SQL Tools; docs/language-services.md
+  has the user-facing rules.
+  - ScriptDom finds the name under the caret (white space and comments allowed around dots) in the caret's batch or, when the batch does
+    not parse, the widest parsing run of statements around it (statements starting after a semicolon or at a statement keyword), and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
+    does: a level's tables are its own FROM and DML target, never a subquery's; an alias hides a same-named object only
+    in a column qualifier, while a table reference's own name is always the object it names; CTEs, derived tables, table variables, PIVOT, trigger pseudo-tables and declared columns name
+    no object; a TVF's alias stands for the function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML
+    target; a column in an INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER
+    COLUMN, DROP COLUMN and PERIOD FOR SYSTEM_TIME) belongs to that table; an INSERT's or OUTPUT INTO's table is never a
+    source of the statement's columns; a correlated subquery's or APPLY's bare column may be an outer table's (offered
+    after its own, with the column checked), a derived table's or CTE's may not; a method on a column is its table's
+    column and a qualified star's qualifier (o.*) is its table; an earlier USE (never USE HINT) sets the database.
+  - Constant `DefinitionSql.Lookup` resolves on the Object Explorer pool (names as parameters, other databases through
+    `QUOTENAME(@db)`; default schema, then dbo, then sys; server-level objects in the login's default database) within
+    10 s. Not found or unavailable is `null` (a status-bar notice, never an error banner); an unreachable server or login
+    is an error. A newer F12 supersedes one waiting; a query with no connection says so.
+  - F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
+    `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions; each editor drops
+    Monaco's Ctrl+hover link (`create-editor.ts`), which would query the backend for every word. F12 scripts CREATE to a
+    new query through Script As, Alt+F12 opens a Peek tab; both run on `editorTextFocus || peekEditorFocus` with no
+    query-tab precondition.
+- **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
+  connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
+  only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
+  (epoch bump, context and listener dropped, `language.close` if used). In-flight requests are capped per kind
+  (`pendingLimits`): Peek 2, query documents 8. On the backend Peek shares the metadata slots
+  (`ProtocolHost.MetadataSlots`) with query tabs, Script As, `actions.describe` and `connections.connect`, so stalled
+  Peek hovers can hold two until their deadline.
+- **Peek editor.** Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`,
+  `explorer/peek-editor.ts`): read-only, one per card or tab, a model per definition disposed as the view moves on. Its
+  focus key is `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps bridge chords
+  off it, so no query command acts on it except Go To and Peek Definition.
+
+## Results
+
+- **Rows stay in the backend** (never on disk) under the result budget. Main forwards DATA pages undecoded as exact-size
+  ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port messages from
+  the renderer are validated with `portRequestSchema`, ownership and the current generation. Peek's Top rows are no
+  exception: Select Top Rows' script with N = 10 through `query.execute`, in Peek's own session and results entry
+  (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss.
+- **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
+  names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
+  `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker
+  is parsed, once however often `GO n` repeats it, by ScriptDom on its own large-stack thread within
+  `ResultNames.MaxParseChars` and `MaxParenDepth` (ScriptDom's recursion can end the process).
+  - Binding is conservative (docs/named-result-sets-scope.md has the rules): statements are None, One or Unknown, and a
+    name binds by position (sets with columns, plans excluded) only where every earlier statement is known, an
+    Unknown's only when nothing after it can return a set; a batch that sets NOEXEC,
+    PARSEONLY or FMTONLY anywhere, or names SQL Server's plan column, gets none. At run time `ResultNameBinder` stops at
+    the first error, a column-count mismatch, SHOWPLAN or STATISTICS PROFILE text, a plan set where a `*` statement
+    stood, or a full budget.
+  - A name not applied (including one a cancel, timeout or ended script never reached, in a later batch or `GO n`
+    repetition too; a repetition's notes name it) is an informational Messages line quoting the
+    name and line, never an error or logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name`
+    carries it; a result's identity stays its ordinal.
+- **Visibility** reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from the grids
+  `ResultGrid` registers (one ResizeObserver per window, PaneService for hidden dock tabs, document visibility, no
+  timers): the whole set when it changes and again on backend ready or results-port generation change, and, once main has
+  reported a state, only while main and the port agree on the generation (until then the backend is taken as ready), ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`,
+  outside page code, as a hint: it never releases, pins or changes a result by itself.
+- **Budget figures** change only through `ResultStore.Resize` (`results.setMemoryLimit`, sent by main alone when the
+  Options limit changes, as each generation becomes ready and after each successful settings read,
+  `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
+  results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
+  its working memory before it builds (search reserves only its rooms for a packed result, or what unpacking takes
+  through a sorted view); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
+- **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
+  `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
+  highlights from sorted positions by binary search per painted row, theme colours only. Diffs (`Results/ResultDiff.cs`,
+  `results.diff`) store the unified diff as a derived result of the same query, marked from its hidden tone column.
+  Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
+- **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
+  past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
+  at once). Their own refusals (a row refused, or a page sealed under low system memory) fail only that set
+  (`TOO_LARGE`) and never stop the query's budget; only a query's own sets stop it (query or global budget full, or low
+  system memory at a page seal; never a row limit). While a query still reads, a derived build counts against its
+  budget. A derived set asked of a stopped query is refused before work with `BUDGET_STOPPED` and the reason; one cut
+  short because its query stopped or its source was released answers `BUDGET_STOPPED` or `RESULT_RELEASED`, not
+  `TOO_LARGE`. Once written whole, a source closed meanwhile still leaves it.
+- **Grid.** Cells render only through `GridView` pools and text only through `nodeValue` (`tests/grid-lint.test.ts`
+  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell; frames stay
   O(visible cells).
-  The Tabs layout (`ResultsTabs`, `queryResults.grid.layout`) mounts only the selected view's `ResultGrid`, keyed by its
-  entry: switching unmounts the other, whose `GridShell` gives back its pool and registration while its state stays in
-  `GridViewState`; switching releases nothing in the backend. The selected view is the service's focused entry.
-  `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
-  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`, `buttonColumn`, Open
-  Value and Fit), each the identity in a table; its saved state, marks and callbacks are always in the result's. Columns
-  are placed through `ColumnAxis` (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column
-  come from the grid (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered.
-  `tests/grid-view.test.ts` holds the seams.
-  Transposed is an orientation of that grid, not a stored result: `GridView`'s `transposed` option swaps rows with columns
-  at every seam and nowhere else (`rotateSelection`, its own inverse; tiles of 32 rows by 128 columns), so nothing outside
-  the grid converts coordinates and no code may turn them a second time. It draws the first `limits.transpose.maxRows`
-  rows as columns, placed by `UniformLayout` (`grid/uniform-layout.ts`: one shared width of at most 240 px and at most 256
-  widths of their own, which a new sort or filter clears, so growth while rows stream rebuilds nothing), and the columns as
-  rows named in the frozen first column, whose name cells hold the sort buttons and funnels. A highlighted row tints its
-  drawn column through pooled bands and colours that column's header, which also carries the row-size bar; a search match
-  past the cap is reported (`onBeyondCap`) and never scrolled to. The orientation, the header column and the transposed
-  view's own offsets and widths are per view in `GridViewState` (`orientation`, `headerColumn`, `transposed`); the option is
-  fixed for a view's life, so a change builds the grid again. `ResultsService.setOrientation` is the only writer of the
-  orientation and the header column: the transpose commands (`contributions/transpose.ts`) call it, it publishes, and
-  `ResultGrid` reads `orientation()`. Its `turned` store (the focused grid of each tab, when transposed) feeds the
-  `resultsGridTransposed` key and the toolbar; a grid's own menu reads that grid's orientation from its target
-  (`argsFor`'s stand-in state), so a Peek card's grid toggles too. Fit Column on a transposed grid fits the target's row
-  (`fitDrawn`), or the name column for a name. There is no stored transpose: `results.transpose`, its `transpose` result kind and `TransposeService`
-  are gone, the backend answers the method `METHOD_NOT_FOUND`, and `tests/results-transpose.test.ts` pins that none returns. A result with a tone column (a comparison, a live table) is never
-  transposed (`transposedView` in `ResultsService.ts` is the one rule, for the grid, `orientation()` and Copy and Save).
-  `tests/grid-orientation.test.ts`, `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
-  A grid drawn transposed copies and saves as drawn, still with nothing stored: the request says `transposed` (and the
-  header column), its parts stay in the result's rows and columns for the blocks that grid shows selected
-  (`transposedCopyPlan`), and `ResultTextWriter`'s column-major mode writes a line per column and a field per row for the
-  rows drawn, counting the rest in `capped`, which the toolbar says (docs/ipc.md, Copy and Save Results As).
-  Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
-  tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
-- Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
-  leave main except to the backend.
-- Operations over whole results (a sort or filter building a grid's view, a profile, a pivot, a comparison) have one busy
-  state, `ResultsService.operations` (`results/operations.ts`), which every result control reads: a sort or filter holds that
-  grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: a click is refused, never queued,
-  and pulses the operation), and Cancel (the toolbar's strip, Escape in the grid) keeps the previous view. Its progress
-  comes only from the backend's droppable `op.progress` EVENTs (`OperationProgress.cs`, relayed by main and the results
-  worker to the request's listener); the renderer's only timers are one-shot (shown after 300 ms, kept 500 ms once shown,
-  a notice for 8 s), plus the display clock of the elapsed time. The toolbar's `OperationStrip` draws it with its live
-  region, `GridShell` the bar along the grid, and `GridView` the ring on the column's sort button (text by `nodeValue`).
-  `tests/result-operations.test.ts` and the busy-state tests in `tests/results-service.test.ts` hold this.
-- Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
-  Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
-  identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
-  `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
-  meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
-  So no pin outlasts the reading: an operation over the whole result runs through `SqlService.UntilReleased`, which the
-  release cancels (`ResultSetBuffer.Released`, answering `RESULT_RELEASED`), and results.read pins only to take or build a
-  page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
-  The store may keep a page packed (`PackedPage`: Zstandard level 2, a one-page window, `PageCodec`), so nothing else
-  touches `StoredPage.Stored` (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned,
-  unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, not a
-  setting: the backend process's service turns it on request and runs the policy (`ResultPacker`,
-  docs/page-compression-findings.md), never on a live table or a result still storing rows. Stage 1 packs a complete
-  result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`). Stage 2 packs a shown one too once it is
-  idle: no pin or lease (a read, operation, Copy or Save) has begun or ended, and the set has not completed or been shown again, for 30 s
-  (`ResultSetBuffer.Activity`, its time on `ResultStore.Clock`, which is `ResultVisibility`'s), the wait doubling for
-  each operation that unpacked it whole, up to eight times as long (`MaxBackoff`, 4 minutes), so a result in use is never packed and unpacked
-  in a loop. A shown result with an open view (a sorted or filtered grid) stays raw, since each of its screens reads a page or so a
-  row; one packed before its grid was sorted, or shown again with a view, is unpacked again on the workers' gate when the
-  budget has room for it twice over and no query waits (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not
-  as a use, which lengthens a hidden viewed result's delay instead), and closing its last view wakes the policy. A result
-  with an open distinct snapshot is packed as any other (it keeps its pages, not their bytes). A read stops a shown result's pass at the next page (its touch count
-  changed). Both run on the policy's own thread, not the workers' gate
-  (which has no lower priority), compressing at the lowest priority (honoured on Windows) and taking locks or allocating only at normal priority, so a
-  starved packer never holds a lock a read or a new query waits on; waking only on a deadline, a completed result of 1 MiB or more, a
-  visibility change, the end of a pin or lease that stopped it or of an operation that unpacked it, or a view's close (`ResultStore.Settled`;
-  an operation's unpack counts as a use, so the delay starts again), and stops between pages when the result is
-  shown (stage 1), touched (stage 2), held, released or the service disposed. A query's row the budget refuses
-  (its own half or the global budget, never a live table's or a derived set's) does not stop the query at once while the
-  policy runs (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`): the row stays open and the ingestion waits outside every lock
-  (`WaitForRoomAsync`, `SqlService.WaitAndCommitAsync`, at most `RoomWaitMs` a wait, `SqlService.MaxRoomWaits` waits a row and `MaxRoomWaitMs` in all for the query; the rows committed before the waiting row are sealed only once it ends) while the policy packs, at once and
-  at normal priority on the workers' gate (`Pack`'s `workers`, a page an item, sharing the threads fairly with other
-  result work), the complete results of 1 MiB or more not held that could make room for it, except one the user is working with (a shown result with an open view, or one an operation unpacked and still uses) (`ForRoom`, `MakeRoom`, `PackForRoom`: any query's
-  for the global budget, only its own when its own half is full; hidden first, then largest; one after another until no
-  query still waits, `StillWaited`), then commits the same row again. With
-  nothing to pack the wait ends at once and the row is refused as before; a stop is never undone, since stored rows are
-  a prefix of the rows read. The checks' stores leave packing off unless a check turns it on
-  (`SqlService`'s `packHidden`), and their second pass packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
-  live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
-  `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
-  collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
-  (`CachePages`), kept only while the budget has spare room for it (`TryReserveSpare`), so many results' caches never
-  take the budget past its figures; without room a page is unpacked for its read alone. A view read unpacks the base pages behind its rows 64 at
-  a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time when refused,
-  keeping only the latest page). A sort, a filter, a profile and a pivot read a packed result fused and leave it packed
-  (`ViewSorter.PageSource`, `PageRooms`): each reader takes a room (one page, the largest packed page's length, reserved
-  as working memory when first made and returned when the operation ends; refused, `TOO_LARGE` with the operation's
-  sentence, or a profile's retry on one thread; a sort's, filter's or profile's refusal says low memory, or that the
-  result was closed, as any other) and unpacks the page it is about to read into it
-  (`ResultSetBuffer.Read`, never through the cache), so the operation holds about a page a worker. Rooms are worker
-  state, given back when a worker stops (`WorkerGate` disposes an `IDisposable` state). A key whose comparisons go back to
-  cells (`Key.ReadsCells`: long exact numbers that tie as doubles, text kept as 8 bytes) has its column extracted once
-  after it is built (`PageSource.Extract`, page by page on the workers, charged as working memory and asking the
-  system's memory load once for every `WorkCheckBytes` taken; refused, the rooms and extracts go back and the result is
-  unpacked in place as before fused reads, `PageSource.Rehydrate`, and only if that is refused too `TOO_LARGE`), so
-  no comparison unpacks a page; a sampled read goes page by page on the workers (`ForRows`), and a pivot's
-  in-order pass unpacks the next batch of pages on the workers while it reads the one before (`InOrder`, two batches of
-  rooms). A pivot's output reads the rows it copies
-  from pages read together (`RowAccess.Hold`, `BodiesTogether`; refused, the result is unpacked in place instead, which
-  adds only what packing saved). Pages held as sealed read exactly as before. A distinct list, row identities, a diff
-  and a search read packed results fused too (`PageRooms.Over`, each worker a `RoomReader`; refused, `TOO_LARGE` with
-  the operation's sentence and nothing held). A diff's readers keep a few pages unpacked (`ResultDiffer.LeftSlots`,
-  `RightSlots`), since it reads the first result in the second result's order and goes back to cells after matching;
-  `ResultDiffer.Local` counts beforehand how many unpacks that order costs, and past `UnpacksPerPage` a page it unpacks
-  the first result in place instead (`TryUnpackAll`; refused, `TOO_LARGE`). The unified result is written on one
-  thread, so each side's packed pages are unpacked ahead on the workers in the order the writer reads them
-  (`PageAhead`, two batches of rooms, as a pivot's in-order pass, taken only from memory the budget can spare,
-  `TryReserveSpare`, and given back once the budget reaches the eighth it leaves free, `HasSpare`, so the output keeps
-  its room; without them the writer unpacks pages itself). Rooms ask the system's memory load once for
-  every `WorkCheckBytes` they take together, so many small rooms are refused under load as one large reservation would
-  be. A distinct snapshot keeps its result's pages, not their bytes (`KeptPages`): its later reads and value searches go
-  in row order through one `ReadRoom`, each page unpacked once, and it never holds page bytes after the result is packed
-  again. A search through a view far from its pages' order (`ResultSearcher.Local`: a sorted view) still unpacks the
-  result in place first (`SqlService.Unpack`: `UnpackNeed` reserved as working memory, then `UnpackAll`, stopped by a
-  release; a refusal answers `TOO_LARGE` with its sentence and unpacks none); in base order or through a filtered view it
-  reads fused, one room a run in base order and up to two through a filtered view (called directly through a far view, it reads through the accessor as before).
-  A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
-  held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page on one thread,
-  unpacking each packed page into one room of its own (`ReadRoom`, the largest page reserved as working memory;
-  refused, the page is read through the accessor and its cache as before). An operation's unpack clears the set's packed
-  mark, so the policy packs it again once it ends. A result's Memory panel state is `partial` while some pages are packed and
-  no whole pass has ended since it was last unpacked (`ResultSetBuffer.Memory`'s `Whole`). `ResultStore.PackingSnapshot` holds the counters (packed, logical and
-  cached bytes; pages packed, kept raw and unpacked; cache hits and lookups; time; the last whole unpack), which
-  `results.memory`'s detail reports with each result's own figures (`ResultSetBuffer.Memory`), so the Memory panel's
-  packed and saved figures are the budget's.
-- A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
-  and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
-  the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
-  `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
-  representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
-  SQL-returned plan set; the backend's `results.pivot` refuses anything but `rows` too) and replaces the group's Pivot in
-  place (`replaceSet`: same entry key, next `revision`, new provenance in `ResultSlot.pivot`, then the old result is
-  released; the old one is never released early to make room); a bare run (Peek's, `begin`'s
-  `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
-  already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
-  drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
-  (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
-  `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
-- A Pivot follows its Table's filters only through `PivotService.followGroup`, looked at in a microtask after a results
-  publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer. It decides over the published run only
-  (it waits while the grid shows a view not yet published), rebuilds through Update's path, and does not build again over the filters it last built over (`tried`, the last set
-  only: filters whose automatic build it gave up itself, superseded or hidden, may be tried again), so a failure, a
-  refusal or a cancel never loops; each retry needs the filters to change. An automatic build whose Pivot is hidden
-  while it runs is given up, and a followed rebuild (`followed` provenance) never switches the output pane. Whether a Pivot is shown is
-  `pivotShown`, a function of the run, the layout, the stack's collapsed entries and whether the Results panel shows
-  (`PaneService`, not `TabResults.view`), so every collapse change goes through
-  `ResultsService.setCollapsed`, which publishes; a toggle never mutates `TabViewState.collapsed` directly. The threshold is
-  `pivotFollow`, in one place.
-- A comparison reads two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync` refuses
-  any other kind). The Compare popover's column pairing is a copy of `ResultDiffer.Pairs` (`results/compare-pairing.ts`)
-  pinned by `tests/fixtures/compare-pairing/cases.json`, which `DiffChecks.cs` and `tests/compare-pairing.test.ts` both
-  read: change the rule in both and add a case. Names compare through one fixed table, `src/shared/ordinal-casing.ts`, in
-  the backend (`OrdinalNames`, which embeds the file), the renderer and the fake backend, not through an ICU's casing,
-  whose Unicode version differs by platform; `DiffChecks.OrdinalCasing` checks it against the runtime wherever the runtime
-  knows the letter, and `VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test` rewrites it from the runtime's casing. Pivot builds and comparisons share the window's `DerivedJobs` (four at once, a
-  busy refusal retried) and count each other's new results in flight against a run's 1,000 (`adding`), one comparison per pair and exact-text choice at a time. A comparison's source links come from
-  its frozen `ResultSlot.sources` and go only to an entry whose set key is still the one compared; otherwise they read
-  closed.
-- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
-  stack caption's close button, a result or view tab's close button in the Tabs layout, or Close Result, on an ended run only; a Table closes its group, so its Pivot
-  goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
-  sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
-  the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
-  results in one request, after a retained-plan copy in progress has read them. Add a new piece of per-entry state there,
-  not in a caller. Services that follow the results give up their own work on an entry that has gone when the snapshot
-  loses it (`PivotService` and `CompareService` abort a build whose source closed; search re-searches
-  only the grids whose target changed; highlights unbind), and `addSet` releases a derived result whose source the run no
-  longer has, so a late answer is released once and never shown. A comparison outlives a closed input (it copied its
-  cells); a group's Pivot does not outlive its Table. Closing does
-  not change the run's status, summary or row total (which counts the query's own rows, never a derived result's);
-  closing the last entry sets `TabResults.emptied`, which keeps the Results view (`hasResultsView`, `OutputPane.tsx`).
-  Two context keys tell the states apart: `hasResults` (`ResultsService.context`) holds while the run keeps a result
-  set or a captured plan, so Close Results stays; `hasResultSets` (`ResultsService.resultSets`) only while it keeps a
-  result set a grid shows (rows, a Pivot, a plan set or a comparison), and gates what needs a grid (Find, Find Next and
-  Previous, Save Results As). Pivot, Compare and Transpose read the run's groups and sets, which an emptied run has
-  none of.
-- In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it
-  (`EntryKey`, the grid's `data-result-entry`), never by its place in the list: sorts, held views, grid state, the
-  stack's weights, collapse and focus, search marks, highlights, panels, commands and menu targets all follow the key, so
-  they stay with the entry when one before it goes. A grid's menu target also carries the generation and result id it
-  was read from, which the grid commands of `contributions/output.ts` check before acting. Names come from the entry's
-  number (`entryName`), not its position. Nothing identifies an entry by its place; the list's order is read only where
-  order is the meaning: the stack's layout, Compare with Previous Result, and the order search steps through matches.
-- Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
-  `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
-  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
-  worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
-  stream's `ack` (`ResultClient.live`), never more than the stream's events took. Sources and
-  probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
-  `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
-  (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
-  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
-  writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
-  Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
+  - The Tabs layout (`ResultsTabs`, `queryResults.grid.layout`) mounts only the focused entry's `ResultGrid`; switching
+    unmounts the other (its `GridShell` returns pool and registration, state stays in `GridViewState`) and releases
+    nothing in the backend.
+  - `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's rows and columns
+    at named seams (`selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`, `buttonColumn`, Open
+    Value and Fit), each the identity in a table; saved state, marks and callbacks are always in result coordinates.
+    Columns are placed through `ColumnAxis` (`grid/layout.ts`); tiles have a `TileShape` (`grid/tiles.ts`). A menu's row
+    and column come from the grid (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is
+    registered. `tests/grid-view.test.ts` holds the seams.
+  - **Transposed** is an orientation, not a stored result: `GridView`'s `transposed` option swaps rows and columns at
+    every seam and nowhere else (`rotateSelection`, its own inverse; tiles 32 rows by 128 columns), so nothing outside
+    the grid converts coordinates and nothing turns them twice. It draws the first `limits.transpose.maxRows` rows as
+    columns through `UniformLayout` (`grid/uniform-layout.ts`: one shared width of at most 240 px plus at most 256 own
+    widths, cleared by a new sort or filter, so streaming rebuilds nothing), with the columns as rows named in a frozen
+    first column holding the sort buttons and funnels. Highlights tint drawn columns through pooled bands; a search match
+    past the cap is reported (`onBeyondCap`), never scrolled to. Orientation, header column and transposed offsets and
+    widths are per view in `GridViewState`; the option is fixed for a view's life. `ResultsService.setOrientation` is
+    the only writer (`contributions/transpose.ts` calls it); `ResultGrid` reads `orientation()`, its `turned` store feeds
+    `resultsGridTransposed` and the toolbar, and a grid's menu reads orientation from its target (`argsFor`), so Peek
+    cards toggle too. Fit Column fits the target's row (`fitDrawn`). A result with a tone column (comparison, live table)
+    is never transposed (`transposedView` in `ResultsService.ts`, the one rule for grid, `orientation()`, Copy and Save).
+    `results.transpose` answers `METHOD_NOT_FOUND` (`tests/results-transpose.test.ts`). `tests/grid-orientation.test.ts`,
+    `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
+  - A transposed grid copies and saves as drawn, storing nothing: the request says `transposed` (and the header column),
+    parts stay in result coordinates (`transposedCopyPlan`), and `ResultTextWriter`'s column-major mode writes a line per
+    column for the rows drawn, counting the rest in `capped` (docs/ipc.md, Copy and Save Results As).
+  - Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; the
+    row tone column (catalogue `role: 'tone'`, last) is hidden and left out of Copy and Save (`ResultJobs`).
+- **Copy and Save** text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and
+  never leave main except to the backend.
+- **Operations busy state.** Whole-result operations (sort or filter building a view, profile, pivot, comparison) have
+  one busy state, `ResultsService.operations` (`results/operations.ts`), read by every result control. A sort or filter
+  holds that grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: refused, never
+  queued, and pulses the operation); Cancel (toolbar strip, Escape in the grid) keeps the previous view. Progress comes
+  only from the backend's droppable `op.progress` EVENTs (`OperationProgress.cs`, relayed by main and the worker to the
+  request's listener); the renderer's only timers are one-shot (shown after 300 ms, kept 500 ms, a notice for 8 s) plus
+  the elapsed-time display clock. `OperationStrip` draws it with its live region, `GridShell` the bar, `GridView` the
+  ring on the sort button (text by `nodeValue`). `tests/result-operations.test.ts` and `tests/results-service.test.ts`
+  hold this.
+- **Release, pins and leases.** Results are released on re-execute, tab close, Close Results, closing one result and
+  backend loss; jobs lease them. Every backend reader of stored pages (results.read, view pages, sort, filter, distinct
+  values, profile, search, row identity, diff, pivot, Copy and Save, plan pairing) reads bytes only through
+  `StoredPage.Body()` (`ResultSetBuffer.Body`) and pins its result while reading (`ResultSetBuffer.Pin`, a count beside
+  the leases): a release ends reads at their next check but frees pages and budget only when the last pin and lease end.
+  No pin outlasts the reading: whole-result operations run through `SqlService.UntilReleased`, which the release cancels
+  (`ResultSetBuffer.Released`, `RESULT_RELEASED`), and results.read pins only to take or build a page, never across its
+  wait for credit. Copy and Save lease, so a release never cuts them short. Nothing else touches `StoredPage.Stored`
+  (`tests/result-page-access.test.ts`), and the .NET checks refuse reads of an unpinned, unleased set
+  (`ResultSetBuffer.RequirePins`).
+- **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`).
+  Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
+  "Result store and memory budget", measurements in docs/page-compression-findings.md).
+  - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2
+    a shown one idle for 30 s (no pin or lease begun or ended, not completed or shown again; `ResultSetBuffer.Activity`
+    on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
+    operation's unpack clears the packed mark and counts as a use.
+  - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
+    saving under a tenth stays raw). A shown result with an open view stays raw; one packed before its view, or shown
+    again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
+    (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
+    delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+  - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
+    allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
+    a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
+    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
+    held, released or the service disposed.
+  - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
+    at once and counts toward `CollectNow`'s next collection, never a compacting one.
+  - Packing for room: a query row its own half or the global budget refuses (never a live table's or derived set's)
+    waits outside every lock (`TryCommitRow`'s `mayWait`, `ResultStore.CanMakeRoom`, `WaitForRoomAsync`,
+    `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`; rows committed before the waiting row
+    are sealed only once it ends) while the
+    policy packs at normal priority on the workers' gate the complete, unheld results of 1 MiB or more that could make
+    room, never one the user is working with (a shown result with an open view, or one an operation unpacked and still uses)
+    (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
+    only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
+    With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
+  - Reads: a packed page unpacks into a six-page per-result cache (`CachePages`) only while the budget has spare room
+    (`TryReserveSpare`), else for that read alone. A view read unpacks its base pages 64 at a time on the workers
+    (`BodiesTogether`, reserved working memory, one at a time when refused).
+  - Fused reads leave the result packed. Sort, filter, profile and pivot use `ViewSorter.PageSource` and `PageRooms`;
+    distinct lists, row identities, diffs and search use `PageRooms.Over` with a `RoomReader` per worker. Each reader
+    unpacks the page it reads into a room (one page of the largest packed length, working memory reserved when made,
+    returned at the end; `ResultSetBuffer.Read`, never the cache). Rooms are worker state (`WorkerGate` disposes an
+    `IDisposable` state) and ask the memory load once per `WorkCheckBytes`. A refusal answers `TOO_LARGE` with the
+    operation's sentence and nothing held, except: a profile retries on one thread; a pivot's output (`RowAccess.Hold`) unpacks in place. A key that reads cells (`Key.ReadsCells`) has its column extracted once after the key is built
+    (`PageSource.Extract`), so no comparison unpacks a page; refused, the result is unpacked in place
+    (`PageSource.Rehydrate`), and only if that is refused does it answer `TOO_LARGE`. Sampled reads use `ForRows`; a
+    pivot's in-order pass (`InOrder`) and a diff's writer (`PageAhead`, spare budget only, returned at `HasSpare`'s
+    eighth) unpack ahead in two batches of rooms. A diff keeps `ResultDiffer.LeftSlots`/`RightSlots` and past
+    `UnpacksPerPage` (counted by `ResultDiffer.Local`) unpacks the first result in place (`TryUnpackAll`). A distinct
+    snapshot keeps pages, not bytes (`KeptPages`), reading in row order through one `ReadRoom`. A search through a far
+    (sorted) view (`ResultSearcher.Local`) unpacks in place first (`SqlService.Unpack`: `UnpackNeed`, then `UnpackAll`).
+  - A transposed Copy or Save holds the pages its rows lie on (`BodiesTogether`, `TOO_LARGE` when refused); a plain one
+    reads through one `ReadRoom` (refused, through the accessor and cache).
+  - The Memory panel's state is `partial` while some pages are packed and no whole pass has ended since the last unpack
+    (`ResultSetBuffer.Memory`'s `Whole`); `ResultStore.PackingSnapshot` feeds `results.memory`, so its figures are the
+    budget's. The checks' stores leave packing off unless a check turns it on (`SqlService`'s `packHidden`).
+- **Runs, groups and slots.** A run's results are groups (`TabResults.groups`): each original result owns its Table
+  slot and at most one Pivot slot; a comparison is its own slot with frozen references to its inputs
+  (`TabResults.comparisons`). `sets` is the one flat list in drawn order (a group's Table, its Pivot, the next group,
+  comparisons last). `ResultsService.addSet` is the only way a derived result joins a run: a pivot comes only from a
+  group's Table of rows (the backend's `results.pivot` refuses anything but `rows`) and replaces the group's Pivot in
+  place (`replaceSet`: same entry key, next `revision`, new provenance in `ResultSlot.pivot`, then the old one is
+  released, never earlier); a bare run (Peek's, `begin`'s `bare`) takes neither pivot nor diff. A slot's identity is its
+  entry key; add no second key for a view, and Transposed is not a view. The pivot builder belongs to one group and
+  follows the focused grid (`ResultsService.focusEntry`, `PivotService`); no source picker. Commands tell grids apart by
+  `pivotGroup`, `slotOf` and `groupOf`, and Peek grids by their target's `bare` (`outputGridBare`).
+- **Pivot follow.** A Pivot follows its Table's filters only through `PivotService.followGroup`, checked in a microtask
+  after a results publish, a layout change (`PivotFollowHost`) or a build's end, never on a timer, over the published run
+  only (it waits while the grid shows an unpublished view). It rebuilds through Update's path and never again over the
+  filters it last built over (`tried`, the last set only; filters whose build it gave up itself may be tried again), so
+  failures, refusals and cancels never loop. An automatic build whose Pivot is hidden mid-run is given up; a `followed` rebuild
+  never switches the output pane. `pivotShown` is a function of the run, layout, collapsed entries and whether the
+  Results panel shows (`PaneService`), so every collapse change goes through `ResultsService.setCollapsed`, never
+  `TabViewState.collapsed` directly. The threshold is `pivotFollow`, in one place.
+- **Comparisons** read two group Tables of rows only (`comparableTable` in `CompareService`; the backend's `DiffAsync`
+  refuses others). The Compare popover's pairing (`results/compare-pairing.ts`) copies `ResultDiffer.Pairs`, pinned by
+  `tests/fixtures/compare-pairing/cases.json`, read by `DiffChecks.cs` and `tests/compare-pairing.test.ts`: change both
+  and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
+  renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
+  checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
+  retried), count each other's in-flight results against a run's 1,000 (`adding`), one comparison per pair and
+  exact-text choice at a time. Source links come from frozen `ResultSlot.sources` and go only to an entry whose set key
+  is still the one compared; otherwise they read closed.
+- **Dropping a result.** Every way a result leaves its run goes through `ResultsService.drop`: closing one view
+  (`removeEntry`, caption or tab close buttons, Close Result on an ended run; a Table closes its group and Pivot), Close
+  Results, a new run, the tab closing. It aborts the entry's sort or filter build, forgets held views, sort, distinct
+  snapshots, grid controller and state and stack state, cancels a copy (an accepted save finishes under its lease), and
+  releases stored results in one request after any retained-plan copy has read them. Add new per-entry state there, not
+  in a caller. Followers give up work on a vanished entry (`PivotService` and `CompareService` abort, search re-searches
+  only changed grids, highlights unbind), and `addSet` releases a derived result whose source has gone. A comparison
+  outlives a closed input; a Pivot does not outlive its Table. Closing never changes the run's status, summary or row
+  total (the query's own rows); closing the last entry sets `TabResults.emptied`, which keeps the Results view
+  (`hasResultsView`, `OutputPane.tsx`). `hasResults` (`ResultsService.context`) holds while the run keeps a set or a
+  captured plan (Close Results stays); `hasResultSets` (`ResultsService.resultSets`) only while a grid shows a set (rows, a Pivot, a
+  plan set or a comparison), and gates Find, Find Next/Previous and Save Results As.
+- **Entry keys.** A result is an entry of its run, named everywhere by the opaque `EntryKey` `ResultsService` mints (the
+  grid's `data-result-entry`), never by position: sorts, held views, grid state, stack weights, collapse, focus, search
+  marks, highlights, panels, commands and menu targets follow the key. A grid's menu target also carries the generation
+  and result id, which `contributions/output.ts`'s grid commands check before acting. Names come from the entry's number
+  (`entryName`). List order is read only where order is the meaning: stack layout, Compare with Previous Result, search
+  order.
+
+## Live data
+
+- **Subscriptions.** Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the
+  results port's `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at
+  most one live EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against stream credit). The
+  results worker relays live events undecoded and grants bytes back only once the page applied the event and called
+  the stream's `ack` (`ResultClient.live`), never more than the stream's events took. Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`)
+  are droppable, per-request and not periodic data.
+- **Catalogue and probes.** Sources and probes live only in `src/shared/live/catalog.ts` (regenerates `docs/live.md` and
+  the embedded `Live/live-catalog.json`). Writes are never probes. Test-only sources (`debug.synthetic`) pass only main's
+  test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
+  `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
+  `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators` probe (source `query.plan`) is the one exception: its SQL is inline in
+  `Plans/LivePlanSampler.cs` (the server pool with `LiveSql.UncommittedPrologue`, a permission check in the same batch,
+  three per-edition and version variants, `DB_NAME()` on Azure) and no offline lint covers it. Probes run on their scope's
+  own pool (" - Activity Monitor" for server DMVs, " - Integration Services" in the catalog's database) with its prologue
   (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
-  gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values that back
-  off.
-  Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
-  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
-  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
-  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, isolated by exact target, handle and generation, owned by
-  the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
-  the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
-  Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.
-- UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
-- Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
-  per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
-  per port), and explicit truncation of results and messages.
-  New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
-  never re-sent.
-- Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`, `saved-passwords.json` (0600), `shortcuts.json` (`src/main/shortcut-store.ts`: re-read before every
-  write, a revision that refuses a stale save with `STALE`, damaged entries salvaged, unknown records kept verbatim)); unreadable
-  files are quarantined, never overwritten.
-- Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
-  (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
-  no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
-  menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
-  registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
-  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
-  Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
-  a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
-  `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
-  query command acts on it. Go To Definition and Peek Definition are the exception: their keys accept `peekEditorFocus`.
-  User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
-  hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
-  file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
-  Monaco's own default keys (the modules `start.tsx` imports, all three platforms) are generated into
-  `src/shared/commands/monaco-keys.generated.ts` from the installed Monaco by `tests/fixtures/monaco-runtime.ts`; after a Monaco
-  upgrade or a change to those imports, regenerate it with `npx vitest run tests/monaco-keybindings.test.ts -u`.
-  Mouse gestures (modifier behaviours, pointer commands, fixed gestures) are declared only in `src/shared/commands/gestures.ts`;
-  handlers read pointer modifiers only through `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`),
-  every pointer command has a keyboard path, and tooltips that name a gesture take its words from the service. After
-  changing it, regenerate `docs/gestures.md` with `npx vitest run tests/gestures.test.ts -u`.
-- Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
-  provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
-  natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
-  back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
-  context menus (`src/main/context-menu.ts`) open only in the focused window or within 1 s of input there, and send
-  back a token and an id. Menu targets
-  (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
-  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
-  Explorer's pinned server shortcuts use the same canonical target as its ordinary rows. Closing a shortcut popover
-  leaves its visible invoker as the keyboard menu anchor and focus destination. Deferred Connect focus yields to newer
-  input recorded by `WindowRegistry`, including input in a popout.
-- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
-  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. The session's
-  only granted permission is a sanitized clipboard write from the main window's main frame; its permission request and
-  check handlers answer alike (`src/main/permissions.ts`), since Electron's default check grants everything. On Linux,
-  Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
-  the click lands) with no role or gate: in each window the page cancels every middle-button release event
-  (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and every middle-button pointermove (how a
-  chorded press or release comes) and hides any `paste` from every other listener while the middle button is held or in a release's
-  task (`blockPrimaryPaste`, `src/renderer/src/core/primary-selection.ts`). Monaco's `selectionClipboard` is off only so
-  a middle-drag selects a column as on other platforms: standalone Monaco has no selection clipboard.
-- Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
-  gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
-  `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
-  text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
-  metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
-  renders and checks every variant.
-- Peek never cuts a definition. A module's text comes in pages of `peekLimits.definitionPageChars` UTF-16 code units, so
-  each reply stays far under the 16 MiB response bound: `explorer.peek` carries the first page with the facts, and a longer
-  text (its `definitionLength` and `definitionStamp`, the module's `modify_date`) is read one page at a time with
-  `explorer.peekDefinition` (constant `PeekSql.DefinitionPage`, `SUBSTRING` from `@offset` under a binary collation that
-  counts code units), each page asked for once the last is in, and put together in the renderer (`PeekReads`). A page
-  never ends inside a surrogate pair. A page whose length or stamp differs from the first page's means the module changed
-  in between, and the part says so instead of showing pages that do not fit. Closing, replacing or refreshing the view
-  cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units), a bound on the renderer's
-  memory (about twice that for a moment, while the pages are joined): a longer text is not read, and the part says so, never
-  showing part of it. Search Objects' details pane, which shows at most `shownChars`, reads a module's pages only that far.
-- View Dependencies (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) reads no SQL of its own: a
-  level of its tree is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings (`PeekSql.Level`, the
-  same text `PeekSql.Dependencies` joins), on Peek's slot and budget, linted with the rest. A level is read only when its node
-  expands, at most `dependencyLimits.perLevel` objects (the catalogue's `dependencyLevel`, mirrored in C#), the tree at most
-  `dependencyLimits.nodes` and `dependencyLimits.depth`, each cut marked. A node already above it on its branch is a cycle leaf,
-  never read; another database's or a linked server's object is a leaf, never read. Closing the dialog or changing its choice
-  cancels the reads still running (`explorerCancel`) and drops their answers.
-- Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
-  connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
-  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (packed object
-  entries in an `ObjectTable` per database, names and definitions, by `IndexMemory`'s estimates) under one 512 MiB budget for all connections (`IndexBudget`); names and
-  definitions are held once across connections in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue) from
-  `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
-  `CatalogSql.Lint`, and the server's own objects from `ObjectSearchSql.Server` on the server's connection; it indexes every
-  kind Object Explorer lists but the SSIS Catalog's, and definitions come from `sys.sql_modules` (and constraint, computed column,
-  plan guide and server trigger text). It indexes Microsoft-shipped objects too; the resource
-  database's (negative ids, from `sys.all_objects` and `sys.all_sql_modules`) are read once per build and shared across
-  connections by fingerprint in `ResourceCatalog`, which interns their definitions. Object Explorer's search box and the
-  Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only
-  from it (`quickSearch`, shown through the quick input's `setAnswer`); the tree has no filter or listing of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
-  a database the build cannot read is a skipped value. Never log names, definitions or search text.
-- Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
-  options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded
-  `Scripting/scripting-catalog.json` with `npx vitest run tests/scripting-catalog.test.ts -u`. Scripting uses its own
-  pool (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling), runs SMO only through
-  `ScriptPipeline` with a fresh `Server` per job and prefetch limited to one object's own children, applies
-  `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
-  with line breaks unescaped, and since SMO 181.38.1 a name with a comment delimiter as "?", so the warning names it) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
-  DDL, and never logs scripts, names or options.
-- Object actions (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, a login's Disable and Enable, and folder actions such as Databases › Attach), their dialogs, pages and database options live only
-  in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
-  backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
-  only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
-  never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`,
-  `Actions/TableAlter` (Table Properties' ALTER TABLE builders; its extended property procedures, called through `QUOTENAME(@db)`
-  with names and value only as their arguments, are checked by `TableAlter.LintProcedure`, which `ActionSql.Lint` chains)
-  and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
-  forms for the others), New Database's `Actions/CreateDatabaseSql`, checked by its own `Lint` (file names and paths as
-  N'' literals quoted on the server, under a binary collation) with the designer form's OPENJSON rules
-  (`Actions/JsonBuilderLint`: number or `nvarchar(max)` columns, text only inside `QUOTENAME`), `Actions/AttachSql`
-  (Attach's builder and its `DBCC CHECKPRIMARYFILE (@mdf, n)` reads, checked by `AttachSql.Lint`, with paths only in one
-  JSON parameter that the server quotes), for RESTORE and BACKUP, which take no `QUOTENAME`d text, `Actions/RestoreSql`
-  binding only variables (`RestoreSql.LintMedia`), and, for logins, `Actions/LoginSql`, checked by its own `LoginSql.LintExecutable`,
-  which `ActionSql.Lint` chains (the password only as `@password` behind a NULL guard, through a binary-collation REPLACE,
-  never in a literal), where names, the database a batch runs in included, go in as parameters through server-side
-  `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
-  collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
-  for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
-  the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
-  or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
-  names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
-  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. A database's Delete that names the database Delete
-  Object read (`DatabaseIdentityDto`) binds every statement it runs on it by name (SINGLE_USER, the DROP, the restored access) through
-  `PlannedStatement.Bound`, so each batch first checks `database_id` and `create_date` (`ActionSql.CheckOf`); the lint lets only those bound
-  batches read `@id` and `@created`. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
-  (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
-  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
-  run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
-  never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), whose info messages SqlClient holds until the statement ends, and a Stop
-  reaches the statement only through `ActionService.StatementStop` (SqlClient's own cancel from another thread waits while a statement
-  streams info messages), the job's token cancelled off the frame loop; a long action (the catalogue's `long`)
-  takes the long gate (per Varia connection, like the others) and reports message 3211 as droppable `action.progress` EVENTs
-  that main relays only to the requesting window (`varia:actions-progress`), and a closing backend stops it and waits for
-  its cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).
-- Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
-  regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with
-  `npx vitest run tests/table-designer-catalog.test.ts -u`. Designer DDL runs only through `actions.execute`'s `createTable`,
-  in one transaction: the backend re-validates the design (`TableDesignValidator`), sends it as one JSON parameter, and
-  constant builder batches (`DesignerSql.Builder`, linted by `ActionSql.LintExecutable`'s designer form) have SQL Server
-  shred it with OPENJSON and compose each statement from `QUOTENAME`d names, `CONVERT`ed typed numbers and type keywords
-  from a constant table generated from the catalogue; a live dry run proves the server builds exactly
-  `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
-  `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
-- Activity Monitor structure (probes, panes, tables and columns, tiles, view chips, wait categories, limits) lives only in
-  `src/shared/activity/catalog.ts`; after changing it, regenerate `docs/activity-monitor.md` and the backend's embedded
-  `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
-  statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
-  names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
-  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
-  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
-  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
-  sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when its id is one
-  Varia's own pooled or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the
-  process id, host name and program name a client claims at login alone; `VariaSessions.Protected` (the ledger's ids or
-  those claims) is the wider set a refusal can use, since SqlClient's reconnect can move a held pool connection to an id
-  the ledger lacks. The session actions (`Activity/SessionActions.cs`)
-  have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
-  gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
-  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
-  only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, Object Explorer verbs and their commands,
-  documents, error codes, features, limits) live only in `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object
-  Explorer's catalogue. After changing it, regenerate
-  the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
-  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read on the
-  SSIS read pool (and by a write's preflight in its own connection) (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
-  the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
-  (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
-  `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
-  RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
-  until disconnect. SSISDB changes only in `SsisActionService` (`ssis.execute`, sensitive): on its own unpooled connection
-  (the application name plus " - Integration Services Actions", Initial Catalog the catalog's database, never retried), never
-  a pool; after a preflight in the same connection (READ COMMITTED, `LOCK_TIMEOUT 10000`, 25 s); with steps only from
-  `SsisSql.WriteTemplates`, each calling only its verb's catalog procedures (`SsisSql.LintWrite`), values as parameters, no
-  outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
-  lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
-  box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
-  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. The
-  catalogue's server verbs (scope `server`; Create Catalog) are the second DDL path: the same connection rules but in
-  `master`, with commands only from `SsisCreateSql` (`ServerCommands(verb)`, every one checked by `SsisCreateSql.Lint`:
-  values as parameters, dynamic SQL only where SQL Server takes a literal, built from `QUOTENAME` or the server's quote
-  escape `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), the database name from the catalogue (or the internal
-  `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
-  reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
-  most 30 s per lock. Never log names, values, SQL or messages.
-- Getting Started uses `src/shared/help/catalog.ts` and lazy JSX guide modules with matching stable IDs. References
-  resolve through the existing command, setting, effective shortcut and gesture catalogs/services. Lesson focus is
-  explicit, so Help focus does not erase editor or results bindings. The singleton custom document has no text model,
-  SQL session, recovery record or persisted progress. Its frame/navigation stay mounted while only the section body
-  loads or fails; guide modules never refocus on load. Samples are bounded fictional illustrations with local state;
-  they do not connect, execute SQL or duplicate production result processing. docs/help-authoring.md owns the workflow.
-- Release notes are reviewed, versioned plain-text records (`release-notes/*.json`), validated by
+  gates and one budget per probe (shared by an `ActivityReader` probe's statements); failures are values that back off.
+- **Views.** Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends
+  dormant ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe. Charts draw only
+  through `ChartView` (`live/ChartView.ts`): a canvas from the probe's ring, at most one draw a frame and none off screen
+  or hidden, at most two vertices a pixel column, colours only from the theme (`charts.*` and `chartSurfaces` in
+  `src/shared/theme/charts.ts`) or system colours under forced colours. Object Explorer status chips are `background`
+  views (`ExplorerStatusService`, isolated by exact target, handle and generation, owned by the pane, sampling in
+  master): at most 8 a window, in slots no other view wants, given up to views the user opens when slots run out or the
+  backend refuses them `BUSY`; they never reload the tree.
+
+## SQL the backend runs
+
+Every path: constant text, values as parameters, names only through server-side `QUOTENAME`, checked by its offline
+lint, on its own pool or connection with a fixed prologue (the actual-plan collector has none, below). Never log names, SQL, values or messages.
+
+- **Object Explorer.** Structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters,
+  version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and
+  the embedded `Explorer/explorer-catalog.json`). SQL is constant per query, band and filter shape; no metadata
+  built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The `CatalogSql` lint renders and checks
+  every variant.
+- **Peek definitions** are never cut. Text comes in pages of `peekLimits.definitionPageChars` UTF-16 code units, far
+  under the 16 MiB response bound: `explorer.peek` carries the first page with the facts; a longer text
+  (`definitionLength`, `definitionStamp` = `modify_date`) is read a page at a time with `explorer.peekDefinition`
+  (constant `PeekSql.DefinitionPage`, `SUBSTRING` from `@offset` under a binary collation), each requested once the last
+  is in, joined in the renderer (`PeekReads`). A page never ends inside a surrogate pair. A length or stamp that differs
+  from the first page's means the module changed, and the part says so. Closing, replacing or refreshing cancels the
+  page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units, a renderer memory bound): a longer
+  text is not read, never shown in part. Search Objects' details pane reads pages only up to its `shownChars`.
+- **View Dependencies** (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) has no SQL
+  of its own: a level is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings
+  (`PeekSql.Level`, joined by `PeekSql.Dependencies`), on Peek's slot and budget. A level is read only on expand, at most
+  `dependencyLimits.perLevel` objects (`dependencyLevel`, mirrored in C#), the tree at most `dependencyLimits.nodes` and
+  `.depth`, each cut marked. A node already above on its branch is a cycle leaf; another database's or a linked server's
+  object is a leaf; neither is read. Closing the dialog or changing its choice cancels running reads (`explorerCancel`)
+  and drops their answers.
+- **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
+  connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
+  `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database, names, definitions, by
+  `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
+  held once in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue)
+  from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
+  `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
+  the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by
+  fingerprint in `ResourceCatalog`. Object Explorer's search box and the Search Objects tab are one search
+  (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only from it (`quickSearch`);
+  the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout; an unreadable database is
+  a skipped value. Never log names, definitions or search text.
+- **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
+  `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
+  (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`
+  with a fresh `Server` per job and prefetch limited to one object's children; `HeaderGuard` on every script with
+  headers; SMO's comments for unresolved references left out (they hold names with unescaped line breaks, and since SMO
+  181.38.1 a name with a comment delimiter as "?", so the warning names it) and any other comment batch a name breaks
+  refused; output capped at 4,000,000 characters; never executes DDL; never logs scripts, names or options.
+- **Object actions** (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, login Disable/Enable, folder
+  actions such as Databases › Attach), their dialogs, pages and database options live only in
+  `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts`.
+  - Object DDL runs only in `ActionService` (and `SsisActionService`, below; the actual-plan collector's event-session
+    DDL is the only other DDL), on its own unpooled, never-retried connection
+    (application name plus " - Object Actions"), never the explorer or scripting pool, after a preflight in the same
+    connection.
+  - Statements come only from linted constant templates and builders: `ActionSql`, `Actions/DatabaseAlter`,
+    `Actions/TableAlter` (extended property procedures via `QUOTENAME(@db)`, `TableAlter.LintProcedure`) and
+    `Designer/DesignerSql` under `ActionSql.LintExecutable`; `Actions/CreateDatabaseSql` (own `Lint`: file names and
+    paths as server-quoted N'' literals under a binary collation, plus `Actions/JsonBuilderLint`'s OPENJSON rules: number or `nvarchar(max)` columns, text only inside
+    `QUOTENAME`);
+    `Actions/PermissionSql` (`PermissionSql.LintExecutable`); `Actions/AttachSql` (`AttachSql.Lint`, paths only in one server-quoted JSON parameter, `DBCC CHECKPRIMARYFILE (@mdf,
+    n)`); `Actions/RestoreSql` for RESTORE and BACKUP, binding only variables (`RestoreSql.LintMedia`); `Actions/LoginSql`
+    (`LoginSql.LintExecutable`, chained by `ActionSql.Lint`; the password only as `@password` behind a NULL guard through
+    a binary-collation REPLACE, never a literal). Names (the batch's database included) go through server-side
+    `QUOTENAME`, numbers through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue,
+    collations only as `sys.fn_helpcollations()` names them. Live checks prove the server builds what Script Action
+    shows for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence.
+  - DDL waits for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path has a Stop (the dialog's, or the status bar's
+    for rename and login Disable/Enable) whose reply waits for SQL Server and lists completed steps. Statements run
+    through a reader (`ActionService.ReadAllAsync`, never `ExecuteNonQuery`, `tests/action-reader-lint.test.ts`); Stop
+    reaches one only through `ActionService.StatementStop` (SqlClient's own cancel waits while info messages stream),
+    cancelled off the frame loop. A `long` action takes the per-connection long gate and reports message 3211 as
+    droppable `action.progress` EVENTs relayed only to the requesting window (`varia:actions-progress`); a closing
+    backend stops it and waits for cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).
+  - Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
+    (`ActionSql.DropRestoring`, identity checked in the batch). A database Delete carrying Delete Object's
+    `DatabaseIdentityDto` binds each statement on the database through `PlannedStatement.Bound`, which first checks
+    `database_id` and `create_date` (`ActionSql.CheckOf`); only those batches may read `@id` and `@created`.
+  - Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000` (the advisory loginFacts describe
+    under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it locks at any isolation level) and any password hash
+    read (`CatalogSql.SecretUses`). The test-only dry run is an internal C# method, never a request field.
+- **Table Designer.** Types, properties, commands and limits live only in `src/shared/designer/catalog.ts` (regenerate
+  `docs/table-designer.md` and embedded `Designer/designer-catalog.json`). DDL runs only through `actions.execute`'s
+  `createTable`, in one transaction: the backend re-validates (`TableDesignValidator`) and sends the design as one JSON
+  parameter; constant builder batches (`DesignerSql.Builder`, `ActionSql.LintExecutable`'s designer form) shred it with
+  OPENJSON and compose statements from `QUOTENAME`d names, `CONVERT`ed numbers and type keywords from a table generated
+  from the catalogue; a live dry run proves the server builds exactly `DesignerSql.Statements` for hostile names. The
+  design lives in the renderer (`TableDesignerService`, a `CustomDocumentProvider` tab with no Monaco model), never
+  reaches AutoRecover, and saves outside the document task.
+- **Activity Monitor.** Probes, panes, tables and columns, tiles, view chips, wait categories and limits live only in
+  `src/shared/activity/catalog.ts` (regenerate `docs/activity-monitor.md` and embedded `Activity/activity-catalog.json`);
+  its live probes are built from it, column ids unique within a probe (`liveColumnId`). SQL is constant per probe,
+  statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files`
+  for names), sizes and caps from the catalogue, no metadata built-ins, temp tables, `sys.sysprocesses` or
+  `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do). Filters run in backend
+  memory over a sample (`ActivityFilter`, sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when
+  its id is one Varia's pooled or Object Actions connections were given (`ILiveHost.OwnSessions`), never by claimed
+  process id, host or program alone; `VariaSessions.Protected` (ledger ids or those claims) is the wider set refusals
+  use, since SqlClient's reconnect can move a pool connection to an unrecorded id.
+  Session actions (`Activity/SessionActions.cs`) have the only exemptions: `activity.details` reads `dm_tran_locks`
+  only on request, on the monitor's pool under the live gates; `activity.kill` runs on the object actions' connection,
+  one guarded batch per session that checks identity (login time, host process id), refuses its own, system and this
+  backend's pool sessions (every connection, any Application Name), then runs a server-built KILL from an int
+  parameter. Neither logs session ids, logins, hosts or SQL.
+- **Actual-plan collector** (`ActualPlanSql`, docs/execution-plans.md) runs on the observer's own connection, never the
+  query's. Its SQL is constant text per scope and version variant, rendered once; its event-session SQL is held to `ActualPlanSql.Lint` (a connection-id read in
+  `ActualPlanCapture` is not):
+  dynamic SQL only through `sys.sp_executesql` of text built from literals, `QUOTENAME(@name)` and server-side `CONVERT`s
+  of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters. It has no
+  prologue: besides a permission check and a connection-id read it only creates, starts, reads and drops its event
+  session, and drops abandoned Varia collectors it recovers.
+- **SSIS Catalog.** Code tables, `ssis.describe` views, `ssis.execute` verbs, Explorer verbs and commands, documents,
+  error codes, features and limits live only in `src/shared/ssis/catalog.ts` (tree kinds and folders are Object
+  Explorer's); it generates `docs/integration-services.md` below its marker line only.
+  - Reads use the SSIS read pool (" - Integration Services", Initial Catalog the catalog's database, idle connections
+    kept until disconnect) or a write's preflight, never the explorer pool, from `SsisSql` and the explorer's SSIS
+    listings under `SsisSql.Lint` (no metadata built-ins, `datetime` conversions, dynamic SQL, writes or
+    `SYNCHRONIZED`): listings and describes `READ UNCOMMITTED` (describes `READ COMMITTED` with RCSI) with
+    `LOCK_TIMEOUT 5000`, the profile's role checks 1000.
+  - Writes only in `SsisActionService` (`ssis.execute`, sensitive): own unpooled, never-retried connection
+    (" - Integration Services Actions"), preflight in it (READ COMMITTED, `LOCK_TIMEOUT 10000`, 25 s), steps only from
+    `SsisSql.WriteTemplates` calling only their verb's procedures (`SsisSql.LintWrite`), no outer transaction,
+    `LOCK_TIMEOUT -1` until Stop, whose reply waits and lists completed steps (`AnswersStop`). A verb SSISDB refuses to
+    SQL logins answers `WINDOWS_AUTH_REQUIRED` on a box server before connecting.
+  - The catalog database name comes only from internal `SsisOptions.CatalogDatabase`, never a request; there is no 32-bit
+    runtime option.
+  - Server verbs (Create Catalog) are the SSIS DDL path: same rules in `master`, commands only from
+    `SsisCreateSql.ServerCommands(verb)` (`SsisCreateSql.Lint`: dynamic SQL only where SQL Server takes a literal, from
+    `QUOTENAME` or `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), database name from the catalogue or internal
+    `SsisOptions.CreateScratch`. Stop cancels any statement but the restore; a Stop or failure after it removes exactly
+    what the request made, waiting at most 30 s per lock.
+
+## UI structure
+
+- **Commands and keys.** Commands and keybindings are declared only in `src/shared/commands/catalog.ts`.
+  `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
+  first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
+  the role, custom menus and the palette run it through `varia:run-role`. Varia's two-part chords are `bridge`
+  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
+  renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
+  to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
+  keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
+  generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
+- **Gestures** are declared only in `src/shared/commands/gestures.ts`; handlers read pointer modifiers only through
+  `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`). Every pointer command has a
+  keyboard path, and tooltips naming a gesture take its words from the service.
+- **Menus** are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus
+  `src/shared/theme/menu.ts`. Windows/Linux render them in `src/renderer/src/menus`; macOS natively from ids. Main's
+  application menu takes only command-id sets (`menuStateSchema`) and sends back a bare id; it is the macOS menu bar and
+  hidden elsewhere, where it still serves role keys. macOS context menus (`src/main/context-menu.ts`) open only in the
+  focused window or within 1 s of input there, and send back a token and an id. Menu targets
+  (`src/renderer/src/menus/targets.ts`, `useMenuTarget`) never cross IPC. `MenuService` is the only `contextmenu`
+  listener, and only `.menu-layer` reaches z-index 30000. A closed shortcut popover leaves its visible invoker as menu
+  anchor and focus destination; deferred Connect focus yields to newer input recorded by `WindowRegistry` (popouts too). Pinned server shortcuts use the
+  same canonical connection target as ordinary rows.
+- **Settings** live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area aggregated by `catalog.ts`;
+  the Scripting page from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod schemas built from
+  the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read before every
+  write, atomic, invalid files quarantined); the renderer gets validated values through `SettingsService` and changes
+  them only with `updateSettings` patches.
+- **Colours** live only in `src/shared/theme/`; CSS and TSX use `var(--varia-*)` (`tests/theme-css.test.ts`). Theme files
+  are untrusted: only main reads them, and the renderer applies only the validated map main sends.
+- **Metrics.** Sizes, radii, shadows and motion are tokens in `src/shared/theme/metrics.ts`, mirrored on `:root` in
+  `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (renderer font sizes too), keeps text at
+  11 px or more, lets only hover fills fade, and stops every animation under reduced motion (Monaco's codicon spinners
+  included).
+- **Icons** live only in `src/shared/icons.ts` (codicons and Varia's SVGs, by id); catalogues name icons by id and the
+  renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
+  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs). Fonts are fixed in
+  `src/renderer/src/fonts.ts`.
+- **Getting Started** uses `src/shared/help/catalog.ts` and lazy JSX guide modules with matching stable IDs; references
+  resolve through the live command, setting, effective shortcut and gesture catalogues. Lesson focus is explicit, so Help
+  focus does not erase editor or results bindings. The singleton custom document has no text model, SQL session,
+  recovery record or persisted progress; its frame and navigation stay mounted while only the section body loads or
+  fails, and guide modules never refocus on load. Samples are bounded fictional illustrations with local state that
+  never connect, execute SQL or duplicate result processing. docs/help-authoring.md owns the workflow.
+- **Release notes** are reviewed, versioned plain-text records (`release-notes/*.json`) validated by
   `src/shared/releases/schema.ts` and explicitly bundled by its catalog. Their read-only document uses the normal custom
-  provider and document frame; it has no SQL model or backend connection. Requested versions match exactly; missing
-  notes do not fall back silently or block the updater. `scripts/release-notes.mjs` also generates public release bodies
-  and published changelog sections from those records. Manual downloads remain the fixed main-owned releases URL.
-- Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
-  in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
-  release's `varia-update-v2.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
+  provider and frame, with no SQL model or backend connection. Requested versions match exactly; missing notes never fall
+  back silently or block the updater. `scripts/release-notes.mjs` also generates public release bodies and changelog
+  sections. Manual downloads use the fixed main-owned releases URL.
+- **Updates** live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); docs/updates.md. Only main
+  fetches (its own in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512
+  against the release's `varia-update-v2.json` (written by `scripts/update-manifest.mjs`), and installs only after
   Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
-  only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
-  The release job keeps writing `varia-update.json` in its first shape: builds up to 0.7.0 refuse a manifest with a kind
-  or field they do not know, so a new kind goes only in the current manifest, which leaves out what a build cannot use
-  instead of refusing the release. An installed
-  Windows copy whose folder the user can write stages a release beside itself while it runs and swaps it in at restart,
-  through the update helper (`backend/Varia.Updater`, `src/main/update-staging.ts`): the helper takes paths only from
-  main, works only in the one folder beside the installation that main stages in and only when that folder is this
-  user's alone (main believes no marker there by itself: it asks the helper), checks the archive's SHA-512 again before
-  unpacking it, and asks for no elevation; anything it cannot do falls back to the installer, for that release in
-  every later run too (`update-failed.json` in the profile, written before every swap is started). macOS builds do not update themselves until they are code signed.
-- Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
-  the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
-  schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
-  before every write, atomic writes, invalid files quarantined); the renderer receives validated values through
-  `SettingsService` and changes them only with `updateSettings` patches. After changing the catalogue, regenerate
-  `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
-- Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
-  Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
-- Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
-  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
-  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
-  spinners included; regenerate `docs/themes/metrics.md` with
-  `npx vitest run tests/theme-metrics.test.ts -u`.
-- Icons live only in `src/shared/icons.ts` (codicons and Varia's own SVGs, by id); catalogues name icons by those ids and
-  the renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
-  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs in the renderer). Fonts are fixed in
-  `src/renderer/src/fonts.ts`. After changing the registry, regenerate `docs/icons.md` with
-  `npx vitest run tests/icons.test.ts -u`.
+  only `UpdateState` and asks with argument-free calls; it never names a URL or path. The release job keeps writing
+  `varia-update.json` in its first shape: builds up to 0.7.0 refuse unknown kinds or fields, so new kinds go only in the
+  current manifest. An installed Windows copy whose folder the user can write stages a release beside itself and swaps
+  it in at restart through the update helper (`backend/Varia.Updater`, `src/main/update-staging.ts`): paths only from
+  main, only in the one staging folder beside the installation and only when that folder is this user's alone (main
+  trusts no marker there itself; it asks the helper), SHA-512 checked again before unpacking, no elevation. Anything it
+  cannot do falls back to the installer, for that release in every later run too (`update-failed.json` in the profile,
+  written before every swap starts). macOS builds do not update themselves until they are code signed.
 
-## Product direction (agreed with the owner, in full)
+## Generated documents
 
-- Goal: SSMS 2022-level polish plus a VS Code-style F1 command palette. Core first (connections, databases, objects);
-  SSIS, replication, and credentials later. Windows, Linux, and macOS are all first-class. Never freeze or crash;
-  handle error states cleanly.
-- Roadmap: PR0 CI/test foundations, PR1 theme tokens, PR2 command registry + F1 palette, PR3 context menus,
-  PR4 Object Explorer v2 (backend node provider, virtualized keyboard tree), PR5 scripting (Script As), PR6 binary
-  IPC v2, PR7 streaming virtualized results grid.
+After changing a catalogue, regenerate with the command in CLAUDE.md's Generated files table: commands
+(`docs/commands.md`), Monaco keys, gestures (`docs/gestures.md`), live (`docs/live.md`, `Live/live-catalog.json`),
+explorer, scripting, actions, designer, activity, SSIS, settings (`docs/settings.md`), metrics
+(`docs/themes/metrics.md`) and icons (`docs/icons.md`). Backend catalogues embed their generated JSON.
+
+## Product direction (agreed with the owner)
+
+CLAUDE.md has the summary. In addition:
+
+- Core first (connections, databases, objects); SSIS, replication and credentials later.
 - IPC v2: length-prefixed MessagePack frames (control and row pages), server push and streams with credit-based
   backpressure, MessagePort with transferable ArrayBuffers to the renderer.
-- Results stay in memory under a backend memory budget with explicit truncation. No spill to disk.
-- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar and native
-  context menus on macOS.
-- SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
-  Entra ID next.
-- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default and
-  Comfortable as an option), not SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Dense
-  Power's environment and status indicators are in (the red Production tag on connections, live Object Explorer status
-  chips), showing only what a probe produces. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's SSMS
-  icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
-  system like VS Code or opencode.
+- Menus: custom-rendered themed title bar and context menus on Windows/Linux; native global menu bar and context menus
+  on macOS.
+- Authentication: SQL, Integrated (Windows SSPI; Kerberos on Linux/macOS) and Microsoft Entra ID.
+- Visuals: Compact density by default with Comfortable as an option. Dense Power's environment and status indicators
+  are in (the red Production tag on connections, live Object Explorer status chips), showing only what a probe produces.
+  Icons are codicons (bundled with Monaco) plus custom SVGs. Themes: Dark and Light (plus follow System), customizable
+  through a standardized palette system like VS Code or opencode.

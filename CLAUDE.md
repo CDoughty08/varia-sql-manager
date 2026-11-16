@@ -8,8 +8,8 @@ Where the detail lives:
 - docs/architecture.md: the full architecture invariants this file summarises. Read the area's bullet before changing it.
 - docs/testing.md: test environment variables, live and scratch checks, smoke-test hooks, testing rules.
 - docs/ci.md: CI layout, measurements and the rules that keep it lean.
-- docs/ipc.md: protocol v2 (frames, pages, limits, error codes, benchmarks). README.md: user-facing behaviour.
-- Each area's generated page (below) and hand-written page in docs/.
+- docs/ipc.md: protocol v2 (frames, pages, limits, error codes, benchmarks).
+- Each area's page in docs/ (user-facing behaviour; some have generated sections, below). README.md is only an overview.
 
 Keep this file stable: no check counts, timings or other numbers that change from PR to PR. A new rule goes in
 docs/architecture.md or docs/testing.md; add a line here only when an agent would break something without it.
@@ -25,7 +25,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
   `npm run test:electron` runs `check` then `test:smoke`.
 - `npm run backend:test`: only the .NET checks. Add `-- --live-group k/3` to `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release` for one CI live group.
-- `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` needs the Release backend built).
+- `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` and `*-live.test.ts` need the Release backend built).
 - `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`, `npm run bench:startup`: benchmarks, not part of `check`;
   `node scripts/check-bench.mjs` compares them with `tests/bench/floors.json`.
 - Other sessions share this machine. While developing, run only the checks that cover your change (one vitest file, the
@@ -40,7 +40,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
   the backend and starts a SQL Server container.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set (with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD` for SQL
   authentication); `VARIA_TEST_SQL_SCRATCH=1` lets them create marked scratch databases. Entra and SSIS checks are opt-in.
-  docs/testing.md lists every variable. Never print passwords or secrets.
+  docs/testing.md lists the test variables; tool- and benchmark-specific ones are in their area docs. Never print passwords or secrets.
 
 ## Architecture invariants (summary; full rules in docs/architecture.md)
 
@@ -70,8 +70,9 @@ Results and live data:
 SQL the backend runs:
 - Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
   its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
-  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`), object actions and
-  Table Designer (`ActionService`, the only DDL path besides `SsisActionService`), session actions, SSIS. Read the area's
+  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`; Live Plan's inline probe in `LivePlanSampler` is unlinted), object actions and
+  Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
+  (`ActualPlanSql`, its own observer connection, no prologue, event-session DDL only), session actions, SSIS. Read the area's
   bullet in docs/architecture.md before touching any of them.
 
 UI structure (each is the single source; tests enforce it):
@@ -107,16 +108,24 @@ After changing a catalogue, regenerate its outputs with the matching command and
 
 ## User-facing documentation
 
-For a user-facing feature or behavior change, update the affected README, docs and guides in the same PR, along with
+For a user-facing feature or behavior change, update the affected docs and guides in the same PR, along with
 CHANGELOG.md's Unreleased summary, or explain concretely why no documentation changes are needed. Published release
-records are frozen: feature PRs do not add their work to an older release. Release preparation curates the versioned
-plain-text records and regenerates the published changelog; docs/release-notes.md describes that process and the shared
-producer for in-app and public notes. Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
+records are frozen: feature PRs do not add their work to an older release (docs/release-notes.md has the process).
+Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
+
+Keep the docs lean:
+- README.md is a short project overview (highlights, install, quick start, links). Feature detail goes in the area's
+  doc under docs/, not the README.
+- Docs describe how things work now. Revision logs, decision histories, past measurement rounds (keep only the current
+  baseline), review findings and PR/issue/commit references belong in PR descriptions, not in docs/. A plan for work in progress may live in docs/
+  until it ships; then fold what still matters into the area's doc and delete the plan. Standing guidance stays, such as
+  docs/ci.md's backlog and its list of rejected proposals.
+- State a rule once and link to it; keep the why to a sentence.
 
 Getting Started pages register in `src/shared/help/catalog.ts` with typed references and advisory source areas;
-follow docs/help-authoring.md to add or update guides and samples. Review those dependencies for every feature PR
-and record the guide/sample impact or a concrete no-impact reason. Use live reference components, not copied keys,
-defaults or menu labels. Samples are fictional and never execute SQL or connect automatically.
+follow docs/help-authoring.md to add or update guides and samples, and record the guide/sample impact (or a concrete
+no-impact reason) in every feature PR. Use live reference components, not copied keys, defaults or menu labels.
+Samples are fictional and never execute SQL or connect automatically.
 
 ## Testing expectations
 
@@ -135,8 +144,8 @@ defaults or menu labels. Samples are fictional and never execute SQL or connect 
   as errors. LF line endings. Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase); imperative commit subjects.
-- CI (`.github/workflows/ci.yml`) runs on every PR, with a source-only lane for documentation-only PRs; its layout is pinned by `tests/ci-workflow.test.ts` and
-  `tests/release-workflow.test.ts` and described in docs/ci.md.
+- CI (`.github/workflows/ci.yml`) runs on every PR, with a source-only lane for documentation-only PRs; its layout is
+  pinned by `tests/ci-workflow.test.ts` and `tests/release-workflow.test.ts` and described in docs/ci.md.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
