@@ -297,17 +297,27 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   slot without re-subscribing; service Running (XPs off while Agent runs) means the job may still run, so it shows "Agent
   XPs off, job progress unavailable", keeps its slot and recovers like the other views; service state unknown (no
   `HAS_PERMS_BY_NAME` permission, the usual case for User and Reader logins) shows "Agent stopped or Agent XPs off, job
-  progress unavailable", keeps its slot, and on the first XPs-1 sample `agent.jobs.watched` reports the real outcome.
-  Renderer fixtures cover all three, and the mock's `running-status-stopped` scene shows the texts. In the Log File
+  progress unavailable" and keeps its slot until the first XPs-1 sample. Outcome matching: the status bar records the
+  server time when its `sp_start_job` returned (`SYSDATETIME()` in the same batch), and takes a finished job's outcome
+  only when `sp_help_job`'s `last_run_date`/`last_run_time` is at or after that start; a job seen idle with an older last
+  run (Agent stopped mid-run and left no outcome row) shows "Agent stopped, job outcome unknown". A normal end shows
+  "<job>: Succeeded / Failed / Canceled at <time>" for a few seconds with View History, then releases the view. Every
+  status-bar job item has a Dismiss action that releases the view and slot at once, so the unknown case never holds one
+  of the window's 4 status-only slots indefinitely. Renderer fixtures cover all three service states, a normal end, an
+  Agent stop and restart while the service state is unknown with an older `last_run_outcome` (shows outcome unknown),
+  and Dismiss, and the mock's `running-status-stopped` scene shows the texts. In the Log File
   Viewer, while `agent.jobs` reports `AGENT_DISABLED`: with the service Stopped, step rows after the last job outcome row
   group as Unknown (no job outcome) and the banner is the Agent-stopped one (Start where allowed); with the service
   Running or unknown the running state cannot be read, so those rows show as "In progress or unknown (Agent XPs off)".
   A renderer vitest and the grouping table tests cover both, with history readable, the banner, and recovery on the
-  next XPs-1 sample. Job Activity Monitor and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
-  state; the banner offers Start (sysadmin on Windows, not a failover cluster instance, startup type not Disabled) only
-  while the service state is Stopped, and with Agent running it offers no Start, only the `sp_configure` /
-  `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `LiveErrors.IsTerminal("AGENT_DISABLED")`,
-  renderer fixtures assert which button shows for XPs 0 with Agent stopped and running, and a renderer
+  next XPs-1 sample. Job Activity Monitor and the Log File Viewer show it as a warning banner, never the error state, worded by
+  `agent.jobs.service`'s service state: Stopped is the "Agent stopped" banner, offering Start (sysadmin on Windows, not a
+  failover cluster instance, startup type not Disabled), with Status pills "Agent stopped"; Running offers no Start, only
+  the `sp_configure` / `mssql-conf` sentence, with Status pills "Unknown (Agent XPs off)"; unknown (the usual case for
+  User and Reader logins) says "SQL Server Agent is stopped or the Agent XPs option is 0", offers no Start, with Status
+  pills "Unknown"; a C# offline check covers `LiveErrors.Classify(15281)` and `LiveErrors.IsTerminal("AGENT_DISABLED")`,
+  renderer fixtures assert the banner text, button and Status pills for `AGENT_DISABLED` with the service Stopped,
+  Running and unknown, and a renderer
   vitest feeds Job Activity Monitor an `AGENT_DISABLED` sample. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
   next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision:
@@ -860,7 +870,7 @@ CLAUDE.md requires.
 
 | Lane | Scope | Depends on | Size |
 | --- | --- | --- | --- |
-| AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, docs generation), `agent.profile` and `agentRole` keys, `AgentReader` + `AgentSql.LintRead`, CI `MSSQL_AGENT_ENABLED` and the Agent-up wait, `VARIA_TEST_SQL_AGENT`, scratch prefix and sweep extension, Agent live suite skeleton; spikes on the owner's test instance: `sp_help_job` while stopped, the Agent XPs value after a clean Agent stop and error 15281, msdb procedures that roll back themselves (266), `xp_servicecontrol` with `SQLServerAgent` on virtual accounts and its "Access is denied" number, `version_number` bumps, msdb error numbers, the `dm_server_services` permission on 2022+ (and the probe split if needed), the Linux DMV | — | M |
+| AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, docs generation), `agent.profile` and `agentRole` keys, `AgentReader` + `AgentSql.LintRead`, CI `MSSQL_AGENT_ENABLED` and the Agent-up wait, `VARIA_TEST_SQL_AGENT`, scratch prefix and sweep extension, Agent live suite skeleton; spikes on the owner's test instance: `sp_help_job` while stopped, the Agent XPs value after a clean Agent stop and error 15281, msdb procedures that roll back themselves (266), `xp_servicecontrol` with `SQLServerAgent` on virtual accounts and its "Access is denied" number, `version_number` bumps, msdb error numbers, the `dm_server_services` permission on 2022+ (which `HAS_PERMS_BY_NAME` guards each probe uses), the Linux DMV | — | M |
 | AG-1 | Object Explorer: catalogue singleton children and `opens` leaves (with C# `Served`, docs and tests), Agent node, Job Activity Monitor leaf, folders and `agentProxySubsystem`, the session sysadmin column and reader session facts, both listing paths, edition gate (`ExplorerProfile` edition; existing Linux and Managed Instance flags), platform-gate verification, `explorer.agentService`, Agent node chips, per-probe reader routing in `SqlSampler` and the role path of `explorer.agent` (updating `ExplorerStatusLiveChecks`), XPs-disabled state, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden (Agent node New › appears with AG-6a's Job…), Ctrl+Q reveals Agent objects | AG-0 | M |
 | AG-2 | Job verbs from the tree: Start Job at Step, Stop, Enable/Disable, Rename, Delete; `AgentSql.LintExecutable` with return-code checks, the identity guard and msdb error mapping (`AGENT_STOPPED`, `JOB_STATE` after 22022, `STALE` codes registered); Agent service Start / Stop / Restart with every state; the `AgentService` suite under the exclusive lock and the path-gated `agent-service.yml` workflow | AG-1 | M |
 | AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, tiles, view chips, filters, multi-select row actions with Start Jobs / Stop Jobs progress, loading, error and Agent-stopped states, server-time labels; status-bar running job (`agent.jobs.watched`), Agent-stopped probe (`agent.jobs.service`) | AG-1 (AG-2 for actions) | M |
