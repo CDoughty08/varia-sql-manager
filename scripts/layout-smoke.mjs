@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   backendReady, closePaneButton, dockEmpty, editorText, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, layoutError, movePane, outputPaneIds, pane as paneOf, paneMenuButton, paneTab,
-  part, primaryAction
+  part, primaryAction, expectEditorShown
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })

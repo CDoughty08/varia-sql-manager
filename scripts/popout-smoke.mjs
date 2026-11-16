@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
   backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
-  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
+  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 

@@ -5,7 +5,7 @@ import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, activeDocumentName, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
-  documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, serverRows, statusBar, toolbarButton
+  documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, serverRows, statusBar, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { connectionLifecycle } from './fixtures/connection-lifecycle.mjs'

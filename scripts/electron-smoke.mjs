@@ -8,7 +8,7 @@ import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tr
 import {
   activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 

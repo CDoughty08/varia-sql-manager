@@ -396,6 +396,7 @@ export const statusBar = page => page.getByRole('contentinfo', { name: 'Status b
  * The status bar's backend segment once the backend is ready: Ready, with the runtime in its tooltip ('fake' for the
  * fake backend; by default the real one's .NET).
  */
+export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).getByTitle(new RegExp('^SQL backend: ' + (typeof runtime === 'string' ? runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : runtime.source)))
 /**
  * Where each workbench panel's content is and why it might not show: in its Dockview slot or still in the hidden holder,
  * the computed visibility and box of the content and of Dockview's render overlay around it, plus the page's visibility
@@ -420,19 +421,28 @@ export function workbenchPanes(page) {
   }, { pane: part.dockPane, slot: part.dockSlot })
 }
 
+/** How long the failure report may take: a renderer too busy to answer must not turn a 30 s failure into the suite's watchdog. */
+const reportMs = 5000
+
 /**
  * Waits for the query editor a new window shows. When it does not show, the error says where each workbench panel's
  * content was (workbenchPanes), so a launch that never shows its panels names the cause instead of only "hidden".
  */
 export async function expectEditorShown(page, { timeout = 30000 } = {}) {
   try { await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout }) } catch (error) {
-    const panes = await workbenchPanes(page).catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
-    error.message += '\nWorkbench panels: ' + JSON.stringify(panes, null, 2)
+    let timer
+    const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${reportMs / 1000} s`)), reportMs) })
+    const panes = await Promise.race([workbenchPanes(page), late])
+      .catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
+      .finally(() => clearTimeout(timer))
+    const report = '\nWorkbench panels: ' + JSON.stringify(panes, null, 2)
+    // Playwright's ExpectError writes its stack from the message when made, and Node prints an uncaught error's stack.
+    const original = error.message
+    error.message = original + report
+    if (typeof error.stack === 'string') error.stack = error.stack.includes(original) ? error.stack.replace(original, () => error.message) : error.message + '\n' + error.stack
     throw error
   }
 }
-
-export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).getByTitle(new RegExp('^SQL backend: ' + (typeof runtime === 'string' ? runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : runtime.source)))
 /** The header's search box (the command centre). */
 export const searchBox = page => titleBar(page).getByRole('button', { name: 'Search', exact: true })
 /** The status bar's Object Explorer segment (renames, scripting, notices), a live region. */

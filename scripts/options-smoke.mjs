@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   backendReady, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsDescription, optionsForm, optionsHeading, optionsNotes, pane, popoutDockButton, popoutTabs, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 
