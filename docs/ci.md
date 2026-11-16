@@ -89,9 +89,7 @@ the Measurements below with the new baseline.
 - **Queueing, not jobs, sets the wall time.** In the 2026-11-07 baseline (50 runs) a busy PR's CI took 25.4 min median
   while its longest job took 10; the median job waited 16 min for a runner (up to 50). Several agent sessions push at
   once, so every job and slot-minute a push adds delays every other run. **Removing whole jobs beats shaving steps.**
-- A PR push then started 15 jobs (4 of them packaging) and about 89 runner-minutes, 3 macOS jobs. Once packaging ran only
-  for PRs that touch it, one that does not ran 12 CI jobs, 64.5 runner-minutes, 1 macOS job (one run, 2026-11-08). Packaging every
-  PR had caught nothing CI missed in 232 runs.
+- Packaging runs only for PRs that touch it: packaging every PR had caught nothing CI missed in 232 runs.
 - Main on 2026-11-11 (3 runs, `--workflow ci.yml --workflow release.yml --branch main`): CI 10.8 min wall, 47 Linux +
   26 Windows + 5 macOS runner-minutes; packaging 14.1 min, 3 + 14 + 4.
 - In `npm run check` on CI the critical path is the vitest chain, which shares 3 or 4 vCPUs with the .NET chain; speeding
@@ -206,8 +204,8 @@ Considered and rejected (do not re-propose without new numbers):
   stops can finish first, cancel from a dedicated thread (SearchChecks.Deadline). Vitest's CPU-bound tests take
   `heavyTimeout` (`tests/fixtures/work-meter.ts`; `tests/idle-waits.test.ts` requires it for every test of 50,000 rows
   or more).
-- **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its weight in
-  `OfflineSuites.Weights`, and in `OfflineSuites.Alone` if it touches process-wide state.
+- **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its measured seconds
+  in `OfflineSuites.Weights` if over 0.3 s (shorter suites count as 0.1 s), and in `OfflineSuites.Alone` if it touches process-wide state.
 - **Fold work into an existing job before adding one.** Each job costs 40 to 70 s of setup (plus about 23 s with a SQL
   Server container) and a slot.
 - **Never repeat on one commit what another job already proved.** Packaging does not re-run tsc or vitest. Report-only

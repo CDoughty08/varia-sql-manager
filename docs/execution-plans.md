@@ -405,7 +405,8 @@ Layout and live updates:
 
 - The layout worker uses iterative threaded tidy-tree contours in O(operators + edges), keeping SQL Server's input order
   and orthogonal parent/input ports and compacting irregular subtrees. It supports forests and rejects duplicate IDs,
-  missing parents and cycles. A safety timeout falls back to the outline and XML. `tests/bench/plans.bench.ts` measures
+  missing parents and cycles. A safety timeout, a layout worker that fails to start, or a GPU init or context failure falls back to the
+  outline and XML. `tests/bench/plans.bench.ts` measures
   it against floors in `tests/bench/floors.json`.
 - Live counter updates are linear in retained operators and invalidate one frame without rebuilding spatial indexes,
   the scene or the layout. Selection and camera survive an output panel unmount.

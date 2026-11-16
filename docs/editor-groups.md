@@ -75,7 +75,7 @@ Last Query, or results while focus is in the results pane):
   labels. Ctrl+scroll down over a shelf adds rows, up removes them; **Increase/Decrease Tab Stack Height** in a tab's menu
   change its shelf, in the palette the active document's. A brief hint reports the row count, when all tabs fit, or the
   one-row minimum. A one-row shelf scrolls horizontally; a taller one uses its last slot for **… N more**, listing tabs
-  outside the shown rows. Row counts and scroll positions are independent per shelf and group. Stacks can grow until every
+  outside the shown rows (its entries have no tab context menu). Row counts and scroll positions are independent per shelf and group. Stacks can grow until every
   tab fits, with no window-height cap; a header taller than its group scrolls vertically (Ctrl+scroll still changes the
   height), and keyboard selection and rename reveal the tab.
 - **Pins** stay first in their group's order (`EditorAreaController.keepPinsFirst`, after every layout change and

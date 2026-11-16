@@ -6,7 +6,7 @@ menu, the window's header button, or dragging its tab onto the main window, wher
 where it was, or where it is dropped. Closing a popout docks its panels back; closing or reloading the main window closes
 every popout.
 
-Panels that can pop out: Object Explorer, Results, Messages and Execution plan (`popoutPaneIds` in `src/shared/layouts.ts`).
+Panels that can pop out: Object Explorer, Results, Messages, Execution plan and Client Statistics (`popoutPaneIds` in `src/shared/layouts.ts`).
 The query editor cannot (see *Limits*).
 
 ## Trust model

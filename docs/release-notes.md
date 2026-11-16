@@ -6,12 +6,12 @@ copy, with the running version marked **installed**. Section navigation and keyb
 frame. Notes can be read without a server connection, a working SQL backend or a network connection.
 
 An update notification's **Release notes** action opens the exact version that notification advertised. If it is not
-bundled, the tab says so. It offers installed-version notes when those are bundled and keeps **Release Downloads**
+bundled, the tab says so. It offers installed-version notes when those are bundled and keeps **Open Release Downloads**
 available. It never substitutes an older release under the requested version's heading. Opening missing notes does
 not start a download, check the network or prevent updating. Development builds distinguish published notes from work
 done since that release; Unreleased content is not presented as a published release.
 
-**Release Downloads** is a separate command that opens the fixed GitHub releases page, also used where self-update is
+**Open Release Downloads** is a separate command that opens the fixed GitHub releases page, also used where self-update is
 unsupported (macOS included) and for update-error remedies. Checking, downloading, verification and installation belong
 to the updater ([updates](updates.md)).
 

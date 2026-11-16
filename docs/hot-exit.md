@@ -15,8 +15,9 @@ default. While off, pinned tabs still reopen, and a close asks about unsaved cha
 - Ctrl+scroll down over a shelf adds rows, up removes them; **Increase Tab Stack Height** and **Decrease Tab Stack
   Height** (tab menu, palette) do the same. A one-row shelf scrolls horizontally; taller shelves list hidden tabs under
   **… N more**. Each shelf and group keeps its requested height with the saved layout.
-- The SID badge right of a query name shows its SQL Server session ID once execution acquires a session; a dash means no
-  known live session. Restored queries start disconnected.
+- A query tab's second line shows its environment and SID badge: `SID n` once execution has a session, a dash with no
+  known live session, and **Disconnected** with the server name for a restored query. Restored queries start
+  disconnected.
 - View › Reload Window keeps the same tabs a close would (all eligible text tabs with restore on, only pinned ones with
   it off), using the text as the page unloads, edits made during a pending reload included. Queries reopen disconnected
   before eligible targets reconnect.

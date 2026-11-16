@@ -297,8 +297,8 @@ Notes:
    ([Result store and memory budget](#result-store-and-memory-budget)): a change wakes it, and a result shown again
    stops packing at its next page.
 2. `actions.execute`: only CANCEL (reason 1) ends it, answered with its steps once the statement, compensation and
-   cleanup have ended (≤ 10 s + `cleanupMs`). While one is pending, main closes its generation with a grace of 10 s +
-   `cleanupMs` + 5 s (`drainMs`, `actionDrainMs`).
+   cleanup have ended (≤ 10 s + `cleanupMs`). While a long action (catalogue `long`) is pending, main closes its
+   generation with a grace of 10 s + `cleanupMs` + 5 s (`drainMs`, `actionDrainMs`); other actions get main's usual grace.
 3. `results.setMemoryLimit { limitGiB }`: a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; else
    `INVALID_PARAMS`); answers `{ applied, globalBytes, queryBytes }`, `applied` false only under the test hooks' fixed
    budget. A changed `results.memory` event precedes the answer or follows within a second. Main sends it, one in flight,
@@ -512,9 +512,10 @@ absent without VIEW SERVER STATE.
   `WITH NO_WAIT`, `database: 'master'`; execute runs one step per statement after recounting sessions (when execute has just closed
   idle pools, a count above zero is retaken every 50 ms for up to a second): such an option without `closeConnections` while others are in is `IN_USE`. Read-Only with a
   change SQL Server then refuses is `NOT_SUPPORTED`. Open Connections' Yes comes from main's
-  `varia:confirm-open-connections` box.
+  `varia:confirm-open-connections` box. The Script drawer previews with `actions.script` only while open, one request
+  once typing has paused for 300 ms, and cancels a preview an edit overtook (`varia:actions-cancel`).
 - **Take Offline and Bring Online.** User databases, read in master. `NOT_SUPPORTED` where the catalogue greys the
-  action or for a snapshot; `PERMISSION_DENIED` without ALTER ANY DATABASE, dbcreator, ownership or ALTER. One step;
+  action or for a snapshot; `PERMISSION_DENIED` without ALTER ANY DATABASE, dbcreator, ownership or (while it is online) ALTER on the database. One step;
   without `dropConnections` SET OFFLINE waits until Stop. Bring Online notes SINGLE_USER or RESTRICTED_USER (read within
   5 s). 5011 is `PERMISSION_DENIED`.
 - **Detach Database.** Azure SQL Database and Managed Instance `NOT_SUPPORTED`; neither sysadmin nor db_owner
@@ -695,8 +696,8 @@ carries a notice; malformed, oversized or overdeep documents fail with bounded, 
 
 The renderer keeps parsed models and layouts in bounded caches that survive hiding and showing a viewer
 (`preparationLimits` in `src/renderer/src/plans/preparation.ts`: 64 parses, 20,000 operators, 16 Mi characters; 32
-layouts, 20,000 operators, 4 Mi units; [details](execution-plans.md#implementation-notes)); a viewer combines up to 64 documents and 16,777,216
-input characters. Plans are read on demand through their result handles (invalidated by release and generation
+layouts, 20,000 operators, 4 Mi units; [details](execution-plans.md#implementation-notes)); a viewer combines up to 64 documents, 16,777,216
+input characters, 512 statements and 10,000 operators. Plans are read on demand through their result handles (invalidated by release and generation
 changes); a truncated plan is never drawn as complete. `.sqlplan` files have their own 16 MiB / 8,388,608-character
 limits. Layout (tidy tree, `src/renderer/src/plans/layout.ts`) runs in its own cancellable worker (20 s bound); drawing is one PixiJS canvas per batch, on
 demand, within the strict CSP; a virtualized DOM outline serves keyboard, screen readers, no-GPU and forced colors.
@@ -831,7 +832,7 @@ authoritative; a query's events after it are ignored.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends |
+| `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample and changes in the shared index budget's use. Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
@@ -899,8 +900,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   the current half holds. Test hooks'
   `VARIA_RESULT_BUDGET_BYTES` fixes the figure and turns off the memory-load check.
 - **Working memory** of operations (sort keys, profile figures) is charged to the same budget (pinned by
-  `tests/working-memory-lint.test.ts`). Reservations of 64 MiB or more, and stepped ones (`WorkSteps`) at each further
-  64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory); refused Distinct Count bounds are not an
+  `tests/working-memory-lint.test.ts`). Reservations of 64 MiB or more, any memory that only makes an operation faster once 64 MiB
+  of it is held (`ResultStore.TryReserveSpare`), and stepped ones (`WorkSteps`) at each further 64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory); refused Distinct Count bounds are not an
   error (the pivot sorts by cell and value instead), and a profile refused on several threads is read again on one.
   Nothing more is stored while the OS reports high memory load (checked at every page seal; the load is the runtime's
   reading at its last GC, refreshed by a gen0 collection when more than a second old).
@@ -911,12 +912,12 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Discarded results.** With `discardResults` no set's rows are stored or charged; each counts in
   `discardedResultSets` and an info message gives sets and rows read, also when the run is stopped or fails. Execution
   plan sets are still kept, within `maxResultSets`; rows after a plan's row in its set are not kept (`ResultSetTally`).
-- **Rows per query.** `maxRows` 0 – 2,147,483,647 across sets (0 = budget only, the default); a plan set's row is kept
-  past it. **Result sets kept:** `maxResultSets` 1 – 1,000 (default 10); later sets are counted. Kept descriptors may
+- **Rows per query.** `maxRows` 0 – 2,147,483,647 across sets (0 = budget only, the default); a plan set's first row is
+  kept past it and not counted. **Result sets kept:** `maxResultSets` 1 – 1,000 (default 10); later sets are counted. Kept descriptors may
   take 8 MiB of the 16 MiB summary, each bounded by `512 + Σ(UTF-8 name + UTF-8 type + 96)` bytes; a set past that, and
   later sets, are discarded.
 - **FOR XML and FOR JSON.** A set whose only column is `XML_F52E2B61-18A1-11d1-B105-00805F49916B` or
-  `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` is joined (`ForXmlCollector`) into one value of up to 2,097,152 characters
+  `JSON_F52E2B61-18A1-11d1-B105-00805F49916B` (ntext or nvarchar) is joined (`ForXmlCollector`) into one value of up to 2,097,152 characters
   (one more marks it truncated; reserved from the query's budget in 256 KiB steps), stored as one row
   (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`. `FOR XML … TYPE` already arrives as one xml cell.
 - **Never unowned.** A summary that cannot be encoded (`RESPONSE_TOO_LARGE`) releases its results at once.
@@ -924,7 +925,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   rowsRead, rowsStored, rowsAvailable (rows in sealed pages), bytesStored, truncatedCells, state: 'open' | 'complete' |
   'released', truncated?, incomplete, name? }`. Result ids are u32 from 1 per generation, always paired with it. `name`
   comes from a `#Name="…"` marker comment before the statement (docs/named-result-sets-scope.md): 1 to 128 characters,
-  trimmed, no control, line separator or bidirectional characters; `backendDescriptorSchema` refuses one out of bounds.
+  trimmed, no control, line separator or bidirectional characters; `backendDescriptorSchema` refuses one out of bounds. Absent for plan sets, Pivots and comparisons; its
+  bytes count toward the 8 MiB of descriptors.
 - **Released** by `results.close`, the next `query.execute` on the same session (whatever its connection), and process
   exit; closing a session or disconnecting keeps results. A release fails in-flight reads with `RESULT_RELEASED` after
   the current page and stops storing at once.
@@ -966,7 +968,7 @@ Notes appended to the summary's messages:
 | a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag and its column switches to a fallback reader: "Column
-‘{name}’ ({type}): some values could not be read and are shown as NULL." An xml value whose rest past the cap fails to
+‘{name}’ ({type}): some values could not be read and are shown as NULL." An xml value read through the `GetXmlReader` fallback whose rest past the cap fails to
 parse keeps its prefix (truncated, an estimate): "Column ‘{name}’ ({type}): some values could not be read to the end
 and show only the part read before the error." Under a Stop, a value that parses as malformed ends the read as the Stop
 instead.
@@ -997,7 +999,10 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
 - **Storage.** Per sealed page, `PageLengths`: a `uint32` per row (cell bytes summed, NULL 0), a sorted sparse list of
   24-byte `(row, column, chars, bytes)` entries for cells whose stored text does not give their length (truncated, xml,
   vector, sql_variant, estimates; estimates flagged by the column's sign bit), and 16-byte `(row, bytes)` entries for
-  rows of 4 GiB or more (`uint32` = `uint.MaxValue`). Charged with the page: 4 bytes a row, 24 per entry, 96 a page.
+  rows of 4 GiB or more (`uint32` = `uint.MaxValue`). An unreadable cell (NULL with the error flag) counts 0 bytes as an
+  estimate; a row's sum is exact unless it holds an estimate or a column whose rule is a guess. Entries wait until
+  `CommitRow`, and a rolled-back row leaves none. Charged with the page: 4 bytes a row, 24 per entry, 96 a page; the open
+  page's lengths count in the builder's working space.
 - **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
   rowsAvailable, estimated: number[] }` for sealed rows only: fewer than `count` past `rowsAvailable` (none for a range
   past it). `estimated` lists, ascending, rows whose sum includes an estimate. Main forwards it only for a result the
@@ -1006,8 +1011,9 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
   estimated rows in order within them (else `BACKEND_ERROR`). `ResultHandle.rowBytes`
   answers an empty range itself and refuses a malformed one (`INVALID_PARAMS`) without sending it (main closes the port
   after 100 invalid messages).
-- **Estimates** also cover: live tables (text as nvarchar; cut cells), xml without `SequentialXml` internals,
-  fallback-reader values of non-character types, and _UTF8 values holding invalid bytes (U+FFFD). Synthetic test rows
+- **Estimates** also cover: live tables (text as nvarchar; cut cells), xml without `SequentialXml` internals, and _UTF8
+  values holding invalid bytes (U+FFFD). A fallback-reader value counts as text: exact for character types, an estimate
+  for decimal, vector and recorded (xml, sql_variant) types; fixed-size types keep their exact size. Synthetic test rows
   are not measured.
 
 ## Messages
@@ -1073,7 +1079,8 @@ view is an order of some or all of a result's base rows, read through the result
   - Equality is the sort's (the collation decides text matches; `2` = `2.0` in float; truncated by prefix, `approximate`).
     A named view that is gone: `VIEW_NOT_FOUND`.
 - **Keep Selected Rows.** `{ op: 'keepRows', cells: { ranges: 1 – 256 [first, count], viewId? } }` keeps rows by position,
-  not value. More than 4,095 rows (`limits.transpose.maxRows`) is `TOO_LARGE` before reading; none is `INVALID_PARAMS`.
+  not value. Ranges are merged and clipped to the view's rows; more than 4,095 (`limits.transpose.maxRows`) is
+  `TOO_LARGE` before reading; none left is `INVALID_PARAMS`.
   It answers `{ op: 'keepRows', rows }` (ascending base rows), the form sent afterwards (`rows: 1 – 4,095`; an unsealed
   row is `INVALID_PARAMS`). It keeps earlier filters' order, and a later filter sees only its rows. Made while rows stream,
   it resolves to rows already sealed, so the view rebuilt once the result completes keeps those and none that arrived
@@ -1237,9 +1244,10 @@ Pivot groups and aggregates a result's rows in the backend (`Results/ResultPivot
   group has 1,204 distinct values, and a pivot can have at most 256 column groups. Choose a column with fewer values, or
   move it to Rows."). The messages name no column or value. Main checks the answer's shape (one row per row group; row columns + (column groups + 1) × values).
 - **Memory and stopped queries.** A derived set of the source query, charged to its budget, stored whole or not at all
-  (`TOO_LARGE`), released as a diff is; a refusal never stops the query. Figures (4 to 25 bytes per cell and value) are
-  charged before computing ("There is not enough result memory to pivot these rows. Close other results and try
-  again."). A query that stopped storing stores no pivot or diff: `BUDGET_STOPPED`, with one of:
+  (`TOO_LARGE`), released as a diff is; a refusal never stops the query. Grouping holds
+  `ResultPivoter.WorkingBytes` (the sort keys + 12 bytes a row). Figures (4 to 25 bytes per cell and value; COUNT
+  DISTINCT adds 4 bytes a cell, charged with them) are charged before computing ("There is not enough result memory to
+  pivot these rows. Close other results and try again."). A query that stopped storing stores no pivot or diff: `BUDGET_STOPPED`, with one of:
   - query budget filled: "This query's results filled its result memory, so it can store nothing more. Run the query
     again returning fewer rows."
   - global budget filled: "The result memory filled while this query ran, so it can store nothing more. Close other
@@ -1315,7 +1323,8 @@ The column profile panel and the row-size bar use `results.profile`, which answe
   (`ResultsService.holdView`) until its answer arrives.
 - **Work.** Two parallel passes over sealed pages (results equal one thread's). Working memory (a bit a row, per column
   and thread an exact distinct set to its cap, 16 KiB of estimator registers) is charged to the query budget
-  (`TOO_LARGE`). With no columns only row sums are read. `cancel` stops it (`CANCELLED`).
+  (`TOO_LARGE`), falling back to half the threads' share, down to one thread's, when the budget has no room. Long
+  min/max and collation keys are charged as met, and a refusal ends the profile `TOO_LARGE`. With no columns only row sums are read. `cancel` stops it (`CANCELLED`).
 
 ## Distinct values
 
@@ -1332,8 +1341,8 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   values some row of that view holds; rows sealed after that view start ticked.
 - **`results.distinctRead { resultId, snapshotId, order: 'count' | 'value', offset: 0 – 2³¹, count: 1 – 512, search?:
   1 – 1,024 characters }`** answers `{ total, offset, values: [{ group, row, text, count, checked }], checked,
-  nullsChecked }`; `count` order is most frequent first, `search` matches as [Search in results](#search-in-results) does
-  and its matches are kept for scrolling.
+  nullsChecked }`; `count` order is most frequent first, ties in value order; `search` matches as [Search in
+  results](#search-in-results) does, `total` then counts only the matches, and they are kept for scrolling.
 - **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls? }`** sets ticks of the
   named groups, all values (or all `search` matches), and NULL; answers `{ checked, nullsChecked }`. A frozen snapshot
   refuses it (`INVALID_PARAMS`).
@@ -1342,7 +1351,8 @@ The header funnel lists a column's distinct values with counts from a snapshot t
 - **Filter.** The first `results.view` using `{ op: 'groups', column, snapshotId }` freezes the snapshot: `in` of the
   ticked values' rows when complete and ticked ≤ cleared, else `notIn` of the cleared (so arriving values stay shown). It
   resolves to `{ op: 'groups', column, snapshotId, keep, values, nulls, row?, digest }`; `digest` is 32 hex digits (half a
-  SHA-256 of column, keep/drop, NULL and frozen rows), equal for equal ticks over equal rows, which Pivot compares.
+  SHA-256 of column, keep/drop, NULL and frozen rows), equal for equal ticks over equal rows, which Pivot compares. A sort or another filter builds the view again from the same
+  frozen snapshot.
 - **Memory.** `DistinctWorkingBytes` (about 65 bytes a row) while building, `DistinctSnapshotBytes` (30 bytes a value plus
   4 KiB) while kept, both on the query budget (`TOO_LARGE`). `cancel` stops a build or read (`CANCELLED`). Main checks
   answers (rows below 2³¹, `checked` ≤ `distinct` ≤ `rows`, `nulls` ≤ `rows`, exactly `min(count, total − offset)`
@@ -1439,7 +1449,8 @@ each with its own interval; a probe emits metrics (series values), up to 4 snaps
 [docs/live.md](live.md), the backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`)
 and the schemas in `src/shared/live/schema.ts`. Production sources: `activity` (Activity Monitor: `activity.overview`,
 `.sessions`, `.resources`, `.queries`), `explorer` (Object Explorer status chips) and the scope-`ssisdb` sources
-`ssis.catalog` (its `ssis.catalogProbe` fingerprints the catalog) and `ssis.operations`. The test source `debug.synthetic`
+`ssis.catalog` (its `ssis.catalogProbe` fingerprints the catalog) and `ssis.operations`, plus `query.plan` (scope
+`server`, the live execution plan, through `Plans.LivePlanSampler` rather than a `SqlSampler`). The test source `debug.synthetic`
 is accepted only by main's test schemas (`ResultsPortHost` with `testSources`, unpackaged smoke runs) and a backend with
 `VARIA_BACKEND_TEST_HOOKS=1`. Both methods are port methods (`PortMethods`), reachable only through the results port; a
 backend whose HELLO lacks either is refused.
@@ -1507,7 +1518,7 @@ due in that tick is sampled instead.
 
 Main checks every frame against `liveEventSchema` (each probe once, metrics aligned with the catalogue's series, tables by
 catalogue index with the catalogue's column names in order, ≤ 8 tables a tick, departed rows and facets only where declared,
-≤ 32 KiB facet text (UTF-8) a tick, declared status ids, `seq` 0 then +1) and against its subscription (`liveEventFits`:
+≤ 32 KiB facet text (UTF-8) a tick, declared status ids, error tables and series the probe has, `seq` 0 then +1) and against its subscription (`liveEventFits`:
 only the subscription's source and subscribed probes), and stamps the generation on every descriptor. The worst-case tick
 encodes to at most 192 KiB (`tests/live-schema.test.ts`); a tick over 256 KiB is never sent: the subscription ends `failed`
 with `BACKEND_ERROR`.
@@ -1528,7 +1539,7 @@ with `BACKEND_ERROR`.
   out (`more`) for a later tick.
 - **Re-sort.** A snapshot table holds its newest revision's pre-sort rows while the subscription's held rows stay within a
   quarter of its memory limit (16 MiB). When an update sets or clears a sort, the next tick (once the previous is
-  acknowledged) writes each table whose order changes as a new revision from those rows, with the same retire rule, its own
+  acknowledged, paused or not) writes each table whose order changes as a new revision from those rows, with the same retire rule, its own
   budget (`BUDGET` if it does not fit), `diff`, `tracked`, `departed`, no facets, marked `resorted`. No statement runs; a
   table with nothing held waits for its next sample.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
@@ -1578,7 +1589,7 @@ good (each terminal, or opened unavailable) it ends `failed` with the first prob
 and message. Every end but `sourceEnded` releases the results first; `kept` stays readable until `results.close`.
 
 **Update answer:** `{ applied: true, probes: { probe, intervalMs, effectiveIntervalMs, paused }[] }` for every probe,
-applied at the next wake. An unknown subscription is `NOT_FOUND`, one that is ending `CANCELLED`.
+applied at once; the next wake uses them. An unknown subscription is `NOT_FOUND`, one that is ending `CANCELLED`.
 
 **Ownership.** `ResultsPortHost` owns each table a tick carries, takes back on `retired` only the stream's own results, and
 at the end takes back all but `kept`. Closing the port cancels live streams (reason 3) and takes back their results; a
@@ -1609,7 +1620,7 @@ connection id is accepted; other scopes need a connected one (`NOT_CONNECTED`). 
   in force for 3 samples in a row doubles that interval up to the cap; under 10 % for 10 samples halves it back toward
   the asked one. Samples and the update answer
   report it as `effectiveIntervalMs`. A new interval from `live.update` restarts the guard.
-- **Idle.** While every probe is paused, the next sample is ≥ 30 s away, or all intervals are ≥ 30 s, the source returns its
+- **Idle.** While every probe is paused, the next sample is ≥ 30 s away, or all intervals are ≥ 30 s (never before a quick second sample), the source returns its
   connection to the pool and reopens when a probe is due. All probes starting paused open no connection.
 
 **SQL sources** (`Live/SqlSampler.cs`; scope `server`: `activity`, `explorer`; scope `ssisdb`: `ssis.catalog`, `ssis.operations`).
@@ -1634,9 +1645,9 @@ connection id is accepted; other scopes need a connected one (`NOT_CONNECTED`). 
 - **Gating.** A probe whose catalogue gates (band, Managed Instance as newest; EngineEdition) exclude the server opens
   `unavailable` `NOT_SUPPORTED`; one needing server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither
   runs. When the session probe did not run at open, such a probe opens `ok` and stops at its first tick with a terminal
-  `PERMISSION_DENIED`.
+  `PERMISSION_DENIED`, running nothing; so does one whose new connection's session probe finds the permission gone.
 - **Budget.** Each statement waits for a live gate (at most its budget, else `BUSY`) and runs with `CommandTimeout` 0 under a
-  token firing at 0.8 × the interval within the probe's `budgetMs` (500 ms to 5 s by default, never above 10 s; the catalog
+  token firing at 0.8 × the asked interval within the probe's `budgetMs` (500 ms to 5 s by default, never above 10 s; the catalog
   probe 500 ms to 10 s).
 - **Multi-statement sources** (`ILiveSqlReader`, `ActivityReader`) run statements one at a time within that budget and
   build rows in C#; each read is checked against its declared columns (`BACKEND_ERROR` on mismatch). A statement the login
@@ -1666,7 +1677,7 @@ no server permission (row-level security). Its probe `ssis.operations.list` keep
   `xml` list `@open`, ≤ 256 a sample, in turn); a row no longer found leaves. It keeps `limit` rows, open first, then newest.
 - Scope matches an execution's folder, project and package, a validation's folder and project, a deployment's project.
 - Tiles ignore scope, status filter and limit: running and pending counts (`status IN (2, 5)`) every sample, the last 24 hours
-  by final status every 30 s.
+  by final status every 30 s and with each baseline.
 - Lists go in as `xml` read with `.nodes('/i')`, names as escaped `LIKE` patterns; the SQL passes the live and SSIS lints. A
   server on Linux or older than SQL Server 2016 opens the probe `unavailable` `NOT_SUPPORTED`.
 
@@ -1714,7 +1725,8 @@ results worker](#results-port-and-results-worker)). Views open a `LiveHandle` fr
 (`src/renderer/src/live/LiveService.ts`, `workbench.live`), which owns the lifecycle; docs/live.md covers the user-facing
 behaviour.
 - **Open.** `live.open(spec, owner)` subscribes with catalogue default intervals unless asked otherwise. `documentOwner(tabId)`
-  is visible while its tab is the active document, follows the tab's connection and closes with it. The SSIS tree's views
+  is visible while its tab is shown in its editor group (the active document without groups) and the editor area
+  shows, follows the tab's connection and closes with it. The SSIS tree's views
   (`SsisTreeProbe`) belong to Object Explorer and hold ordinary slots. At most 16 views hold a slot per window (main's 16
   port streams). A `background` view (`LiveSpec.background`: Object Explorer status via `ExplorerStatusService`) takes only a
   free slot, at most 8: without one it waits (`dormant`, `waiting: true`, running nothing). A view opening when all 16 are
@@ -1880,7 +1892,7 @@ applied (`applyLive`) and the results it retires (only this stream's) are forgot
 synchronously, then calls `ack(bytes)`, and nothing more arrives until then (an exception from `onEvent` is caught: the stream's
 bookkeeping goes on and the event stays unacknowledged). A cancelled stream's events still count its results but no longer reach `onEvent`. On end its results
 are forgotten, except those a finished source kept, readable until `release`. A
-failed worker ends streams with `RESULT_DECODER_FAILED`, `dispose` with `PORT_CLOSED`. `applyLive(descriptor)` creates
+failed worker ends streams with `RESULT_DECODER_FAILED` (main cancels them when the new worker's port opens), `dispose` with `PORT_CLOSED`. `applyLive(descriptor)` creates
 or updates a result as query events do, so an append table's handle notifies its listeners as it grows. `forget(keys)` marks
 backend-released results released and drops their windows and pages, without `results.close`.
 
@@ -2085,7 +2097,7 @@ terminal for live probes. Display login text is never identity proof.
 | --- | --- |
 | Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -2228,7 +2240,8 @@ and reports that block skipped.
   password. A remembered password is Electron `safeStorage` ciphertext in `saved-passwords.json`, bound to its server,
   login, TLS settings and opaque revision by a SHA-256 hash and a check inside the ciphertext (moved or rewritten entries
   are refused); an unchanged secret keeps its revision, replacement rotates it, and legacy ciphertext without one is picker-only. Main serializes
-  secret operations, so a rejected revision is never retried by queued reconnects; temporary keyring/network/TLS failures
+  secret operations and gates saved-binding attempts through completion, so a rejected revision cannot be tried again by
+  queued reconnects, even if removing its ciphertext fails; temporary keyring/network/TLS failures
   keep the entry. Main decrypts (async API only) into a `connections.connect` or `.databases` request with that binding
   and an empty password, after `validateRequest`; the frame is zeroed. The renderer only learns which entries have one.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
@@ -2430,8 +2443,9 @@ Notes on the figures:
   segment to no task with 50 ms of CPU time on Linux (100 ms elsewhere) and none of 250 ms by the clock (one retry), read
   from a renderer trace.
 - Jumps across many columns miss their 50 ms target: each rewrites every cell in view, and styling, layout and paint of
-  most of a 300 bit-column grid's ~1,800 elements takes 40 to 90 ms on these CPUs. Continuous scrolling of 300 bit columns
-  misses 60 frames a second, though each frame writes only the cells of the rows that scrolled in. Row numbers are one sticky
+  most of a 300 bit-column grid's ~1,800 elements takes 40 to 90 ms on these CPUs. Continuous scrolling of wide results
+  misses 60 frames a second: every frame writes the cells of the rows that scrolled in (about 1,800 elements for 300 bit
+  columns). Row numbers are one sticky
   column beside the rows (a sticky header per row made every row a composited layer); `results-smoke.mjs` checks that
   nothing inside a row is sticky. Rows are reordered in the DOM (for screen readers) only in the first frame after
   scrolling stops.

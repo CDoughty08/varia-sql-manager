@@ -3,8 +3,8 @@
 Historical design mocks for the results pane, kept for reference now that the pane has shipped. They are not
 production code and may differ from it; [docs/results-tools.md](../../docs/results-tools.md) describes the pane as it
 is. Each file is one self-contained page (inline CSS and JS, no network, no build step) that opens directly in a
-browser. Every page has a Dark / Light switch and pane sizes; `?theme=light`, `?size=narrow` and `?state=<id>` open a
-page in that state.
+browser. Every page has a Dark / Light switch (`?theme=light`) and `?state=<id>`; the grouped-results and Compare mocks also
+have pane sizes (`?size=narrow`).
 
 | Mock | Shows |
 | --- | --- |

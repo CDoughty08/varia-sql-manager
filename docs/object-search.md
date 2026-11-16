@@ -204,7 +204,8 @@ never the tree's. Rename, Delete and Properties need the tree's row: reveal the 
 | Form | Result |
 | --- | --- |
 | Name (Ctrl+C on a hit) | The name as stored. |
-| Schema-Qualified Name, Fully Qualified Name (Ctrl+Shift+C) | Database, schema, a child's parent and name joined with dots, bracketing only parts that are not regular identifiers or are reserved keywords (`AppData.dbo.[Order Details].UnitPrice`). Only for objects in a schema. |
+| Schema-Qualified Name | Schema, a child's parent and name joined with dots, bracketing only parts that are not regular identifiers or are reserved keywords (`dbo.[Order Details].UnitPrice`). Only for objects in a schema. |
+| Fully Qualified Name (Ctrl+Shift+C) | The same with the database first (`AppData.dbo.[Order Details].UnitPrice`). Only for objects in a schema. |
 | Bracketed Name | Every part bracketed, `]` doubled as QUOTENAME does (`[AppData].[dbo].[Orders]`); a login, database or database user is its name alone, bracketed. |
 
 ### The details pane

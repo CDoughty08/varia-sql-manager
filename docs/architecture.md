@@ -23,7 +23,7 @@ only when a summary line stops being true.
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
   Unknown methods and members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
 - **Logs and secrets.** Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text,
-  credentials or connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the
+  names, values, credentials or connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the
   environment, logs, traces or previews.
   - A remembered password is only Electron `safeStorage` ciphertext (async API only, `src/main/secret-cipher.ts`) in
     `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
@@ -272,7 +272,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
   - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2
     a shown one idle for 30 s (no pin or lease begun or ended, not completed or shown again; `ResultSetBuffer.Activity`
-    on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (4 minutes). An
+    on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
     saving under a tenth stays raw). A shown result with an open view stays raw; one packed before its view, or shown
@@ -444,7 +444,7 @@ lint, on its own pool or connection with a fixed prologue. Never log names, SQL,
     `Designer/DesignerSql` under `ActionSql.LintExecutable`; `Actions/CreateDatabaseSql` (own `Lint`: file names and
     paths as server-quoted N'' literals under a binary collation, plus `Actions/JsonBuilderLint`'s OPENJSON rules: number or `nvarchar(max)` columns, text only inside
     `QUOTENAME`);
-    `Actions/AttachSql` (`AttachSql.Lint`, paths only in one server-quoted JSON parameter, `DBCC CHECKPRIMARYFILE (@mdf,
+    `Actions/PermissionSql` (`PermissionSql.LintExecutable`); `Actions/AttachSql` (`AttachSql.Lint`, paths only in one server-quoted JSON parameter, `DBCC CHECKPRIMARYFILE (@mdf,
     n)`); `Actions/RestoreSql` for RESTORE and BACKUP, binding only variables (`RestoreSql.LintMedia`); `Actions/LoginSql`
     (`LoginSql.LintExecutable`, chained by `ActionSql.Lint`; the password only as `@password` behind a NULL guard through
     a binary-collation REPLACE, never a literal). Names (the batch's database included) go through server-side

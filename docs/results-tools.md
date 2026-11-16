@@ -36,7 +36,16 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
 - **Highlight** (grid menu) colours rows; Ctrl+Shift+H applies the last colour picked. A highlight follows its row by a
   unique key column through sorting and re-runs; when a re-run loses the key column, the grid says so and **Clear All
   Highlights** starts again.
-- Find's **Columns** mode searches column names and fades the columns that do not match.
+- **Filter** (grid menu) keeps the selected cells' values, other values, the range from the lowest to the highest
+  selected value, no NULLs in a column, or the rows that repeat in the selected columns or in every column. Values match
+  by the column's collation. Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
+  and Save Results As follow the filtered rows.
+- A column header's funnel (**Filter Column Values…**, Alt+Down in a grid) lists every distinct value with its count,
+  most frequent first or by value, as a checklist with a search, Select all, Select none and NULL as an entry; OK keeps
+  the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL.
+- **Search** (results toolbar, Ctrl+F in a grid) finds matching cells in every grid of the run, in memory, comparing text
+  by its column's collation; Enter and Shift+Enter (F3 and Shift+F3 in a grid) step through them in each grid's order.
+  Its **Columns** mode searches column names instead and fades the columns that do not match.
 - **Row size** draws a bar behind each row number for the row's size; hover it for the bytes.
 
 ## Keep Selected Rows
@@ -96,7 +105,10 @@ are not rebuilt.
 
 ### Pivots
 
-- One Pivot per result, always read from the result's own rows.
+- One Pivot per result, always read from the result's own rows. The builder picks row groups, an optional column
+  group and values: Count, Distinct Count, Sum, Average, Min or Max (Sum and Average for numeric columns only). Text
+  groups by the column's collation, NULL is a group of its own, and decimal sums keep all 38 digits. A pivot of more than
+  256 column groups, 100,000 row groups or 4,000,000 figures is refused with a message saying which.
 - The builder belongs to the grid you last used (for a comparison or plan set, the first pivotable result) and names it.
   Each result keeps its draft, inherited by a re-run's result of the same number. **Pivot Results…** on a Pivot opens
   the builder with what that Pivot was built with.
@@ -109,6 +121,8 @@ are not rebuilt.
 - The builder closes with the results (Close Results, a run with none, closing the last result) and the next run does not
   reopen it; drafts stay for the next **Pivot…**.
 - A Pivot's strip says when its result holds only part of the query's rows.
+- Two large Pivot builds of one query can refuse each other with `TOO_LARGE`, and a replacement counts the old Pivot's
+  memory against the new one until it is built.
 
 ### Out-of-date Pivots
 
@@ -157,7 +171,12 @@ the picked result old (−); **Swap old and new** turns them. Names read old →
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed
 the popover or switched pair meanwhile; with the palette over it, it stays and offers Show It). **Cancel** shows while it
 runs; failures show in the popover, or the toolbar once it has closed. An existing identical comparison is shown (**Show
-It**). Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
+It**).
+
+The comparison is a unified, git-style diff after the results: each changed row as its old row (−) and new row (+)
+with the changed values marked, added and removed rows, and one unchanged row of context around each change, with each
+row's number in both results. Rows match by a key column unique in both, else by whole rows. **Compare with Previous
+Result (Exact Text)** in the palette compares every character. Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
 A run keeps at most 1,000 results, comparisons and Pivots (including those building); past that it is refused.
 
 The popover closes, returning focus to its opener, on Escape, **Close**, the toolbar's Compare, a press outside or in
