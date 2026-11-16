@@ -187,7 +187,11 @@ mirror, docs.ts output and catalogue tests:
 
 - **Singleton children**: `KindSpec` gains `singletons` (kind, label, the same `editions`/`platforms` gates as folders), and an
   `order` that sorts with `FolderSpec.order` among the owner's children (in TS and in the C# children listing; catalogue
-  tests assert SSMS's order, so Job Activity Monitor sits between Jobs and Alerts), with an unnamed `server`-style scope. The server kind's singleton is `agent`
+  tests assert SSMS's order, so Job Activity Monitor sits between Jobs and Alerts; `tests/explorer-catalog.test.ts`'s
+  sibling-order uniqueness check, which today covers only `folderSpecs` and `laterFolders` and skips `owner === 'object'`,
+  counts singletons as siblings, below kind owners too; a kind's children are merged by `order` rather than taken from its
+  `folders` array; `ExplorerCatalog.cs`'s ordering and the generated catalogue JSON's `CatalogFolder` reader carry
+  singletons with their `order`), with an unnamed `server`-style scope. The server kind's singleton is `agent`
   ("SQL Server Agent", so chips keyed by `NodeKind` work); the `agent` kind's singleton is `agentJobActivity` ("Job Activity
   Monitor", a leaf).
 - **Opens a document**: `KindSpec` gains `opens` (a document id from the Agent catalogue); a leaf with it opens that document
@@ -237,7 +241,12 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
   a generic failure. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
-  next sample clears the sublabel and the tree reloads the Agent folders.
+  next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision: the TS and C#
+  listings read the `agent` node's XPs input, seeded from the capability read. An `AgentStateSource` on `ExplorerService`
+  (modelled on `DatabaseRuntimeSource`) carries `explorer.agentService`'s XPs value, and when it changes 0 → 1 or 1 → 0 it
+  reconciles the `agent` node (re-lists its children, keeping expansion and selection), the one case where a status sample
+  changes the tree. When the status view is not running (`liveData.explorerStatus` off or Object Explorer hidden), the
+  fallback is the 15281 mapping on any Agent read plus Refresh.
 - The `explorer` live source gains a reader for one probe only. Today `LiveService.CreateSampler` hands an
   `ILiveSqlReader` to the Activity Monitor and `ssis.operations` sources, and `SqlSampler` then sends **every** ungated
   probe of that source to the reader and takes the session from the reader's `SessionAsync`. Routing is fixed when the
@@ -264,8 +273,13 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   table-less samples other than `explorer.agent`. So AG-1 adds an `agent` field to `ServerStatus`, reads the
   `explorer.agentService` sample in `ServerView`, adds an `agentChips(...)` builder in `src/shared/explorer/status.ts` with
   its docs entry, and a `rowStatus` branch for `node.kind === 'agent'`; a vitest checks the Agent row's Stopped chip, XPs
-  sublabel and running-jobs chip, and that unknown state shows no chip. Job rows show state chips (Running · step n/m, Failed, Between retries) from
-  `agent.jobs` while the Jobs folder is open. Chips never reload the tree.
+  sublabel and running-jobs chip, and that unknown state shows no chip. Drawing them needs `ExplorerRow` changes too: `listedChips` returns `[]` for
+  every kind but login, so `staticChips ?? status?.chips` never reaches a status chip on a non-root row; AG-1 makes it
+  return `undefined` for kinds with no listed chips, adds a `sublabel` field to `RowStatus` rendered for the agent row (as
+  `liveDatabase` does for databases), and puts the status words into the agent row's accessible name and tooltip (chips
+  are `aria-hidden`; today only the root row's `serverWords` does this). The vitest renders the row and asserts its
+  accessible name ("SQL Server Agent, Stopped, Agent XPs disabled"), not just `rowStatus`'s output. Job rows show state chips (Running · step n/m, Failed, Between retries) from
+  `agent.jobs` while the Jobs folder is open. Chips never reload the tree, except the Agent XPs change above.
 - A live change source `agent.tree` with probe `agent.treeProbe` (as source `ssis.catalog` has probe `ssis.catalogProbe`):
   row count and checksum of the columns the tree shows. Sysadmin computes them in SQL; the role path cannot (`INSERT …
   EXEC` is never used), so the backend computes them from the capped `sp_help_job` read. It reloads only changed folders,
@@ -367,14 +381,15 @@ live check that a SQLAgentUserRole login opens and saves its own job:
     the deleted step; `sp_add_jobstep @step_id` shifts later steps up and moves their go-to targets), so the dialog's step
     numbers are never sent as they stand. msdb also keeps step names unique per job and checks a new name against every
     step, the one being updated included (`sp_verify_jobstep`, error 14261). The save is one pure planner in
-    `src/shared/agent/steps.ts` with table tests: (1) delete removed steps from the highest id down; (2) give every
-    surviving step whose final name or position changes a unique temporary name (a constant prefix plus a GUID, under 128
+    `src/shared/agent/steps.ts` with table tests: (1) delete removed steps from the highest id down; (2) whenever any step is added, deleted, moved or renamed, give
+    **every** surviving step a unique temporary name (ids shift under inserts, so "unchanged" cannot be judged from the
+    original id) (a constant prefix plus a GUID, under 128
     characters); (3) add new steps in ascending final position, also under temporary names; (4) one `sp_update_jobstep`
     per step writing its full content (name, subsystem, command, actions, go-to targets) into its final id; (5)
     `sp_update_job @start_step_id`. Move up/down are therefore changed final positions: content moves between ids, while
     history keeps the `step_id` and `step_name` recorded at run time (as SSMS's own reorder behaves; AG-0 confirms) and a
     step's `step_uid`, which only the "Log to table" output keys on, stays with the id; the step dialog says so when a step
-    with table logging moves. Table tests cover a swap, a rotation, a rename into another step's old name and an insert
+    with table logging moves. Table tests cover a swap, a rotation, a move combined with an insert ahead of an unmoved step, a rename into another step's old name and an insert
     reusing a renamed step's name. An `AgentActions` live check runs those cases with steps that other steps jump to, then
     reads `sysjobsteps` back and compares with the dialog's model.
   - Step dialog **General**: Step name, Type (from `syssubsystems`, filtered by the platform gates and what the login can
@@ -481,7 +496,9 @@ Database Mail logs, which SSMS shows there).
   `sysjobhistory` uses: the template sets `@oldest_date` by a constant `CASE @unit WHEN 1 THEN DATEADD(day, -@count,
   GETDATE()) WHEN 2 THEN DATEADD(week, …) WHEN 3 THEN DATEADD(month, …) END`, with count and unit as parameters, so a
   client in another time zone cannot shift it; the dialog shows the cut-off labelled "(server time)" when the offsets
-  differ. A renderer test covers the label and the live Delete History check covers the cut-off. Without a job argument msdb purges every job on the server, so zod and C#
+  differ. The unit is bounded 1..3 in zod and C#, "all history" is its own explicit choice (not a NULL unit), and the
+  template THROWs when a unit was given but `@oldest_date` came out NULL, since `sp_purge_jobhistory` treats a NULL
+  `@oldest_date` as "all history". A renderer test covers the label and the live Delete History check covers the cut-off. Without a job argument msdb purges every job on the server, so zod and C#
   require 1 to `agentLimits.historyJobs` job ids and the template refuses a NULL `@job_id` before calling. The confirmation
   names the jobs, the cut-off and that it cannot be undone. Server-wide purges exist only in Agent Properties (AG-8a).
 - Agent error logs: `xp_readerrorlog <n>, 2` with the search text as its parameters, sysadmin only (Managed Instance:
@@ -504,7 +521,7 @@ Database Mail logs, which SSMS shows there).
 | Proxies | List by subsystem, New / Properties (General: name, credential, description, subsystems from `syssubsystems`; Principals; References), Rename, Delete, Script As | |
 | Credentials | New Credential and Credential Properties on the existing Security › Credentials folder (kind `credential`) and from the Proxy dialog: name, identity, secret, encryption provider. `ALTER CREDENTIAL` resets the secret when `SECRET` is omitted, so in Properties the Identity and secret are read-only until "Change identity and password" is checked, and every ALTER sends both | |
 | Error logs | List, view in Log File Viewer, Recycle | Configure (log path, level) via Agent Properties › General |
-| SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
+| SQL Server Agent Properties | General (auto restart SQL Server, auto restart Agent, error log file read-only), History (max rows, per job) through `msdb.dbo.sp_set_sqlagent_properties` (undocumented, what SSMS calls; allowlisted; read-only on Managed Instance). History's "Remove agent history older than" is not a setting: as in SSMS it is a one-shot purge of **all** jobs' history on OK (`sp_purge_jobhistory @oldest_date`, sysadmin), behind its own destructive confirmation; the cut-off uses Delete History's server-computed `CASE @unit … DATEADD(…, GETDATE())` template with the same bounds and NULL guard, and the confirmation labels it "(server time)" when the offsets differ (renderer test; AG-8a's live check covers the cut-off) | Advanced, Alert System (mail profile, fail-safe), Job System, Connection |
 | Agent service | State and chips; Start / Stop / Restart | |
 | Database Mail | Readiness (in AG-6a, where the Notifications page shows it; AG-7 reuses it): `Database Mail XPs`, `sysmail_profile`, and for sysadmin also Agent's own mail settings from `sp_get_sqlagent_properties` (`use_databasemail`, `databasemail_profile`), because Agent sends nothing without a profile set in Alert System (a Later page, so the warning says to set it in SSMS) and a restart after setting it. Only sysadmin and DatabaseMailUserRole get a warning; others see none; on Managed Instance the profile must be `AzureManagedInstance_dbmail_profile`. Warn on e-mail notifications when not set up | Configuration wizard and Database Mail log |
 | Multi-server (MSX/TSX) | Targets page shows local only | Multi-server administration |
@@ -534,7 +551,9 @@ Database Mail logs, which SSMS shows there).
   (`sp_help_job` nests one itself); results are read into backend memory, capped, and paged or filtered there.
 - **Writes**: inside `ActionService` (its own unpooled, never-retried connection, preflight in the same connection, Stop,
   `LOCK_TIMEOUT -1`, reader-only execution, no logging), templates in `Agent/AgentSql.cs` checked by
-  `AgentSql.LintExecutable`, which `ActionSql.Lint` chains as it does `LoginSql`. Every call is
+  `AgentSql.LintExecutable`, which `ActionSql.Lint` chains as it does `LoginSql`. Besides the guard statements (identity
+  and `STALE` checks, the purge cut-off's `SET @oldest_date = CASE … END` and its NULL-guard THROW, all constant text the
+  lint admits by named shape), every call is
   `EXEC @rc = msdb.dbo.<allowlisted procedure> @arg = @param, …;` followed by
   `IF @@ERROR <> 0 OR @rc <> 0 THROW 50012, N'<constant>', <call index>;`: msdb's Agent procedures mostly fail with
   `RAISERROR` and `RETURN 1`, which `XACT_ABORT` does not stop (it does not apply to `RAISERROR`), so the `@rc` check is what
