@@ -5,10 +5,9 @@ menu item opens the same dialog while a workbench window is open. After closing 
 opens the system About panel with Varia's name and running version. It is available without a SQL Server connection
 or a working SQL backend.
 
-The dialog shows the running application version, operating-system platform and current update state. Opening it
-does not start an update check; it follows the same state as the status bar. Development builds say that they do not
-check for updates. A last successful check is described as the last check, not as proof the computer is still online
-or no newer release has since appeared.
+The dialog shows the running version, operating-system platform and the update state the status bar shows; opening it
+does not start a check. Development builds say they do not check for updates. A last successful check is described as
+the last check, not as proof that no newer release exists.
 
 **Check for Updates**, **Download Update** and **Restart to Update** appear when appropriate. Download and preparation
 states keep their progress visible. Current unsigned macOS builds and other copies that cannot self-update offer
