@@ -740,8 +740,16 @@ Database Mail logs, which SSMS shows there).
   `N'Start'`, `N'Stop'`, `N'QueryState'` as a parameter; `LintExecutable` allows exactly this positional shape, with
   `N'SQLServerAgent'` its only literal, beside the `EXEC @rc = msdb.dbo.<proc> @arg = @param` shape. `xp_servicecontrol` maps the constant `SQLServerAgent` to the
   connected instance's Agent (`SQLSERVERAGENT` or `SQLAgent$<instance>`), as the QueryState fact showed; the Windows CI job
-  proves it on a named instance. Restart is Stop, then the action itself re-reads `QueryState` (ActionService has no live
-  probes) on its own connection under the `AgentSql` lint until it reads stopped, bounded by a catalogue deadline and
+  proves it on a named instance. Three action rows: `startAgent`, `stopAgent` and `restartAgent`. Start and Stop are built like Restart below:
+  `long: true` with a `cleanupMs`, fixed steps (Start: 0 Start, 1 Wait for Running; Stop: 0 Stop, 1 Wait for stopped),
+  each wait bounded by `agentLimits.serviceWaitMs` (60 s), the job returning its outcome as a value from the moment the
+  statement is sent (its `QueryState` reads on a token of their own), and a long run registered for the whole action
+  (`startAgent` and `stopAgent` kinds beside `restartAgent`, subjects "A start of SQL Server Agent" / "A stop of SQL
+  Server Agent", with the same per-kind "Wait for it to finish" override below; both take the long gate like Restart), so close, Disconnect and Restart SQL Backend are refused
+  while one runs; a Start that times out ends "SQL Server Agent was left stopped" with Start again; backend fake-service
+  checks cover a cancel after each statement was sent and vitests the long-run refusal for each kind. Restart is Stop,
+  then the action itself re-reads `QueryState` (ActionService has no live
+  probes) on its own connection under the `AgentSql` lint until it reads stopped, each wait bounded by `agentLimits.serviceWaitMs` and
   Stop-able, then Start. Sysadmin and Windows servers only, not on a failover cluster instance; confirmation first, through
   ActionService. "Access is denied" (the engine's virtual account may lack the right on the Agent service) maps by its
   error number (AG-0) to a `PERMISSION_DENIED` value with a sentence naming the account. This deliberately differs from
@@ -752,12 +760,12 @@ Database Mail logs, which SSMS shows there).
   then takes over); "Access is denied" naming the engine's service account; a Restart whose Stop succeeded but whose Start
   failed or timed out, which says "SQL Server Agent was left stopped" and offers Start again; and Cancel restart (the
   dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. The restart row in
-  `actions-catalog.json` is `long: true` with a `cleanupMs`, so `actionDrainMs` covers the stop deadline plus the Start wait and a closing
+  `actions-catalog.json` is `long: true` with a `cleanupMs`, so `actionDrainMs` covers the larger of the two phases (stopGraceMs plus cleanupMs, as `StopWait`) and a closing
   backend generation drains it as the last resort (a crash or Windows session end; the run is also registered with
   `LongRunService` as a new `restartAgent` kind in `longRunKinds`/`longRunSubjects`, subject "A restart of SQL Server
   Agent", so the window close, Disconnect of that server and Restart SQL Backend are refused and the reload prompt names it;
-  `longRunMessages` gains a per-kind override so `restartAgent` says "… Wait for it to finish." instead of "Stop it
-  first", since Cancel restart is disabled in the start phase; vitest): during the stop phase the drain acts as Cancel restart,
+  `longRunMessages` gains a per-kind override so `restartAgent`, `startAgent` and `stopAgent` each say "… Wait for it to finish." instead of "Stop it
+  first", since Cancel restart is disabled in the start phase and a plain Start or Stop cannot be stopped once its statement is sent; vitest per kind): during the stop phase the drain acts as Cancel restart,
   during the start phase Start finishes (offline check that the drain covers both phases) (only long actions send step events today, through
   `ActionProgress.Begin` and main's `varia:actions-progress`), so it takes the long gate and reports fixed steps: 0 Stop,
   1 Wait for stop, 2 Start, each begun with `progress.Begin(i)`, with every step's result in the reply. `RunAsync` maps anything a cancelled job throws to
@@ -772,7 +780,7 @@ Database Mail logs, which SSMS shows there).
   error. The long gate is shared with restores and backups (`longPerConnection` 1, `longTotal` 2), so its BUSY messages in
   `ActionService` and the generated `longPerConnection` text in `src/shared/actions/docs.ts` (both of its quotes), the `long` doc comment in
   `src/shared/actions/catalog.ts`, docs/ipc.md's text and quotes, and the `LongBusy`/`LongElsewhere` constants in
-  `ActionProgressChecks` are reworded to "another long action (restore, backup or Agent restart)", with a check that a restart blocked by a restore gets that message. Once
+  `ActionProgressChecks` are reworded to "another long action (restore, backup, or Agent start, stop or restart)", since all three Agent rows are long and take the long gate, with checks that a restart and a plain Start blocked by a restore, and a restore blocked by an Agent Start, get that message. Once
   step 2 has begun, a Stop no longer cancels the Start statement: the action finishes Start, reads `QueryState` and returns that
   outcome instead of `CANCELLED` (backend check with a fake service: a Stop arriving after Start still returns the Start
   outcome). The renderer enables Cancel restart only while the latest step event is below 2. Cancel restart is
@@ -785,10 +793,11 @@ Database Mail logs, which SSMS shows there).
   for Cancel in step 0 and step 1 include it); and the reply carries that state: the dialog says "Restart cancelled;
   SQL Server Agent was left stopped" with Start again beside Close only when it reads stopped, otherwise "Restart
   cancelled; SQL Server Agent is <state>" with Close only; focus goes to Close, the primary button, in every ending (mock
-  scene `restart-cancelled`; backend fake-service checks for Cancel in step 0 and step 1, renderer vitests for both
-  wordings). Start again sends the plain `startAgent` service-control action without a second confirmation (the restart
+  scene `restart-cancelled`; backend fake-service checks for Cancel in step 0 and step 1, renderer vitests for all
+  three wordings, each asserting the text, the footer and focus on Close). Start again sends the `startAgent` action defined above without a second confirmation (the restart
   was already confirmed) and runs in place: the same dialog adds a "Start SQL Server Agent" step row with the Start
-  action's own progress and endings (Running, access denied, left stopped on timeout), Cancel restart stays disabled,
+  action's own progress and endings (Running, access denied, or left stopped on timeout with Start again offered once more), registering its own `startAgent`
+  long run, Cancel restart stays disabled,
   Close is disabled while it runs with focus on the `log` region and becomes enabled and takes focus when it ends, and
   Escape and the title-bar close follow Close (mock scene `restart-start-again`; renderer vitest for success and failure
   endings and their focus). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
