@@ -265,4 +265,18 @@ describe('smoke selectors', () => {
     expect(missing).toEqual([])
     expect(destructured).toEqual([])
   })
+  it('imports every ui.mjs helper a suite calls', async () => {
+    // node --check passes a call to a helper the suite never imported; the suite then stops with a ReferenceError where
+    // it first calls it, at launch for expectEditorShown, which only the smoke gate would otherwise report.
+    const helpers = Object.keys(await import(pathToFileURL(resolve(fixtures)).href))
+    const unimported = suites.flatMap(file => {
+      const source = readFileSync(file, 'utf8'), imported = new Set<string>()
+      for (const [, names] of source.matchAll(/import \{([^}]*)\} from '\.\/(?:fixtures\/)?ui\.mjs'/g)) for (const item of names.split(',')) { const [name, alias] = item.trim().split(/\s+as\s+/); if (name) imported.add(alias ?? name) }
+      return helpers.filter(name => !imported.has(name) && new RegExp(`(?<![.\\w$])${name}\\(`).test(source)
+        // A suite's own helper of the same name (declared, a parameter, or taken from an object) is not ui.mjs's.
+        && !new RegExp(`(?:const|let|var|function)\\s+${name}\\b|[,{(]\\s*${name}\\s*[,=)}]|\\b${name}\\s*=>`).test(source)).map(name => `${file} ${name}`)
+    })
+    expect(helpers).toContain('expectEditorShown')
+    expect(unimported).toEqual([])
+  })
 })

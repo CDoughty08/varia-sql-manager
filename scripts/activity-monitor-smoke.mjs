@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, staleBadge, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -783,8 +783,21 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    // A menu command does nothing while a modal is open (a dialog the connect left behind), and the monitor opens only on a
+    // live connection: click once the server's row shows it connected (its version) and nothing modal is left.
+    await expect(explorerTree(page).getByRole('treeitem', { level: 1, name: /\(SQL Server \d/ })).toHaveCount(1, { timeout: 30000 })
+    await expect(page.locator('[aria-modal="true"]')).toHaveCount(0)
     await menu('activity.open')
-    await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1)
+    try { await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1) } catch (error) {
+      // Each way activity.open can end without a tab leaves a trace: the Connect dialog again, the server picker, a banner.
+      // Bounded and caught: a page that crashed or hangs must not replace the failure it explains.
+      const look = async () => ({ dialogs: await page.getByRole('dialog').evaluateAll(dialogs => dialogs.map(dialog => dialog.getAttribute('aria-label') ?? document.getElementById(dialog.getAttribute('aria-labelledby') ?? '')?.textContent ?? null)), picker: await quickInput(page).isVisible(), banners: await page.getByRole('alert').allInnerTexts(), servers: await serverRows(page).allInnerTexts(), tabs: await queryTabs().allInnerTexts() })
+      const seen = await within(look(), 5000, () => ({ unavailable: 'no answer within 5 s' })).catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
+      const note = `\nAfter activity.open: ${JSON.stringify(seen)}`
+      error.message += note
+      error.stack = `${error.stack}${note}`
+      throw error
+    }
     // Rates need two samples on the server's clock; a login without server state gets the permission message instead.
     const permission = monitor().getByText(/^Activity Monitor needs VIEW SERVER/)
     const cpu = async () => (await tile('% Processor Time').getAttribute('aria-label')) ?? ''

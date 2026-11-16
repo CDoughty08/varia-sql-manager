@@ -8,7 +8,7 @@ import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tr
 import {
   activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -73,7 +73,7 @@ try {
   const failures = []
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
   await pinStackedResults(page)
   const health = await page.evaluate(() => window.varia.health())
@@ -183,7 +183,7 @@ try {
   expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/Error: Workbench test fault\.[\s\S]*Component stack:/)
   await shellFailure.getByRole('button', { name: 'Reload', exact: true }).click()
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   await expect(shellFailure).toHaveCount(0)
   await expect(page.locator('.app-header')).toHaveCount(0)
   await expect(page.getByRole('menubar', { name: 'Application menu' })).toBeVisible()

@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -23,7 +23,7 @@ async function launch() {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
 }
 async function close() {
   if (!application) return
