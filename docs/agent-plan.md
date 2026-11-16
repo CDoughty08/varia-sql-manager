@@ -751,16 +751,27 @@ Database Mail logs, which SSMS shows there).
   Starting… / Stopping… on the node and in the dialog until `QueryState` agrees (the next `explorer.agentService` sample
   then takes over); "Access is denied" naming the engine's service account; a Restart whose Stop succeeded but whose Start
   failed or timed out, which says "SQL Server Agent was left stopped" and offers Start again; and Cancel restart (the
-  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. Cancel restart is
-  enabled only during the stop phase; once Start is sent it is disabled (focus on it moves to Close, which stays disabled
-  until the end). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
+  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. The restart row in
+  `actions-catalog.json` is `long: true` with a `cleanupMs`, so `actionDrainMs` covers the stop deadline plus the Start wait and a closing
+  backend generation (quit, reload, Restart Backend) drains it: during the stop phase the close acts as Cancel restart,
+  during the start phase Start finishes (offline check that the drain covers both phases) (only long actions send step events today, through
+  `ActionProgress.Begin` and main's `varia:actions-progress`), so it takes the long gate and reports fixed steps: 0 Stop,
+  1 Wait for stop, 2 Start, each begun with `progress.Begin(i)`, with every step's result in the reply. Once step 2 has
+  begun, a Stop no longer cancels the Start statement: the action finishes Start, reads `QueryState` and returns that
+  outcome instead of `CANCELLED` (backend check with a fake service: a Stop arriving after Start still returns the Start
+  outcome). The renderer enables Cancel restart only while the latest step event is below 2. Cancel restart is
+  enabled only during the stop phase; once Start is sent it is disabled and focus on it moves to the
+  dialog's `log` region (`tabindex="-1"`), since Close is still disabled and cannot take focus; a vitest asserts focus
+  stays inside the dialog in the start phase. The title-bar close button follows Escape: inert while the restart runs,
+  Close once it ends. After Cancel restart (Agent left stopped and said so) the footer offers Start again beside Close,
+  with focus on Close (mock scenes `restart-cancelled` and `restart-stop-timeout`). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
   dialog says "SQL Server Agent did not stop within <n> s; its state is <QueryState>" while the node shows the sampled
   state. When Restart ends by itself (success, left stopped, or that stop timeout) Close becomes enabled and takes focus;
   on left stopped the footer offers Start again beside Close, as the `restart-failed` mock shows, with focus on Close.
   The Restart steps table sits in a `log` region announcing each step's result; Escape does nothing while the restart
   runs (Close disabled) and acts as Close after it ends. Renderer vitests cover success, left stopped, the stop timeout,
-  Cancel restart in the stop phase and disabled in the start phase, focus on each ending, and Escape mid-restart
-  sending nothing.
+  Cancel restart in the stop phase and disabled in the start phase, focus on each ending, and Escape or the
+  title-bar close mid-restart sending nothing.
 - **Script As**: SMO through `ScriptPipeline`. `UrnBuilder` gains JobServer children (`Server/JobServer/Job[@Name=… and
   @CategoryID=…]`, `Alert`, `Operator`, `ProxyAccount`), the scripting catalogue gains rows and preflight ids (the job
   preflight reads `category_id` from `sysjobs_view`), never executing, `HeaderGuard` applied. AG-4 verifies SMO can script a
