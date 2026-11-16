@@ -303,12 +303,14 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   since `ActionService.ReadAllAsync` reads every column with `GetString`); `ActionExecuteResult` gains an optional
   `jobStarted` string (14 characters, yyyymmddhhmmss) in the C# record, the strict zod schema and the C# bounds, with an
   offline contract test and a live check. Actions stay single-target, as `actionRequestSchema` and
-  `actionExecuteRequestSchema` are today and as `AgentIdentityDto` is: multi-select Start Jobs and Stop Jobs send one
-  ordinary `actions.execute` per selected job, one after another, each with its own target, identity guard and template,
+  `actionExecuteRequestSchema` are today and as `AgentIdentityDto` is: multi-select Start Jobs, Stop Jobs, Enable Jobs and Disable Jobs
+  (each with SSMS's one-line-per-job progress dialog) send one ordinary `actions.execute` per selected job, one after another, each with its own target, identity guard and template,
   so each job's `jobStarted`, `JOB_STATE` or `NOT_FOUND` comes back on its own reply and one refusal never fails the
-  others (the progress dialog's line per job). The renderer caps a selection at `agentLimits.startJobs` (the verbs are
-  disabled above it, with the reason), so no request shape changes; a renderer vitest covers a partial failure and the
-  cap. The status bar takes a
+  others (the progress dialog's line per job). The renderer caps a selection at `agentLimits.startJobs` (those four verbs are
+  disabled above it, with the reason), so no request shape changes. The progress dialog's Stop, and Close or Escape
+  mid-sequence, send no further requests: unsent jobs show "Not run", the request in flight finishes and reports (a
+  request is never withdrawn or re-sent), and no `sp_stop_job` is sent to jobs already started. A renderer vitest covers
+  a partial failure, the cap and Stop mid-sequence for each verb. The status bar takes a
   finished job's outcome only when its last run, compared at second precision, is at or after that time (table tests: the
   job starts in the same second, and in the next). `sp_start_job` only posts the request, so for a moment the job can read
   idle with the previous run's `last_run`: the status bar shows "Starting…" until the job is seen running (status not 4)
@@ -317,7 +319,8 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   mid-run and left no outcome row) show "Agent stopped, job outcome unknown" (renderer fixture: first sample idle with an
   older `last_run`, next running, never "outcome unknown"). Stop is disabled during Starting… (until the job is seen
   running), since `sp_stop_job` refuses a job that is not yet running; Dismiss stays (mock scene `running-status-starting`). A normal end shows
-  "<job>: Succeeded / Failed / Canceled (started <time>)", the time being `job0LastRun` (Agent's `last_run_*` is the run's
+  "<job>: Succeeded / Failed / Canceled (started <time>)", with the date when the start is not on the server's current
+  day and "(server time)" when the server's offset differs from this computer's, as every Agent time, the time being `job0LastRun` (Agent's `last_run_*` is the run's
   start, and `sp_help_job @job_aspect = N'JOB'` returns no duration, so no end time is claimed; table test), for a few
   seconds with View History, then releases the view. Every
   status-bar job item has a Dismiss action that releases the view and slot at once, so the unknown case never holds one
@@ -491,8 +494,8 @@ watched view's args never change past the bound (renderer fixture: starting `wat
 error and one summary item). That summary item's accessible name is "<n> more Agent jobs started, live progress
 unavailable"; it is never promoted into a freed slot, a later overflow Start adds to its count, and it goes away on its
 Dismiss or when Job Activity Monitor is opened from it (renderer fixture covers both and a count bump; mock scene
-`running-status-overflow`), holds it only while a
-watched job runs, and never polls; it does not depend on Job Activity Monitor or Object Explorer being open. Elapsed time
+`running-status-overflow`). The status bar holds its view only while a
+watched job runs and never polls; it does not depend on Job Activity Monitor or Object Explorer being open. Elapsed time
 shows only when the start is readable (below).
 
 Start times: `sp_help_job` returns no start time for a running job. Sysadmin reads `sysjobactivity.start_execution_date` for the newest Agent session only
