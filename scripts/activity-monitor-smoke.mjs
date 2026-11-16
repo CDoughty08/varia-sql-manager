@@ -790,8 +790,12 @@ try {
     await menu('activity.open')
     try { await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1) } catch (error) {
       // Each way activity.open can end without a tab leaves a trace: the Connect dialog again, the server picker, a banner.
-      const seen = { dialogs: await page.getByRole('dialog').evaluateAll(dialogs => dialogs.map(dialog => dialog.getAttribute('aria-label') ?? document.getElementById(dialog.getAttribute('aria-labelledby') ?? '')?.textContent ?? null)), picker: await quickInput(page).isVisible(), banners: await page.getByRole('alert').allInnerTexts(), servers: await serverRows(page).allInnerTexts(), tabs: await queryTabs().allInnerTexts() }
-      error.stack = `${error.stack}\nAfter activity.open: ${JSON.stringify(seen)}`
+      // Bounded and caught: a page that crashed or hangs must not replace the failure it explains.
+      const look = async () => ({ dialogs: await page.getByRole('dialog').evaluateAll(dialogs => dialogs.map(dialog => dialog.getAttribute('aria-label') ?? document.getElementById(dialog.getAttribute('aria-labelledby') ?? '')?.textContent ?? null)), picker: await quickInput(page).isVisible(), banners: await page.getByRole('alert').allInnerTexts(), servers: await serverRows(page).allInnerTexts(), tabs: await queryTabs().allInnerTexts() })
+      const seen = await within(look(), 5000, () => ({ unavailable: 'no answer within 5 s' })).catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
+      const note = `\nAfter activity.open: ${JSON.stringify(seen)}`
+      error.message += note
+      error.stack = `${error.stack}${note}`
       throw error
     }
     // Rates need two samples on the server's clock; a login without server state gets the permission message instead.
