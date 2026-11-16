@@ -755,21 +755,24 @@ Database Mail logs, which SSMS shows there).
   `actions-catalog.json` is `long: true` with a `cleanupMs`, so `actionDrainMs` covers the stop deadline plus the Start wait and a closing
   backend generation drains it as the last resort (a crash or Windows session end; the run is also registered with
   `LongRunService` as a new `restartAgent` kind in `longRunKinds`/`longRunSubjects`, subject "A restart of SQL Server
-  Agent", so the window close, Disconnect of that server and Restart SQL Backend are refused with the existing messages
-  and the reload prompt names it; vitest): during the stop phase the drain acts as Cancel restart,
+  Agent", so the window close, Disconnect of that server and Restart SQL Backend are refused and the reload prompt names it;
+  `longRunMessages` gains a per-kind override so `restartAgent` says "… Wait for it to finish." instead of "Stop it
+  first", since Cancel restart is disabled in the start phase; vitest): during the stop phase the drain acts as Cancel restart,
   during the start phase Start finishes (offline check that the drain covers both phases) (only long actions send step events today, through
   `ActionProgress.Begin` and main's `varia:actions-progress`), so it takes the long gate and reports fixed steps: 0 Stop,
   1 Wait for stop, 2 Start, each begun with `progress.Begin(i)`, with every step's result in the reply. `RunAsync` maps anything a cancelled job throws to
   `CANCELLED` "stopped before it changed anything", and `JobAsync` maps a `SqlException` only while the token is not
-  cancelled, which is false once Stop has run: so from step 1 on the restart job catches `OperationCanceledException` and
+  cancelled, which is false once Stop has run: so from step 0 on (once the Stop statement has been sent) the restart job catches `OperationCanceledException` and
   `SqlException` itself and returns the step results as a value (cancelled after Stop, left stopped, Start error), never
-  letting them escape, and step 2's Start and its `QueryState` reads run on a token of their own bounded by the Start wait,
-  not the job token (`cleanupMs` is at least the Start statement plus the Start wait, since a Stop's reply and the drain
+  letting them escape (only a cancel before step 0, in the gate wait, sign-in or prologue, is left to `RunAsync`'s
+  `CANCELLED`), and step 2's Start and its `QueryState` reads run on a token of their own bounded by the Start wait,
+  not the job token (`cleanupMs` covers the larger of the Start statement plus the Start wait and the post-cancel `QueryState` read, since a Stop's reply and the drain
   wait only `stopGraceMs` plus `cleanupMs`). Backend fake-service checks: a Stop in step 1 returns the cancelled-after-Stop
   outcome with the read state, and a Stop in step 2 followed by a failing Start returns left stopped with the Start
   error. The long gate is shared with restores and backups (`longPerConnection` 1, `longTotal` 2), so its BUSY messages in
-  `ActionService` and the generated `longPerConnection` text in `src/shared/actions/docs.ts` are reworded to "another long
-  action (restore, backup or Agent restart)", with a check that a restart blocked by a restore gets that message. Once
+  `ActionService` and the generated `longPerConnection` text in `src/shared/actions/docs.ts` (both of its quotes), the `long` doc comment in
+  `src/shared/actions/catalog.ts`, docs/ipc.md's text and quotes, and the `LongBusy`/`LongElsewhere` constants in
+  `ActionProgressChecks` are reworded to "another long action (restore, backup or Agent restart)", with a check that a restart blocked by a restore gets that message. Once
   step 2 has begun, a Stop no longer cancels the Start statement: the action finishes Start, reads `QueryState` and returns that
   outcome instead of `CANCELLED` (backend check with a fake service: a Stop arriving after Start still returns the Start
   outcome). The renderer enables Cancel restart only while the latest step event is below 2. Cancel restart is
@@ -777,11 +780,18 @@ Database Mail logs, which SSMS shows there).
   dialog's `log` region (`tabindex="-1"`), since Close is still disabled and cannot take focus; a vitest asserts focus
   stays inside the dialog in the start phase. The title-bar close button follows Escape: inert while the restart runs,
   Close once it ends. On Cancel restart in step 0 or 1 the action sends no Start and reads
-  `QueryState` once (bounded, inside `cleanupMs`), and the reply carries that state: the dialog says "Restart cancelled;
+  `QueryState` once on a token of its own bounded within `cleanupMs` (never the cancelled job token); if that read fails
+  the dialog says "Restart cancelled; SQL Server Agent's state could not be read" with Close only (fake-service checks
+  for Cancel in step 0 and step 1 include it); and the reply carries that state: the dialog says "Restart cancelled;
   SQL Server Agent was left stopped" with Start again beside Close only when it reads stopped, otherwise "Restart
   cancelled; SQL Server Agent is <state>" with Close only; focus goes to Close, the primary button, in every ending (mock
   scene `restart-cancelled`; backend fake-service checks for Cancel in step 0 and step 1, renderer vitests for both
-  wordings). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
+  wordings). Start again sends the plain `startAgent` service-control action without a second confirmation (the restart
+  was already confirmed) and runs in place: the same dialog adds a "Start SQL Server Agent" step row with the Start
+  action's own progress and endings (Running, access denied, left stopped on timeout), Cancel restart stays disabled,
+  Close is disabled while it runs with focus on the `log` region and becomes enabled and takes focus when it ends, and
+  Escape and the title-bar close follow Close (mock scene `restart-start-again`; renderer vitest for success and failure
+  endings and their focus). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
   dialog says "SQL Server Agent did not stop within <n> s; its state is <QueryState>" (Close only, no Start again, since Agent is not stopped; mock scene `restart-stop-timeout`) while the node shows the sampled
   state. When Restart ends by itself (success, left stopped, or that stop timeout) Close becomes enabled and takes focus;
   on left stopped the footer offers Start again beside Close, as the `restart-failed` mock shows, with focus on Close.
