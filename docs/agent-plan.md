@@ -751,9 +751,16 @@ Database Mail logs, which SSMS shows there).
   Starting… / Stopping… on the node and in the dialog until `QueryState` agrees (the next `explorer.agentService` sample
   then takes over); "Access is denied" naming the engine's service account; a Restart whose Stop succeeded but whose Start
   failed or timed out, which says "SQL Server Agent was left stopped" and offers Start again; and Cancel restart (the
-  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. When
-  Restart ends by itself (success, left stopped or timed out) Cancel restart becomes disabled and Close enabled, and
-  focus on Cancel restart moves to Close (renderer vitest for success and left stopped).
+  dialog's button, never a bare "Stop"), which after Stop leaves Agent stopped and says so. Cancel restart is
+  enabled only during the stop phase; once Start is sent it is disabled (focus on it moves to Close, which stays disabled
+  until the end). If the stop phase passes its deadline without QueryState reading stopped, no Start is sent and the
+  dialog says "SQL Server Agent did not stop within <n> s; its state is <QueryState>" while the node shows the sampled
+  state. When Restart ends by itself (success, left stopped, or that stop timeout) Close becomes enabled and takes focus;
+  on left stopped the footer offers Start again beside Close, as the `restart-failed` mock shows, with focus on Close.
+  The Restart steps table sits in a `log` region announcing each step's result; Escape does nothing while the restart
+  runs (Close disabled) and acts as Close after it ends. Renderer vitests cover success, left stopped, the stop timeout,
+  Cancel restart in the stop phase and disabled in the start phase, focus on each ending, and Escape mid-restart
+  sending nothing.
 - **Script As**: SMO through `ScriptPipeline`. `UrnBuilder` gains JobServer children (`Server/JobServer/Job[@Name=… and
   @CategoryID=…]`, `Alert`, `Operator`, `ProxyAccount`), the scripting catalogue gains rows and preflight ids (the job
   preflight reads `category_id` from `sysjobs_view`), never executing, `HeaderGuard` applied. AG-4 verifies SMO can script a
