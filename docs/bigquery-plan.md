@@ -1,7 +1,7 @@
 # BigQuery support plan (0.10.0)
 
 Status: **agreed with the owner on 2026-11-15**, then revised after an adversarial review the same day. The owner's
-answers to that review are decisions 21–24, and the details the review rounds settled are decisions 25–49. Nothing here is
+answers to that review are decisions 21–24 and 50, and the details the review rounds settled are decisions 25–49. Nothing here is
 implemented yet. The lanes below become PRs. [Decisions](#decisions) records the owner's answers.
 
 0.10.0 is meant to deliver two things: BigQuery support and SQL Server Agent support. Agent is planned separately
@@ -383,8 +383,8 @@ which is already its rule.
   profile work. The label stays on everything built from it.
 - **Pivot and profile pushed down to BigQuery** (0.11), as `GROUP BY` and `APPROX_*` queries.
 - **Save to a BigQuery table** (0.11). A copy job turns the 24-hour table into a named one, so a result outlives the
-  cache, can be shared, and can pass 10 GB. Whether to add a console-style per-query destination table setting is open
-  for the owner (see [Open questions](#open-questions)).
+  cache, can be shared, and can pass 10 GB. A console-style per-query destination table setting comes with it in 0.11
+  (decision 50).
 - **Statistics only** already exists: `discardResults` reads nothing back and still reports rows and bytes.
 
 ### Jobs, scripts, Stop
@@ -718,7 +718,8 @@ and Properties can move to 0.11 without hurting the core experience.
 
 - Browser OAuth sign-in with a Varia-owned Google client (needs Google's verification) and refresh tokens in
   `safeStorage`.
-- Pivot and profile pushed down to BigQuery for windowed results, and Save to a BigQuery table (lifts the 10 GB limit).
+- Pivot and profile pushed down to BigQuery for windowed results, and Save to a BigQuery table plus a per-query
+  destination table setting (lift the 10 GB limit).
 - Execution details: BigQuery's query plan stages and timeline in the plan canvas.
 - Job history pane (`jobs.list`), reopening a past job's results.
 - A parameters prompt for undeclared `@names`, batch query priority, a local-time TIMESTAMP option, and a custom API
@@ -726,13 +727,6 @@ and Properties can move to 0.11 without hurting the core experience.
 - Table actions (delete, copy, expiration, labels), dataset creation, the external-account `executable` source behind
   an explicit opt-in.
 - Deleting the frozen 0.9.0 files (`connections.json`, `saved-passwords.json`, `Session/`, `AutoRecover/`).
-
-## Open questions
-
-- **Per-query destination table in 0.10.0?** The BigQuery console's answer to results over 10 GB is a query setting
-  that writes the result to a named table. Varia could offer that per tab in 0.10.0 (a small M lane after BQ-3c-1: a
-  table name field, `writeDisposition`, and the windowed reader pointed at that table, which does not expire), or keep
-  it with Save to a BigQuery table in 0.11. The plan assumes 0.11 until the owner decides.
 
 ## Decisions
 
@@ -829,6 +823,11 @@ Recorded on 2026-11-15: details the second review round settled within the agree
     refused-shape test for each.
 49. **Federation file sources are confirmed:** the first use of a config shows the resolved `credential_source.file`
     path and asks; the path joins the credential binding, so a changed path asks again.
+
+Recorded on 2026-11-15, from the owner's answer to the review's open question.
+
+50. **Destination tables:** a console-style per-query destination table setting is not in 0.10.0; it comes in 0.11
+    with Save to a BigQuery table, which together lift the 10 GB limit.
 43. **Orphan protocol:** a `query.job` event in each query stream tells main the in-flight jobs; after a restart main
     calls the sensitive `bigquery.cancelJobs` with the profile's credentials, with no reconnect.
 46. **Remote queries:** windowed sort, filter, value lists, Load sample, Load into memory and Re-run run through one
