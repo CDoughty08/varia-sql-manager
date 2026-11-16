@@ -225,7 +225,11 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
       <option value="oe-stopped">Agent stopped, Start confirmation</option>
       <option value="oe-menu-job">Job context menu</option>
       <option value="oe-user">SQLAgentUserRole login</option>
-      <option value="oe-mi">Managed Instance / Linux</option>
+      <option value="oe-mi">Managed Instance</option>
+      <option value="oe-xps">Agent XPs disabled</option>
+      <option value="oe-unknown">Agent state unknown (no server state permission)</option>
+      <option value="oe-reader">SQLAgentReaderRole · another login's job</option>
+      <option value="oe-new">Agent node New ›</option>
       <option value="oe-noaccess">No Agent access</option>
       <option value="oe-linux">Linux server</option>
       <option value="oe-menus">Folder and object menus</option>
@@ -238,6 +242,11 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
       <option value="jam-stopped">Job Activity Monitor · Agent stopped</option>
       <option value="jam-empty">Job Activity Monitor · no jobs</option>
       <option value="lfv-empty">Log File Viewer · no history</option>
+      <option value="jam-loading">Job Activity Monitor · loading</option>
+      <option value="jam-error">Job Activity Monitor · sample failed</option>
+      <option value="lfv-unknown">Log File Viewer · run with no job outcome</option>
+      <option value="lfv-error">Log File Viewer · read failed</option>
+      <option value="lfv-log-trunc">Log File Viewer · error log truncated</option>
     </optgroup>
     <optgroup label="Job dialog">
       <option value="new-job">New Job (empty, SQLAgentUserRole)</option>
@@ -250,8 +259,12 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
       <option value="step-general">Job Step · General (T-SQL)</option>
       <option value="step-ps">Job Step · General (PowerShell, proxy)</option>
       <option value="step-ssis">Job Step · General (SSIS package)</option>
+      <option value="step-cmdexec">Job Step · General (CmdExec)</option>
+      <option value="delete-step">Delete step (other steps jump to it)</option>
       <option value="step-advanced">Job Step · Advanced</option>
       <option value="schedule">Job Schedule</option>
+      <option value="schedule-idle">Job Schedule · CPU idle warning</option>
+      <option value="remove-schedule">Remove schedule (offer to delete)</option>
       <option value="manage-schedules">Manage Schedules</option>
       <option value="pick-schedule">Pick Schedule</option>
       <option value="jobs-in-schedule">Jobs in Schedule</option>
@@ -275,6 +288,8 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
       <option value="alert">Alert Properties · General</option>
       <option value="alert-response">Alert Properties · Response</option>
       <option value="alert-options">Alert Properties · Options</option>
+      <option value="alert-perf">Alert Properties · performance condition</option>
+      <option value="alert-wmi">Alert Properties · WMI (read-only)</option>
       <option value="proxy">Proxy Properties · General</option>
       <option value="proxy-principals">Proxy Properties · Principals</option>
       <option value="proxy-references">Proxy Properties · References</option>
@@ -282,6 +297,7 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
       <option value="credential-props">Credential Properties</option>
       <option value="agent-props-general">SQL Server Agent Properties · General</option>
       <option value="agent-props">SQL Server Agent Properties · History</option>
+      <option value="agent-props-purge">Agent Properties · purge all history confirmation</option>
     </optgroup>
   </select>
   <label for="theme">Theme</label>
@@ -308,7 +324,7 @@ legend { font-size: 11px; font-weight: 600; color: var(--text3); padding: 0 4px 
   <div class="status" id="status"><span><span class="dot"></span>Ready</span><span>Connected. sql-prod-01 (16.0)</span><span>CONTOSO\dana</span><span>master</span><span style="margin-left:auto">Ln 1 · Col 1</span><span>UTF-8</span></div>
   <div id="overlay"></div>
 </div>
-<p class="legend-top">Each surface maps to a lane in docs/agent-plan.md: Object Explorer AG-1; job verbs, service control and the status bar AG-2; Job Activity Monitor AG-3; Script As AG-4; Log File Viewer AG-5a (job history) and AG-5b (error logs); job dialog AG-6a–c; operators and alerts AG-7; Agent Properties AG-8a; proxies and credentials AG-8b.</p>
+<p class="legend-top">Each surface maps to a lane in docs/agent-plan.md: Object Explorer AG-1; job verbs and service control AG-2; Job Activity Monitor, Start Jobs and the status bar AG-3; Script As AG-4; Log File Viewer AG-5a (job history) and AG-5b (error logs); job dialog AG-6a–c; operators and alerts AG-7; Agent Properties AG-8a; proxies and credentials AG-8b.</p>
 
 <script>
 // Icons: simple codicon-like strokes, drawn here only for the mock.
@@ -358,7 +374,7 @@ function row(depth, o) {
 function tree(mode) {
   const out = []
   // The server row keeps its running-jobs chip (owner, 2026-11-15) so a collapsed server still shows running jobs.
-  const serverChips = mode === 'noaccess' || mode === 'stopped' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
+  const serverChips = mode === 'noaccess' || mode === 'stopped' || mode === 'xps' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
   out.push(row(0, { icon: 'server', label: 'sql-prod-01', sub: '16.0', open: true, cls: 'server', chips: serverChips }))
   for (const f of ['Databases', 'Security', 'Server Objects', 'Replication', 'Always On High Availability', 'Management', 'Integration Services Catalogs']) {
     if (mode === 'user' && !['Databases', 'Security'].includes(f)) continue
@@ -366,21 +382,25 @@ function tree(mode) {
   }
   if (mode === 'express') return out.join('')
   const running = mode !== 'stopped'
-  const agentChips = mode === 'stopped' ? [['warn', 'Stopped', 'pause']] : mode === 'noaccess' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
-  const agentSub = mode === 'stopped' ? 'Stopped' : mode === 'mi' ? 'Managed Instance' : mode === 'linux' ? 'Linux' : ''
-  const agentBadge = mode === 'stopped' ? 'disabledBadge' : mode === 'noaccess' ? 'noaccess' : ''
-  out.push(row(1, { icon: 'agent', label: 'SQL Server Agent', sub: agentSub, open: mode !== 'noaccess', badge: agentBadge, badgeColor: mode === 'stopped' ? 'var(--warning)' : 'var(--iconMuted)', chips: agentChips, id: 'agentRow', cls: mode === 'stopped' ? 'sel' : '' }))
+  const agentChips = mode === 'stopped' ? [['warn', 'Stopped', 'pause']] : mode === 'noaccess' || mode === 'xps' ? [] : [['running', mode === 'user' ? '1 Agent job running' : '2 Agent jobs running', 'job']]
+  const agentSub = mode === 'stopped' ? 'Stopped' : mode === 'xps' ? 'Agent XPs disabled' : mode === 'mi' ? 'Managed Instance' : mode === 'linux' ? 'Linux' : ''
+  const agentBadge = mode === 'stopped' || mode === 'xps' ? 'disabledBadge' : mode === 'noaccess' ? 'noaccess' : ''
+  out.push(row(1, { icon: 'agent', label: 'SQL Server Agent', sub: agentSub, open: mode !== 'noaccess', badge: agentBadge, badgeColor: mode === 'stopped' || mode === 'xps' ? 'var(--warning)' : 'var(--iconMuted)', chips: agentChips, id: 'agentRow', cls: mode === 'stopped' ? 'sel' : '' }))
+  if (mode === 'xps') {
+    out.push(`<div class="explain" style="margin-left:40px">${ic('warn', 12)} The Agent XPs option is 0, so SQL Server Agent cannot be used on this server: no folders are listed. A sysadmin turns it on with sp_configure (or by starting Agent, which sets it). Varia does not change server options from here.</div>`)
+    return out.join('')
+  }
   if (mode === 'noaccess') {
     out.push(`<div class="explain" style="margin-left:40px">${ic('noaccess', 12)} This login has no SQL Server Agent role in msdb. Ask a sysadmin for SQLAgentUserRole, SQLAgentReaderRole or SQLAgentOperatorRole.</div>`)
     return out.join('')
   }
   out.push(row(2, { icon: 'folder', folder: true, label: 'Jobs', open: true }))
-  const jobs = mode === 'empty' ? [] : mode === 'user'
+  const jobs = mode === 'empty' ? [] : mode === 'reader' ? [['ETL – Load warehouse', 'failed'], ['Index maintenance', 'running'], ['Refresh reporting snapshot', ''], ['Export finance extract', '']] : mode === 'user'
     ? [['Refresh reporting snapshot', '', 'job'], ['Export finance extract', 'running', 'job']]
     : [['ETL – Load warehouse', 'failed'], ['Index maintenance', 'running'], ['Log backup – Sales', 'retry'], ['Nightly full backup – Sales', ''], ['Purge audit rows', ''], ['Refresh reporting snapshot', 'disabled'], ['syspolicy_purge_history', '']]
   if (!jobs.length) out.push(`<div class="row" style="padding-left:56px;color:var(--muted);font-size:12px">No jobs</div>`)
   for (const [n, s] of jobs) {
-    out.push(row(3, { icon: 'job', label: n, leaf: true, badge: s === 'disabled' ? 'disabledBadge' : '', cls: (s === 'disabled' ? 'dim ' : '') + (mode === 'menu-job' && n === 'Index maintenance' ? 'sel' : ''), id: n === 'Index maintenance' ? 'jobRow' : '',
+    out.push(row(3, { icon: 'job', label: n, leaf: true, badge: s === 'disabled' ? 'disabledBadge' : '', cls: (s === 'disabled' ? 'dim ' : '') + ((mode === 'menu-job' || mode === 'reader') && n === 'Index maintenance' ? 'sel' : ''), id: n === 'Index maintenance' ? 'jobRow' : '',
       chips: s === 'running' ? [['running', 'Running · step 2/4', '']] : s === 'failed' ? [['err', 'Failed', '']] : s === 'retry' ? [['warn', 'Between retries', '']] : [] }))
   }
   out.push(row(2, { icon: 'monitor', label: 'Job Activity Monitor', leaf: true }))
@@ -388,8 +408,8 @@ function tree(mode) {
     out.push(`<div class="explain" style="margin-left:40px">SQLAgentUserRole: only the login's own jobs, and only Jobs and Job Activity Monitor, as SSMS shows it. Alerts, Operators, Proxies and Error Logs are hidden; New Job's step types are T-SQL plus subsystems with a proxy granted to the login.</div>`)
     return out.join('')
   }
-  out.push(row(2, { icon: 'folder', folder: true, label: 'Alerts', open: true }))
-  for (const [n, d] of [['Severity 017 – Insufficient resources', 0], ['Severity 024 – Fatal hardware error', 0], ['Error 823 – I/O error', 0], ['Log file > 80% full', 1]]) out.push(row(3, { icon: 'alert', label: n, leaf: true, badge: d ? 'disabledBadge' : '', cls: d ? 'dim' : '' }))
+  if (mode !== 'mi') out.push(row(2, { icon: 'folder', folder: true, label: 'Alerts', open: true }))
+  if (mode !== 'mi') for (const [n, d] of [['Severity 017 – Insufficient resources', 0], ['Severity 024 – Fatal hardware error', 0], ['Error 823 – I/O error', 0], ['Log file > 80% full', 1]]) out.push(row(3, { icon: 'alert', label: n, leaf: true, badge: d ? 'disabledBadge' : '', cls: d ? 'dim' : '' }))
   out.push(row(2, { icon: 'folder', folder: true, label: 'Operators', open: true }))
   for (const n of ['DBA team', 'On-call pager']) out.push(row(3, { icon: 'person', label: n, leaf: true }))
   if (mode !== 'linux' && mode !== 'mi') out.push(row(2, { icon: 'folder', folder: true, label: 'Proxies', open: true }))
@@ -403,7 +423,8 @@ function tree(mode) {
   out.push(row(2, { icon: 'folder', folder: true, label: 'Error Logs', open: true }))
   out.push(row(3, { icon: 'log', label: 'Current', sub: '15/11/2026 07:02', leaf: true }))
   for (let i = 1; i <= 3; i++) out.push(row(3, { icon: 'log', label: 'Archive #' + i, sub: `${15 - i * 2}/11/2026 06:5${i}`, leaf: true }))
-  if (mode === 'mi') out.push(`<div class="explain" style="margin-left:40px">Managed Instance: Agent always runs, so Start, Stop and Restart are absent; e-mail notifications only through Database Mail, no pager or net send, no CPU-idle schedules. The Proxies folder follows the platform gates (verified in AG-1). Express and Azure SQL Database show no Agent node.</div>`)
+  if (mode === 'mi') out.push(`<div class="explain" style="margin-left:40px">Managed Instance: Agent always runs, so Start, Stop and Restart are absent. No Alerts or Proxies folders (not supported there), Agent Properties read-only, no CPU-idle schedules, e-mail only through Database Mail's AzureManagedInstance_dbmail_profile, no pager or net send; the error log reads through sp_readmierrorlog. Express and Azure SQL Database show no Agent node.</div>`)
+  if (mode === 'unknown') out.push(`<div class="explain" style="margin-left:40px">This login lacks the server state permission sys.dm_server_services needs, so Agent's state is unknown: no Running or Stopped chip, never a guess. The running-jobs count still shows, read through sp_help_job.</div>`)
   if (mode === 'linux') out.push(`<div class="explain" style="margin-left:40px">Linux: no service control from T-SQL, no Proxies folder, step types from msdb.dbo.syssubsystems (T-SQL plus replication), no WMI alerts or event log notification. Gates live in the Agent catalogue and are verified in AG-1 against the CI container.</div>`)
   return out.join('')
 }
@@ -419,7 +440,9 @@ const jamRows = [
   ['syspolicy_purge_history', 'Yes', 'Idle', 'ok:Succeeded', '15/11/2026 02:00:00', '16/11/2026 02:00:00', '[Uncategorized (Local)]', '']
 ]
 const pill = v => { const [k, t] = v.includes(':') ? v.split(/:(.*)/s) : ['', v]; return k ? `<span class="pill ${k}">${t}</span>` : t }
-function jam(stopped, empty) {
+function jam(stopped, empty, state) {
+  const jtabs = `<div class="doctabs"><div class="doctab on"><div class="r">${ic('monitor', 14)}Job Activity Monitor</div><div class="s">sql-prod-01</div></div></div>`
+  if (state === 'loading') return `${jtabs}<div class="toolbar"><span class="seg"><span class="on">All</span><span>Running</span><span>Failed</span><span>Disabled</span></span><div class="filterbox">${ic('search', 14)}Filter jobs</div><span style="margin-left:auto" class="live"><span class="pulse"></span>Connecting…</span></div><div class="gridwrap" style="margin-top:6px" aria-busy="true"><table class="g"><thead><tr><th></th><th>Name</th><th>Enabled</th><th>Status</th><th>Last Run Outcome</th><th>Last Run (server time)</th><th>Next Run</th><th>Category</th></tr></thead><tbody>${[1, 2, 3, 4, 5].map(i => `<tr><td class="num">${i}</td>${[60, 20, 40, 40, 50, 50, 45].map(w => `<td><span style="display:inline-block;height:8px;width:${w}%;border-radius:4px;background:var(--line)"></span></td>`).join('')}</tr>`).join('')}</tbody></table></div><div class="panehead"><b>Loading jobs…</b><span class="r">First sample from sp_help_job</span></div>`
   if (empty) return `<div class="doctabs"><div class="doctab on"><div class="r">${ic('monitor', 14)}Job Activity Monitor</div><div class="s">sql-prod-01</div></div></div><div class="toolbar"><span class="seg"><span class="on">All <span class="n">0</span></span><span>Running <span class="n">0</span></span><span>Failed <span class="n">0</span></span><span>Disabled <span class="n">0</span></span></span><div class="filterbox">${ic('search', 14)}Filter jobs</div><span style="margin-left:auto" class="live"><span class="pulse"></span>Live · every 5 s</span></div><div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted)">${ic('job', 24)}<div style="color:var(--text2)">No jobs on this server that you can see</div><div style="font-size:12px">SQLAgentUserRole shows only your own jobs.</div><span class="btn">New Job…</span></div>`
   const rows = jamRows.map((r, i) => `<tr class="tone-${r[7]} ${i === 1 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="t">${r[0]}</td><td>${r[1]}</td><td>${stopped ? '<span class="pill warn">Agent stopped</span>' : pill(r[2])}</td><td>${pill(r[3])}</td><td class="mono">${r[4]}</td><td class="mono">${r[5] || '<span style="color:var(--muted)">Not scheduled</span>'}</td><td>${r[6]}</td></tr>`).join('')
   return `
@@ -429,14 +452,15 @@ function jam(stopped, empty) {
     <div class="filterbox">${ic('search', 14)}Filter jobs</div>
     <span class="vsep"></span>
     <span class="tb">${ic('play', 14)}Start Job at Step…</span><span class="tb">${ic('stop', 14)}Stop Job</span><span class="tb">Enable</span><span class="tb">Disable</span><span class="tb">${ic('history', 14)}View History</span><span class="tb">${ic('props', 14)}Properties</span>
-    <span style="margin-left:auto" class="live"><span class="pulse"></span>Live · every 5 s</span><span class="tb">${ic('pause', 14)}</span><span class="tb">${ic('more', 14)}</span>
+    <span style="margin-left:auto" class="live" ${state === 'error' ? 'style="color:var(--error)"' : ''}><span class="pulse"></span>${state === 'error' ? 'Sample failed · retrying' : 'Live · every 5 s'}</span><span class="tb">${ic('pause', 14)}</span><span class="tb">${ic('more', 14)}</span>
   </div>
   <div class="tiles">
     <div class="tile"><div class="l">Running</div><div class="v acc">1</div><div class="d">Index maintenance · 12 min</div></div>
-    <div class="tile"><div class="l">Failed (24 h)</div><div class="v err">2</div><div class="d">ETL – Load warehouse, Log backup – Sales</div></div>
-    <div class="tile"><div class="l">Succeeded (24 h)</div><div class="v">14</div><div class="d">across 5 jobs</div></div>
-    <div class="tile"><div class="l">Next run</div><div class="v" style="font-size:15px">14:30:00</div><div class="d">Log backup – Sales · in 9 min</div></div>
+    <div class="tile"><div class="l">Last run failed</div><div class="v err">2</div><div class="d">ETL – Load warehouse, Log backup – Sales</div></div>
+    <div class="tile"><div class="l">Between retries</div><div class="v warn">1</div><div class="d">Log backup – Sales · attempt 1 of 3</div></div>
+    <div class="tile"><div class="l">Disabled</div><div class="v">1</div><div class="d">Refresh reporting snapshot</div></div>
   </div>
+  ${state === 'error' ? `<div class="errnote">${ic('err', 14)}<span><b>The last sample failed:</b> Lock request time out period exceeded. Showing rows from 14:21:05; Varia keeps trying at the next interval.</span></div>` : ''}
   ${stopped ? `<div class="errnote" style="background:var(--warningSurface);color:var(--warningSurfaceText)">${ic('warn', 14)}SQL Server Agent is not running, so no job starts on schedule. Last outcomes are from msdb. <b style="margin-left:6px">Start Agent…</b></div>` : ''}
   <div class="gridwrap" style="margin-top:6px">
     <table class="g"><thead><tr><th></th><th>Name ${ic('filter', 12, 'class="fn"')}</th><th>Enabled</th><th>Status ${ic('filter', 12, 'class="fn"')}</th><th>Last Run Outcome ${ic('filter', 12, 'class="fn"')}</th><th>Last Run (server time)</th><th>Next Run${stopped ? ' (not current)' : ''}</th><th>Category ${ic('filter', 12, 'class="fn"')}</th></tr></thead><tbody>${rows}</tbody></table>
@@ -453,7 +477,7 @@ const runs = [
   ['14/11/2026 23:45:00', 'Purge audit rows', 'ok:Succeeded', '00:01:13', 'The job succeeded.', ''],
   ['14/11/2026 02:30:00', 'ETL – Load warehouse', 'ok:Succeeded', '00:17:58', 'The job succeeded.', '']
 ]
-function lfv(errlog, empty) {
+function lfv(errlog, empty, state) {
   const srcs = `
     <div class="cap">Select logs</div>
     <div class="src"><span class="cb ${errlog ? '' : 'part'}"></span>${ic('chevD', 12)}<b style="font-weight:600">Job History</b></div>
@@ -466,12 +490,15 @@ function lfv(errlog, empty) {
   const tool = `<div class="toolbar"><span class="tb">${ic('refresh', 14)}Refresh</span><span class="tb">${ic('filter', 14)}Filter…</span><div class="filterbox">${ic('search', 14)}Search messages</div><span class="seg"><span class="on">Last 7 days</span><span>24 h</span><span>All</span></span><span class="vsep"></span><span class="tb">${ic('save', 14)}Export…</span>${errlog ? `<span class="tb">${ic('restart', 14)}Recycle</span>` : `<span class="tb">${ic('trash', 14)}Delete history…</span>`}<span style="margin-left:auto" class="live"><span class="pulse"></span>Live · new runs appear</span></div>`
   const head = `<div class="doctabs"><div class="doctab"><div class="r">${ic('monitor', 14)}Job Activity Monitor</div><div class="s">sql-prod-01</div></div><div class="doctab on"><div class="r">${ic('log', 14)}Log File Viewer</div><div class="s">sql-prod-01 · ${errlog ? 'SQL Server Agent' : 'Job History'}</div></div></div>`
   if (errlog) {
+    const trunc = state === 'trunc' ? `<div class="trunc" style="color:var(--warningSurfaceText);background:var(--warningSurface)">${ic('warn', 12)} Showing the first 10,000 rows of Current – 15/11/2026 07:02; the rest were not read (xp_readerrorlog cannot page). Narrow it with Search messages to see later rows.</div>` : ''
     const lines = [['15/11/2026 07:02:11', 'Information', '[129] SQLSERVERAGENT starting under Windows NT service control'], ['15/11/2026 07:02:12', 'Information', '[364] The Messenger subsystem is not supported'], ['15/11/2026 07:02:13', 'Warning', '[396] An idle CPU condition has not been defined - OnIdle job schedules will have no effect'], ['15/11/2026 07:02:13', 'Information', '[146] Request servicer engine started'], ['15/11/2026 14:15:04', 'Error', '[264] An attempt was made to send an email when no email session has been established']]
-    return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}<div class="split-top"><div class="gridwrap"><table class="g"><thead><tr><th></th><th>Date</th><th>Log Type</th><th>Message</th></tr></thead><tbody>${lines.map((l, i) => `<tr class="${l[1] === 'Error' ? 'tone-error' : l[1] === 'Warning' ? 'tone-warning' : ''} ${i === 4 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="mono">${l[0]}</td><td class="t">${l[1]}</td><td class="mono">${l[2]}</td></tr>`).join('')}</tbody></table></div></div>
+    return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}<div class="split-top"><div class="gridwrap"><table class="g"><thead><tr><th></th><th>Date</th><th>Log Type</th><th>Message</th></tr></thead><tbody>${lines.map((l, i) => `<tr class="${l[1] === 'Error' ? 'tone-error' : l[1] === 'Warning' ? 'tone-warning' : ''} ${i === 4 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="mono">${l[0]}</td><td class="t">${l[1]}</td><td class="mono">${l[2]}</td></tr>`).join('')}</tbody></table></div>${trunc}</div>
       <div class="panehead"><b>Selected row details</b></div><div class="split-bot"><div class="detail"><dl><dt>Date</dt><dd>15/11/2026 14:15:04</dd><dt>Log</dt><dd>SQL Server Agent (Current – 15/11/2026 07:02)</dd><dt>Log Type</dt><dd>Error</dd></dl><pre>[264] An attempt was made to send an email when no email session has been established</pre></div></div></div></div>`
   }
   if (empty) return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--muted)">${ic('history', 24)}<div style="color:var(--text2)">No history for the selected jobs in the last 7 days</div><div style="font-size:12px">Try All, or check SQL Server Agent Properties › History: Agent keeps 1,000 rows (100 per job).</div></div></div></div>`
-  const progress = `<tr class="tone-running"><td class="num">0</td><td class="mono">15/11/2026 14:18:02</td><td class="t">Index maintenance</td><td><span class="pill run">In progress</span></td><td class="mono">—</td><td>sql-prod-01</td><td>Step 1 succeeded; step 2 running. The run has no job outcome row yet.</td></tr>`
+  if (state === 'error') return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted)">${ic('err', 24)}<div style="color:var(--text2)">Job history could not be read</div><div style="font-size:12px">The connection to sql-prod-01 was lost. The sources and filters are kept.</div><span class="btn">Retry</span></div></div></div>`
+  const unknown = state === 'unknown' ? `<tr class="tone-warning"><td class="num">·</td><td class="mono">15/11/2026 09:40:00</td><td class="t">ETL – Load warehouse</td><td><span class="pill warn">Unknown (no job outcome)</span></td><td class="mono">—</td><td>sql-prod-01</td><td>Steps 1-2 ran, then no job outcome row was written: Agent stopped or restarted during the run.</td></tr>` : ''
+  const progress = unknown + `<tr class="tone-running"><td class="num">0</td><td class="mono">15/11/2026 14:18:02</td><td class="t">Index maintenance</td><td><span class="pill run">In progress</span></td><td class="mono">—</td><td>sql-prod-01</td><td>Step 1 succeeded; step 2 running. The run has no job outcome row yet.</td></tr>`
   const rowsHtml = progress + runs.map((r, i) => `<tr class="tone-${r[5]} ${i === 0 ? 'sel' : ''}"><td class="num">${i + 1}</td><td class="mono">${r[0]}</td><td class="t">${r[1]}</td><td>${pill(r[2])}</td><td class="mono">${r[3]}</td><td>sql-prod-01</td><td>${r[4]}</td></tr>`).join('')
   const steps = [['0', '(Job outcome)', 'err:Failed', '00:00:04', '0', '0', 'The job failed. The last step to run was step 1 (Back up log).'], ['1', 'Back up log', 'err:Failed', '00:00:04', '16', '3201', 'Executed as user: CONTOSO\\svc-agent. Cannot open backup device \'\\\\backup01\\sql\\Sales_log.trn\'. Operating system error 53 (The network path was not found.). [SQLSTATE 42000] (Error 3201)  BACKUP LOG is terminating abnormally. [SQLSTATE 42000] (Error 3013). The step failed.']]
   return `${head}<div class="lfv"><div class="sources">${srcs}</div><div class="lfv-right">${tool}
@@ -530,10 +557,11 @@ const D = {
     <tr><td>9</td><td>After Agent starts</td><td>No</td><td>Start automatically when SQL Server Agent starts</td><td>1</td></tr>
   </tbody></table>
   <div class="btnrow"><span class="btn">New…</span><span class="btn">Pick…</span><span class="btn">Edit…</span><span class="btn">Remove</span></div>
-  <div class="note">${ic('info', 14)}Schedule 7 is shared with another job (Jobs in schedule: 2). Remove detaches it from this job; Varia deletes a schedule only when no other job uses it and you confirm, as SSMS asks.</div>`),
+  <div class="note">${ic('info', 14)}Schedule 7 is shared with another job (Jobs in schedule: 2). Remove detaches it from this job, then offers to delete the schedule; msdb refuses the delete while any job (even one this login cannot see) still uses it.</div>`),
   'job-alerts': () => jobDlg('Alerts', `<div style="font-size:12px;color:var(--text3)">Alerts that run this job</div>
   <table class="dtable"><thead><tr><th>Name</th><th>Enabled</th><th>Type</th></tr></thead><tbody><tr class="sel"><td>Log file &gt; 80% full</td><td>No</td><td>SQL Server performance condition alert</td></tr></tbody></table>
-  <div class="btnrow"><span class="btn">Add…</span><span class="btn">Edit…</span><span class="btn">Remove</span></div>`),
+  <div class="btnrow"><span class="btn">Add…</span><span class="btn">Edit…</span><span class="btn">Remove</span></div>
+  <div class="note">${ic('info', 14)}Add (New Alert with this job preset) arrives with the alerts lane (AG-7) and is hidden until then. The page is hidden where the server has no alerts (Managed Instance).</div>`),
   'job-notifications': () => jobDlg('Notifications', `<div style="font-size:12px;color:var(--text3);margin-bottom:8px">Actions to perform when the job completes</div>
   <div class="form" style="grid-template-columns:28px 120px 1fr 200px">
     <span class="cb on">${ic('check', 10)}</span><label>E-mail</label><div class="inp sel">DBA team</div><div class="inp sel">When the job fails</div>
@@ -570,7 +598,7 @@ const D = {
   'delete-job': () => dlgFrame({ title: 'Delete Object', size: 'small', noTools: false, body: `<div style="margin-bottom:6px">Object to be deleted</div>
     <table class="dtable"><thead><tr><th>Object Name</th><th>Object Type</th><th>Owner</th><th>Status</th></tr></thead><tbody><tr><td>Refresh reporting snapshot</td><td>Job</td><td>CONTOSO\\dana</td><td></td></tr></tbody></table>
     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px"><span class="chk"><span class="cb on">${ic('check', 10)}</span>Delete the job's history</span><span class="chk"><span class="cb on">${ic('check', 10)}</span>Delete schedules no other job uses (Daily 06:00)</span></div><div class="note">${ic('info', 14)}Both on by default: SSMS passes @delete_history = 1 and @delete_unused_schedule = 1.</div>`, foot: '<span class="btn danger">Delete</span><span class="btn">Cancel</span>' }),
-  'start-agent': () => dlgFrame({ title: 'Start SQL Server Agent', size: 'small', noTools: true, body: `<div>Start the SQL Server Agent service on <b>sql-prod-01</b>?</div><div class="note">${ic('info', 14)}Runs master.dbo.xp_servicecontrol on the server (sysadmin, Windows servers). Linux and Managed Instance never show Start, Stop or Restart.</div>`, foot: '<span class="btn primary">Start</span><span class="btn">Cancel</span>' }),
+  'start-agent': () => dlgFrame({ title: 'Start SQL Server Agent', size: 'small', noTools: true, body: `<div>Start the SQL Server Agent service on <b>sql-prod-01</b>?</div><div class="note">${ic('info', 14)}Runs master.dbo.xp_servicecontrol on the server (sysadmin, Windows servers). Linux, Managed Instance and failover cluster instances never show Start, Stop or Restart.</div>`, foot: '<span class="btn primary">Start</span><span class="btn">Cancel</span>' }),
   operator: () => dlgFrame({ title: 'Operator Properties - DBA team', pages: ['General', 'Notifications', 'History'], page: 'General', body: `<div class="form">
     <label>Name</label><div class="hstack"><div class="inp" style="flex:1">DBA team</div><span class="chk"><span class="cb on">${ic('check', 10)}</span>Enabled</span></div>
     <label>E-mail name</label><div class="inp">dba-team@contoso.example</div>
@@ -607,11 +635,12 @@ const D = {
     <span class="chk"><span class="cb on">${ic('check', 10)}</span>Limit size of job history log</span>
     <div class="form" style="margin:8px 0 0 22px;grid-template-columns:240px 120px"><label>Maximum job history log size (rows)</label><div class="inp">1000</div><label>Maximum job history rows per job</label><div class="inp">100</div></div></fieldset>
     <fieldset><legend>Remove agent history</legend><span class="chk"><span class="cb"></span>Remove agent history</span>
-    <div class="hstack" style="margin:8px 0 0 22px;opacity:.55">Older than<div class="inp short">4</div><div class="inp sel mid">Week(s)</div></div></fieldset>
+    <div class="hstack" style="margin:8px 0 0 22px;opacity:.55">Older than<div class="inp short">4</div><div class="inp sel mid">Week(s)</div></div>
+    <div class="note" style="margin-top:8px">${ic('warn', 14)}Not a setting: as in SSMS, checking it purges every job's history older than the cut-off once, when you press OK, after its own confirmation.</div></fieldset>
     <div class="note">${ic('info', 14)}0.10.0 ships General and History; Advanced, Alert System, Job System and Connection follow. Pages not yet served show what SSMS shows, read-only.</div>` })
 }
 function stepDlg(page, type) {
-  const types = { tsql: 'Transact-SQL script (T-SQL)', ps: 'PowerShell', ssis: 'SQL Server Integration Services Package' }
+  const types = { tsql: 'Transact-SQL script (T-SQL)', ps: 'PowerShell', ssis: 'SQL Server Integration Services Package', cmdexec: 'Operating system (CmdExec)' }
   const common = (inner) => dlgFrame({ title: 'Job Step Properties - Rebuild fragmented indexes', pages: ['General', 'Advanced'], page, go: p => p === 'General' ? 'step-general' : 'step-advanced', body: inner, size: 'mid' })
   if (page === 'Advanced') return common(`<fieldset style="margin-top:0"><legend>On success action</legend><div class="form"><label>On success action</label><div class="inp sel">Go to the next step</div><label>Retry attempts</label><div class="hstack"><div class="inp short">2</div>Retry interval (minutes)<div class="inp short">5</div></div></div></fieldset>
     <fieldset><legend>On failure action</legend><div class="form"><label>On failure action</label><div class="inp sel">Go to step: [4] Notify on failure</div></div></fieldset>
@@ -628,6 +657,10 @@ function stepDlg(page, type) {
     <div class="hstack" style="margin:10px 0 4px"><span style="font-size:13px;color:var(--text2)">Command</span><span style="margin-left:auto" class="btn">Open…</span><span class="btn">Select All</span><span class="btn">${ic('check', 14)}Parse</span></div>
     <div class="code"><div><span class="n">1</span><span class="c">-- Rebuild indexes over 30% fragmented, reorganize from 10%</span></div><div><span class="n">2</span><span class="k">DECLARE</span> @min_pages <span class="k">int</span> = 1000;</div><div><span class="n">3</span><span class="k">EXEC</span> dbo.IndexOptimize @Databases = <span class="s">N'USER_DATABASES'</span>,</div><div><span class="n">4</span>     @FragmentationLevel2 = 30, @MinNumberOfPages = @min_pages;</div></div>
     <div class="note">${ic('check', 14)}Parse: the command parsed successfully. (Varia's language service parses it; nothing runs on the server.)</div>`)
+  if (type === 'cmdexec') return common(`${head.replace('Rebuild fragmented indexes', 'Copy export to share').replace('<div class="inp sel "></div>', '<div class="inp sel">FileShareWriter</div>')}<label>Process exit code of a successful command</label><div class="inp short">0</div></div>
+    <div class="hstack" style="margin:10px 0 4px"><span style="font-size:13px;color:var(--text2)">Command</span><span style="margin-left:auto" class="btn">Open…</span></div>
+    <div class="code"><div><span class="n">1</span>robocopy D:\\Exports \\\\files01\\exports *.csv /MOV /R:2</div></div>
+    <div class="note">${ic('shield', 14)}Runs on the server as the proxy (or the Agent service account for sysadmin). Windows servers only; the gates hide CmdExec on Linux.</div>`)
   if (type === 'ps') return common(`${head}</div>
     <div class="hstack" style="margin:10px 0 4px"><span style="font-size:13px;color:var(--text2)">Command</span><span style="margin-left:auto" class="btn">Open…</span></div>
     <div class="code"><div><span class="n">1</span><span class="k">$file</span> = <span class="s">"\\\\files01\\exports\\index-failure-$(Get-Date -Format yyyyMMdd).txt"</span></div><div><span class="n">2</span><span class="s">"Index maintenance failed on $env:COMPUTERNAME"</span> | <span class="k">Out-File</span> <span class="k">$file</span></div></div>
@@ -647,7 +680,7 @@ Object.assign(D, {
     <label style="align-self:start;margin-top:4px">Description</label><div class="inp area"></div>
     <span></span><span class="chk">${cbx(1)}Enabled</span></div>
     <div class="note">${ic('info', 14)}A SQLAgentUserRole login: Owner is its own login, read-only. OK is disabled until the job has a name. Steps, Schedules and the rest start empty.</div>`, foot: '<span class="btn primary dis">OK</span><span class="btn">Cancel</span>' }),
-  'job-denied': () => jobDlg('Steps', `<table class="dtable"><thead><tr><th style="width:40px">Step</th><th>Name</th><th>Type</th><th>Run as</th></tr></thead><tbody><tr class="sel"><td>1</td><td>Copy export to share</td><td>Operating system (CmdExec)</td><td>FileShareWriter</td></tr></tbody></table>`, { message: `<div class="errnote">${ic('err', 14)}<span><b>Permission denied.</b> sp_add_jobstep refused step 1: the login may not use proxy "FileShareWriter". Nothing was saved; the job is as it was. Pick another proxy or ask a sysadmin to grant it.</span></div>`, progress: 'Failed at step 2 of 4' }),
+  'job-denied': () => jobDlg('Steps', `<table class="dtable"><thead><tr><th style="width:40px">Step</th><th>Name</th><th>Type</th><th>Run as</th></tr></thead><tbody><tr class="sel"><td>1</td><td>Copy export to share</td><td>Operating system (CmdExec)</td><td>FileShareWriter</td></tr></tbody></table>`, { message: `<div class="errnote">${ic('err', 14)}<span><b>Permission denied.</b> Saving step 1 'Copy export to share' was refused: the login may not use proxy "FileShareWriter" (msdb error 14525). Nothing was saved; the job is as it was. Pick another proxy or ask a sysadmin to grant it.</span></div>`, progress: 'Failed: part 2 of 3 (add step 1)' }),
   'job-stale': () => jobDlg('General', `<div class="form"><label>Name</label><div class="inp">Index maintenance</div><label>Owner</label><div class="inp">CONTOSO\\dana</div><label>Description</label><div class="inp area">Rebuilds fragmented indexes.</div></div>`, { message: `<div class="errnote" style="background:var(--warningSurface);color:var(--warningSurfaceText)">${ic('warn', 14)}<span><b>Changed by someone else since it was opened.</b> Reload to see the changes; your edits are kept until you do.</span><span class="btn" style="margin-left:auto">Reload</span></div>` }),
   'start-jobs': () => dlgFrame({ title: 'Start Jobs', size: 'small', noTools: true, body: `<table class="dtable"><thead><tr><th style="width:24px"></th><th>Action</th><th>Status</th><th>Message</th></tr></thead><tbody>
     <tr><td style="color:var(--success)">${ic('check', 14)}</td><td>Start Job 'Nightly full backup – Sales'</td><td>Success</td><td></td></tr>
@@ -655,8 +688,10 @@ Object.assign(D, {
     <tr><td style="color:var(--textAccent)">${ic('job', 14)}</td><td>Start Job 'Purge audit rows'</td><td>In progress</td><td></td></tr></tbody></table>
     <div class="note">${ic('info', 14)}Several jobs selected in Job Activity Monitor: one line per job, as SSMS. Stop Jobs looks the same.</div>`, foot: '<span class="btn">Stop</span><span class="btn primary">Close</span>' }),
   'stop-agent': () => dlgFrame({ title: 'Stop SQL Server Agent', size: 'small', noTools: true, body: `<div>Stop the SQL Server Agent service on <b>sql-prod-01</b>?</div><div class="warnnote">${ic('warn', 14)}2 jobs are running (Index maintenance, Export finance extract). Stopping Agent stops them, and no job starts on schedule until Agent starts again.</div>`, foot: '<span class="btn danger">Stop</span><span class="btn">Cancel</span>' }),
-  'restart-agent': () => dlgFrame({ title: 'Restart SQL Server Agent', size: 'small', noTools: true, body: `<div>Restarting SQL Server Agent on <b>sql-prod-01</b>…</div><table class="dtable" style="margin-top:8px"><tbody><tr><td style="width:24px;color:var(--success)">${ic('check', 14)}</td><td>Stop service SQLSERVERAGENT</td><td>Done</td></tr><tr><td style="color:var(--textAccent)">${ic('job', 14)}</td><td>Wait for the service to stop</td><td>Stopping…</td></tr><tr><td></td><td style="color:var(--muted)">Start service SQLSERVERAGENT</td><td></td></tr></tbody></table><div class="note">${ic('info', 14)}xp_servicecontrol has no restart, so Restart is Stop, a wait for the state to read stopped, then Start. The service name comes from sys.dm_server_services (named instances use SQLAgent$&lt;instance&gt;).</div>`, foot: '<span class="btn">Stop</span><span class="btn primary dis">Close</span>' }),
-  'delete-history': () => dlgFrame({ title: 'Delete History', size: 'small', noTools: true, body: `<div>Delete all history for <b>Log backup – Sales</b>?</div><div class="warnnote">${ic('warn', 14)}This removes 96 rows from msdb and cannot be undone.</div>`, foot: '<span class="btn danger">Delete</span><span class="btn">Cancel</span>' }),
+  'restart-agent': () => dlgFrame({ title: 'Restart SQL Server Agent', size: 'small', noTools: true, body: `<div>Restarting SQL Server Agent on <b>sql-prod-01</b>…</div><table class="dtable" style="margin-top:8px"><tbody><tr><td style="width:24px;color:var(--success)">${ic('check', 14)}</td><td>Stop SQL Server Agent</td><td>Done</td></tr><tr><td style="color:var(--textAccent)">${ic('job', 14)}</td><td>Wait for the service to stop</td><td>Stopping… (up to 60 s)</td></tr><tr><td></td><td style="color:var(--muted)">Start SQL Server Agent</td><td></td></tr></tbody></table><div class="note">${ic('info', 14)}xp_servicecontrol has no restart, so Restart is Stop, then the action re-reads QueryState until it reads stopped (bounded, Stop-able), then Start. It always passes the constant SQLServerAgent, which xp_servicecontrol maps to this instance's Agent (SQLAgent$&lt;instance&gt; on a named instance). SSMS uses WMI from the client; Varia goes through the engine, so it works from Linux and macOS too.</div>`, foot: '<span class="btn">Stop</span><span class="btn primary dis">Close</span>' }),
+  'delete-history': () => dlgFrame({ title: 'Delete History', size: 'small', noTools: true, body: `<div>Delete history for the 2 jobs checked in Log File Viewer:</div><ul style="margin:6px 0 10px 18px;padding:0"><li>Log backup – Sales</li><li>ETL – Load warehouse</li></ul>
+    <div style="display:flex;flex-direction:column;gap:6px"><span class="chk"><span class="radio"></span>All history for these jobs</span><span class="chk"><span class="radio on"></span>History older than</span><div class="hstack" style="margin-left:22px"><div class="inp short">4</div><div class="inp sel mid">Week(s)</div><span style="font-size:12px;color:var(--text3)">before 18/10/2026 14:21</span></div></div>
+    <div class="warnnote">${ic('warn', 14)}This removes those jobs' rows from msdb and cannot be undone. Other jobs' history is not touched.</div>`, foot: '<span class="btn">Cancel</span><span class="btn danger">Delete</span>' }),
   'jobs-filter': () => dlgFrame({ title: 'Filter Settings - Jobs', size: 'small', noTools: true, body: `<table class="dtable"><thead><tr><th>Property</th><th>Operator</th><th>Value</th></tr></thead><tbody><tr><td>Name</td><td>Contains</td><td>backup</td></tr><tr><td>Owner</td><td>Equals</td><td></td></tr><tr><td>Category</td><td>Equals</td><td>Database Maintenance</td></tr><tr><td>Creation Date</td><td>Greater than</td><td></td></tr></tbody></table><div class="note">${ic('info', 14)}Object Explorer's existing Filter Settings dialog with the Jobs folder's properties.</div>`, foot: '<span class="btn">Clear Filter</span><span class="btn primary">OK</span><span class="btn">Cancel</span>' }),
   'pick-schedule': () => dlgFrame({ title: 'Pick Schedule for Job - Index maintenance', size: 'mid', noTools: true, body: `<div class="filterbox" style="margin-bottom:6px">${ic('search', 14)}Filter schedules</div><table class="dtable"><thead><tr><th>ID</th><th>Name</th><th>Enabled</th><th>Description</th><th>Jobs in schedule</th></tr></thead><tbody>${[[2, 'Daily 01:00', 'Yes', 'Occurs every day at 01:00:00.', 1], [4, 'Nightly 02:30', 'Yes', 'Occurs every day at 02:30:00.', 2], [11, 'Month-end close', 'Yes', 'Occurs every month on the last day of the month at 22:00:00.', 0]].map((r, i) => `<tr class="${i === 1 ? 'sel' : ''}"><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`).join('')}</tbody></table><div class="note">${ic('info', 14)}Lists shared schedules the login may use (sp_help_schedule); schedules the job already has are left out.</div>` }),
   'jobs-in-schedule': () => dlgFrame({ title: 'Jobs Referencing a Schedule - Nightly 02:30', size: 'small', noTools: true, body: `<table class="dtable"><thead><tr><th>Selected</th><th>Name</th><th>Category</th></tr></thead><tbody><tr><td>${cbx(1)}</td><td>ETL – Load warehouse</td><td>Data Collector</td></tr><tr><td>${cbx(1)}</td><td>Purge audit rows</td><td>[Uncategorized (Local)]</td></tr><tr><td>${cbx(0)}</td><td>Index maintenance</td><td>Database Maintenance</td></tr></tbody></table><div class="note">${ic('info', 14)}Checking attaches the schedule to a job, unchecking detaches it (sp_attach_schedule / sp_detach_schedule), saved with OK.</div>` }),
@@ -668,15 +703,30 @@ Object.assign(D, {
   'proxy-references': () => dlgFrame({ title: 'Proxy Account Properties - FileShareWriter', pages: ['General', 'Principals', 'References'], page: 'References', go: p => p === 'General' ? 'proxy' : 'proxy-' + p.toLowerCase(), body: `<div style="font-size:12px;color:var(--text3)">Job steps that run as this proxy</div><table class="dtable"><thead><tr><th>Job</th><th>Step</th><th>Subsystem</th></tr></thead><tbody><tr><td>Index maintenance</td><td>4 Notify on failure</td><td>PowerShell</td></tr><tr><td>Export finance extract</td><td>2 Copy export to share</td><td>CmdExec</td></tr></tbody></table><div class="note">${ic('info', 14)}Read-only. Deleting a proxy that steps reference asks first and names them.</div>` }),
   'credential-props': () => dlgFrame({ title: 'Credential Properties - FileShareWriterCred', size: 'small', body: `<div class="form">
     <label>Credential name</label><div class="inp ro">FileShareWriterCred</div>
-    <label>Identity</label><div class="hstack"><div class="inp" style="flex:1">CONTOSO\\svc-exports</div><span class="btn">…</span></div>
-    <span></span><span class="chk">${cbx(0)}Change password</span>
+    <label>Identity</label><div class="hstack"><div class="inp ro" style="flex:1">CONTOSO\\svc-exports</div><span class="btn dis">…</span></div>
+    <span></span><span class="chk">${cbx(0)}Change identity and password</span>
     <label>Password</label><div class="inp dis"></div><label>Confirm password</label><div class="inp dis"></div>
     <label>Created</label><span class="mono">02/03/2025 10:20:41</span><label>Modified</label><span class="mono">08/11/2026 16:02:13</span></div>
-    <div class="note">${ic('key', 14)}The secret is never read back (SQL Server cannot return it). "Change password" enables the fields; ALTER CREDENTIAL keeps the old secret unless it is checked.</div>` }),
+    <div class="note">${ic('key', 14)}The secret is never read back (SQL Server cannot return it). ALTER CREDENTIAL resets the secret whenever it runs without one, so Identity and Password are read-only until "Change identity and password" is checked, and every save then sends both. With it unchecked, OK changes nothing on the server.</div>` }),
   'agent-props-general': () => dlgFrame({ title: 'SQL Server Agent Properties - sql-prod-01', pages: ['General', 'Advanced', 'Alert System', 'Job System', 'Connection', 'History'], page: 'General', go: p => p === 'General' ? 'agent-props-general' : p === 'History' ? 'agent-props' : '', body: `<fieldset style="margin-top:0"><legend>Agent service</legend><div class="form"><label>Service state</label><span><span class="chip ok" style="margin-left:0">Running</span></span><label>Service account</label><span>NT Service\\SQLSERVERAGENT</span></div>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px"><span class="chk">${cbx(1)}Auto restart SQL Server if it stops unexpectedly</span><span class="chk">${cbx(1)}Auto restart SQL Server Agent if it stops unexpectedly</span></div></fieldset>
     <fieldset><legend>Error log</legend><div class="form"><label>File name</label><div class="inp ro">C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\Log\\SQLAGENT.OUT</div><span></span><span class="chk" style="color:var(--muted)">${cbx(0)}Include execution trace messages</span></div></fieldset>
     <div class="note">${ic('info', 14)}Error log options are read-only in 0.10.0 (Configure is later). Advanced, Alert System, Job System and Connection show read-only.</div>` })
+})
+Object.assign(D, {
+  'step-cmdexec': () => stepDlg('General', 'cmdexec'),
+  'delete-step': () => jobDlg('Steps', `<table class="dtable"><thead><tr><th style="width:40px">Step</th><th>Name</th><th>On Success</th><th>On Failure</th></tr></thead><tbody><tr><td>2</td><td>Rebuild fragmented indexes</td><td>Go to the next step</td><td>Go to step: [4] Notify on failure</td></tr><tr><td>3</td><td>Update statistics</td><td>Quit the job reporting success</td><td>Go to step: [4] Notify on failure</td></tr><tr class="sel"><td>4</td><td>Notify on failure</td><td>Quit the job reporting failure</td><td>Quit the job reporting failure</td></tr></tbody></table>`) + `<div class="scrim" style="background:transparent"><div class="dlg small" role="alertdialog" aria-label="Delete job step"><div class="dlg-title">Delete job step<span class="x">${ic('x')}</span></div><div class="dlg-body"><div class="dlg-main"><div class="dlg-page"><div>Delete step 4 'Notify on failure'?</div><div class="warnnote">${ic('warn', 14)}Steps 2 and 3 go to this step on failure. They will be changed to "Quit the job reporting failure".</div><div style="font-size:12px;color:var(--text3)">Nothing changes on the server until the job is saved with OK.</div></div></div></div><div class="dlg-foot"><span class="btn primary">Cancel</span><span class="btn danger">Delete step</span></div></div></div>`,
+  'remove-schedule': () => jobDlg('Schedules', `<table class="dtable"><thead><tr><th>ID</th><th>Name</th><th>Enabled</th><th>Jobs in schedule</th></tr></thead><tbody><tr class="sel"><td>9</td><td>After Agent starts</td><td>No</td><td>1</td></tr></tbody></table>`) + `<div class="scrim" style="background:transparent"><div class="dlg small" role="alertdialog" aria-label="Remove schedule"><div class="dlg-title">Remove schedule<span class="x">${ic('x')}</span></div><div class="dlg-body"><div class="dlg-main"><div class="dlg-page"><div>Remove 'After Agent starts' from Index maintenance?</div><div style="margin-top:8px;display:flex;flex-direction:column;gap:6px"><span class="chk"><span class="radio on"></span>Detach it, keep the schedule</span><span class="chk"><span class="radio"></span>Detach it and delete the schedule</span></div><div class="note">${ic('info', 14)}msdb refuses the delete if another job still uses the schedule; the job is then saved with the schedule only detached, and Varia says so.</div></div></div></div><div class="dlg-foot"><span class="btn primary">Remove</span><span class="btn">Cancel</span></div></div></div>`,
+  'schedule-idle': () => dlgFrame({ title: 'New Job Schedule', size: 'mid', noTools: true, body: `<div class="form"><label>Name</label><div class="inp">When the server is idle</div><label>Schedule type</label><div class="hstack"><div class="inp sel" style="flex:1">Start whenever the CPUs become idle</div><span class="chk">${cbx(1)}Enabled</span></div></div>
+    <div class="warnnote">${ic('warn', 14)}No idle CPU condition is defined on sql-prod-01 (SQL Server Agent Properties › Advanced), so this schedule never starts the job. Varia does not edit that page yet; set it in SSMS or with sp_set_sqlagent_properties.</div>
+    <fieldset><legend>Summary</legend><div class="desc">Start whenever the CPUs become idle.</div></fieldset>` }),
+  'alert-perf': () => dlgFrame({ title: 'Alert Properties - Log file > 80% full', pages: ['General', 'Response', 'Options'], page: 'General', body: `<div class="form"><label>Name</label><div class="hstack"><div class="inp" style="flex:1">Log file &gt; 80% full</div><span class="chk">${cbx(0)}Enable</span></div><label>Type</label><div class="inp sel">SQL Server performance condition alert</div></div>
+    <fieldset><legend>Performance condition alert definition</legend><div class="form"><label>Object</label><div class="inp sel">Databases</div><label>Counter</label><div class="inp sel">Percent Log Used</div><label>Instance</label><div class="inp sel">Sales</div><label>Alert if counter</label><div class="hstack"><div class="inp sel mid">rises above</div>Value<div class="inp short">80</div></div></div></fieldset>
+    <div class="note">${ic('info', 14)}Object, Counter and Instance list sys.dm_os_performance_counters when the login has the server state permission; otherwise they are typed, as text boxes.</div>` }),
+  'alert-wmi': () => dlgFrame({ title: 'Alert Properties - Deadlock graph (WMI)', pages: ['General', 'Response', 'Options'], page: 'General', body: `<div class="form"><label>Name</label><div class="inp ro">Deadlock graph (WMI)</div><label>Type</label><div class="inp sel dis">WMI event alert</div></div>
+    <fieldset><legend>WMI event alert definition</legend><div class="form"><label>Namespace</label><div class="inp ro mono">\\\\.\\root\\Microsoft\\SqlServer\\ServerEvents\\MSSQLSERVER</div><label style="align-self:start">Query</label><div class="inp area ro mono">SELECT * FROM DEADLOCK_GRAPH</div></div></fieldset>
+    <div class="note">${ic('info', 14)}WMI event alerts are shown read-only in 0.10.0 (editing is later); Response and Options stay editable. Linux has no WMI alerts.</div>`, foot: '<span class="btn primary">OK</span><span class="btn">Cancel</span>' }),
+  'agent-props-purge': () => D['agent-props']() + `<div class="scrim" style="background:transparent"><div class="dlg small" role="alertdialog" aria-label="Remove agent history"><div class="dlg-title">Remove agent history<span class="x">${ic('x')}</span></div><div class="dlg-body"><div class="dlg-main"><div class="dlg-page"><div>Delete the history of <b>every job</b> on sql-prod-01 older than 4 weeks (before 18/10/2026 14:21)?</div><div class="warnnote">${ic('warn', 14)}This runs once now; it is not saved as a setting. It cannot be undone.</div></div></div></div><div class="dlg-foot"><span class="btn primary">Cancel</span><span class="btn danger">Delete history</span></div></div></div>`
 })
 function searchOverlay() {
   return `<div class="menu" style="left:560px;top:44px;width:480px;padding:6px 0"><div style="padding:2px 10px 6px;font-size:11px;color:var(--text3)">Objects</div>
@@ -700,7 +750,7 @@ const callouts = {
 }
 function menu(kind) {
   const items = kind === 'agent'
-    ? [['play', 'Start', '', 1], ['stop', 'Stop', '', 0], ['restart', 'Restart', '', 0], '-', ['monitor', 'Job Activity Monitor', '', 0], ['history', 'View History', '', 0], '-', ['props', 'Properties', 'Alt+Enter', 0], ['refresh', 'Refresh', 'F5', 0]]
+    ? [['plus', 'New', '›', 0], '-', ['play', 'Start', '', 1], ['stop', 'Stop', '', 0], ['restart', 'Restart', '', 0], '-', ['monitor', 'Job Activity Monitor', '', 0], ['history', 'View History', '', 0], '-', ['props', 'Properties', 'Alt+Enter', 0], ['refresh', 'Refresh', 'F5', 0]]
     : [['plus', 'New Job…', '', 0], '-', ['play', 'Start Job at Step…', '', 0], ['stop', 'Stop Job', '', 0], '-', ['code', 'Script Job as', '›', 0], '-', ['history', 'View History', '', 0], '-', ['', 'Enable', '', 1], ['', 'Disable', '', 0], '-', ['rename', 'Rename', 'F2', 0], ['trash', 'Delete', 'Del', 0], ['refresh', 'Refresh', 'F5', 0], '-', ['props', 'Properties', 'Alt+Enter', 0]]
   return items.map(it => it === '-' ? '<hr>' : `<div class="mi ${it[3] ? 'dis' : ''} ${it[1] === 'Start Job at Step…' ? 'hl' : ''}"><span class="g">${it[0] ? ic(it[0], 14) : ''}</span>${it[1]}<span class="k">${it[2]}</span></div>`).join('')
 }
@@ -709,7 +759,7 @@ function render() {
   document.body.classList.toggle('light', document.getElementById('theme').value === 'light')
   const notes = document.getElementById('notes').checked
   const treeEl = document.getElementById('tree'), main = document.getElementById('main'), ov = document.getElementById('overlay'), st = document.getElementById('status')
-  const mode = { 'oe-stopped': 'stopped', 'oe-user': 'user', 'oe-mi': 'mi', 'oe-linux': 'linux', 'oe-noaccess': 'noaccess', 'oe-menu-job': 'menu-job', 'new-job': 'user', 'jam-stopped': 'stopped', 'jam-empty': 'empty' }[s] || 'normal'
+  const mode = { 'oe-xps': 'xps', 'oe-unknown': 'unknown', 'oe-reader': 'reader', 'oe-new': 'normal', 'oe-stopped': 'stopped', 'oe-user': 'user', 'oe-mi': 'mi', 'oe-linux': 'linux', 'oe-noaccess': 'noaccess', 'oe-menu-job': 'menu-job', 'new-job': 'user', 'jam-stopped': 'stopped', 'jam-empty': 'empty' }[s] || 'normal'
   treeEl.innerHTML = tree(mode)
   ov.innerHTML = ''
   st.classList.remove('running')
@@ -718,6 +768,11 @@ function render() {
   else if (s === 'jam-stopped') main.innerHTML = jam(true)
   else if (s === 'jam-empty') main.innerHTML = jam(false, true)
   else if (s === 'lfv-empty') main.innerHTML = lfv(false, true)
+  else if (s === 'jam-loading') main.innerHTML = jam(false, false, 'loading')
+  else if (s === 'jam-error') main.innerHTML = jam(false, false, 'error')
+  else if (s === 'lfv-unknown') main.innerHTML = lfv(false, false, 'unknown')
+  else if (s === 'lfv-error') main.innerHTML = lfv(false, false, 'error')
+  else if (s === 'lfv-log-trunc') main.innerHTML = lfv(true, false, 'trunc')
   else if (s === 'lfv') main.innerHTML = lfv(false)
   else if (s === 'lfv-log') main.innerHTML = lfv(true)
   else main.innerHTML = editorBg()
@@ -728,6 +783,8 @@ function render() {
   }
   if (s === 'oe-stopped') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '200px'; m.style.top = '440px'; m.innerHTML = menu('agent'); m.querySelectorAll('.mi').forEach(x => { const t = x.textContent.trim(); if (/^(Stop|Restart)/.test(t)) x.classList.add('dis'); if (/^Start$/.test(t)) { x.classList.remove('dis'); x.classList.add('hl') } }); ov.appendChild(m); ov.insertAdjacentHTML('beforeend', D['start-agent']()) }
   if (s === 'oe-menu-job') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '220px'; m.style.top = '470px'; m.innerHTML = menu('job'); ov.appendChild(m); const sub = document.createElement('div'); sub.className = 'menu'; sub.style.left = '460px'; sub.style.top = '582px'; sub.innerHTML = ['CREATE To', 'DROP To', 'DROP And CREATE To'].map(t => `<div class="mi"><span class="g"></span>${t}<span class="k">›</span></div>`).join(''); ov.appendChild(sub) }
+  if (s === 'oe-new') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '200px'; m.style.top = '440px'; m.innerHTML = menu('agent'); m.querySelector('.mi').classList.add('hl'); ov.appendChild(m); const sub = document.createElement('div'); sub.className = 'menu'; sub.style.left = '440px'; sub.style.top = '440px'; sub.innerHTML = [['job', 'Job…'], ['alert', 'Alert…'], ['person', 'Operator…'], ['shield', 'Proxy…'], ['calendar', 'Schedule…']].map(t => `<div class="mi"><span class="g">${ic(t[0], 14)}</span>${t[1]}<span class="k"></span></div>`).join(''); ov.appendChild(sub) }
+  if (s === 'oe-reader') { const m = document.createElement('div'); m.className = 'menu'; m.style.left = '220px'; m.style.top = '330px'; m.innerHTML = menu('job'); m.querySelectorAll('.mi').forEach(x => { const t = x.textContent.trim(); x.classList.remove('hl'); if (/^(Start Job|Stop Job|Enable|Disable|Rename|Delete)/.test(t)) { x.classList.add('dis'); x.title = 'Owned by CONTOSO\\etl_svc: SQLAgentReaderRole may view it, not change it' } }); ov.appendChild(m) }
   if (s === 'search-job') ov.insertAdjacentHTML('beforeend', searchOverlay())
   if (s === 'oe-menus') ov.insertAdjacentHTML('beforeend', folderMenus())
   if (s === 'running-status') { st.classList.add('running'); st.innerHTML = `<span style="color:var(--textAccent);display:inline-flex;gap:6px;align-items:center">${ic('job', 12)}Index maintenance: running step 2 of 4 · 12:04</span><span>Started by CONTOSO\\dana</span><span class="tb" style="height:18px;color:var(--textAccent)">${ic('stop', 12)}Stop</span><span style="margin-left:auto">sql-prod-01</span>`; main.innerHTML = jam(false) }
@@ -742,7 +799,7 @@ function render() {
       if (s === 'oe' || s === 'oe-stopped') c.style.left = '470px'
       ov.appendChild(c)
     }
-    const extra = { 'jam-stopped': 'From explorer.agentService: every Status reads Agent stopped and Next Run is marked not current (Agent refreshes it about every 20 minutes, not while stopped). Start Agent only for sysadmin on Windows.', 'oe-user': 'SQLAgentUserRole: both running-jobs chips count only the jobs this login may see, read through sp_help_job by AgentReader (the login cannot read sysjobactivity).', 'search-job': 'Search Objects indexes Agent kinds in their own batch, so a refusal skips only them.', 'oe-menus': 'Menus per kind, SSMS names. Manage Job Categories and Error Logs > Configure are later and not shown.', 'job-denied': 'A refusal is a value: the dialog stays open, names the refused step, and the save rolled back (every msdb call checks its return code).', 'job-stale': 'Properties saves compare version_number and date_modified; a change by someone else answers STALE with Reload.', lfv: 'Master/detail: runs above (an In progress run groups step rows after the last job outcome row), the selected run\'s steps below, full message in the details pane. agent.history live source: filters are args, new runs append.', jam: 'LiveGrid with the Results grid\'s components; tones from the backend (failed error, running accent, between retries warning, disabled muted). View chips, filter box and column funnels filter in backend memory. LiveService pauses it while hidden.', lfv: 'Master/detail: runs above, the selected run\'s steps below, full message in the details pane. agent.history live source (like SSIS Operations): filters are args, new runs append.', 'lfv-log': 'Agent error log through xp_readerrorlog (sysadmin). The same viewer later adds SQL Server logs and Database Mail.', 'running-status': 'Tinted status bar while a job this window started is running; Stop sends sp_stop_job. Follows the live row, no polling.' }[s]
+    const extra = { 'jam-stopped': 'From explorer.agentService: every Status reads Agent stopped and Next Run is marked not current (Agent refreshes it about every 20 minutes, not while stopped). Start Agent only for sysadmin on Windows.', 'oe-user': 'SQLAgentUserRole: both running-jobs chips count only the jobs this login may see, read through sp_help_job by AgentReader (the login cannot read sysjobactivity).', 'search-job': 'Search Objects indexes Agent kinds in their own batch, so a refusal skips only them.', 'oe-menus': 'Menus per kind, SSMS names. Manage Job Categories and Error Logs > Configure are later and not shown.', 'job-denied': 'A refusal is a value: the dialog stays open, names the refused step, and the save rolled back (every msdb call checks its return code).', 'job-stale': 'Properties saves compare version_number and date_modified of the job and of every schedule the dialog edits; a change by someone else answers STALE (not retryable) with Reload.', 'oe-xps': 'Agent XPs = 0: the node shows why and lists nothing. Read in agent.profile from sys.configurations.', 'oe-unknown': 'State unknown, never guessed: no state chip without the permission explorer.agentService needs.', 'oe-reader': 'SQLAgentReaderRole sees every job; verbs on another login\'s job are disabled with the reason (tooltip), not hidden. View History and Properties (read-only) stay.', 'oe-new': 'SSMS\'s New submenu. Each item appears once its lane lands and where the gates and role allow (no Alert or Proxy on Managed Instance).', 'jam-loading': 'Skeleton rows until the first sample; aria-busy on the grid.', 'jam-error': 'A failed sample keeps the last rows and says why; the live indicator turns to error. PERMISSION_DENIED instead replaces the grid with the no-access state.', 'lfv-unknown': 'Step rows with no job outcome row and the job not running now: Agent stopped or crashed mid-run. Grouping is time-bounded so they never merge into the next run.', 'lfv-error': 'A failed read is shown in place with Retry; sources and filters are kept.', 'lfv-log-trunc': 'xp_readerrorlog cannot page, so the read stops at agentLimits.logRows and says so.', 'delete-history': 'From the Log File Viewer toolbar for the checked jobs only: sp_purge_jobhistory per job id, optionally @oldest_date. A purge with no job id is never sent.', 'credential-props': 'ALTER CREDENTIAL without SECRET wipes the secret, so Identity and Password change only together.', 'agent-props-purge': 'The one server-wide purge: sysadmin, its own confirmation, never stored.', jam: 'Tiles count jobs from the same sp_help_job read (no history read). LiveGrid with the Results grid\'s components; tones from the backend (failed error, running accent, between retries warning, disabled muted). View chips, filter box and column funnels filter in backend memory. LiveService pauses it while hidden.', lfv: 'Master/detail: runs above (an In progress run groups step rows after the last job outcome row while the job is executing), the selected run\'s steps below, full message in the details pane. agent.history live source (like SSIS Operations): filters are args, new runs append.', 'lfv-log': 'Agent error log through xp_readerrorlog (sysadmin; sp_readmierrorlog on Managed Instance). The same viewer later adds SQL Server logs and Database Mail.', 'running-status': 'Tinted status bar while a job this window started is running; Stop sends sp_stop_job. Fed by the table-less agent.jobs.watched probe, which keeps sampling while Object Explorer is hidden (statusOnly); no polling.' }[s]
     if (extra) { const c = document.createElement('div'); c.className = 'callout'; c.style.right = '14px'; c.style.bottom = '34px'; c.textContent = extra; ov.appendChild(c) }
   }
   fill(document)
