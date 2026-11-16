@@ -98,7 +98,11 @@ From Microsoft's documentation (re-checked in AG-0 and AG-1, never assumed):
 - On SQL Server 2022 and later `sys.dm_server_services` may need VIEW SERVER SECURITY STATE rather than VIEW SERVER STATE
   (AG-0 probes it with a low-privilege login).
 
-Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job: what
+Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job:
+whether `sp_get_sqlagent_properties` returns values to a SQLAgentUserRole login (msdb grants that role EXECUTE and the
+procedure has no sysadmin check, but it reads through `xp_instance_regread`, which may refuse non-sysadmin callers; until
+then the plan treats it as sysadmin-only, and if it works the cap text, idle-CPU and mail facts show to every role that
+can run it, with any refusal number mapped to "not read"); what
 `sp_help_job` and `xp_sqlagent_enum_jobs` return while Agent is stopped; that `xp_servicecontrol N'Start'|N'Stop',
 N'SQLServerAgent'` works under the default virtual accounts and for a named instance (the CI job installs one); the error
 number of its "Access is denied"; which msdb calls bump `sysjobs.version_number` and `sysschedules.version_number`; the
@@ -246,17 +250,24 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
   a generic failure: a new explorer code `AGENT_DISABLED` joins `explorerErrorCodes` in `src/shared/contracts.ts` (C# has
   no code list; codes are strings in `ExplorerErrors`): `ExplorerErrors.Classify` gains `15281 => "AGENT_DISABLED"`, and
-  `ExplorerErrors.Create` gains an `AGENT_DISABLED` message case worded per platform (`sp_configure` on Windows,
-  `mssql-conf` on Linux) instead of the default `Msg n:` text, retryable (Refresh after Start succeeds). The no-role
-  `PERMISSION_DENIED` sentence is passed as caller-supplied text, as `NOT_SUPPORTED`'s is, since `Create`'s fixed
-  "You do not have permission to view …" text does not say which role is missing. ExplorerChecks' Classify table gains
-  15281, and docs/ipc.md lists the code. The live path has its own list, so `AGENT_DISABLED` also joins
+  `ExplorerErrors.Create` gains a platform-neutral `AGENT_DISABLED` message case (naming both `sp_configure` and
+  `mssql-conf`; neither `Create`, `From` nor `LiveErrors.From` knows the platform) instead of the default `Msg n:` text,
+  retryable (Refresh after Start succeeds); the renderer words the node's explanation and banners per platform from
+  `agent.profile`. The Agent listing's own no-role `PERMISSION_DENIED` and `AGENT_DISABLED` are built as direct
+  `new ExplorerError(...)` values with their Agent sentences, so `Create`'s fixed "You do not have permission to view …"
+  text for `From`-classified 229 and friends is unchanged (an ExplorerChecks case asserts it still is). ExplorerChecks'
+  Classify table gains 15281, and docs/ipc.md lists the code. The live path has its own list, so `AGENT_DISABLED` also joins
   `liveErrorCodes` (`src/shared/live/schema.ts`, validated by main's supervisor, which drops any tick that fails it):
   `LiveErrors.Classify` maps 15281 to it and `LiveErrors.From` gives the same sentence; docs/ipc.md's live code list and
-  a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It is deliberately not in `LiveErrors.IsTerminal`: the probe keeps
-  sampling at its interval so a view recovers by itself once Start turns the option on. Job Activity Monitor, the
-  status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped" (with Start for
-  sysadmin on Windows), never the error state; a C# offline check covers `LiveErrors.Classify(15281)` and a renderer
+  a `tests/live-schema.test.ts` case accepting an `AGENT_DISABLED` tick error cover it. It is deliberately not in `LiveErrors.IsTerminal`, so the probe retries
+  with `LiveService`'s usual back-off (up to the larger of `backoffMs` and its interval); to recover promptly, a view
+  showing `AGENT_DISABLED` sends `live.update` with `refresh: true` when `agent.jobs.service` or `explorer.agentService`
+  reports XPs 0 → 1, or after its own Start succeeds, and a renderer vitest covers that recovery. Job Activity Monitor, the
+  status-bar watched job and the Log File Viewer show it as the same warning banner as "Agent stopped", never the error
+  state; the banner offers Start (sysadmin on Windows, not a failover cluster instance, startup type not Disabled) only
+  while the service state is Stopped, and with Agent running it offers no Start, only the `sp_configure` /
+  `mssql-conf` sentence; a C# offline check covers `LiveErrors.Classify(15281)` and `!LiveErrors.IsTerminal("AGENT_DISABLED")`,
+  renderer fixtures assert which button shows for XPs 0 with Agent stopped and running, and a renderer
   vitest feeds Job Activity Monitor an `AGENT_DISABLED` sample. The node's explanation names `sp_configure` on Windows and `mssql-conf` on Linux. The XPs value is
   live, not cached: `explorer.agentService` also reads `Agent XPs` from `sys.configurations`, so after Start turns it on the
   next sample clears the sublabel. Whether the Agent folders are listed is a children-listing decision:
@@ -537,7 +548,8 @@ Database Mail logs, which SSMS shows there).
   `instance_id` filter and returns at most 1,024 characters, so on the role path the pane shows the captured row's message
   and says "msdb returns at most 1,024 characters to this login" when it is that long.
 - History cap text ("Agent keeps 1,000 history rows, 100 per job") shows only when it was read: through
-  `msdb.dbo.sp_get_sqlagent_properties` (undocumented, sysadmin, allowlisted read). Other logins see no cap text.
+  `msdb.dbo.sp_get_sqlagent_properties` (undocumented, allowlisted read; sysadmin until AG-0's spike shows other roles get
+  values). Other logins see no cap text.
 - Delete History (sysadmin and Operator; other logins only when the capability read says they have EXECUTE on
   `sp_purge_jobhistory`, which msdb grants only to SQLAgentOperatorRole by default, and they own every checked job,
   because the procedure then raises 14392 for another owner's job; otherwise the button is disabled with the reason;
@@ -590,7 +602,7 @@ Database Mail logs, which SSMS shows there).
   lists per procedure, such as `@mode = N'FULL'`) for a procedure in `AgentSql.ReadProcedures` (`sp_help_job`,
   `sp_help_jobhistory`, `sp_help_jobactivity`, `sp_help_jobstep`, `sp_help_jobschedule`, `sp_help_schedule`,
   `sp_help_category`, `sp_help_operator`, `sp_help_alert`, `sp_help_notification`, `sp_help_proxy`,
-  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and sysadmin-only `sp_get_sqlagent_properties`).
+  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and `sp_get_sqlagent_properties`, sysadmin-only unless AG-0's spike says otherwise).
   And the master procedures, which take positional arguments, each have a named shape: `EXEC master.dbo.xp_enumerrorlogs
   2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3, NULL, NULL, N'desc';` and, on Managed Instance, `EXEC
   master.dbo.sp_readmierrorlog @p1, 2, @p2, @p3` (with the same sort arguments if it accepts them, which AG-0 checks;
