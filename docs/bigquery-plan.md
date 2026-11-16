@@ -1,7 +1,7 @@
 # BigQuery support plan (0.10.0)
 
 Status: **agreed with the owner on 2026-11-15**, then revised after an adversarial review the same day. The owner's
-answers to that review are decisions 21–24 and 50, and the details the review rounds settled are decisions 25–49. Nothing here is
+answers to that review are decisions 21–24 and 50–52, and the details the review rounds settled are decisions 25–49. Nothing here is
 implemented yet. The lanes below become PRs. [Decisions](#decisions) records the owner's answers.
 
 0.10.0 is meant to deliver two things: BigQuery support and SQL Server Agent support. Agent is planned separately
@@ -201,7 +201,7 @@ Google's failures become Varia error values, with user text and a recovery. Each
 | `responseTooLarge` | `RESULT_TOO_LARGE` | "The result is over BigQuery's 10 GB result limit." Suggests a filter or aggregate (decision 21) |
 | `bytesBilledLimitExceeded` | `COST_CAP` | Shows the estimate and the cap, and links to Cost settings |
 | Legacy SQL (`#legacySQL`, a legacy-only error) | `LEGACY_SQL` | "Varia runs GoogleSQL only." (decision 13) |
-| Network loss mid-job | `CONNECTION_LOST` | The cell shows the failed state with Retry; a running job is cancelled when the network returns (decision 33) |
+| Network loss mid-job | `CONNECTION_LOST` | The tab keeps the job record; when the network returns, Reconnect re-attaches to the job (decision 51) instead of re-running it |
 | Destination table gone | `REMOTE_EXPIRED` | Offers Re-run with the estimate |
 | `tabledata.list` refused by row access policies | `ROW_ACCESS` | "Preview needs access to every row of this table." Offers Script As SELECT |
 
@@ -407,14 +407,64 @@ which is already its rule.
   `jobs.cancel` on the parent job. Cancel is best-effort, so the message says BigQuery may still bill work done before
   it stopped. Inside a session, Stop is `jobs.cancel` only (`ABORT_SESSION` would end the whole session, temp tables,
   variables and transaction with it); the next execution polls the cancelled job until it is done before submitting.
-- **Orphaned jobs** (decision 33): closing a tab, Close Results and quitting cancel the tab's running jobs. Each
-  `query.execute` and `results.remoteQuery` stream carries a `query.job` event (job id, location, started or finished),
-  which main reads as it forwards the stream and keeps in memory with the profile id. When the backend restarts, main
-  calls `bigquery.cancelJobs` on the new backend straight away: a sensitive call carrying the profile's credential
-  material (which main prepares from the profile without interaction, as every BigQuery mode allows), the project and the
-  job ids and locations, with no connection handle. It needs no reconnect and holds nothing up. Jobs it cannot cancel
-  (credentials gone, network down) are listed in the tab's Messages with their ids, so the user can cancel them in the
-  console.
+### Re-attaching to jobs (BQ-3d)
+
+A BigQuery job runs on Google's side whatever happens to Varia, and anyone signed in as the same principal can read it
+again: `jobs.get` for its state, `jobs.getQueryResults` and the result table (kept about 24 hours) for its rows. So
+Varia **re-attaches** to running jobs instead of cancelling them, as the BigQuery console does after a closed browser
+tab (decision 51).
+
+- **Job records.** Each `query.execute` and `results.remoteQuery` stream carries a `query.job` event (job id, location,
+  project, parent or child, started or finished, and for session queries the BigQuery session id). Main keeps them in
+  a small file of their own, `WorkbenchSession/jobs.json` (not the hot exit document, which is written only on close),
+  with its own strict zod schema and limits (64 records per tab, 1,024 in all, bounded strings), written atomically on
+  every `query.job` event whatever the hot exit setting, so a record survives a backend restart, a hot exit and a crash
+  of the whole app. Each record is keyed to the tab's AutoRecover id, which already persists across restarts, and
+  carries the profile id. At startup main pairs records with the restored tabs and drops records whose tab did not come
+  back, after offering their cancel ([Fallback to cancel](#re-attaching-to-jobs-bq-3d)). Records older than the result
+  table's lifetime (24 hours) are dropped. They hold no secrets and no SQL text: a job id or session id is useless
+  without the principal's credentials. Finished jobs are dropped once their results are read.
+- **When it happens.** Once a tab's connection is back (startup reconnect after a hot exit or crash, Reconnect after a
+  backend restart or a network loss, or Reload Window), the renderer calls `query.attach` for each of the tab's jobs.
+  A restored tab whose connection does not come back by itself (auto-reconnect off, or credentials refused) shows a line
+  in Messages and the status bar: "BigQuery job … from the last session is still running: Reconnect to re-attach, or
+  Cancel job" (the latter through `bigquery.cancelJobs`), so a running job is never unseen. `query.attach` is a stream method shaped like
+  `query.execute` (query lane, deadline 0, `query.cancel` stops it) that takes a job reference instead of text. The backend keeps one attachment per job id: a second `query.attach` for
+  a job already streaming (Reload Window while the old stream still polls, or two reconnect paths racing) takes over the
+  existing stream rather than starting another. An attached session job holds the session's queue, so the next Execute
+  waits for it as it would for any running session query. The backend first checks the connection's pinned principal is the one that created the job (`AUTH_IDENTITY` otherwise,
+  and the job is left alone).
+  - **Still running:** the tab shows the running state again ("Re-attached to job … started 12 minutes ago") and Stop
+    works.
+  - **Finished meanwhile:** its result sets are read from the result table (free) by the usual residence rule, and its
+    summary and cost figures go to Messages.
+  - **Scripts:** the parent job's children are listed again; finished statements' results and Messages lines are
+    rebuilt in statement order, and polling continues for the rest.
+  - **Sessions:** the BigQuery session lives on Google's side, so its temp tables and variables survive; the tab keeps
+    using it while BigQuery accepts it, and otherwise starts a new one with the existing notice.
+  - **Results gone** (expired, or a cache hit's table invalidated): the existing `REMOTE_EXPIRED` state with Re-run.
+- Rows the old backend had read are not carried over; re-reading the result table costs nothing.
+- **Quitting Varia leaves jobs running** and re-attaches at the next start, through hot exit's restored tabs. Today's
+  close and quit prompt (`QueryService.confirmSessions` and `prepareSessions`, which offers to cancel executing queries
+  and waits for them) changes for BigQuery: with hot exit on, quitting leaves BigQuery jobs out of it entirely (SQL
+  Server queries still ask as today); with hot exit off there is no tab to restore, so BigQuery jobs join that prompt
+  with the three choices below ("Don't quit" in place of "Don't close"). Jobs left running are excluded from
+  `cancelPreparedSessions`.
+- **Closing a tab or Close Results while a job runs asks first** (decision 52), through the same `prepareSessions`
+  path, so a BigQuery tab sees one prompt, not two: **Cancel the job**, **Leave it running**, or **Don't close** (the default, and Escape). The dialog names the job,
+  how long it has run and its estimate, and offers "Remember my choice" (`queryExecution.bigQuery.closeRunningJob`:
+  `ask` by default, `cancel` or `leave`).
+  - **Leave it running** detaches the job: Varia forgets it, and a notification shows its job id (with Copy) so the
+    user can find it in the console. This suits long DML or `CREATE TABLE AS` jobs whose effect, not their rows, is the
+    point. The job history pane (0.11, [Later](#later)) will list such jobs. A tab whose session query is left running
+    does not call `ABORT_SESSION`, which would kill the job; the session ends after 24 hours idle, and the dialog says
+    its temp tables are billed as storage until then.
+  - Windowed sort and filter queries and Load sample are auxiliary and never left running: closing their result cancels
+    them without asking.
+- **Fallback to cancel.** When a job cannot be re-attached because its tab did not come back or reconnect failed and
+  the user closes the tab, main calls `bigquery.cancelJobs` (sensitive, carrying the profile's credential material, no
+  connection handle). Deleting a profile that still has job records asks first: cancel its jobs, or keep the profile.
+  Jobs that cannot be cancelled either are listed in a notification with their ids, for the console.
 
 ### Cost
 
@@ -453,7 +503,8 @@ Varia follows BigQuery Studio: the estimate is always visible, and nothing block
   Execute cancels a pending diagnostics dry run and goes first. Dry runs that do not need the session (text that uses no
   temp tables or variables), windowed sort and filter, value lists and Preview Rows run outside it. BQ-3a-2 confirms on
   the real project that a dry run accepts a session id; if it does not, text that needs the session gets no estimate
-  and the status bar says why. `ABORT_SESSION` runs only when the tab closes.
+  and the status bar says why. `ABORT_SESSION` runs only when the tab closes, and not when its running job is left
+  running ([Re-attaching to jobs](#re-attaching-to-jobs-bq-3d)).
 - `query.session.state` answers `transactionCount: 0` for BigQuery, so the close prompt never fires: BigQuery rolls back
   an abandoned session's transaction.
 - A session ends after 24 hours idle or 7 days in all. When BigQuery reports it gone, the next execution starts a new
@@ -606,7 +657,8 @@ REST through the shared rate limiter. Explorer chips are SQL Server-only.
 
 New methods, each in all five places with bounded strings: `bigquery.account` and `bigquery.projects` (pre-connect,
 sensitive), `bigquery.dryRun` (the estimate before execute and for views), `bigquery.preview` (Preview Rows),
-`bigquery.cancelJobs` (after a backend restart, sensitive) and `results.remoteQuery`. New event types in existing
+`bigquery.cancelJobs` (the fallback when re-attaching is impossible, sensitive), `query.attach` and
+`results.remoteQuery`. New event types in existing
 query streams: `resultSet.residence` and `query.job`. New main-only IPC channel: `connections.pickKeyFile`. All new
 methods declare `providers: ['bigquery']`. The protocol stays v2: new methods, new event types inside existing streams
 and optional descriptor fields are all additive (docs/ipc.md records each).
@@ -618,6 +670,7 @@ and optional descriptor fields are all additive (docs/ipc.md records each).
 | `bigquery.preview` | unary | results | 120 s |
 | `bigquery.cancelJobs` | unary, sensitive | control | 30 s |
 | `results.remoteQuery` | stream | query | 0 (until done or cancelled) |
+| `query.attach` | stream | query | 0 (until done or cancelled) |
 
 **SQL the backend runs.** Constant text in `BigQuery/BigQuerySql.cs`, values as query parameters. BigQuery cannot take
 identifiers as parameters and has no `QUOTENAME`, so names go in only through `BqNames`, with one quoting function per kind (project, dataset, table, column), each
@@ -671,8 +724,8 @@ a shell's environment, which docs/bigquery.md explains. gRPC through an HTTP pro
 
 | Layer | What | Runs |
 | --- | --- | --- |
-| Offline .NET | A fake BigQuery HTTP handler injected through `BigQueryClientBuilder`, replaying recorded REST JSON: paging, the residence decision and the switch to windowed, byte-sized blocks, read-ahead per viewer, the fetch lane, remote sort and filter SQL and the fallback to the original query, `REMOTE_RESULT` on every page reader, `REMOTE_EXPIRED`, the row cap, every error row in [Errors](#errors), child-job scripts with incremental polling and `[l:c]` with selection offsets, client `jobId` lookup after a network error and the 409 path, cancel and orphan cleanup after restart, every type in both REST and Arrow (the golden test), `sortKind` parity for SQL Server, identity pins per mode, every accepted and refused federation shape, key file checks, `BqNames` and the SQL lint, the provider check in `DispatchAsync` | `npm run check`, every PR |
-| vitest | Tokenizer golden files, completion and alias scope, both `providers` lints and the main-side method check, the principal union with the old spelling, migration of every 0.9.0 file, dialog form logic (type switch, Undo, pickers), the cost-prompt rules (threshold, incomplete estimate, both opt-outs), the location prompt (decision 18), the 10 GiB threshold units | `npm run check` |
+| Offline .NET | A fake BigQuery HTTP handler injected through `BigQueryClientBuilder`, replaying recorded REST JSON: paging, the residence decision and the switch to windowed, byte-sized blocks, read-ahead per viewer, the fetch lane, remote sort and filter SQL and the fallback to the original query, `REMOTE_RESULT` on every page reader, `REMOTE_EXPIRED`, the row cap, every error row in [Errors](#errors), child-job scripts with incremental polling and `[l:c]` with selection offsets, client `jobId` lookup after a network error and the 409 path, cancel, job records and `query.attach` in every state (running, finished, script, session, expired, other principal), the `bigquery.cancelJobs` fallback, every type in both REST and Arrow (the golden test), `sortKind` parity for SQL Server, identity pins per mode, every accepted and refused federation shape, key file checks, `BqNames` and the SQL lint, the provider check in `DispatchAsync` | `npm run check`, every PR |
+| vitest | Tokenizer golden files, completion and alias scope, both `providers` lints and the main-side method check, the principal union with the old spelling, migration of every 0.9.0 file, dialog form logic (type switch, Undo, pickers), the cost-prompt rules (threshold, incomplete estimate, both opt-outs), the location prompt (decision 18), the close prompt's three choices and remembered setting (decision 52), quitting with hot exit on and off, a restored tab that does not reconnect, a second attach, deleting a profile with job records, records older than 24 hours, the 10 GiB threshold units | `npm run check` |
 | Smoke | The connect dialog's BigQuery path, Explorer browse, execute and stream, a windowed result under **Always windowed** (scroll, jump, sort, filter, expiry), Stop, the cost prompts, hidden SQL Server commands, focus and announcements. Against the emulator via `VARIA_TEST_BIGQUERY_ENDPOINT`; skips when unset | An existing Linux smoke shard |
 | Emulator live | `ghcr.io/goccy/bigquery-emulator` 0.8.x (pinned by digest) as a service container: queries, paging, scripts, parameters, cancel, types, REST metadata, and Storage Read (its plaintext gRPC port, 9060, through an insecure HTTP/2 channel in test builds only). Emulator mode uses anonymous credentials, skips the probe and sessions, and fakes estimates. It does not cover sessions, dry runs, transactions, bytes statistics, routines beyond insert, or INFORMATION_SCHEMA; those stay on the fakes and the real project. BQ-1 confirms the .NET client works against it first | Folded into an existing Linux live group, not a new job; seconds recorded in docs/ci.md |
 | Real project (opt-in) | `VARIA_TEST_BIGQUERY_PROJECT` plus ADC or `VARIA_TEST_BIGQUERY_KEY_FILE`. Public datasets and one scratch dataset with a 1-day expiration. It proves sessions, dry runs, cost figures, child jobs, identity pinning, the per-statement cap question and Storage Read pricing. **Spending rules:** every job sends `maximumBytesBilled` of 100 MiB (the suite fails a job that does not), every check dry-runs first and skips above its allowance, a run stops after 1 GiB billed in total, queries touch only small public tables and the scratch dataset, the Storage Read check reads one small result, and the run asserts and prints `totalBytesBilled`. Recorded fixtures for the offline fakes are refreshed from this suite at release preparation | Local only, no repository secret (decided) |
@@ -698,7 +751,8 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-4** GoogleSQL editor | `googlesql` language and tokenizer; provider on query documents; language switch on connection change; keyword and function catalogue with signature help | M | BQ-0 | CLAUDE.md generated-files row |
 | **BQ-2** Connect dialog and saved connections | Server type with Undo; BigQuery fields; account line; key file picker through main; both project pickers and the dataset picker; saved connections, MRU and labels by project; query tab dataset dropdown and status bar | M | BQ-1 | README, settings and icons regenerated |
 | **BQ-3a** Execution | `jobs.insert` with a client `jobId` (`useLegacySql`, lookup after a network error, 409 means it exists) and `jobs.getQueryResults` polling; REST reads into memory (`BigQueryColumnPlan`, converter, types); truncation as SQL Server; cost figures and units; the per-statement cap check | L | BQ-1 | ipc.md |
-| **BQ-3a-2** Scripts, sessions, Stop | Child jobs with incremental polling and `[l:c]`; tab sessions, expiry, location prompt; Stop and orphan cleanup (`query.job`, `bigquery.cancelJobs`) | M | BQ-3a, BQ-2 (the location prompt sits on its dataset dropdown) | |
+| **BQ-3a-2** Scripts, sessions, Stop | Child jobs with incremental polling and `[l:c]`; tab sessions, expiry, location prompt; Stop; the `query.job` event | M | BQ-3a, BQ-2 (the location prompt sits on its dataset dropdown) | |
+| **BQ-3d** Re-attaching to jobs | Job records in `WorkbenchSession/jobs.json`; `query.attach` (running, finished, scripts, sessions, expired); identity check; quit behaviour with and without hot exit; the close prompt and its setting; Leave running; the `bigquery.cancelJobs` fallback | M | BQ-3a-2, BQ-3c-1 (finished results may be windowed), BQ-7 (the dialog shows the estimate; the setting sits on its pages) | README, settings regenerated |
 | **BQ-3b** Storage Read in memory | Storage Read (Arrow), stream order by the backend scanner, REST fallback and messages, the REST/Arrow golden test, pricing check, proxy check, offline throughput benchmark | M | BQ-3a | testing.md |
 | **BQ-7** Dry run and cost | `bigquery.dryRun`; the estimate before execute, both prompts and opt-outs; status bar estimate; diagnostics markers; Cost and Sessions settings pages | M | BQ-3a, BQ-4 | settings regenerated, architecture.md (dry runs send text) |
 | **BQ-3c-1** Remote results | Residence decision and setting; remote result; byte-sized block cache, read-ahead per viewer, fetch lane; `results.read` waits; `revision` and the residence event; row cap; Memory panel; invariant change and page-access and working-memory lints; misestimate switch; `results.remoteQuery` (all five places, kinds enum, events, cancel path, ipc.md entry) with the `load` kind | L | BQ-3b | architecture.md, ipc.md |
@@ -709,8 +763,8 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-6b** IntelliSense | Completion from the index with alias scope; hover | L | BQ-4, BQ-6a, and the index's column metadata from the editor plan | |
 | **BQ-8** Live checks and docs | Real-project opt-in suite and fixture refresh; windowed smoke; Getting Started guide and sample (`src/shared/help/catalog.ts`); final docs pass | M | lands alongside each lane; final pass last | README, testing.md, help |
 
-Critical path: BQ-0 → BQ-1 → BQ-3a → BQ-3b → BQ-3c-1 → BQ-3c-2, with BQ-2 (needed to try anything in the app), BQ-7
-and BQ-3a-2 beside it, and BQ-5 → BQ-6a → BQ-6b on a second track. BQ-0 first also gives Agent its gating. If the
+Critical path: BQ-0 → BQ-1 → BQ-3a → BQ-3b → BQ-3c-1 → BQ-3c-2, with BQ-2 (needed to try anything in the app), BQ-7,
+BQ-3a-2 and BQ-3d beside it, and BQ-5 → BQ-6a → BQ-6b on a second track. BQ-0 first also gives Agent its gating. If the
 release is tight, BQ-6b's completion can ship with objects and keywords only (no alias scope), and Load sample, Peek
 and Properties can move to 0.11 without hurting the core experience.
 
@@ -800,8 +854,7 @@ Recorded on 2026-11-15: details the adversarial review settled within the agreed
 31. **Row cap:** windowed results show at most 2,147,483,647 rows, with an explicit truncation note.
 32. **Remote views:** sort and filter create derived results that start at once and stream like a query, fall back to
     the original query only for a deterministic single SELECT outside a session, and refuse row-named filters.
-33. **Orphaned jobs:** tab close, Close Results and quit cancel running jobs; main cancels in-flight jobs after a
-    backend restart.
+33. **Orphaned jobs:** superseded by decisions 51 and 52 (re-attach, and a prompt on close).
 34. **Job creation:** every query is a `jobs.insert` with a client-generated `jobId`, looked up after a network error
     and never re-created; no inline (job-less) queries.
 35. **Sessions:** auxiliary queries run outside the tab's session; an expired session is replaced with a notice.
@@ -828,8 +881,16 @@ Recorded on 2026-11-15, from the owner's answer to the review's open question.
 
 50. **Destination tables:** a console-style per-query destination table setting is not in 0.10.0; it comes in 0.11
     with Save to a BigQuery table, which together lift the 10 GB limit.
-43. **Orphan protocol:** a `query.job` event in each query stream tells main the in-flight jobs; after a restart main
-    calls the sensitive `bigquery.cancelJobs` with the profile's credentials, with no reconnect.
+
+Recorded on 2026-11-15, from the owner's answers on job lifecycle.
+
+51. **Re-attach, not cancel:** after a backend restart, a hot exit or a crash, Varia re-attaches to a tab's BigQuery
+    jobs (running or finished) through persisted job records and `query.attach`. Quitting Varia leaves jobs running.
+    In 0.10.0, as lane BQ-3d.
+52. **Close prompt:** closing a tab or Close Results while a job runs asks: Cancel the job, Leave it running, or Don't
+    close. Quitting with hot exit off asks the same once. The choice can be remembered in Options.
+43. **Job records:** a `query.job` event in each query stream tells main the in-flight jobs, which it persists in
+    `WorkbenchSession/jobs.json` on every change; `bigquery.cancelJobs` is the fallback when re-attaching is impossible.
 46. **Remote queries:** windowed sort, filter, value lists, Load sample, Load into memory and Re-run run through one
     stream method, `results.remoteQuery`, on the query lane; the protocol stays v2.
 47. **Key files on the wire:** an opaque reference (pick token or profile id); only main knows the path.
