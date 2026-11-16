@@ -47,7 +47,7 @@ checks GitHub for updates and installs them on restart (macOS opens the release 
 ## Quick start
 
 1. Click **Connect**, enter a server, and pick an authentication method.
-2. Open a new query (**Ctrl+N**), write T-SQL and press **F5**. A selection runs on its own.
+2. Open a new query (**Ctrl+N**), write T-SQL and press **F5**. If text is selected, only the selection runs.
 3. Explore results and messages below the editor, or browse and script objects in Object Explorer.
 
 Press **F1** for the command palette, and see **Help › Getting Started** for offline guides. The
@@ -60,8 +60,7 @@ self-signed certificate. Windows authentication on Linux and macOS needs the sys
 ## Not yet available
 
 SQLCMD mode, Results to Text and Results to File (grid results can be exported), IntelliSense for Entra connections,
-backup, SQL Server Agent job management, and database user and role dialogs (logins are supported). Results are kept in memory under a budget with explicit truncation; nothing
-spills to disk.
+backup, SQL Server Agent job management, and database user and role dialogs (logins are supported).
 
 ## Build from source
 
@@ -91,16 +90,17 @@ server. [docs/testing.md](docs/testing.md) lists every variable, and [CLAUDE.md]
 architecture rules.
 
 electron-vite bundles every npm package, so all of them are listed under devDependencies, but those devDependencies ship
-in the app: audit without `--omit=dev`.
+in the app (zod, React, Monaco with DOMPurify, Dockview, PixiJS): audit without `--omit=dev` and treat their advisories
+as production ones.
 
-Releases are cut by pushing a `v<version>` tag after updating `package.json`; see [docs/ci.md](docs/ci.md) and
-[docs/release-notes.md](docs/release-notes.md).
+Releases are cut by pushing a `v<version>` tag after updating `package.json` and `package-lock.json` and adding the
+release record; see [cutting a release](docs/release-notes.md#cutting-a-release).
 
 ## Architecture
 
 An Electron + React + Monaco + Dockview front end talks to a .NET sidecar (Microsoft.Data.SqlClient and SMO) over a
 length-prefixed MessagePack protocol on stdio. The renderer is sandboxed and untrusted; it reaches the system only
-through a small preload API that main verifies, and query results stay in backend memory, never on disk.
+through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk.
 
 - [Architecture invariants](docs/architecture.md)
 - [IPC protocol](docs/ipc.md)

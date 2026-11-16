@@ -9,8 +9,8 @@ the Measurements below with the new baseline.
 `tests/ci-workflow.test.ts` holds this layout.
 
 - **Triggers.** CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are
-  tested), every push to main and manual runs. Newer PR and main pushes cancel their earlier runs; manual runs and tags
-  always finish. The repository is public, so minutes cost nothing, but GitHub runs only 20 of its jobs at once (5 on
+  tested), every push to main and manual runs. Newer PR and main pushes cancel their earlier runs; manual runs always
+  finish (tags run release.yml, not CI). The repository is public, so minutes cost nothing, but GitHub runs only 20 of its jobs at once (5 on
   macOS).
 - **Jobs.** A scope job classifies the complete change, then the 13 validation jobs start together, and a final
   `CI result` job checks their outcomes. Each validation job builds what it needs, so one failure hides nothing and the
@@ -73,7 +73,8 @@ the Measurements below with the new baseline.
   Unknown or empty changes and missing history fall back to full CI. Git is used directly to avoid `paths`' 3,000-file
   limit. Scope and result jobs check out only their scripts and use the runner's bundled Node; test jobs select Node 24.
 - Manual runs execute the selected `regression-suite`: `docs` runs the exact documentation lane on any branch, `none`
-  runs full CI, the others run focused Electron regressions. Every manual run reports `Manual CI result`; only automatic
+  runs full CI, the others run focused regressions through `ci-regressions.yml` (`dialogs`, `results`, `tail`, `all`:
+  Electron suites; `activity`: live SQL checks). That workflow has manual entry points only and adds no automatic runs. Every manual run reports `Manual CI result`; only automatic
   runs report the required `CI result`, so a manual success cannot stand in for it. Never require `Manual CI result`.
 - The main ruleset requires the single check `CI result`, not strict: a PR need not be up to date with main, so
   merge only when the head SHA's run is green. The result job runs with `always()` and fails if

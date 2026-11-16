@@ -82,6 +82,8 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   `KRB5CCNAME` to a cache that does not exist) runs `tests/kerberos-live.test.ts`: Integrated authentication without a
   ticket must fail cleanly. A real Kerberos round trip needs a KDC and a domain-joined SQL Server, so it is a manual
   check: `kinit`, then connect with Windows authentication to a server name or SPN registered for Kerberos.
+- **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
+  Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.
 - **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner
   fixtures from the live server's backup history.
 - **Scratch.** `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the session hook) adds the Object Explorer, Script As and object
@@ -117,7 +119,7 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   `SSISDB`; only the opt-in `VARIA_TEST_SSIS_CREATE=1` creates and drops it, on a server whose owner allows it and only
   when it has no `SSISDB`: it never drops a catalog it did not create. docs/integration-services.md records what is
   verified.
-- **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to
+- **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). Only in unpackaged smoke runs main also honours:
   - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`

@@ -10,7 +10,7 @@ result sets in order, when no later statement in the batch can return a set. To 
 A name is applied only when the batch's text shows which result set the statement returns. Messages says why one was
 not (put `GO` between statements to name both) when the marker is inside `BEGIN … END`, a branch or a loop; after an
 `EXEC`, `IF`, `WHILE` or an error in the batch; or in a batch that sets `NOEXEC`, `PARSEONLY` or `FMTONLY` anywhere or
-selects a column named like SQL Server's XML plan column. A trigger returning rows (table, database or server DDL) can
+whose text mentions SQL Server's XML plan column's name. A trigger returning rows (table, database or server DDL) can
 still shift a name when its result has the named statement's column count. With `SET STATISTICS XML ON`, a plan arriving
 where a `SELECT *` stood stops naming for the rest of the batch.
 
@@ -26,6 +26,18 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   (first 4,096 rows plus visible rows, within width limits). From the keyboard menu, the active column.
 - **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages.
   Unavailable while executing. Hiding the results pane keeps results. The toolbar never switches or closes documents.
+
+## Sorting, filtering and highlighting
+
+- A column header's sort button sorts ascending, then descending, then back to SQL Server's order; Shift+click adds
+  further columns. Sorting is in memory; the query never runs again.
+- With filters, the result's caption counts the rows kept ("34 of 100 rows") and lists each filter with a Remove button;
+  a column's funnel stays filled while that column has a filter.
+- **Highlight** (grid menu) colours rows; Ctrl+Shift+H applies the last colour picked. A highlight follows its row by a
+  unique key column through sorting and re-runs; when a re-run loses the key column, the grid says so and **Clear All
+  Highlights** starts again.
+- Find's **Columns** mode searches column names and fades the columns that do not match.
+- **Row size** draws a bar behind each row number for the row's size; hover it for the bytes.
 
 ## Keep Selected Rows
 
@@ -137,7 +149,9 @@ the picked result old (−); **Swap old and new** turns them. Names read old →
   closing the tab forgets them.
 - Columns pair by name (case-insensitive), both text or both binary, repeats in order; no manual mapping. Left-out columns
   are listed (with both types when the kind differs) and named on the strip.
-- **Exact text** compares case and trailing spaces.
+- Text compares by its collation, so values differing only in case or trailing spaces are underlined rather than marked
+  changed; **Exact text** compares every character. When long values were compared by the part Varia keeps, the strip
+  says so.
 - Stored results are compared, ignoring the inputs' sorts and filters; the popover warns and the strip says so.
 
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed

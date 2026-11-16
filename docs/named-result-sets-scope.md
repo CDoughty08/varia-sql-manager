@@ -60,9 +60,9 @@ The backend parses each batch that holds a marker once with ScriptDom (`TSql180P
 
 | Class | Statements |
 | --- | --- |
-| None | `DECLARE`, `SET`, `USE`, `PRINT`, DDL, transactions, `INSERT`/`UPDATE`/`DELETE`/`MERGE` without `OUTPUT` (or with `OUTPUT … INTO`), `SELECT` that assigns variables, `SELECT … INTO` |
+| None | `DECLARE` (variables, table variables, cursors), `SET` (except the options below), `USE`, `PRINT`, DDL, transactions, `TRUNCATE`, `RAISERROR`, `THROW`, `RETURN`, `GRANT`/`DENY`/`REVOKE`, `EXECUTE AS`/`REVERT`, `OPEN`/`CLOSE`/`DEALLOCATE` cursor, `FETCH … INTO`, `WAITFOR DELAY`/`TIME`, `INSERT`/`UPDATE`/`DELETE`/`MERGE` without `OUTPUT` (or with `OUTPUT … INTO`), `SELECT` that assigns variables, `SELECT … INTO` |
 | One | Any other `SELECT`; DML with `OUTPUT` to the client |
-| Unknown | `EXEC` and `EXECUTE`, `IF`, `WHILE`, `BEGIN … END`, `TRY … CATCH`, anything not listed |
+| Unknown | `EXEC` and `EXECUTE`, `IF`, `WHILE`, `BEGIN … END`, `TRY … CATCH`, `SET NOEXEC`/`PARSEONLY`/`FMTONLY`, `FETCH` without `INTO`, `WAITFOR (RECEIVE …)`, `SELECT` with `COMPUTE`, `DBCC`, anything not listed |
 
 While a batch runs the backend counts its result sets (every set with columns, kept or not, leaving out sets it
 recognises as plans). A statement's first set is at a known place when every statement before it in the batch is of a
@@ -96,10 +96,10 @@ A missing name is better than a wrong one. The cases:
 | Selection execute that leaves the marker out | No name: what is selected is what runs, and the backend does not look back for a marker. Selecting from the comment's line includes it. |
 | Estimated plan | Not result sets; nothing changes. |
 | Actual plan from the toolbar | Captured on another connection; no extra sets, nothing changes. |
-| `SET STATISTICS XML ON` in the script | Plan sets are recognised and left out of the count, so rows keep their names. Plan sets are not named. A plan that arrives where a `SELECT *` stood stops naming for the rest of the batch. A batch that selects a column named like the XML plan column gets no names. |
+| `SET STATISTICS XML ON` in the script | Plan sets are recognised and left out of the count, so rows keep their names. Plan sets are not named. A plan that arrives where a `SELECT *` stood stops naming for the rest of the batch. A batch whose text mentions the XML plan column's name anywhere (a comment, string or dynamic SQL too) gets no names. |
 | A trigger that returns rows | Its set can still shift a name when it has the same number of columns as the named statement's. A documented limit. |
 | The batch does not parse | No names for that batch; one Messages line says so. The server reports a syntax error itself. |
-| The batch is over the parse bounds (length, parenthesis depth) or selects the XML plan column | No names for that batch; each marker gets a Messages note saying why. |
+| The batch is over the parse bounds (length, parenthesis depth) or its text mentions the XML plan column's name | No names for that batch; each marker gets a Messages note saying why. |
 
 ```sql
 -- #Name="Order"

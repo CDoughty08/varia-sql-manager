@@ -6,8 +6,8 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
 ## In the editor
 
 - **Execute.** With text selected, the Execute button reads **Execute selection** with its line range and runs only the
-  selection; a click inside the selection clears it and places the caret. Otherwise it reads **Entire query** and runs
-  the whole document (`QueryBar.tsx`).
+  selection; a click inside the selection clears it and places the caret. Otherwise it reads **Execute** (detail **Entire query**)
+  and runs the whole document (`QueryBar.tsx`).
 - **Zoom.** Ctrl+wheel over the editor (Cmd+wheel also works on macOS) enlarges or shrinks the text in every editor tab
   for this session. The **View** menu's zoom commands resize the whole workbench.
 - **Status bar.** Click **Ln/Col** to go to a line, or **INS/OVR** to switch between insert and overtype mode.

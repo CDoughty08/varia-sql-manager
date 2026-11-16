@@ -30,7 +30,7 @@ only when a summary line stops being true.
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
     for a matching binding. Remember password is disabled where safeStorage is unavailable, Linux's backend is
-    `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key).
+    `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key; the tags are not yet confirmed on a Linux desktop).
   - Entra tokens stay in backend memory for its lifetime (MSAL and Azure.Identity through Varia's
     `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main
     or the renderer. Only connect and Load databases open a browser sign-in, under the request's token (Stop); sign-in
@@ -137,8 +137,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send one signal.
 - **Go To Definition** (`language.definition`, `DefinitionService`) never goes through SQL Tools; docs/language-services.md
   has the user-facing rules.
-  - ScriptDom finds the name under the caret (white space and comments allowed around dots) in the caret's batch, or the
-    widest parsing run of statements around it (statements starting after a semicolon or at a statement keyword), and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
+  - ScriptDom finds the name under the caret (white space and comments allowed around dots) in the caret's batch or, when the batch does
+    not parse, the widest parsing run of statements around it (statements starting after a semicolon or at a statement keyword), and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
     does: a level's tables are its own FROM and DML target, never a subquery's; an alias hides a same-named object only
     in a column qualifier, while a table reference's own name is always the object it names; CTEs, derived tables, table variables, PIVOT, trigger pseudo-tables and declared columns name
     no object; a TVF's alias stands for the function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML
@@ -186,7 +186,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     PARSEONLY or FMTONLY anywhere, or names SQL Server's plan column, gets none. At run time `ResultNameBinder` stops at
     the first error, a column-count mismatch, SHOWPLAN or STATISTICS PROFILE text, a plan set where a `*` statement
     stood, or a full budget.
-  - A name not applied (cancel, timeout and `GO n` repetitions included) is an informational Messages line quoting the
+  - A name not applied (cancel, timeout, `GO n` repetitions, and one a cancel, timeout or ended script never reached, in a
+    later batch too) is an informational Messages line quoting the
     name and line, never an error or logged, at most `ResultNames.MaxNotes` per run. The descriptor's optional `name`
     carries it; a result's identity stays its ordinal.
 - **Visibility** reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from the grids
@@ -278,7 +279,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
     (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
     delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
-  - The policy runs on its own thread, not the workers' gate: it compresses at the lowest priority and takes locks or
+  - The policy runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
     of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown, touched,
@@ -302,9 +303,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     unpacks the page it reads into a room (one page of the largest packed length, working memory reserved when made,
     returned at the end; `ResultSetBuffer.Read`, never the cache). Rooms are worker state (`WorkerGate` disposes an
     `IDisposable` state) and ask the memory load once per `WorkCheckBytes`. A refusal answers `TOO_LARGE` with the
-    operation's sentence and nothing held, except: a profile retries on one thread; a key that reads cells
-    (`Key.ReadsCells`) extracts its column once (`PageSource.Extract`) or falls back to unpacking in place
-    (`PageSource.Rehydrate`); a pivot's output (`RowAccess.Hold`) unpacks in place. Sampled reads use `ForRows`; a
+    operation's sentence and nothing held, except: a profile retries on one thread; a pivot's output (`RowAccess.Hold`) unpacks in place. A key that reads cells (`Key.ReadsCells`) has its column extracted once after the key is built
+    (`PageSource.Extract`), so no comparison unpacks a page; refused, the result is unpacked in place
+    (`PageSource.Rehydrate`), and only if that is refused does it answer `TOO_LARGE`. Sampled reads use `ForRows`; a
     pivot's in-order pass (`InOrder`) and a diff's writer (`PageAhead`, spare budget only, returned at `HasSpare`'s
     eighth) unpack ahead in two batches of rooms. A diff keeps `ResultDiffer.LeftSlots`/`RightSlots` and past
     `UnpacksPerPage` (counted by `ResultDiffer.Local`) unpacks the first result in place (`TryUnpackAll`). A distinct
@@ -434,7 +435,8 @@ lint, on its own pool or connection with a fixed prologue. Never log names, SQL,
 - **Object actions** (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, login Disable/Enable, folder
   actions such as Databases › Attach), their dialogs, pages and database options live only in
   `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts`.
-  - DDL runs only in `ActionService` (and `SsisActionService`, below), on its own unpooled, never-retried connection
+  - Object DDL runs only in `ActionService` (and `SsisActionService`, below; the actual-plan collector's event-session
+    DDL is the only other DDL), on its own unpooled, never-retried connection
     (application name plus " - Object Actions"), never the explorer or scripting pool, after a preflight in the same
     connection.
   - Statements come only from linted constant templates and builders: `ActionSql`, `Actions/DatabaseAlter`,

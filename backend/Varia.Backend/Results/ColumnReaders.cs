@@ -10,7 +10,7 @@ using Varia.Backend.Plans;
 
 namespace Varia.Backend.Results;
 
-/// <summary>How one column's cells are read (docs/ipc.md, SQL type → reader → wire → display).</summary>
+/// <summary>How one column's cells are read (docs/ipc.md, Display formats: the SQL type table).</summary>
 internal enum CellCodec : byte
 {
     Bit, Byte, Int16, Int32, Int64, Decimal, SqlDecimal, Money, Real, Float, Date, Time, SmallDateTime, DateTime, DateTime2, DateTimeOffset, Guid,

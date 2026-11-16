@@ -40,7 +40,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
   the backend and starts a SQL Server container.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set (with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD` for SQL
   authentication); `VARIA_TEST_SQL_SCRATCH=1` lets them create marked scratch databases. Entra and SSIS checks are opt-in.
-  docs/testing.md lists every variable. Never print passwords or secrets.
+  docs/testing.md lists the test variables; tool- and benchmark-specific ones are in their area docs. Never print passwords or secrets.
 
 ## Architecture invariants (summary; full rules in docs/architecture.md)
 
@@ -118,7 +118,8 @@ Keep the docs lean:
   doc under docs/, not the README.
 - Docs describe how things work now. Revision logs, decision histories, past measurement rounds (keep only the current
   baseline), review findings and PR/issue/commit references belong in PR descriptions, not in docs/. A plan for work in progress may live in docs/
-  until it ships; then fold what still matters into the area's doc and delete the plan.
+  until it ships; then fold what still matters into the area's doc and delete the plan. Standing guidance stays, such as
+  docs/ci.md's backlog and its list of rejected proposals.
 - State a rule once and link to it; keep the why to a sentence.
 
 Getting Started pages register in `src/shared/help/catalog.ts` with typed references and advisory source areas;

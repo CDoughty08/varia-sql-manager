@@ -30,15 +30,15 @@ or slice by slice through `WorkerGate`, so most phases have an honest fraction:
 
 Each page or slice item bumps one `Interlocked` counter (an item is a page or at least 32K rows, so there is no
 contention), and a Stopwatch-throttled droppable EVENT goes out on the request at most every 250 ms, as `job.progress`
-and `action.progress` do: `{ type: 'op.progress', phase, done, total }`. The backend computes the percentage, which
-never moves backwards. Main validates the event and the results worker forwards it to the renderer. Nothing polls, and
+and `action.progress` do: `{ type: 'op.progress', phase, percent? }`, `percent` left out while a phase has no total. The
+backend computes the percentage, which never moves backwards. Main validates the event and the results worker forwards it to the renderer. Nothing polls, and
 nothing touches the grid's paint path.
 
 ## What the user sees
 
 - **At once:** the sort arrow turns (or the filter chip changes). The grid keeps showing the previous view while the
   new one is built (`ResultGrid` swaps it in when ready).
-- **After 300 ms** (`motion.delay`): the results toolbar's strip shows what is running, on which result, the phase, a
+- **After 300 ms** (`operationShowDelayMs`; shown at least 500 ms, `operationMinShownMs`): the results toolbar's strip shows what is running, on which result, the phase, a
   meter and the percentage, and Cancel; a 2 px bar runs along the top of the grid; a ring with the percentage sits on
   the sorted column's header button or the filtered column's funnel. No status-bar mirror.
 - **No knowable total:** the bar slides, the ring spins and no number shows, until a phase with a total starts.

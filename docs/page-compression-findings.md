@@ -52,7 +52,7 @@ minute. Hidden results keep 5 s.
 - **No thrash.** A read stops a pass at its next page (the set's touch count changed) and keeps the pages already
   packed: the result shows as `partial` in the Memory panel and falls due again 30 s later. Plain reads never unpack a
   result whole. Each operation that unpacks it whole (see [Operations that unpack first](#operations-that-unpack-first))
-  doubles the wait, up to eight times as long (`MaxBackoff`, 4 minutes).
+  doubles the wait, up to eight times as long (`MaxBackoff` = 3 doublings, 4 minutes).
 - **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
   row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (p99 about 145 ms against 21 ms), enough
   to show while scrolling. A shown result with an open view is not packed (a hidden one is). One already packed when its
@@ -80,6 +80,9 @@ Idle packing stays on the lowest-priority thread, since nobody is waiting on its
 the gate, since a query is waiting.
 
 ## Format and codec
+
+Zstandard in the runtime is why the backend targets .NET 11, a short-term-support release; it moves to .NET 12 (LTS)
+when that ships.
 
 A packed page's body is replaced by its Zstandard bytes with the raw length beside it, one page at a time. `FirstRow`,
 `Rows` and the lengths sidecar (`PageLengths`, 4 bytes a row, 0.3 to 3.4 % of a result) stay raw, so `results.rowBytes`,

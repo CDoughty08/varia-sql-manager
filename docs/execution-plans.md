@@ -21,13 +21,15 @@ the plan document.
   before moving to the parent/first input. Collapsing selects the branch root. Selecting a hidden input from the
   outline, search or rankings expands only its ancestors.
 - The minimap (at most 80 × 48 cells) centres the viewport on click or drag; when focused, arrow keys pan and Home fits
-  the batch. It hides when the graph is small.
+  the batch. It hides when the canvas is under 240 × 160 px.
 - Outline and properties separators accept dragging, arrow keys, Home and End. Pane widths and visibility, minimap and
   row-flow visibility persist in settings. Camera, selection and collapsed branches live in a bounded in-memory view
   cache that survives Graph/XML switches, hidden views and layout moves, but not restarts.
 
 ### Navigation
 
+- Drag or scroll to pan; pinch or Ctrl+scroll to zoom. **Fit statement** and **Fit batch** fit the view to the active
+  statement or the whole batch.
 - The virtual outline lists every operator, including inputs hidden in the graph, and supplies the row-flow wording to
   assistive technology even when edge labels are hidden at low zoom. Its rows expose selection, position and expansion
   state.
@@ -74,7 +76,7 @@ The model follows Microsoft's [Showplan schemas](https://schemas.microsoft.com/s
 
 ## Actual plans and capture
 
-**Include Actual Execution Plan** captures completed plans through an observer-owned Extended Events collector on a
+**Include Actual Execution Plan** (query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
 separate connection. No capture SQL runs on the user's query connection, so `@@ROWCOUNT` and `@@ERROR` behave as in
 ordinary execution across runs. Statistics collection starts after capture setup and finishes before observer
 collection.

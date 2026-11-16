@@ -13,9 +13,9 @@ server. Hits show in a band above the tree; a hit reveals its object in the tree
 
 - In the box: Enter reveals the first hit and keeps focus; each further Enter reveals the next, wrapping (Shift+Enter goes
   back); typed before the answer, it searches at once. ↓ moves into the hits. Escape clears the text, or in an empty box
-  returns to the tree.
+  returns to the tree, where Left and Right collapse and expand.
 - In the hits (one tab stop): ↑ ↓, Page Up, Page Down, Home and End walk; a click or Enter reveals with focus kept; ↑ on
-  the first hit, or Escape, returns to the box. Left and Right in the tree collapse and expand.
+  the first hit, or Escape, returns to the box.
 - Scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover (stacked below the scope in narrow
   sidebars, following the pane's width); chosen types show as a summary with Clear. Search options holds Match Case,
   Match Whole Word, Use Regular Expression and Fuzzy Match, its button marked when any are on. Search and index details
