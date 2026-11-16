@@ -895,7 +895,7 @@ const SCENES = [
       ], 560, r.bottom - 2, 'Job')
       m.style.minWidth = '260px'
       const dis = m.querySelector('[aria-disabled]').getBoundingClientRect()
-      const tip = u.h(`<div class="bq-hover" style="left: ${dis.right + 8}px; top: ${dis.top - 4}px; max-width: 300px;"><div>${cd('info')} Only the job's creator can read its results.</div><div class="bq-dim">etl-runner@… started this job.</div></div>`)
+      const tip = u.h(`<div class="bq-hover" style="left: ${dis.right + 8}px; top: ${dis.top - 4}px; max-width: 300px;"><div>${cd('info')} Only the job's creator can read its anonymous result table.</div><div class="bq-dim">etl-runner@… started this job.</div></div>`)
       u.d.body.append(tip)
       u.mark(tip, 'Disabled with the reason')
     } },
