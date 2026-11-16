@@ -886,9 +886,13 @@ async function rememberPassword() {
   await expect(loading).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  // The dialog says it is waiting before main has sent the connect; a Stop before then ends it in main while it prepares,
+  // and the request may never reach the backend. Stop once the backend has it.
+  await expect.poll(async () => (await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'entra-wait').length).toBe(1)
   await dialog.getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
-  expect(await cancels()).toEqual(['connections.databases', 'connections.connect'])
+  // Main answers Stop at once and sends the CANCEL frame beside it: the backend logs it a moment after the dialog says so.
+  await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect'])
   // Closing the dialog stops Load databases too.
   await dialog.getByLabel('Database Name', { exact: true }).focus()
   await expect(loading).toBeVisible()
