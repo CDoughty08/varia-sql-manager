@@ -15,7 +15,7 @@ rules.
   of each launch there; it holds the environment, so never upload one from a run with secrets.
 - `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3`
   runs one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`); `-- --live-suite <Name>` runs one live
-  suite (names in `LiveGroups.Suites`). `backend-sidecar.test.ts` starts the
+  suite (names in `LiveGroups.Suites`). `backend-sidecar.test.ts` and `*-live.test.ts` start the
   Release backend: build it first with `npm run check` or `npm run backend:test`.
 - Benchmarks, not part of `check`: `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`,
   `npm run bench:grid [-- --live]` and `npm run bench:startup` (Electron, need `out/`). `node scripts/check-bench.mjs
@@ -73,7 +73,7 @@ benchmarks only when a change can move them. CI runs everything on every PR.
 - **Cloud sessions.** `.claude/hooks/session-start.sh` installs Node 24 and the .NET 11 SDK (`global.json`, latest
   feature band), runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), puts
   `/opt/node24/bin` on PATH, and starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433),
-  exporting the SQL variables once it is ready. After clear or compact it only refreshes the exported variables. Without
+  exporting the SQL variables once it is ready. After clear or compact it skips `npm install` and the builds; it still ensures the SQL container, the SDK and Node. Without
   Docker, live checks are skipped rather than failing.
 - **Live SQL.** `VARIA_TEST_SQL_SERVER` turns on the live .NET checks and real connections in `connections-smoke.mjs`:
   SQL authentication with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. Which checks
@@ -134,7 +134,8 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   - the renderer's test mode: `window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()` (saves
     AutoRecover's copies at once), `window.__variaLive` (opens views on the synthetic live source, stands in for a hidden
     window, mounts a `LiveGridPane` with `mountGrid`, `grid`, `sortGrid`, `saveGrid`, `unmountGrid`) and
-    `window.__variaTestShellFault()` (the workbench's next render throws);
+    `window.__variaTestShellFault()` (the workbench's next render throws), `window.__variaTestExplorerFault()`,
+    `window.__variaServerFiles`, `window.__variaRestore` and `window.__variaFailures`;
   - and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`.
 - **Smoke fixture.** Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on
   Windows (its runners can take seconds to write a file), and closing the app logs main's file operations of 500 ms or

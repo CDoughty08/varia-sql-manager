@@ -64,7 +64,7 @@ the Measurements below with the new baseline.
 ## Documentation-only changes
 
 - `scripts/ci-scope.mjs` sends a PR whose changes are limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`
-  and Markdown under `docs/` through a Linux documentation lane: npm install with lifecycle scripts disabled (no
+  and Markdown under `docs/` through a Linux documentation lane: `npm ci --ignore-scripts` (no
   Electron download), then source-only vitest, which keeps the generated-document, README and published-changelog
   assertions. It skips .NET, typechecking, production builds, SQL services, smoke and benchmarks. Anything else
   (`release-notes/*.json`, schema JSON, scripts, workflows, build resources, tests, dependencies) runs full CI.

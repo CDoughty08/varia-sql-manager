@@ -218,13 +218,13 @@ backend schedules it:
 | `query` | The per-tab session path. |
 | `results` | One of 16 read slots. |
 | `explorer` | At once, under Object Explorer's gates (4 statements per connection, 8 in all; static folders need neither). |
-| `actions` | At once, under the action service's gates: execute 1 per Varia connection, 2 in all; long actions (restore, backup) a separate long gate, also 1 and 2; each waited for at most 30 s, then `BUSY`. `activity.kill` has its own gates (1 and 2, waited for at most 5 s), so it never queues behind a DROP waiting on the session it kills. A DROP waiting on a lock never holds a metadata slot. |
+| `actions` | At once, under the action service's gates: execute 1 per Varia connection, 2 in all; long actions (restore, backup) a separate long gate, also 1 and 2; each waited for at most 30 s, then `BUSY`. `activity.kill` has its own gates (1 and 2, waited for at most 5 s, then `BUSY`), so it never queues behind a DROP waiting on the session it kills. A DROP waiting on a lock never holds a metadata slot. |
 | `live` | No slot. A subscription samples on its own task; its statements and unary `live` methods (`activity.details`, via `LiveService.RunGatedAsync`) run under the live gates (2 per connection, 8 in all, waited for at most the statement's budget, Details' 10 s, then `BUSY`; an unconnected id is `NOT_CONNECTED`). |
 | `ssis` | At once, under the SSIS gates (reads 2 per connection and 4 in all, writes 1 and 2, waited for at most 30 s, then `BUSY`). |
 
 In the table, "budget N s" means the backend stops its own work after N s and answers an `error: TIMEOUT` value inside
-the header deadline. Two rows differ: `plans.estimate`'s 30 s bounds the whole acquisition (gates, connection and
-compilation), past which the request fails with error code `TIMEOUT`; `explorer.index`'s 120 s per database (it has no
+the header deadline. Two rows differ: `plans.estimate`'s 30 s bounds the whole acquisition (connection and
+compilation; its gate never waits), past which the request fails with error code `TIMEOUT`; `explorer.index`'s 120 s per database (it has no
 header deadline) skips that database with status `TIMEOUT` and indexing goes on. "Sensitive" means the frame is zeroed after use; "never re-sent" applies to every method but is
 noted where it matters.
 
@@ -238,10 +238,10 @@ noted where it matters.
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `databases.list` | invoke | unary | metadata | 45 s |
-| `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s (an error response, not a `TIMEOUT` value). Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
+| `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.definition` | invoke (F12, Alt+F12) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
-| `plans.estimate` | invoke | unary | query | 35 s; 30 s compilation budget; `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
+| `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for an ended generation or with no backend |
@@ -337,13 +337,13 @@ managed identity cache; Azure.Identity credentials), never on disk or IPC.
 **Cancellation channels.** Cancellable requests carry a renderer `requestId`; main maps it to its REQUEST frame and a
 cancel call sends CANCEL (reason 1) per id, answered `CANCELLED`. A cancel that arrives before the request was written is
 sent right after it; one for an unseen id is a 60 s tombstone, and that request is refused `CANCELLED`. A running
-`requestId` sent again is `DUPLICATE_REQUEST`. `cancellableRequests` maps methods to channels.
+`requestId` sent again is `DUPLICATE_REQUEST`, and a request past the Running cap is `TOO_MANY_REQUESTS`. `cancellableRequests` maps methods to channels.
 
 | Registry | Channel | Ids per call | Tombstones | Running | Methods |
 | --- | --- | --- | --- | --- | --- |
 | `RendererRequests` | `varia:connections-cancel` | 1–16 | 64 | 8 | `connections.connect`, `.databases` (only with a context `requestId`) |
-| `ExplorerRequests` | `varia:explorer-cancel` | 1–256 | 1,024 | — | `explorer.*` |
-| `ScriptingRequests` | `varia:scripting-cancel` | 1–64 | 256 | — | `scripting.script` |
+| `ExplorerRequests` | `varia:explorer-cancel` | 1–256 | 1,024 | 1,024 | `explorer.*` |
+| `ScriptingRequests` | `varia:scripting-cancel` | 1–64 | 256 | 256 | `scripting.script` |
 | `ActionRequests` | `varia:actions-cancel` | 1–16 | 64 | 128 | `actions.describe`, `.script`, `.execute` |
 | `SsisRequests` | `varia:ssis-cancel` | 1–64 | 64 | 256 | every `ssis.*` |
 | `ActivityRequests` | `varia:activity-cancel` | 1–16 | 64 | 32 | `activity.details` |
@@ -461,7 +461,7 @@ error? }`. Sensitive.
 
 **Create Catalog** (docs/integration-services.md#create-catalog). `ssis.catalogSetup { connectionId, requestId }` answers
 `{ setup?: { catalog, clrEnabled, startupDefault, backupFile, dataFile, logFile }, elapsedMs, error? }` from the SSIS read
-pool. Refusals: cloud editions, before 2016, Linux (`NOT_SUPPORTED`, before connecting); no sysadmin
+pool. Refusals: Azure SQL Database, Managed Instance and other cloud editions, before 2016, Linux (`NOT_SUPPORTED`, before connecting); no sysadmin
 (`PERMISSION_DENIED`); catalog exists (`CATALOG_EXISTS`); no catalog backup or file location (`NOT_SUPPORTED`).
 - `ssis.execute { …, action: { verb: 'createCatalog', password, enableClr, startupProcedure } }` (`password` 1–128 UTF-16
   units, no U+0000 or lone surrogate; booleans required; no `revision`) runs in `master` (SQL logins allowed). Preflight
@@ -556,7 +556,7 @@ under READ UNCOMMITTED; missing is `NOT_FOUND`.
   `IN_USE`; owned databases, jobs, roles, endpoints, availability groups or granted permissions `DEPENDENTS` (also 15173);
   with `dropMappedUsers`, uncountable sessions or more mapped users than listed `NOT_SUPPORTED` and a database the scan
   could not read again `BLOCKED`. Steps `Drop the database
-  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`). 15434 is `IN_USE`.
+  user` per user and `Drop the login`, each checking its principal (`PrincipalBinding`), in no common transaction; a mismatch (50010) is `NOT_FOUND` and drops nothing. 15434 is `IN_USE`.
 
 **Unlock Login.** `dialog: 'unlockLogin'` answers `{ login, lock: { locked, badPasswords?, lockoutTime?, mustChange,
 expired, daysUntilExpiration? } }` (`ActionSql.LoginLock`, the only `LOGINPROPERTY` caller; `BLOCKED` after 10 s).
@@ -620,7 +620,7 @@ version, is `NOT_SUPPORTED` to the describe too). A long run.
 **Restore Database.** `dialog: 'restoreDatabase', restore: { kind: 'history', database? } | { kind: 'devices', devices }
 | { kind: 'historyFiles', setId } | { kind: 'mediaFiles', devices, file }` (1–64 devices) answers `{ restore: { server?,
 historyDatabases?, sets?, files?, …Truncated } }` (130 s deadline, 120 s budget, `restoreLimits`; 2 reads per
-connection). Script takes the plan (≤ 1,024 sets, 1,000 moves), uses no connection, and answers SMO's script
+connection). `action: 'restore'` takes the plan, `restore: { sets, relocate, recovery, … }` (≤ 1,024 sets, 1,000 moves). Script uses no connection and answers SMO's script
 (≤ 4,000,000 characters). Execute (database target, `identity` over an existing one) is a long action (30 s cleanup); its
 preflight checks identity, permission, tail-log, the chain (`RestoreChain`), WITH REPLACE (`BACKUP_MISMATCH`),
 Close existing connections over a database not online (`DATABASE_UNAVAILABLE`) and target files (`NAME_IN_USE`). The reply adds `restored`: `{ state,
@@ -1098,7 +1098,7 @@ view is an order of some or all of a result's base rows, read through the result
 - **Filters**, applied in order before the sort, each over the rows the previous kept:
   - `{ op: 'in' | 'notIn' | 'between', column, rows: 0 – 4,096 base rows, nulls? }` compares with those rows' values
     (`nulls`: NULL is among `in`'s and `notIn`'s values). `between` keeps no NULL: with `rows` it takes exactly two rows
-    of distinct non-NULL values and no `nulls` (else `INVALID_PARAMS`); from `cells` it keeps the lowest and highest
+    of non-NULL values and no `nulls` (else `INVALID_PARAMS`); from `cells` it keeps the lowest and highest
     value (none but NULL is `INVALID_PARAMS`). Instead of `rows`,
     `cells: { ranges: 1 – 256 [first, count], viewId? }` names selected positions, reduced to one row per distinct value
     (at most 4,096, else `TOO_LARGE`); the answer's `filters` returns the resolved `{ op, column, rows, nulls }` for later
@@ -1458,7 +1458,7 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   source columns). Main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone,
   rowsTotal, bytes }` at most 4 a second, a save's with `fileName` (never the path), the first as the dialog closes.
 - **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts, viewId?, transposed?,
-  headerColumn? }` and `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128, viewId?,
+  headerColumn? }` and `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128, suggestedSuffix?, viewId?,
   transposed?, headerColumn? }` are `trusted()`, strictly validated, and checked against
   `ResultsPortHost.owns(generation, resultId)` and the ready generation (`RESULT_UNAVAILABLE`). A copy decodes with a
   streaming `TextDecoder`, regrants credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB, and writes the clipboard once on
@@ -1513,6 +1513,7 @@ live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs
     folder?: str 1..128, project?: str 1..128, package?: str 1..260, prefix?: boolean, caller?: str 1..128,
     windowHours?: 1..8,760, limit?: 1..10,000 }` (kinds and statuses distinct; `Live/SsisOperations.cs` checks again); new
     args replace the old whole (an absent member does not filter) and read the window again.
+  - `query.plan`: `{ queryId: uuid }`, required: the running query whose live plan is sampled.
 - `start` (`liveStartSchema`, sources whose append tables can start mid-way): `'beginning'`, `{ tail: 1..200,000 }` or
   `{ before: 1..2^53−1 }` (the rows before an id, ending there).
 - `track` names a keyed snapshot table by index; each key is the key cells' stored texts joined with U+001F; `linger` is how

@@ -25,7 +25,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
   `npm run test:electron` runs `check` then `test:smoke`.
 - `npm run backend:test`: only the .NET checks. Add `-- --live-group k/3` to `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release` for one CI live group.
-- `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` needs the Release backend built).
+- `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` and `*-live.test.ts` need the Release backend built).
 - `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`, `npm run bench:startup`: benchmarks, not part of `check`;
   `node scripts/check-bench.mjs` compares them with `tests/bench/floors.json`.
 - Other sessions share this machine. While developing, run only the checks that cover your change (one vitest file, the
@@ -70,7 +70,7 @@ Results and live data:
 SQL the backend runs:
 - Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
   its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
-  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`), object actions and
+  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`; Live Plan's inline probe in `LivePlanSampler` is unlinted), object actions and
   Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
   (`ActualPlanSql`, its own observer connection, no prologue, event-session DDL only), session actions, SSIS. Read the area's
   bullet in docs/architecture.md before touching any of them.

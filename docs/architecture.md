@@ -375,7 +375,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
   `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
-  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Probes run on their scope's
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan` probe is the one exception: its SQL is inline in
+  `Plans/LivePlanSampler.cs` (the server pool with `LiveSql.UncommittedPrologue`, a permission check in the same batch,
+  three per-edition and version variants, `DB_NAME()` on Azure) and no offline lint covers it. Probes run on their scope's
   own pool (" - Activity Monitor" for server DMVs, " - Integration Services" in the catalog's database) with its prologue
   (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
   gates and one budget per probe (shared by an `ActivityReader` probe's statements); failures are values that back off.
@@ -489,9 +491,11 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   backend's pool sessions (every connection, any Application Name), then runs a server-built KILL from an int
   parameter. Neither logs session ids, logins, hosts or SQL.
 - **Actual-plan collector** (`ActualPlanSql`, docs/execution-plans.md) runs on the observer's own connection, never the
-  query's. Its SQL is constant text per scope and version variant, rendered once and held to `ActualPlanSql.Lint`:
+  query's. Its SQL is constant text per scope and version variant, rendered once; its event-session SQL is held to `ActualPlanSql.Lint` (a connection-id read in
+  `ActualPlanCapture` is not):
   dynamic SQL only through `sys.sp_executesql` of text built from literals, `QUOTENAME(@name)` and server-side `CONVERT`s
-  of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters.
+  of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters. It has no
+  prologue: it only creates, starts, reads and drops its own event session.
 - **SSIS Catalog.** Code tables, `ssis.describe` views, `ssis.execute` verbs, Explorer verbs and commands, documents,
   error codes, features and limits live only in `src/shared/ssis/catalog.ts` (tree kinds and folders are Object
   Explorer's); it generates `docs/integration-services.md` below its marker line only.

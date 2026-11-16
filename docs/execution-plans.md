@@ -28,7 +28,9 @@ the plan document.
 
 ### Navigation
 
-- Drag or scroll to pan; pinch or Ctrl+scroll to zoom. **Fit statement** and **Fit batch** fit the view to the active
+- Drag or scroll to pan; pinch or Ctrl+scroll (⌘+scroll on macOS) to zoom, or use the toolbar's Zoom out, Zoom in and
+  percentage (reset) buttons. Up/Down and Home/End select operators; Left/Right collapse or expand a branch, or move to the
+  parent or first child. **Fit statement** and **Fit batch** fit the view to the active
   statement or the whole batch.
 - The virtual outline lists every operator, including inputs hidden in the graph, and supplies the row-flow wording to
   assistive technology even when edge labels are hidden at low zoom. Its rows expose selection, position and expansion
@@ -76,7 +78,7 @@ The model follows Microsoft's [Showplan schemas](https://schemas.microsoft.com/s
 
 ## Actual plans and capture
 
-**Include Actual Execution Plan** (query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
+**Include Actual Execution Plan** (Ctrl+M, query toolbar or Query menu, per query tab) captures completed plans through an observer-owned Extended Events collector on a
 separate connection. No capture SQL runs on the user's query connection, so `@@ROWCOUNT` and `@@ERROR` behave as in
 ordinary execution across runs. Statistics collection starts after capture setup and finishes before observer
 collection.

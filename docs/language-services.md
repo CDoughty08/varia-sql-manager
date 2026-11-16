@@ -169,7 +169,7 @@ The backend suite covers table/column completion, hover after unsaved edits, ext
 identical SQL in different databases, process lifetime, close, disconnect and cleanup; refresh checks preserve a real
 session's transaction and temporary table. The UI suites drive Monaco's suggestion and hover widgets in split and floating
 groups, switch to a panel's OS popout and back, then refresh and dock back keeping each query's context. CI (`ci.yml`) runs
-the backend suite against its disposable SQL Server 2022 instance; packaging checks verify the bundled distribution and offline
+the backend suite and, on Linux smoke shard 3, the UI suite against its disposable SQL Server 2022 instance; packaging checks verify the bundled distribution and offline
 startup.
 
 References: [SQL Tools Service protocol](https://github.com/microsoft/sqltoolsservice/blob/main/docs/guide/jsonrpc_protocol.md),
