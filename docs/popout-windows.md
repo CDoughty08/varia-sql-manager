@@ -11,13 +11,12 @@ The query editor cannot (see *Limits*).
 
 ## Trust model
 
-Main used to deny every `window.open` and block every navigation. It now allows exactly one kind of child window, and
-nothing else changes:
+Main denies every `window.open` and navigation except exactly one kind of child window:
 
 - **Only the trusted page's popouts.** `setWindowOpenHandler` on the main window answers `allow` only for `about:blank`,
   disposition `new-window`, a frame name `varia-popout-<uuid>` and features exactly `left=…,top=…,width=…,height=…` within
   `popoutLimits` (`src/shared/popouts.ts`), at most 16 windows (counting those allowed but not yet created), on a display's work area (`popoutRequest`, `onDisplay` in
-  `src/main/popout-windows.ts`). Everything else is denied as before.
+  `src/main/popout-windows.ts`). Everything else is denied.
 - **Explicit preferences, not inherited ones.** The child gets `preload: undefined`, `contextIsolation: true`,
   `nodeIntegration: false`, `sandbox: true`, `webviewTag: false` and no `additionalArguments` (no test seams).
 - **Same origin, same process, same CSP.** An `about:blank` child of the page is the page's origin (`app://varia` in a
@@ -47,19 +46,18 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 - Main counts each popout's own input for Paste (`UserActivation` per window), runs roles (Copy, Paste, Select All…) in
   the focused popout, shows macOS context menus in it, and mirrors the main window's zoom into it. Reload and zoom act on
   the main window.
-- While any popout is open the main window's background throttling is off, so its timers keep running when it is
-  minimized. Work scheduled for the next frame (result pages, the results view, Object Explorer's updates) asks every
-  open window for one and runs on whichever draws first (`requestFrame`), since a minimized or covered main window may
-  draw none. Throttling off also keeps the page's own visibility at visible, so main tells the page when the main window
-  is minimized or hidden (`onMainWindowHidden`): live views in the main window pause then, and Object Explorer's status
-  views keep sampling only while Object Explorer is in a popout (`LiveOwner.popout`).
+- While any popout is open the main window's background throttling is off, so its timers run when minimized. Next-frame
+  work (result pages, the results view, Object Explorer's updates) asks every open window for a frame and runs on the
+  first to draw (`requestFrame`). Because the page then always reports itself visible, main tells it when the main window
+  is minimized or hidden (`onMainWindowHidden`): its live views pause, and Object Explorer's status views keep sampling
+  only while Object Explorer is in a popout (`LiveOwner.popout`).
 - When Chromium zooms a window, main applies that zoom to every window. Wheel zoom over the query editor changes the editor font size.
-- A window name is the page's handle on its popout in main: `raisePopout(name)` (`varia:popout-raise`, the main page's
-  trusted IPC, a name that must match `varia-popout-<uuid>`) brings that popout to the top, restored if minimized, without
-  activating it (`moveTop`, `showInactive`). Where `showInactive` leaves a minimized window minimized (macOS, some Linux window
-  managers), main restores it and gives focus back to the main window, again if the popout takes focus within 2 s (`restoreFocusMs`), since
-  macOS activates it only once its animation ends. Search Objects' Reveal uses it, so a popped-out Object Explorer comes forward
-  while keyboard focus stays in the hits; a raise from the page itself (`window.focus()`) would take focus.
+- `raisePopout(name)` (`varia:popout-raise`, trusted IPC; the name must match `varia-popout-<uuid>`) brings that popout to
+  the top, restored if minimized, without activating it (`moveTop`, `showInactive`). Where `showInactive` leaves it
+  minimized (macOS, some Linux window managers), main restores it and returns focus to the main window, again if the
+  popout takes focus within 2 s (`restoreFocusMs`), since macOS activates it only after its animation. Search Objects'
+  Reveal uses it so a popped-out Object Explorer comes forward while focus stays in the hits (`window.focus()` would take
+  focus).
 - A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
   focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
 
@@ -76,9 +74,8 @@ when their panels dock back.
 ## Limits
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker
-  plumbing to the window it was created in; moving its element to another document breaks input and measuring. Popping
-  it out needs a second editor instance per window sharing the model, which is follow-up work. The same holds for
-  single documents: they split and float within the editor area (docs/editor-groups.md) but do not pop out.
+  plumbing to the window it was created in; moving its element to another document breaks input and measuring. Single
+  documents likewise split and float within the editor area (docs/editor-groups.md) but do not pop out.
 - Dialogs and toasts render in the main window (a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
 - Object Explorer's status views in a minimized popout keep sampling: only the main window's minimizing is reported.

@@ -8,8 +8,8 @@ Where the detail lives:
 - docs/architecture.md: the full architecture invariants this file summarises. Read the area's bullet before changing it.
 - docs/testing.md: test environment variables, live and scratch checks, smoke-test hooks, testing rules.
 - docs/ci.md: CI layout, measurements and the rules that keep it lean.
-- docs/ipc.md: protocol v2 (frames, pages, limits, error codes, benchmarks). README.md: user-facing behaviour.
-- Each area's generated page (below) and hand-written page in docs/.
+- docs/ipc.md: protocol v2 (frames, pages, limits, error codes, benchmarks).
+- Each area's page in docs/ (user-facing behaviour; some have generated sections, below). README.md is only an overview.
 
 Keep this file stable: no check counts, timings or other numbers that change from PR to PR. A new rule goes in
 docs/architecture.md or docs/testing.md; add a line here only when an agent would break something without it.
@@ -107,16 +107,23 @@ After changing a catalogue, regenerate its outputs with the matching command and
 
 ## User-facing documentation
 
-For a user-facing feature or behavior change, update the affected README, docs and guides in the same PR, along with
+For a user-facing feature or behavior change, update the affected docs and guides in the same PR, along with
 CHANGELOG.md's Unreleased summary, or explain concretely why no documentation changes are needed. Published release
-records are frozen: feature PRs do not add their work to an older release. Release preparation curates the versioned
-plain-text records and regenerates the published changelog; docs/release-notes.md describes that process and the shared
-producer for in-app and public notes. Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
+records are frozen: feature PRs do not add their work to an older release (docs/release-notes.md has the process).
+Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
+
+Keep the docs lean:
+- README.md is a short project overview (highlights, install, quick start, links). Feature detail goes in the area's
+  doc under docs/, not the README.
+- Docs describe how things work now. Revision logs, decision histories, dated measurement rounds, review findings and
+  PR/issue/commit references belong in PR descriptions, not in docs/. A plan for work in progress may live in docs/
+  until it ships; then fold what still matters into the area's doc and delete the plan.
+- State a rule once and link to it; keep the why to a sentence.
 
 Getting Started pages register in `src/shared/help/catalog.ts` with typed references and advisory source areas;
-follow docs/help-authoring.md to add or update guides and samples. Review those dependencies for every feature PR
-and record the guide/sample impact or a concrete no-impact reason. Use live reference components, not copied keys,
-defaults or menu labels. Samples are fictional and never execute SQL or connect automatically.
+follow docs/help-authoring.md to add or update guides and samples, and record the guide/sample impact (or a concrete
+no-impact reason) in every feature PR. Use live reference components, not copied keys, defaults or menu labels.
+Samples are fictional and never execute SQL or connect automatically.
 
 ## Testing expectations
 
@@ -135,8 +142,8 @@ defaults or menu labels. Samples are fictional and never execute SQL or connect 
   as errors. LF line endings. Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase); imperative commit subjects.
-- CI (`.github/workflows/ci.yml`) runs on every PR, with a source-only lane for documentation-only PRs; its layout is pinned by `tests/ci-workflow.test.ts` and
-  `tests/release-workflow.test.ts` and described in docs/ci.md.
+- CI (`.github/workflows/ci.yml`) runs on every PR, with a source-only lane for documentation-only PRs; its layout is
+  pinned by `tests/ci-workflow.test.ts` and `tests/release-workflow.test.ts` and described in docs/ci.md.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

@@ -1,19 +1,78 @@
 # SQL language services
 
-Varia supplies completion, hover information and query diagnostics through Microsoft SQL Tools Service. SQL Server is the first provider. The editor-facing contract and transport are separate from that provider so another database engine can use a different language server without changing the Monaco integration.
+Varia supplies completion, hover and query diagnostics through Microsoft SQL Tools Service. SQL Server is the only
+provider; the editor-facing contract and transport are provider-neutral so another engine can use a different language
+server without changing the Monaco integration.
 
-Installed applications include the matching self-contained runtime for Windows x64, Linux x64, macOS arm64 or macOS x64. IntelliSense requires no separate installation, executable-path setting or first-launch download.
+Installed applications include the matching self-contained runtime for Windows x64, Linux x64, macOS arm64 or macOS x64.
+IntelliSense needs no separate installation, path setting or first-launch download.
+
+## Using IntelliSense
+
+- **Completion.** **Ctrl+Space**, or a provider trigger character such as `.`. Suggestions use the query tab's
+  connection and database; switching tabs does not change another editor's pending request.
+- **Columns** rank ahead of general suggestions of equal match quality. In supported SELECT scopes, unqualified column
+  suggestions carry their source qualifier (a self-join offers `t.high` and `b.high`; `hi` matches both). `t.` returns
+  only that source's columns. Scope resolution uses a bounded parser and SQL Tools' binder per visible source (temporary
+  probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
+  incomplete expansion does not bring back ambiguous bare columns.
+- **Hover** an identifier for the language server's information.
+- Hover and completion widgets can extend beyond a short query panel within the window; each editor owns its widgets
+  across split and floating groups, and menus and dialogs stay above them.
+
+### Go To Definition
+
+**F12** scripts the table, view, procedure, function, synonym or user-defined type under the caret as CREATE to a new
+query tab; on a column it goes to the column's table, using the statement's aliases. **Alt+F12** opens it in a Peek tab.
+**Ctrl+click** (**⌘-click** on macOS; changeable among the Shortcuts page's mouse gestures) does what F12 does. Both keys
+work in query tabs and Peek's read-only definition editor. Go To Definition is implemented by Varia's backend, not SQL
+Tools.
+
+- Names resolve on the query's connection and database as SQL Server resolves them: three-part names in another
+  database; a one-part name in your default schema, then dbo, then sys (`sp_who` finds `sys.sp_who`); a column through
+  its own query's aliases, not a subquery's. An earlier `USE` changes the database. A column's XML or CLR method
+  (`t.Doc.value(...)`) goes to the column's table.
+- CTEs, derived tables, table variables and columns a statement declares have no definition. A name matching nothing, a
+  temporary object or a linked server's object shows a short status-bar message, never an error dialog.
+
+### Error checking
+
+Runs after a 500 ms editing pause without executing the query. Syntax and catalog-binding errors (missing columns,
+unknown aliases) show as red squiggles, provider warnings yellow. Hover for the message, or use **Alt+F8** /
+**Alt+Shift+F8** and **Edit › IntelliSense › Next/Previous SQL Issue**. The status bar reports progress, failures and
+error/warning counts. Turn it off in **Tools › Options › Text Editor › Transact-SQL › IntelliSense › Enable error
+checking**.
+
+- Every edit clears obsolete markers; only results matching the current model version, connection context and backend
+  generation show.
+- At most 1,000 issues, with an explicit incomplete status when capped.
+- Unconnected queries get syntax analysis; name resolution needs a supported live connection.
+- These are static checks: dynamic SQL and session-local objects are outside the separate metadata connection.
+
+### Refresh Local Cache
+
+**Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache** or the palette rebuilds
+the query's metadata cache after schema changes, for its provider, connection and database. It preserves unsaved SQL,
+execution sessions, transactions and temporary tables, and waits for the provider's readiness notification before
+reporting completion. The status bar shows progress and failures; changing the query's target or closing it discards an
+obsolete result.
+
+### Authentication
+
+Connected IntelliSense supports SQL Login and Windows authentication with the connection's encryption and certificate
+settings. Microsoft Entra authentication is not supported for IntelliSense (SQL Tools Service does not share Varia's
+token broker); query execution is unaffected.
 
 ## Source builds and packaging
 
-`npm run dev`, `npm run build`, `npm start`, and `npm run build:smoke` prepare the pinned runtime before launching or building. The first preparation downloads the upstream archive; subsequent runs verify and reuse the local copy. Transient download failures allow up to three attempts within one three-minute budget, finally using the pinned asset's official GitHub API download while retaining its checksum. `npm run package` prepares its target platform in `beforePack`, and release CI explicitly prepares it before packaging.
+`npm run dev`, `npm run build`, `npm start` and `npm run build:smoke` prepare the pinned runtime first. The first run
+downloads the upstream archive; later runs verify and reuse it. Transient failures get up to three attempts within one
+three-minute budget, the last through the pinned asset's official GitHub API download, checksum unchanged.
+`npm run package` prepares its platform in `beforePack`; release CI prepares it explicitly.
 
-```sh
-npm ci
-npm run dev
-```
-
-The pin and platform-specific SHA-256 hashes are in `build/sqltools-service.json`. Preparation verifies the archive before extraction, preserves the entire runtime and upstream notices, adds the component's MIT license, and records each extracted file's hash. Packaged checks verify this inventory and start the real language server with developer overrides cleared.
+The pin and per-platform SHA-256 hashes are in `build/sqltools-service.json`. Preparation verifies the archive before
+extraction, keeps the whole runtime and upstream notices, adds the component's MIT license and records each file's hash.
+Packaged checks verify this inventory and start the real language server with developer overrides cleared.
 
 ```sh
 npm run sqltools:prepare
@@ -21,65 +80,78 @@ node scripts/prepare-sqltools-service.mjs --rid linux-x64
 node scripts/prepare-sqltools-service.mjs --check
 ```
 
-An offline build can pass `--archive /absolute/path/to/the-pinned-archive`; it must still match the checked-in hash. Prepared runtimes live under `artifacts/sqltools-service/<rid>` and ship under `resources/sqltools-service`, beside the backend. The application never downloads a runtime while running.
-
-Developers can override discovery with `VARIA_SQLTOOLS_SERVICE_PATH`, an absolute path to `MicrosoftSqlToolsServiceLayer.exe` on Windows or `MicrosoftSqlToolsServiceLayer` elsewhere. Keep its distribution files beside it. A nonempty override is authoritative, including when invalid; clear it to use the bundled runtime. A page or SQL document cannot choose an executable, arguments, or shell command.
-
-Open a query tab and use **Ctrl+Space** to request suggestions, or type a provider trigger character such as `.`. Hover over an identifier for information supplied by the language server. Suggestions use the query tab's connection and selected database. Changing the active tab does not change the context of another editor's pending request.
-
-Column suggestions rank ahead of general suggestions with the same matching quality. In supported SELECT scopes, unqualified column suggestions carry their source qualifier: a self-join exposes `t.high` and `b.high` independently, and typing `hi` can match both. Typing `t.` uses SQL Tools' normal qualified completion and returns only that source's columns. Scope resolution uses a bounded SQL parser and SQL Tools' binder for each visible source; temporary probe edits are restored before any other request uses that document. Work is limited to 16 source qualifiers and a five-second probe budget. An incomplete expansion does not reintroduce ambiguous bare table columns.
-
-**Go To Definition (F12)** scripts the table, view, procedure, function, synonym or user-defined type under the caret as CREATE to a new query tab, as SSMS does; on a column it goes to the column's table, using the statement's aliases. **Alt+F12** opens the object in a Peek tab instead, and **Ctrl+click** (**⌘-click** on macOS; change it on the Shortcuts page's mouse gestures) does what F12 does. Both keys work in query tabs and in Peek's read-only definition editor. Names resolve on the query's connection and database, including three-part names in another database, as SQL Server resolves them: a one-part name in your default schema, then dbo, then sys (so `sp_who` finds `sys.sp_who`), and a column through its own query's aliases, not a subquery's. A `USE` earlier in the script changes the database names resolve in, as it does when the script runs; a column's XML or CLR method (`t.Doc.value(...)`) goes to the column's table. CTEs, derived tables, table variables and the columns a statement declares have no definition to go to. A name that matches nothing, a temporary object or a linked server's object shows a short status-bar message, never an error dialog.
-
-Hover and completion widgets can extend beyond a short query panel while remaining within the window. Each editor owns its widgets across split and floating groups; menus and dialogs stay above them.
-
-SQL error checking runs after a 500 ms editing pause without executing the query. Syntax and catalog-binding errors, including missing columns and unknown aliases, appear as red squiggles; provider warnings appear yellow. Hover for the message, or use **Alt+F8** / **Alt+Shift+F8** and **Edit › IntelliSense › Next/Previous SQL Issue** to navigate the current query. The status bar reports analysis progress, failures and error/warning counts. Turn it off in **Tools › Options › Text Editor › Transact-SQL › IntelliSense › Enable error checking**. Every edit clears obsolete markers immediately; only results matching the current model version, connection context and backend generation are displayed. Results are limited to 1,000 issues, with explicit incomplete status when capped. Unconnected queries receive syntax analysis; database name resolution requires a supported live connection.
-
-Use **Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache**, or the command palette to rebuild the current query's metadata cache after schema changes. Refresh uses the selected provider, connection and database. It preserves unsaved SQL, query execution sessions, transactions and temporary tables, and waits for the provider's readiness notification before reporting completion. The status bar shows refresh progress and failures. Changing the query's target or closing it discards an obsolete refresh result.
-
-Connected IntelliSense initially supports SQL Login and Windows authentication, using the connection's encryption and certificate settings. Microsoft Entra authentication is not enabled for IntelliSense in this slice: the SQL Tools Service process does not share Varia's token broker. Query execution keeps its existing authentication support.
+- Offline builds can pass `--archive /absolute/path/to/the-pinned-archive`; it must match the checked-in hash.
+- Prepared runtimes live under `artifacts/sqltools-service/<rid>` and ship under `resources/sqltools-service`, beside
+  the backend. The application never downloads a runtime while running.
+- `VARIA_SQLTOOLS_SERVICE_PATH` overrides discovery: an absolute path to `MicrosoftSqlToolsServiceLayer.exe` on Windows
+  or `MicrosoftSqlToolsServiceLayer` elsewhere, with its distribution files beside it. A nonempty override is
+  authoritative even when invalid; clear it to use the bundled runtime. Pages and SQL documents cannot choose an
+  executable, arguments or shell command.
 
 ## Boundaries
 
-The integration has three parts:
+1. Monaco turns its model, cursor and cancellation state into database-neutral requests: document id and version, text,
+   a UTF-16 position, and a context naming provider and connection.
+2. Varia's validated IPC carries only the supported language operations; the renderer gets no general JSON-RPC interface
+   and none of SQL Tools' connection or execution methods.
+3. A backend provider owns server setup, document synchronization and database-specific connection behaviour. The shared
+   LSP client owns the child process, UTF-8 `Content-Length` framing, request correlation, cancellation and disposal.
 
-1. Monaco translates its model, cursor and cancellation state into database-neutral language requests. Requests contain a document identifier and version, its text, a UTF-16 position, and a context identifying the provider and connection.
-2. Varia's validated IPC carries only the supported language operations. The renderer does not receive a general JSON-RPC interface or SQL Tools Service's connection and execution methods.
-3. A backend provider owns language-server setup, document synchronization and database-specific connection behavior. The shared LSP client owns the child process, UTF-8 `Content-Length` framing, request correlation, cancellation and process disposal.
+The language context reserves separate fields for database/default schema and project/dataset, so PostgreSQL (search
+path) or BigQuery (project, dataset) can supply their own; each must define its own authentication, quoting, catalog
+interpretation and capabilities. The reserved identifiers do not enable those engines.
 
-Language context reserves separate fields for database/default schema and project/dataset. SQL Server uses database context; PostgreSQL can later supply its own search-path behavior, and BigQuery can supply project and dataset behavior. Those providers must define their own authentication, quoting, catalog interpretation and language capabilities. An identifier in the contract does not mean that engine is implemented.
+- Each query document has a stable model URI, kept when an editor group switches models or floats. Completion and hover
+  resolve the requesting model, not the active query. Responses are discarded after an edit, context change, close,
+  cancellation or backend-generation change. Query editors stay in the main OS window; other panels support
+  [OS popouts](popout-windows.md).
+- Credentials stay in the backend. SQL Tools keeps its own database connection, not a query tab's session, so temporary
+  tables, session variables, uncommitted changes and session SET options are invisible to it, and background analysis
+  cannot interfere with a running query or transaction.
+- The SQL Server adapter opens the buffer before connecting, waits for metadata readiness and retries transient busy
+  completion responses within a deadline. It sends explicit UTF-16 replacement ranges and refreshes its parse tree before
+  hovering changed text. Service file tracing is off; stderr is drained without logging.
+- The executable and arguments come only from the trusted application.
 
-Each query document has a stable model URI. The same document retains its identity when an editor group switches models or floats within the editor area. Completion and hover resolve the model that requested them, rather than reading the globally active query. Responses are discarded after a document edit, connection-context change, close, cancellation or backend-generation change. Query editors currently stay in the main OS window; other panels support [OS popouts](popout-windows.md).
+## Scope and limits
 
-Credentials stay in the backend. SQL Tools Service maintains its own database connection for language analysis; it does not share a query tab's execution session. Temporary tables, session variables, uncommitted changes and session-specific SET options from executed queries are therefore unavailable to that connection. This separation also prevents background analysis from interfering with an active query or transaction.
+- Implemented: completion, hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition. Not yet:
+  formatting, signature help, completion-item resolution, Entra IntelliSense.
+- Documents above 250,000 UTF-16 code units edit and execute normally without language requests.
+- Completion keeps at most 128 documents and 8,000,000 UTF-16 code units in total, and returns at most 500 items per
+  response, prioritizing matching identifiers before truncation so later catalog names stay reachable.
+- A missing service executable leaves language support unavailable; editing and execution still work.
 
-The SQL Server adapter opens the buffer before connecting, waits for metadata readiness, and handles transient busy completion responses within a bounded deadline. It sends explicit UTF-16 replacement ranges for edits and refreshes its cached parse tree before hovering changed text. Service file tracing is disabled, and the transport drains stderr without logging it.
+### Documents and processes
 
-## First-slice scope
-
-- Completion, hover, syntax/catalog diagnostics and explicit metadata-cache refresh are implemented. Go To Definition is implemented by Varia's backend, not SQL Tools (below). Formatting, signature help and completion-item resolution are future work.
-- SQL Server is the only implemented provider. The reserved PostgreSQL and BigQuery identifiers do not enable those engines.
-- Server responses are bounded before reaching the editor. Documents above 250,000 UTF-16 code units retain normal editing and execution behavior without language requests. Completion retains at most 128 documents and 8,000,000 UTF-16 code units in total; a completion response returns at most 500 items. Matching identifiers are prioritized before truncation so names later in a large catalog remain reachable as the user types.
-- An absent service executable leaves language support unavailable; query editing and execution remain available.
-- The bundled service is pinned and verified at build time. Its executable and arguments come only from the trusted application, never SQL documents or renderer requests.
-
-The broker tracks at most 128 language documents. When a new query would pass that, it waits for a close already under way; if there is none, the least recently used document with no request in progress is released (one whose close never arrived, for example after a window went away without closing its tabs) and the new query is served. That document opens again from its full text on its next request. Only when all 128 have requests in progress is the new one refused as busy. SQL Tools notifications wait in a queue bounded by 8,388,608 characters (each counted at its parameters' length plus 512), so a burst of diagnostics for many documents is absorbed; only a queue that passes the bound stops the child, which is then reinitialized.
-
-The child process starts lazily when a language request first needs it. The welcome query a first launch opens is known to be valid and is not analysed until it is edited, so a launch does not start a child for it. Requests have deadlines; a failed process is reinitialized on a subsequent request, with each document synchronized again from its current full text. A failed availability check is retried on the next completion or hover request after a short cooldown, without requiring a backend restart. Refresh Local Cache can retry immediately. Closing a query or disconnecting its connection releases the corresponding language document and analysis connection.
-
-The pinned service retains some metadata and offline parse caches after document close. When a context's last document closes, or after 128 document closures, the adapter waits for admitted language requests to finish and retires the child. Remaining documents synchronize lazily with a fresh child; query execution sessions are unaffected. Renderer cleanup is bounded and also waits for requests queued behind metadata work, so a late request cannot reopen a closed tab's analysis state. Cleanup retries only explicit pre-dispatch capacity refusals. Persistent overload reports a warning rather than restarting the backend or silently discarding cleanup.
-
-SQL Tools publishes diagnostics asynchronously without document versions and shares its diagnostic debounce across documents. Analysis therefore uses one separate, serialized SQL Tools child with an immutable URI for each snapshot. This isolates native debounce across the two children and prevents an earlier snapshot's notification from painting the current query. Completion and hover preempt pending background analysis for their document, while error checking pauses and automatically resumes after foreground requests settle. At most one diagnostic context is retained, briefly two snapshot connections during rollover. The analysis child retires on close, disconnect, relevant cache refresh, context change, 128 snapshots, 8,000,000 cumulative snapshot UTF-16 code units, reset, or 60 seconds idle. The broker retains fingerprints for version checks rather than another copy of every query buffer. Using both analysis and completion can therefore hold two SQL Tools processes; diagnostics alone does not start the completion child. These are static language checks, not a guarantee that SQL will execute successfully; dynamic SQL and query-session-local objects remain outside the separate metadata connection.
-
-Database management actions temporarily pause language requests and release metadata connections so IntelliSense cannot keep a database in use during rename, detach, restore or similar operations. The next language request after the action rebuilds the analysis context. This initial suspension covers all providers; a later version can narrow it to the affected connection and database.
-
-## Next stages
-
-Add Entra token handoff, formatting and signatures. Implement a second provider before promoting any SQL Server-specific assumption into the common contract.
+- **Document cap.** The broker tracks at most 128 documents. A new one waits for a close under way; otherwise the least
+  recently used document with no request in progress is released (it reopens from full text on its next request). Only
+  when all 128 have requests in progress is the new one refused as busy.
+- **Notification queue.** Bounded by 8,388,608 characters (each notification counted at its parameters' length plus 512);
+  passing the bound stops the child, which is reinitialized.
+- **Lifetime.** The child starts on the first request that needs it; the first-launch welcome query is not analysed until
+  edited. Requests have deadlines; a failed process is reinitialized on a later request, resynchronizing each document
+  from full text. A failed availability check is retried on the next completion or hover after a short cooldown;
+  Refresh Local Cache retries at once. Closing a query or disconnecting releases its document and analysis connection.
+- **Retirement.** When a context's last document closes, or after 128 closures, the adapter waits for admitted requests and
+  retires the child (the pinned service keeps caches after close); remaining documents resync lazily. Renderer cleanup is
+  bounded, waits for requests queued behind metadata work, and retries only explicit pre-dispatch capacity refusals;
+  persistent overload reports a warning.
+- **Analysis child.** Diagnostics run in one separate, serialized SQL Tools child with an immutable URI per snapshot,
+  because SQL Tools publishes unversioned diagnostics with a shared debounce. Completion and hover preempt pending
+  analysis for their document; error checking resumes after them. At most one diagnostic context is kept (briefly two
+  snapshot connections during rollover). The child retires on close, disconnect, relevant refresh, context change, 128
+  snapshots, 8,000,000 cumulative snapshot UTF-16 code units, reset, or 60 seconds idle. The broker keeps fingerprints,
+  not buffer copies. Analysis and completion together can hold two processes; diagnostics alone does not start the
+  completion child.
+- **Management actions** pause language requests and release metadata connections so IntelliSense cannot keep a database
+  in use during rename, detach, restore and similar; the next request rebuilds the context. The pause covers all
+  providers.
 
 ## Live validation
 
-Prepare the build, choose a disposable development SQL Server, and enable marked scratch fixtures. The backend suite creates two uniquely named, marked databases with different columns and drops only its own fixtures in `finally`.
+Use a disposable development SQL Server with marked scratch fixtures; the backend suite creates two uniquely named, marked
+databases with different columns and drops only its own in `finally`.
 
 ```powershell
 npm run build:smoke
@@ -89,10 +161,15 @@ npm run test:language:live
 npm run test:language:ui
 ```
 
-For SQL authentication, also set `VARIA_TEST_SQL_USER` and `VARIA_TEST_SQL_PASSWORD`. Do not put passwords in command arguments. Tests omit the executable-path override to exercise bundled discovery.
+For SQL authentication also set `VARIA_TEST_SQL_USER` and `VARIA_TEST_SQL_PASSWORD` (never in command arguments). Tests
+omit the path override to exercise bundled discovery.
 
-The backend suite covers live table/column completion, hover after unsaved edits, external schema changes followed by refresh, concurrent documents with identical SQL in different databases, process lifetime, document close, disconnect and fixture cleanup. Refresh checks preserve a real query session's transaction and temporary table. The UI suites exercise Monaco's actual suggestion and hover widgets in split and floating editor groups, switch focus to an existing panel's OS popout and back, then refresh and dock back while preserving each query's context.
+The backend suite covers table/column completion, hover after unsaved edits, external schema changes plus refresh,
+identical SQL in different databases, process lifetime, close, disconnect and cleanup; refresh checks preserve a real
+session's transaction and temporary table. The UI suites drive Monaco's suggestion and hover widgets in split and floating
+groups, switch to a panel's OS popout and back, then refresh and dock back keeping each query's context. Release CI runs
+the backend suite against its disposable SQL Server 2022 instance; packaging checks verify the bundled distribution and offline
+startup.
 
-On November 8, 2026, the backend and real Monaco UI suites were validated on SQL Server 2025 Developer `17.0.1000.7` using Windows authentication. Release CI also runs the focused backend suite against its disposable SQL Server 2022 instance. Platform packaging checks verify the bundled distribution and offline server startup.
-
-The [SQL Tools Service protocol](https://github.com/microsoft/sqltoolsservice/blob/main/docs/guide/jsonrpc_protocol.md) documents its stdio protocol and Microsoft-specific connection methods. The [Monaco completion API](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.languages.CompletionItemProvider.html) defines the editor adapter's model-based provider interface.
+References: [SQL Tools Service protocol](https://github.com/microsoft/sqltoolsservice/blob/main/docs/guide/jsonrpc_protocol.md),
+[Monaco completion API](https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.languages.CompletionItemProvider.html).

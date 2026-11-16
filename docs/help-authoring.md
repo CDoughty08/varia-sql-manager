@@ -11,13 +11,11 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
    sections, related IDs and typed command/setting/gesture references. List real `sourceAreas` to help future authors
    find affected guides. This map is advisory; a source edit alone does not prove prose needs to change.
 2. Add `src/renderer/src/help/guides/<id>.tsx`, exporting a default component accepting `GuideProps`. Use `GuidePage`
-   with the registered ID and content for every section. Its content keys are type checked. Vite discovers and
-   lazily loads the file; no additional route or renderer registration is needed. `HelpDocument` owns the stable
-   frame and navigation controls, including focus when its tab remounts; `GuidePage` supplies its section body.
-   Guide modules must not focus themselves when they finish loading: the navigation request already owns focus,
-   and the user may have moved elsewhere.
-   A rejected lazy import stays failed for the window's lifetime; recovery directs the reader to other guides or a
-   restart, rather than promising that reopening the same page retries it.
+   with the registered ID and content for every section (content keys are type checked). Vite discovers and lazily
+   loads the file; no route or renderer registration is needed. `HelpDocument` owns the frame, navigation controls and
+   focus when its tab remounts; `GuidePage` supplies the section body. Guide modules must not focus themselves when they
+   finish loading (the user may have moved elsewhere). A rejected lazy import stays failed for the window's lifetime;
+   recovery points to other guides or a restart.
 3. Use `CommandRef`, `SettingRef` and `GestureRef` for current names, paths, keys and values. Declare those references
    in the catalog. Do not transcribe default key strings or use the reader's current Help focus to resolve them.
    A new lesson context belongs in the shared references helper, with checks for focus flags and scope precedence.
@@ -27,13 +25,13 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
    State the sample's assumptions and which settings it honors. Prefer examples whose behavior remains correct under
    the other supported settings: the results sample sorts numeric ranks, independent of the text-sort mode, and its
    copy explanation follows the applied header option. Test nondefault settings and actual output ordering.
-   Add a new sample family only when an existing family cannot explain the workflow; test its meaningful behavior.
+   Add a new sample family only when an existing one cannot explain the workflow, and test its behavior.
 5. Run `tests/getting-started.test.ts`, typecheck, and `npm run check` before committing. The registry check loads every
-   guide and verifies module parity, related links, section uniqueness, real source paths and declared references.
-   It intentionally does not snapshot prose: reviewers still check correctness, prerequisites, failure remedies,
-   persistence limits and whether the explanation helps the user finish their task. `tests/getting-started-loading.test.ts`
-   exercises delayed/rejected modules, recovery focus, closing during a load, tab reflow and settings-sensitive samples.
-   Scroll checks include pointer input on nested content and Tab entry from the section list, as well as column input.
+   guide and verifies module parity, related links, section uniqueness, real source paths and declared references. It
+   does not snapshot prose: reviewers check correctness, prerequisites, failure remedies, persistence limits and whether
+   the guide helps the user finish the task. `tests/getting-started-loading.test.ts` covers delayed/rejected modules,
+   recovery focus, closing during a load, tab reflow, settings-sensitive samples, and scrolling (pointer input on nested
+   content, Tab entry from the section list, column input).
 
 ## Verify behavior
 

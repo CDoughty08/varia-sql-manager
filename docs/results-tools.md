@@ -1,375 +1,303 @@
 # Result grid tools
 
-**Named results.** A query can name a result set with a marker comment just before its statement:
-`/* #Name="Sample Query" */` or `-- #Name="Open orders"` (`#Name` in any case, the name in double quotes, a quote
-inside it doubled, at most 128 characters). The result's tab, caption and the lists that name results show the name
-where they showed "Result 2"; a result without a name keeps its number, so naming one never renumbers another. Several
-markers stacked before one `EXEC` name its result sets in order. The name goes on a result only when Varia can tell
-which result set the statement returns, from the batch's text: a marker inside `BEGIN … END`, a branch or a loop, or
-after an `EXEC`, `IF` or `WHILE` in the same batch, is not applied, nor is one after an error in the batch or in a
-batch that sets `NOEXEC`, `PARSEONLY` or `FMTONLY` anywhere or selects a column named like SQL Server's XML plan column,
-and the
-Messages tab says why (put `GO` between such statements to name both). The query runs exactly as written; a marker is
-an ordinary comment to SQL Server. A trigger that returns rows (a table's, or a database or server DDL trigger) can
-still shift a name when its result has the same number of columns as the named statement's. With `SET STATISTICS XML ON`, a plan that
-arrives where a `SELECT *` stood stops naming for the rest of its batch.
+## Named results
 
-Right-click a result column header or cell, or press Shift+F10 in the grid, to open its menu.
+A marker comment just before a statement names its result set: `/* #Name="Sample Query" */` or
+`-- #Name="Open orders"` (`#Name` in any case, name in double quotes, inner quotes doubled, at most 128 characters).
+Unnamed results keep their numbers, so naming one never renumbers another. Markers stacked before one `EXEC` name its
+result sets in order. To SQL Server a marker is an ordinary comment.
 
-- **Copy Column Name** copies that column's raw name only, without data, brackets or a display-name fallback. An unnamed
-  column copies an empty string. Ordinary **Copy** and **Copy with Headers** keep their existing result-data formatting.
-- **Fit Column** fits that column to its header and the widest measured value. It uses the same bounded measurement as
-  double-clicking the column's right border: the first 4,096 rows plus the visible rows, subject to the existing width
-  limits. It changes no result data or order. From the keyboard menu, it acts on the focused grid's active column.
-- **Close Results**, in the grid menu, results toolbar and command palette, releases all result sets for that query and
-  keeps Messages. It is unavailable while that query is executing. Hiding the results pane still keeps its results.
-- The **Close** button at the end of a caption closes that view and frees its memory. A result's own ("Close Result 2")
-  closes the result with its Pivot, which the button's tooltip says ("Close Result 2 and its Pivot"); a Pivot's ("Close
-  Pivot of Result 2") or a comparison's closes that one alone. **Close Just This Result** in the grid menu, and **Close
-  Result** in the command palette, do the same for the grid they are used on (from the palette, the grid last used).
-  The other results keep their names and numbers (closing Result 2 does not rename Result 3), their sort, filters,
-  selection and heights. A comparison made from a closed result stays: it copied what it compared. Anything still being
-  built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a save that has
-  already started writing its file finishes. The run summary and its row count do not change. Closing the last result
-  leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
-  execution plans stay, and so does Close Results, which releases those plans. Find in Results, Find Next and Previous,
-  Save Results As, Pivot, Compare and Transpose are then unavailable, as they need a grid. Closing one view is
-  unavailable while the query is executing, and there is no undo.
-- **Progress of long operations.** A sort or filter, a column profile, a Pivot and a comparison run in the backend over
-  the whole result. One that takes longer than 300 ms shows in the results toolbar: what it does and to which result,
-  its phase ("Reading keys", "Sorting", "Finding row keys"), a meter with one percentage that only goes up (none while a
-  phase cannot tell how far it is), the elapsed time after 10 seconds, and **Cancel**. A sort or filter also shows a
-  ring with the percentage on its column's sort button and a thin bar along the top of the grid. While it runs, that
-  grid's sorting and filtering (its header buttons, funnels and menu commands), Save Results As and Sort Text By wait:
-  they are dimmed and a click does nothing but point at the running operation. Copy still works and copies what the grid
-  shows. Cancel, or Escape in the grid, stops it and keeps the order and rows the grid had, which the toolbar says. A
-  grid sorted or filtered while its rows still arrived is built again from every row once they are in; cancelling that
-  keeps the view of the rows that had arrived, and Save Results As then asks to sort or filter again first. A screen
-  reader hears when it starts and ends and why a click waited, never each percentage.
-- When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
-  grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
-  Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or
-  Space presses it. The rows already kept stay. The button goes when the query ends, and the focus returns to the grid.
-  The strip for **Maximum rows kept per execution** has no button: that limit is one you set, reached as you asked, and
-  the toolbar's Cancel still stops the query.
+A name is applied only when the batch's text shows which result set the statement returns. Messages says why one was
+not (put `GO` between statements to name both) when the marker is inside `BEGIN … END`, a branch or a loop; after an
+`EXEC`, `IF`, `WHILE` or an error in the batch; or in a batch that sets `NOEXEC`, `PARSEONLY` or `FMTONLY` anywhere or
+selects a column named like SQL Server's XML plan column. A trigger returning rows (table, database or server DDL) can
+still shift a name when its result has the named statement's column count. With `SET STATISTICS XML ON`, a plan arriving
+where a `SELECT *` stood stops naming for the rest of the batch.
 
-The menu keeps the query, result set and column it was opened for, including in popped-out panels. Column actions refuse
-a result replaced by another execution or lost with the backend. The toolbar closes its own query's results; it does not
-switch or close query documents. Closing results from the output moves focus to its surviving Results tab. Closing a
-result or a comparison from its caption moves focus to the next caption, else the previous one, else the Results tab;
-closing a Pivot moves it to its own result's caption. **Close Result** from the palette or a key closes the grid you
-last used, and is unavailable until you have used one.
+## Grid menu
 
-The run summary's row count is the rows the query returned: pivots and comparisons do not add to it. After a
-splitter between results has been dragged, a result added later (a pivot, say) takes an average share and the others
-keep their proportions.
+Right-click a header or cell, or Shift+F10 in the grid. The menu keeps the query, result set and column it was opened
+for (popped-out panels too); column actions refuse a result replaced by another run or lost with the backend. Column
+commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
+
+- **Copy Column Name**: the raw name only (an unnamed column copies an empty string). **Copy** and **Copy with
+  Headers** are unchanged.
+- **Fit Column**: fits the column to its header and widest measured value, as double-clicking its right border does
+  (first 4,096 rows plus visible rows, within width limits). From the keyboard menu, the active column.
+- **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages.
+  Unavailable while executing. Hiding the results pane keeps results. The toolbar never switches or closes documents.
+
+## Closing one result
+
+A caption's **Close** button closes that view and frees its memory: a result's ("Close Result 2", tooltip "Close Result
+2 and its Pivot") takes its Pivot too; a Pivot's ("Close Pivot of Result 2") or comparison's closes only that. **Close
+Just This Result** (grid menu) and **Close Result** (palette; the grid last used, unavailable until one is used) do the
+same. Unavailable while executing; no undo.
+
+- Other results keep names, numbers, sort, filters, selection and heights. Comparisons made from it stay.
+- Work being built from it (pivot, comparison, sort, copy) is cancelled; a save already writing finishes.
+- The run summary and row count do not change.
+- Closing the last result shows "Results were closed. Execute the query again to see them."; Messages, captured plans and
+  Close Results (which releases them) stay; Find in Results, Find Next/Previous, Save Results As, Pivot, Compare and
+  Transpose become unavailable.
+- Focus goes to the next caption, else the previous, else the Results tab (a Pivot's: its result's caption; Close
+  Results from the output: the surviving Results tab).
+
+## Long operations
+
+Sorts, filters, column profiles, Pivots and comparisons run in the backend over the whole result. Past 300 ms the results
+toolbar shows the operation and result, its phase ("Reading keys", "Sorting", "Finding row keys"), a rising percentage
+(none while a phase cannot tell), elapsed time after 10 seconds, and **Cancel**. A sort or filter also shows a ring on
+its column's sort button and a bar along the grid's top.
+
+- Meanwhile that grid's sorting and filtering, Save Results As and Sort Text By are dimmed (a click points at the running
+  operation); Copy copies what the grid shows.
+- Cancel, or Escape in the grid, keeps the previous order and rows.
+- A grid sorted or filtered while rows arrived is rebuilt from every row once they are in; cancelling that keeps the
+  partial view, and Save Results As asks to sort or filter again first.
+- Screen readers hear start, end and why a click waited.
+
+**Row memory.** When a running query stops keeping rows (result memory budget full, or the computer low on memory), the
+grid's strip says so while the query keeps reading and counting, with **Stop query** (Cancel Executing Query, Alt+Pause on
+Windows and Linux; Tab reaches it from the grid, Enter or Space presses it). Kept rows stay; when the query ends the
+button goes and focus returns to the grid. The **Maximum rows kept per execution** strip has no button; the toolbar's
+Cancel still stops the query.
+
+After a splitter between results is dragged, a later result takes an average share; the others keep their proportions.
 
 ## Groups
 
-Each result the query returned is a group, named by its number. The stack draws one item per view, in this order:
+Each result is a group named by its number. The stack shows each result's grid (Table) with its **Pivot** under it once
+built, then comparisons in the order made ("Differences: Result 1 → Result 3"). A SQL-returned plan set (`SET
+SHOWPLAN_XML ON`, say) is a numbered group too: its link opens the plan, closing it removes the plan from the Execution
+plan pane, and it has no Pivot, Compare or Transpose. The Results tab's badge and the run summary's row count cover only the query's own results. After
+a re-run results return in the same order and names and the last-used result is again current; Pivots and comparisons
+are not rebuilt.
 
-- each result's own grid (its Table), with its **Pivot** directly under it once one is built, then the next result;
-- every comparison after the results, in the order made ("Differences: Result 1 → Result 3").
+### Pivots
 
-A result has at most one Pivot, and a Pivot is always read from the result's own rows, never from another Pivot. The
-pivot builder belongs to one result and names it as its source; there is nothing to pick. It follows the grid you last
-used: that grid's result, or, when the grid is a comparison or a plan set, the first result that can be pivoted. Each
-result keeps its own draft, which a re-run's result of the same number takes over. **Pivot Results…** on a Pivot's grid
-opens the builder for that Pivot's result, starting from what the Pivot was built with. **Build Pivot** on a result that
-has a Pivot replaces it once the new one is built: the old Pivot stays readable meanwhile, and a build that fails, is
-cancelled or does not fit in result memory leaves it as it was and says why (the old Pivot is never freed to make room;
-the builder suggests closing it and building again). A rebuilt Pivot keeps its place, its name, the focus and the way it
-is drawn (transposed, under the same header column when the new Pivot has one column of that name), and the sort keys
-and column widths you set on columns whose names appear once in both; its filters, selection and scroll start over, and
-the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
-window (the builder says when one waits for the others), and a busy SQL backend is asked again after
-1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. Like the Compare popover, the builder goes with the results themselves: **Close Results**, a run that
-leaves no result, or closing its last result closes it, and the next run does not reopen it; each result's draft is kept
-for the next **Pivot…**. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+- One Pivot per result, always read from the result's own rows.
+- The builder belongs to the grid you last used (for a comparison or plan set, the first pivotable result) and names it.
+  Each result keeps its draft, inherited by a re-run's result of the same number. **Pivot Results…** on a Pivot opens
+  the builder with what that Pivot was built with.
+- **Build Pivot** on a result with a Pivot replaces it once built; the old stays readable. A build that fails, is
+  cancelled or does not fit leaves it and says why (the old is never freed to make room; the builder suggests closing it).
+- A rebuilt Pivot keeps its place, name, focus, drawing (transposed, same header column if present), and sort keys and
+  widths on columns named once in both. Filters, selection and scroll reset; the toolbar says when filters went.
+- At most four builds per window (the builder says when one waits); a busy backend is retried after 1, 4 and 16 seconds.
+- A failed build's message stays until the draft is edited or built again.
+- The builder closes with the results (Close Results, a run with none, closing the last result) and the next run does not
+  reopen it; drafts stay for the next **Pivot…**.
+- A Pivot's strip says when its result holds only part of the query's rows.
 
-A Pivot records the filters of the result it was built from. When that result's filters change (a filter added, removed
-or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
-**Update** (in Tabs layout, on the row above the Pivot's grid, and its Pivot tab carries a dot), and its strip says so
-first. Sorting the result does not mark it, since the order of the rows changes no
-figure, and neither does a filter made again of the same values: ticking the same values again in a column's filter, or
-filtering by other cells that hold the same values. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
-last used) builds the Pivot again from what it
-was built with, not from an edit in the builder not yet built, over the result as it is filtered now, and replaces it as
-**Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
-is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
-results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
-once the SQL backend has stopped.
+### Out-of-date Pivots
 
-A Pivot that is small and quick to build **follows its result's filters by itself**: when the result stores at most
-500,000 rows and the Pivot's last build took under a quarter of a second (250 ms), a filter change rebuilds it at once,
-as Update would: its caption shows "Building again…" with Cancel (its strip still says it is out of date) until the new
-Pivot replaces it. The result's stored rows count, not the rows its filters keep, since a build
-reads them all. Otherwise it stays marked out of date with Update. Only a Pivot you can see rebuilds by itself: in Tabs
-layout while its Pivot tab is selected, stacked while its caption is expanded, and only while the Results panel is
-showing (Messages picked in its place hides it; Messages docked beside Results or popped out does not, and a closed or
-hidden Results panel does). A Pivot that is hidden keeps its mark and rebuilds when you show it (select its Pivot tab, expand it, show the
-Results panel again or switch to the stacked layout). A newer filter change stops a rebuild still running and starts one for the
-newer filters, so only the last is shown; a rebuild that fails, does not fit or that you cancel leaves the old Pivot
-marked, says why in the results toolbar, and is not tried again by itself until the filters change (Update still
-asks for it). A Pivot hidden while it rebuilds by itself (Messages takes its place, you select another view or collapse it) stops
-that rebuild, keeps the pane you picked, and rebuilds when you show it again. A rebuild that follows the filters by itself does not select the Pivot's tab in Tabs layout, and does not
-clear what the builder says about a Build Pivot of yours that failed (it does clear what an earlier automatic rebuild or
-Update said). Like Update, it removes the Pivot's own filters, selection and scroll, and the toolbar says so, though you
-did not click anything. A rebuild you started with Update or Build Pivot is never stopped this way. A Copy of the Pivot still running holds a rebuild by itself back until the copy ends. The grid's menu shows more items than its titles have
-letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
-reach it.
+When its result's filters change (added, removed, replaced, Keep Selected Rows), a Pivot is **out of date**: its caption
+shows "Out of date" with **Update** (in Tabs, on the row above its grid, plus a dot on its tab) and its strip says so.
+Sorting, or re-applying the same values, does not mark it.
+
+**Update** (also **Update Pivot** under Pivot Results… in the grid menu, and in the palette) rebuilds from the Pivot's own
+build settings (not unbuilt builder edits) over the result as now filtered, replacing it as Build Pivot does; **Cancel**
+shows on the caption meanwhile, and a failure leaves the old Pivot with the reason in the toolbar. It waits for the query
+and the result's sort or filter, and is not offered once the backend has stopped.
+
+**Automatic rebuild**, when the result stores at most 500,000 rows (stored, not filtered) and the last build took under
+250 ms: a filter change rebuilds at once ("Building again…" with Cancel).
+
+- Only a visible Pivot rebuilds (Tabs: its tab selected; Stacked: expanded; and the Results panel showing, which Messages
+  in its place, or a closed or hidden panel, prevents; Messages docked beside or popped out does not). Hidden ones keep
+  the mark and rebuild when shown; hiding one mid-rebuild stops it.
+- A newer filter change replaces a running rebuild. A failed or cancelled one leaves the mark, says why, and is not
+  retried until the filters change.
+- It does not select the Pivot's tab or clear a failed Build Pivot message of yours. Like Update, it resets the Pivot's
+  filters, selection and scroll, and the toolbar says so.
+- Never stops a rebuild you started; a running Copy of the Pivot holds it back.
+
+Update Pivot takes access key **U**; Pivot Results… has none (arrows and type-ahead reach it).
 
 ## Comparisons
 
-**Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results toolbar's
-**Compare**, which a narrow window hides) opens the Compare popover: under the toolbar's Compare when that opened it, else
-at the top right of that result's grid. The grid it was opened on is the new side (+), and the result picked is the old
-side (−). **Swap old and new** turns them round, and the comparison is always named old → new ("Differences: Result 1 →
-Result 3"). The popover offers the run's other results that have all their rows and share at least one column with it;
-Pivots, comparisons and plan sets are never offered, and the backend refuses them too. With one such result there is no
-list, only the two sides; with several, each row gives the result's rows, and an amber "2 of 3 columns" when a column of
-either result does not pair (a pair counts once). It first picks what you last chose on that result in this query tab (the result compared with and which
-way round), in this run or an earlier one, while that result is offered; otherwise the nearest earlier result, which is
-what **Compare with Previous Result** compares at once. Exact text keeps your last choice in the tab. Only a choice is
-remembered (a pick, a swap, Exact text or Compare), not merely opening the popover; closing the tab forgets it.
+**Compare…** (grid menu; **Compare Results…** in the palette, not offered while Results is hidden; toolbar **Compare**,
+hidden when narrow) opens the Compare popover under the toolbar button or at the grid's top right. That grid is new (+),
+the picked result old (−); **Swap old and new** turns them. Names read old → new ("Differences: Result 1 → Result 3").
 
-Columns pair by name, ignoring case, and by both holding text or both binary data, a repeated name in order; there is no
-manual mapping. The popover lists the columns left out only when there are any, with both types when a column of the same
-name holds the other kind of data, and the comparison's strip names them too. **Exact text** compares case and trailing
-spaces. A comparison reads the stored results, so the inputs' sorts and filters are not applied: the popover warns while
-either input is sorted or filtered, and the strip says so.
+- Offered: the run's other results with all their rows and a shared column (never Pivots, comparisons or plan sets; the
+  backend refuses them too). One candidate shows no list; several show each one's rows and an amber "2 of 3 columns"
+  when a column does not pair.
+- First pick: your last choice on that result in this tab (partner and direction), else the nearest earlier result, which
+  **Compare with Previous Result** compares at once. Exact text keeps your last choice. Only choices are remembered;
+  closing the tab forgets them.
+- Columns pair by name (case-insensitive), both text or both binary, repeats in order; no manual mapping. Left-out columns
+  are listed (with both types when the kind differs) and named on the strip.
+- **Exact text** compares case and trailing spaces.
+- Stored results are compared, ignoring the inputs' sorts and filters; the popover warns and the strip says so.
 
-**Compare** (or Enter) starts it, and the popover closes once the comparison is there and the comparison takes the
-focus. If you close the popover meanwhile, or move it to another pair, the comparison is only added and the focus stays
-where it is; with the command palette open over it, it stays and offers Show It. While it runs the popover offers
-**Cancel**, and a failure is said there. Asking for a comparison the run already has (the same two results, the same way
-round, the same Exact text choice) shows that one (**Show It**), and asking again while it runs does nothing.
-Comparisons of other pairs run at the same time, at most four at once in a window together with Pivot builds (the rest
-wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails. A comparison
-still running when the popover closes goes on, and a failure is then said in the results toolbar. A run keeps at most
-1,000 results, comparisons and Pivots included (counting those still being built), so a comparison that would pass that
-is refused with a sentence saying so.
+**Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed
+the popover or switched pair meanwhile; with the palette over it, it stays and offers Show It). **Cancel** shows while it
+runs; failures show in the popover, or the toolbar once it has closed. An existing identical comparison is shown (**Show
+It**). Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
+A run keeps at most 1,000 results, comparisons and Pivots (including those building); past that it is refused.
 
-Escape, **Close** or the popover's close button close it and give the focus back to what opened it; the toolbar's
-**Compare** closes it too, and so does a press outside it or in another window, or a key that moves the focus elsewhere
-(F6, F8). While the Results panel is hidden, Compare Results… is not offered. It also closes when the query runs again, when its result closes, with the results
-themselves, when the results pane is hidden or another document is shown, and when its pane pops out or docks back. A
-result picked that closes leaves it with nothing picked.
+The popover closes, returning focus to its opener, on Escape, **Close**, the toolbar's Compare, a press outside or in
+another window, a focus key (F6, F8), a re-run, its result or the results closing, the pane hiding or popping out or
+docking, or another document showing. A picked result that closes leaves nothing picked.
 
-A comparison's strip starts with its two inputs: each is a link to that result's grid while that exact result is open.
-Once one is closed it reads "Result 1 (closed)": the comparison copied what it compared, so it stays.
+A comparison's strip links its two inputs while open; a closed one reads "Result 1 (closed)".
 
 ## Tabs
 
-The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
-Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
-groups one at a time instead of stacked. Tabs is the default; turn it off
-for Stacked. When the results toolbar does not fit its pane, Tabs is the first tool to give way (see
-[Narrow and short panes](#narrow-and-short-panes)); the toolbar's ⋯, the palette and the Window menu still switch the layout.
+The toolbar's **Tabs** (palette **Show Results as Tabs**, Window › Results as Tabs, Tools › Options › Query Results ›
+SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows one group at a time. Default on; off is
+Stacked. It is the first toolbar tool to fold ([Narrow and short panes](#narrow-and-short-panes)).
 
 ![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
 
 ![The same in the Light theme](images/results-tabs-light.png)
 
-- A row of tabs, one per result ("Result 2") and one per comparison after them, then the selected result's view tabs:
-  **Table** (**Plan set** for a SQL-returned plan set) and, once one is built, **Pivot**, with the view's rows, columns,
-  batch, filters and Save Results As beside them. A comparison has no view tabs.
-- One grid is mounted: the selected view's. Switching unmounts the other and releases nothing, so each grid comes back
-  with its scroll, column widths, selection, orientation, sort and filters.
-- The selection is the grid you last used, so the toolbar, the menus, Column Profile and the pivot builder act on the view
-  shown. A result's tab returns to the view it showed last, and a Pivot built for the selected result, or a new
-  comparison, is shown at once (a Pivot stays behind its tab when you went back to a grid while it was built). Switching
-  between Stacked and Tabs keeps the focus on the grid of the view you were in.
-- While a query runs the first result stays selected as the others arrive; a tab you pick stays picked. After a re-run
-  the result of the same number is selected again.
-- Find Next onto a match in another result or view selects that tab and view, then reveals the match. From a grid (F3),
-  the grid shown takes the focus and the match becomes its active cell.
-- Each tab has a close button: a result's closes its Table and Pivot (its tooltip says so), a Pivot's or a comparison's
-  that view alone. Closing the selected view selects its result's Table (after a Pivot), else the next tab, else the
-  previous one, in the view that result showed last, and the focus goes to that tab; with nothing left, to the Results tab. Closing is unavailable while the
-  query runs.
-- The arrow keys, Home and End move along a row of tabs and select as they go; each row is one Tab stop.
-- There is no scroll bar around the grid. The Messages strip opens by itself when the pane fits the two rows of tabs, the
-  grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
-- When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
-  view whenever the selection changes and fades the edge that hides tabs.
-- When some tabs are out of view, a button at the end of the row counts them ("+12") and opens the overflow picker: a
-  themed list of every result, each Pivot indented under its result, and the comparisons, with a filter box that keeps
-  the focus. Type words of a name ("27", "pivot 3"; every word must match), move with Up, Down, Page Up and Page Down,
-  and press Enter or click a row to show it; its tab takes the focus, scrolled into view. Escape gives the focus back to
-  the button, or to where Go to Result… was run from; a press outside or the focus leaving closes it. Results arriving
-  or closing while it is open keep the row you moved to. It opens at the view shown, which it marks, and a Pivot
-  that is out of date says so. The list draws only the rows in view, so a run of 1,000 results costs a screenful of rows
-  (the row of tabs itself draws at most 64 around the selected one). **Go to Result…** (Ctrl+Shift+O, ⇧⌘O on macOS;
-  command palette, Window menu) opens it from anywhere, even when every tab fits.
-- **Next Result** and **Previous Result** (Ctrl+Alt+Page Down and Up from anywhere; also Ctrl+Page Down and Up in the
-  Results pane, on Windows and Linux) select the next or previous result or comparison, wrapping round; a result shows
-  the view it showed last. **Go to Result 1** to **8** and **Go to Last Result** (Ctrl+1 to Ctrl+9, ⌘ on macOS, in the
-  Results pane) pick one as a browser's keys pick a tab. "In the Results pane" means the focus is in it or in the
-  overflow picker and the query has two or more results or comparisons; otherwise, Messages (its strip in the Results pane too) and the plan included, the
-  same keys pick query tabs (Go to Query 1 to 8, Go to Last Query) and Ctrl+Page Down and Up step through queries. A
-  Results pane that is closed, hidden by Toggle Results Pane (Ctrl+R) or behind another output pane comes forward for
-  these commands and Go to Result…; one in a popout window has its tab selected there (Go to Result… also brings that window forward), and Stacked still scrolls to the result.
-  **Next Result View** and **Previous Result View** (Ctrl+Alt+Shift+Page Down and Up, outside the editor's text and other
-  text boxes, where Monaco's column selection keeps them) switch between the selected result's Table and Pivot. They work
-  from a grid, whose focus moves to the grid shown, from a focused tab, whose focus follows, and from the editor, which
-  keeps it. In Stacked, Next and Previous Result and Go to Result N scroll the stack to the result (opening it when
-  collapsed) and, from a grid, focus its grid; the view commands and the picker are for Tabs.
-- In a short results pane the Tabs layout folds its rows so the grid keeps room for its header and two rows: first the
-  result tabs and the selected view's tabs, chips and buttons share one row (the row and column counts are left to the
-  status line), then, in the shortest pane (the results pane dragged to its minimum, say), the grid shows alone, as
-  Stacked's one result gives up its caption. The keys above and Go to Result… still reach every view.
-- Peek's rows are never drawn as tabs.
+- A tab row of results then comparisons, then the selected result's view tabs (**Table**, or **Plan set**, and **Pivot**
+  once built) with rows, columns, batch, filters and Save Results As beside them.
+- Only the shown grid is mounted; each returns with its scroll, widths, selection, orientation, sort and filters. The
+  shown view is the current grid; a result's tab returns to its last view; new Pivots and comparisons show at once.
+- While running, the first result stays selected unless you pick one; after a re-run the same number is selected.
+- Find Next onto another view selects it; from a grid (F3) that grid takes focus with the match active.
+- Tab close buttons work as caption ones; closing the selected view selects and focuses its Table (after a Pivot), else
+  the next tab, else the previous (or the Results tab).
+- Arrow keys, Home and End move and select; each row is one Tab stop. No scroll bar wraps the grid; the Messages strip
+  opens itself when both tab rows, the grid's minimum height (or a small finished result's) and the strip fit.
+- An overfull row scrolls sideways (wheel too), keeps the selection in view and fades the hiding edge.
+- In a short pane rows fold so the grid keeps its header and two rows: first everything shares one row (counts move to the
+  status line), then in the shortest pane the grid shows alone.
+- Peek's rows are never tabs.
+
+**Overflow picker.** With tabs hidden, a "+12" button at the row's end opens a themed list of every result (Pivots
+indented) and comparison, with a filter box that keeps focus: type words ("27", "pivot 3"; all must match), Up, Down,
+Page Up, Page Down, Enter or click to show (its tab takes focus). Escape returns focus to the button or where Go to
+Result… was run; clicking outside or leaving closes it. It opens at and marks the shown view, flags out-of-date Pivots,
+and keeps your row as results change. It draws only visible rows (the tab row draws at most 64). **Go to Result…**
+(Ctrl+Shift+O, ⇧⌘O on macOS; palette, Window menu) opens it anywhere.
 
 ![The overflow picker over 30 results in the Dark theme](images/results-picker-dark.png)
 
 ![The same in the Light theme](images/results-picker-light.png)
 
-A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
-and closing it removes that plan from the Execution plan pane. Pivot, Compare and Transpose are unavailable for it.
+| Command | Keys | Notes |
+| --- | --- | --- |
+| Next / Previous Result | Ctrl+Alt+Page Down / Up anywhere; Ctrl+Page Down / Up in the Results pane (Windows, Linux) | Wraps; shows the result's last view. |
+| Go to Result 1 to 8, Go to Last Result | Ctrl+1 to Ctrl+9 (⌘ on macOS) in the Results pane | Places in the tab row, whatever the names. |
+| Next / Previous Result View | Ctrl+Alt+Shift+Page Down / Up | Table ↔ Pivot; not in text boxes (Monaco's column selection keeps them). Focus moves to the grid from a grid, follows from a tab, stays in the editor. |
 
-The Results tab's badge counts the query's own results, not their Pivots or comparisons.
-
-After a re-run the results come back in the same order under the same names, and the result whose grid was last used
-is the one commands act on again. Pivots and comparisons are not rebuilt.
+"In the Results pane" means focus there or in the picker, with two or more results or comparisons; otherwise (Messages
+and the plan included) the keys pick query tabs (Go to Query 1 to 8, Go to Last Query, Ctrl+Page Down/Up). A Results pane
+closed, hidden by Toggle Results Pane (Ctrl+R) or behind another output pane comes forward for these commands; in a popout
+its tab is selected (Go to Result… also raises the window). In Stacked, result commands scroll to and expand the result
+(and focus its grid from a grid); view commands and the picker are Tabs-only.
 
 ## Where a result's name shows
 
-Named results (the marker rules are at the top of this page) read as follows.
-
-A named result shows its name wherever the results pane says "Result 2" for an unnamed one, and keeps its number
-beside it where two results of one name must be told apart. An unnamed result reads exactly as before, and naming one
-result never renumbers another.
+A [named result](#named-results) shows its name wherever an unnamed one says "Result 2", keeping the number where needed.
 
 | Surface | A named result |
 | --- | --- |
-| Result tab (Tabs) | The name, with "Result 2" first among the selected result's facts beside its view tabs. Its tooltip has the whole name and the number ("Open orders · Result 2"); its accessible name and its close button's carry the number ("Open orders, Result 2", "Close Open orders, Result 2"). |
-| Caption (Stacked) | The name, with "Result 2" first among its facts; the tooltip has the whole name and the number, and the caption's toggle, filters, Save and Close buttons are named with the number, as a tab is. |
-| View tabs | Table and Pivot, as before; their accessible names use the name ("Views of Open orders", and the Pivot's title, "Pivot of Open orders"). |
-| Pivot | "Pivot of Open orders", in its title, the builder's source, "Out of date" and Update's tooltip ("Build Pivot of Open orders again from Open orders as it is filtered now"). |
-| Comparison | "Differences: Open orders → Result 3", its strip's links and the columns not compared ("Price (Open orders)"); a closed source reads "Open orders (closed)". |
-| Compare popover | Each result by its name, with "Result 2" beside it; the two sides read "Open orders · Result 2". |
-| Go to Result and the overflow picker | The name with "Result 2" beside it in lighter text (accessible name "Open orders, Result 2, Table"); the filter matches either ("open", "result 2"). |
-| Grid | Its accessible name starts "Open orders, Result 2 of 5, …", so a screen reader still hears the number. |
-| Column Profile, splitter, plans | The name with its number in place of "Result 2" ("Resize Open orders, Result 2", "Open orders, Result 2, plan 1"). |
-| Memory details | The query tab, then the name and number ("Query 3 · Open orders · Result 2"); a narrow panel cuts the query tab's part first. |
+| Result tab | The name, "Result 2" first among the facts beside its view tabs; tooltip "Open orders · Result 2"; accessible names "Open orders, Result 2", "Close Open orders, Result 2". |
+| Caption (Stacked) | As a tab; buttons named with the number. |
+| View tabs | "Views of Open orders", "Pivot of Open orders". |
+| Pivot | "Pivot of Open orders" in title, builder, "Out of date" and Update's tooltip ("Build Pivot of Open orders again from Open orders as it is filtered now"). |
+| Comparison | "Differences: Open orders → Result 3", strip links, columns not compared ("Price (Open orders)"); closed: "Open orders (closed)". |
+| Compare popover | Name with "Result 2"; sides "Open orders · Result 2". |
+| Go to Result, picker | Name with "Result 2" lighter ("Open orders, Result 2, Table"); filter matches either. |
+| Grid | Accessible name "Open orders, Result 2 of 5, …". |
+| Column Profile, splitter, plans | "Resize Open orders, Result 2", "Open orders, Result 2, plan 1". |
+| Memory details | "Query 3 · Open orders · Result 2"; narrow panels cut the query part first. |
 
-- A long name ends in an ellipsis: a tab that shows a name the query gave (a named result's, or a Pivot's or
-  comparison's made from one) is at most `--varia-resultTab` wide (docs/themes/metrics.md), and such a caption's name
-  gives way before its facts. The whole name stays in the tooltip and the accessible name. Tabs and captions of unnamed
-  results are as wide as their words, as before.
-- Two results of one name keep it: nothing is renamed in the pane, and lists, tooltips and accessible names carry each
-  one's number ("Totals · Result 2" and "Totals · Result 5"). What is named after one of them adds its number in
-  parentheses: "Pivot of Totals (Result 5)", "Differences: Totals (Result 2) → Orders", the comparison's links and the
-  Compare popover's heading and sentences.
-- **Go to Result 1** to **8** count places in the row of tabs, whatever the results are called.
-- A Pivot's or a comparison's title is fixed when it is made, from its result's name then.
-- Save Results As suggests a file named after it (below).
-- The query a first launch opens names its result ("Sample Query"), so the first run shows a name. A session that hot
-  exit kept with the earlier text keeps it; that text is still treated as the untouched welcome query.
+- Tabs showing a query-given name (or a Pivot or comparison made from one) are at most `--varia-resultTab` wide
+  (docs/themes/metrics.md) with an ellipsis; such a caption's name gives way before its facts. Tooltips keep the whole name.
+- Two results of one name keep it, with numbers in lists, tooltips and accessible names ("Totals · Result 2"); things named
+  after one add the number: "Pivot of Totals (Result 5)", "Differences: Totals (Result 2) → Orders".
+- A Pivot's or comparison's title is fixed when made.
+- The first-launch query names its result ("Sample Query"); a hot-exit session with the earlier text keeps it, still
+  treated as the untouched welcome query.
 
 ## Save Results As names
 
-Save Results As suggests a file named after the query tab and the view saved, and a copy's strip in the toolbar names
-the view the same way ("Copying Pivot of Result 2… 40%"):
+Suggested file names (a copy's strip names the view the same way, "Copying Pivot of Result 2… 40%"):
 
 | Saved | Suggested file name |
 | --- | --- |
 | A result | `SQLQuery1-Result2.csv`; a named one `SQLQuery1-Open orders.csv` |
 | Its Pivot | `SQLQuery1-Result2-Pivot.csv`, `SQLQuery1-Open orders-Pivot.csv` |
 | Drawn transposed | `-Transposed` after it: `SQLQuery1-Result2-Transposed.csv` |
-| A comparison | `SQLQuery1-Differences1.csv`, numbered in the order the run's comparisons were made (a closed one keeps its number) |
+| A comparison | `SQLQuery1-Differences1.csv`, numbered in the order made (a closed one keeps its number) |
 
-- A name keeps its number beside it when the name alone would not tell the file apart: another result of the run has a
-  name that makes the same file name (case aside, as Windows and macOS compare file names: "Totals" and "totals" save as
-  `SQLQuery1-Totals-Result1` and `SQLQuery1-totals-Result3`), the name is what another result's file is called anyway
-  (a result named "Result2" beside an unnamed Result 2, "Totals-Pivot" beside the Pivot of "Totals"), or the name was cut.
-- A name takes at most 64 characters of the file name; a longer one is cut there and numbered. Characters no file name
-  may hold (`\ / : * ? " < > |`) become `_`, and trailing dots go; a name of nothing else is named by its number instead.
-- The whole stays within what Windows, Linux and macOS allow (128 characters, and 240 bytes with the extension): a long
-  query tab name gives way first, then the result's name, never the part that tells results apart (`-Result2-Pivot`).
+- A name keeps its number when it would clash: with another result's name, case-insensitively ("Totals", "totals" →
+  `SQLQuery1-Totals-Result1`, `SQLQuery1-totals-Result3`); with another file name ("Result2" beside an unnamed Result 2,
+  "Totals-Pivot" beside the Pivot of "Totals"); or when cut.
+- Names take at most 64 characters; `\ / : * ? " < > |` become `_`, trailing dots go, and an empty result uses the number.
+- The whole stays within 128 characters and 240 bytes with extension: the query tab name gives way first, then the
+  result's name, never the distinguishing part (`-Result2-Pivot`).
 
 ## Narrow and short panes
 
-The results toolbar fits its own pane, so the Results panel docked beside the editor or popped out into a window of its
-own folds as a narrow window does. When its tools do not fit, they give way in order: **Tabs**; then the groups
-tighten (their icons go, and the search box's magnifier and its Previous and Next, while Enter, Shift+Enter, F3 and
-Shift+F3 still step); then **Transposed**, **Headers** and **Compare**; **Sort text by**; **White space**; and last the
-Profile, Row size and Pivot group. The search box keeps its whole placeholder ("Search all results", or "Search column
-names" while it searches column names): the groups fold instead, and only once all of them have folded does the field
-narrow, so **⋯** and **Close Results** stay in view. In a short pane the Pivot builder drops
-its explanations (such as "Building again replaces…") so **Build Pivot** stays whole. **⋯** (More results tools) at the
-toolbar's end, with **Close Results**, shows in any Results pane at least about 400 px wide and holds every tool: Results as Tabs, Go to Result…, Pivot…,
-Compare…, Transposed, Choose Headers… (while the grid is transposed), Column Profile, Row Size, Show Spaces and Tabs,
+The toolbar fits its own pane, so a docked or popped-out Results panel folds like a narrow window. Tools give way in
+order: **Tabs**; group icons and the search box's magnifier, Previous and Next (Enter, Shift+Enter, F3, Shift+F3 still
+step); **Transposed**, **Headers**, **Compare**; **Sort text by**; **White space**; the Profile, Row size and Pivot group.
+The search field keeps its placeholder ("Search all results" or "Search column names") and narrows last, so **⋯** and
+**Close Results** stay visible. A short pane's Pivot builder drops its explanations so **Build Pivot** stays whole.
+
+**⋯** (More results tools) shows in Results panes at least about 400 px wide and holds every tool: Results as Tabs, Go to
+Result…, Pivot…, Compare…, Transposed, Choose Headers… (while transposed), Column Profile, Row Size, Show Spaces and Tabs,
 Show All White Space, Sort Text by Characters or Bytes, and Close Results.
 
-A long name gives way in every place a narrow pane shows it: a result tab stops at its widest and ends in an ellipsis,
-a caption's name gives way before its facts, and Go to Result… cuts a row's name inside the list. In a short pane the
-rows of tabs fold into one row, then away, so the grid keeps its header and two rows, and the toolbar stays one row.
-A popped-out Results panel shows the same names, tooltips and accessible names as the main window.
+Long names end in ellipses in tabs, captions and Go to Result…; popouts show the same names as the main window.
 
 ## Peek's rows
 
-Peek's top rows are drawn bare: the grid alone, with no caption, close button, results toolbar or side panels. (A
-caption appears while the grid has a filter, so the filter can be removed; when the last filter goes, focus moves to
-the grid.) Copy, Save Results As, sorting, filters,
-Keep Selected Rows and Transpose work as in query output; Pivot, Compare, Close Just This Result and Close Results are
-not offered for a Peek grid.
-
-The column commands are available to keyboard users through the grid's context menu and can be assigned shortcuts in
-Tools > Options > Environment > Shortcuts.
+Drawn bare: the grid alone (a caption appears while it has a filter; when the last goes, focus moves to the grid). Copy,
+Save Results As, sorting, filters, Keep Selected Rows and Transpose work; Pivot, Compare, Close Just This Result and Close
+Results are not offered.
 
 ## Transposed
 
-Transposed is a way a grid is drawn, not a result: its columns as rows, named in a frozen first column, and its rows as
-columns. The view keeps it with its scroll position, widths and selection, so it survives tab switches and collapsing.
-Nothing is stored, so it follows the grid's sort and filters and is available while rows arrive.
+A way of drawing a grid: columns as rows, named in a frozen first column. The view keeps it with scroll, widths and
+selection. Nothing is stored, so it follows sort and filters and works while rows arrive.
 
 | Command | What it does |
 | --- | --- |
-| Transpose Results (`output.transpose`) | Turns the grid transposed, or back. The toolbar's Transposed button and the grid menu's Transpose › Transposed show which it is. |
-| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until its chip is removed (beside the view tabs, or on the caption when stacked). |
-| Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value for its row, and turns the grid. From a menu it is the column under the pointer; otherwise the active cell's. |
-| Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, starting on the current choice. The toolbar's Headers button opens it below itself. |
+| Transpose Results (`output.transpose`) | Toggles. The toolbar's Transposed button and the grid menu's Transpose › Transposed show the state. |
+| Transpose Selected Rows (`output.transposeSelectedRows`) | Keep Selected Rows, then transposes. If the filter refuses (more than 4,095 rows or 256 ranges), fails or is replaced first, nothing changes. The filter stays until its chip is removed. |
+| Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value, and transposes: the column under the pointer from a menu, else the active cell's. |
+| Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, on the current choice. The toolbar's Headers button opens it. |
 
-They act on the menu's grid, else the focused one, else the grid that last had the focus in the query. A query's result
-and a pivot can be transposed; a comparison and a plan set cannot. A Peek card's grid can, from its menu.
+They act on the menu's grid, else the focused one, else the query's last-focused. Results, pivots and Peek grids can be
+transposed; comparisons and plan sets cannot.
 
-- A header value is written as a pivot names a column group: `NULL`, `(blank)`, cut at 128 characters. Until its rows
-  are read a header reads "Row N". The header column is still drawn as a row, and is remembered while the grid is a table.
-- The first 4,095 rows are drawn as columns. With more, the strip under the grid says "Showing the first 4,095 of N rows
-  as columns" and suggests filtering. Find Next onto a match in a later row says so in the toolbar and does not move.
-- Sort, Filter, Copy Column Name and Open Value on a transposed cell or name act on the result's own column and row.
-  Fit Column fits the drawn column under the pointer (one row of the result); on a name it fits the name column.
-- Copy and Save Results As write the grid as drawn (below).
+- Header values read as pivot column groups: `NULL`, `(blank)`, cut at 128 characters; "Row N" until read. The header
+  column is still drawn as a row.
+- The first 4,095 rows are drawn. With more, the strip says "Showing the first 4,095 of N rows as columns"; Find Next onto
+  a later row says so and does not move.
+- Sort, Filter, Copy Column Name and Open Value act on the result's own column and row. Fit Column fits the drawn column
+  under the pointer, or the name column.
 
 ## Copying and saving a transposed view
 
-A results grid drawn transposed (its columns as rows) copies and saves what it shows; nothing is stored for it.
-
-- Each line is one of the result's columns and each value on it one row, in the grid's current sort and filters. A block
-  selected in the transposed grid copies as that block.
-- With headers (**Copy with Headers**, or a save with the header option on) the first line reads `Column`, `Row 1`,
-  `Row 2`… and each line starts with its column's name. When a column is used as headers, its values name the rows
-  instead, as the grid's headers show them (`NULL`, `(blank)`, binary as hex, at most 128 characters); a repeated value
-  gets `_2`, `_3`… so every field has its own name. That column is still written as a line.
-- A JSON save is one object per column, with every value as text and NULL as `null`.
-- The first 4,095 rows of the view are written, the ones the transposed grid draws. When rows are left out, the toolbar
-  says how many; filter the results to copy or save others.
+- Each line is one result column, values in the current sort and filters; a selected block copies as that block.
+- With headers, the first line is `Column`, `Row 1`, `Row 2`… and each line starts with its column name. A header column's
+  values name the rows as shown (`NULL`, `(blank)`, binary as hex, at most 128 characters; repeats get `_2`, `_3`…), and
+  it is still written as a line.
+- JSON: one object per column, values as text, NULL as `null`.
+- The first 4,095 rows are written; the toolbar says how many were left out.
 
 ## Discard results after execution
 
-With **Discard results after execution** on (Tools › Options › Query Results › SQL Server › Results to Grid), every query
-reads its rows and keeps none. While it is on, the status bar shows **Results discarded**; pressing it opens Options with
-the setting focused. A run that read result sets and kept none shows a notice where its grid would be, saying how many
-sets were read, with **Turn off Discard results**. Once the setting is off the notice offers **Execute again**, so the
-next run keeps its rows; turned off from the notice, focus moves to Execute again, and turned off from Options opened by
-the status bar item, focus goes to the active document. While the run is still going the notice says rows are not being
-kept. A run that also kept an execution plan opens the Execution plan view as before, with the notice on its Results tab,
-which screen readers name "Results, not kept"; the run's completion announcement says how many sets were read and not
-kept. Select Top 1000 Rows from Object Explorer runs the same way. Runs made with the setting off show none of this, even
-when sets past the result-set limit were not kept, and results you close say they were closed.
+**Discard results after execution** (Tools › Options › Query Results › SQL Server › Results to Grid) reads rows and keeps
+none. The status bar's **Results discarded** opens Options at the setting.
+
+- A run that kept nothing shows how many sets were read, with **Turn off Discard results**; once off, **Execute again**
+  (focused when turned off from the notice; from Options via the status bar, focus goes to the active document).
+- While running, the notice says rows are not being kept.
+- With a plan, the Execution plan view opens as usual with the notice on its Results tab ("Results, not kept"); the
+  completion announcement gives the counts.
+- Select Top 1000 Rows from Object Explorer behaves the same.
+- With the setting off none of this shows, even for sets past the result-set limit.
 
 ![The Results view after a discarded run in the dark theme: Results were not kept, with Turn off Discard results, and Results discarded in the status bar](images/results-discarded-dark.png)
 
@@ -377,10 +305,8 @@ when sets past the result-set limit were not kept, and results you close say the
 
 ## Error source navigation
 
-SQL errors with a location in the submitted query have a **Go to line** button in Messages. Activate it from the keyboard,
-or double-click the error, to focus that query and reveal its line. Selection offsets and `GO` batch offsets are included.
-Editing the query disables the old location; re-executing replaces it. Copying Messages includes only their text.
-
-Procedure-relative errors and batches that can execute nested SQL have no source link: SQL Server can report a line in
-the nested scope rather than the query's text. Errors without a source location, cancellation and connection failures
-remain ordinary messages.
+Errors with a location in the submitted query have **Go to line** in Messages (keyboard, or double-click the error), which
+focuses the query at that line, allowing for selection and `GO` batch offsets. Editing disables the old location;
+re-executing replaces it. Copying Messages copies only text. Procedure-relative errors and batches that can run nested
+SQL have no link (SQL Server may report a nested line); errors without a location, cancellation and connection failures
+stay plain messages.

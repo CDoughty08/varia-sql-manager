@@ -4,29 +4,28 @@ Varia SQL Manager updates itself from this repository's [GitHub releases](https:
 Main does all of it (`src/main/updater.ts`, `src/main/update-install.ts`, `src/main/update-staging.ts`); the page only
 shows the state main pushes (`UpdateState` in `src/shared/updates.ts`) and runs the Help commands.
 
-**Help > Release Notes** reads bundled, curated notes inside Varia. A notification's **Release notes** action requests
-that notification's exact version; if its notes are not bundled, the reader says so and offers installed-version notes.
-**Open Release Downloads** separately opens the fixed GitHub releases page for manual installation and error remedies.
-Missing notes never block an update. See [Release Notes](release-notes.md).
+**Help > Release Notes** reads bundled, curated notes. A notification's **Release notes** action asks for that exact
+version; if its notes are not bundled, the reader says so and offers the installed version's. **Open Release Downloads**
+opens the fixed GitHub releases page for manual installation. Missing notes never block an update. See
+[Release Notes](release-notes.md).
 
 ## How a release is found
 
 Every release carries `varia-update-v2.json`, written by the release job (`scripts/update-manifest.mjs`): the version and,
-for each packaged file, its kind, architecture, size and SHA-512. Varia reads it from
+per packaged file, its kind, architecture, size and SHA-512. Varia reads it from
 `https://github.com/CDoughty08/varia-sql-manager/releases/latest/download/varia-update-v2.json`, which skips pre-releases and
-drafts. That link is not the REST API, so many people behind one corporate address do not share the API's rate limit.
+drafts and is not subject to the REST API's per-address rate limit.
 
-Builds up to 0.7.0 read `varia-update.json` and refuse a manifest with a kind of file or a field they do not know. The
-release job therefore still writes that file in its first shape (schema 1, without the Windows archive), and it must keep
-doing so for as long as those builds are to update. The current manifest is read tolerantly: fields a build does not
-know, and files it cannot use (a kind or architecture it does not know, a name or size outside its bounds), are left
-out, so nothing a release adds for one build stops another from updating, and adding a kind needs no third file. What
-is kept is still fully checked. `scripts/update-manifest.mjs` refuses to write a manifest with a file outside the
-bounds, so such a release fails in the packaging job.
+- Builds up to 0.7.0 read `varia-update.json` and refuse unknown kinds or fields, so the release job must keep writing
+  that file in its first shape (schema 1, without the Windows archive) for as long as those builds are to update.
+- The current manifest is read tolerantly: unknown fields, and files a build cannot use (unknown kind or architecture, a
+  name or size out of bounds), are skipped, so adding a kind needs no third file. What is kept is fully checked.
+  `scripts/update-manifest.mjs` refuses to write a file outside the bounds, failing the packaging job.
 
-Checks run 15 seconds after start-up and every four hours (30 minutes after a failed check), unless **Environment › Product
-Updates › Automatically check for updates** is off. **Help › Check for Updates** checks at any time. A newer release
-downloads at once unless **Automatically download updates** is off; then the status bar and **Help › Download Update** offer it.
+Checks run 15 seconds after start-up and every four hours (30 minutes after a failed check), unless **Environment ›
+Product Updates › Automatically check for updates** is off. **Help › Check for Updates** checks at any time. A newer
+release downloads at once unless **Automatically download updates** is off; then the status bar and **Help › Download
+Update** offer it.
 
 ## What each build does
 
@@ -38,108 +37,104 @@ downloads at once unless **Automatically download updates** is off; then the sta
 | Linux AppImage | `APPIMAGE` | A hidden `.…AppImage.update` beside the AppImage | Replaces the AppImage (renamed to the new version when its name had the old one) and starts it. |
 | macOS, and anything else (an unpacked folder, a development run) | — | — | Not offered: the toast and the status bar point to the releases page. Development builds never check. |
 
-macOS builds are not code signed, so they do not update themselves: they check, say that a release exists, and open the
-releases page. Self-update on macOS returns with code signing.
+macOS builds are not code signed, so they only check, say a release exists and open the releases page.
 
-Nothing installs until **Restart to Update** (in the Help menu, the status bar or the toast). It closes Varia as File › Exit
-does, so queries with unsaved changes ask first; cancelling that keeps Varia running and installs nothing. The update
-installs only after the windows have closed and the SQL backend has stopped.
+Nothing installs until **Restart to Update** (Help menu, status bar or toast). It closes Varia as File › Exit does, so
+unsaved queries ask first and cancelling installs nothing. The update installs only after the windows have closed and
+the SQL backend has stopped.
 
 ## Staged updates on Windows
 
-Running the installer at restart means waiting, with nothing on screen, while it removes the old version and unpacks the
-new one. An installed copy whose folder the user can write (the installer's default, "only for me") does that work while
-Varia is still open instead:
+An installed copy whose folder the user can write (the installer's default, "only for me") prepares the update while
+Varia is still open, so the restart is two renames instead of a silent installer run.
 
-1. The release's archive (`Varia-SQL-Manager-<version>-win-x64.zip`: the packaged application, without the files
-   Setup adds) downloads and is verified like any other file. The status bar then shows **Preparing update…**, and
-   Check for Updates waits.
-2. The update helper (`resources/updater/Varia.Updater.exe`, built from `backend/Varia.Updater`) runs from the installation
-   at below-normal priority. It checks the archive's SHA-512 again with the file held open, unpacks it to
-   `<staging>/app`, refusing an entry that would land outside it or over another, copies in what Setup wrote and the
-   archive lacks (the uninstaller, its icon where there is one, and `resources/elevate.exe`), and writes `staged.json`
-   last. Only then is the update ready; the archive is deleted. Closing Varia meanwhile stops the helper and keeps the
-   archive for the next run. One stage runs at a time: a helper left unpacking by a Varia that was ended is not
-   unpacked over, and that run installs with Setup.
-3. Restart to Update copies the helper into the staging folder and starts it there, detached. Once Varia has exited it
+1. **Download.** The release archive (`Varia-SQL-Manager-<version>-win-x64.zip`: the packaged application without the
+   files Setup adds) downloads and is verified like any file. The status bar shows **Preparing update…** and Check for
+   Updates waits.
+2. **Stage.** The update helper (`resources/updater/Varia.Updater.exe`, from `backend/Varia.Updater`) runs from the
+   installation at below-normal priority. It re-checks the SHA-512 with the file held open, unpacks to `<staging>/app`
+   (refusing entries outside it or over another), copies in what Setup wrote and the archive lacks (the uninstaller, its
+   icon if any, `resources/elevate.exe`), and writes `staged.json` last; the archive is then deleted. Closing Varia stops
+   the helper and keeps the archive for next time. One stage runs at a time: a helper left unpacking by a Varia that was
+   ended is not unpacked over, and that run installs with Setup.
+3. **Swap.** Restart to Update copies the helper into the staging folder and starts it detached. Once Varia exits it
    renames the installation to `<staging>/old` and `<staging>/app` to the installation, starts Varia, updates the version
-   that Apps & features shows, and deletes the old folder. After Varia's own exit, the restart costs two renames. The
-   helper that swaps is the running version's, not the new release's; the uninstaller stays the one Setup last wrote.
+   Apps & features shows, and deletes the old folder. The swapping helper is the running version's; the uninstaller stays
+   the one Setup last wrote.
 
-The staging folder is `.<installation folder>.update` beside the installation: the same volume, so the renames are
-atomic, and a name that does not start with the installation's, so Setup's "is Varia running" check never takes the
-helper for the application. The helper works in no other folder (an installation at a drive's root has none and is not
-staged), and the folder is not made until a release is staged. Uninstalling removes it: Setup's uninstaller runs the
-installation's helper (`uninstall`) before it removes the application's files, and the helper removes the staging
-folder, and a recovery registered for it, when the folder is this user's alone. (The record in the profile stays with
-the rest of the profile, as an uninstall keeps that.)
+A release staged by an earlier run is reused when `staged.json` names the manifest's archive (version and SHA-512) and the
+application is there. Everything staging left is removed once the running version is the latest.
 
-That name can be guessed, and beside a custom installation (a shared `D:\Tools`) other people may be able to make
-folders. So the helper makes the staging folder for this user alone (its own access rules: the user, SYSTEM and
-Administrators, nothing inherited) and works only in a folder that is a real folder, owned by this user, with rules of
-its own; one that somebody else made first is refused, and the release installs with Setup. Main believes nothing in
-the folder by itself: whether a release is staged is the helper's answer (`check`), asked before Restart to Update is
-offered and again when it is chosen. One consequence: after a staged update the installation's files carry the staging
-folder's access rules, not the parent folder's, so only the user who installed it (and administrators) can read them.
+### The staging folder
 
-A folder cannot be renamed while one of its files is open. The helper waits up to 30 seconds for Varia to exit and tries
-the rename for up to 20 more. Half way through, if no Varia is running from the installation, it ends whatever else
-still is (a backend or SQL language service that was left behind), as Setup does; a copy of Varia the user started
-meanwhile, and its backend, are left alone. The second rename, and the move back when it fails, are each tried for
-5 seconds. If the release cannot be put in place, the helper puts the installation back, starts the old version unless
-it is already running, and writes `failed.json`.
+- `.<installation folder>.update` beside the installation: the same volume, so renames are atomic, and a name not
+  starting with the installation's, so Setup's "is Varia running" check ignores the helper. The helper works in no other
+  folder (an installation at a drive's root is not staged); the folder is made only when a release is staged.
+- Uninstalling runs the installation's helper (`uninstall`) before removing the application's files; it removes the
+  staging folder, and any registered recovery, when the folder is this user's alone. The profile's record stays with the
+  profile.
+- The name is guessable and others may be able to create folders beside a custom installation (a shared `D:\Tools`), so
+  the helper creates it for this user alone (the user, SYSTEM and Administrators, nothing inherited) and works only in a
+  real folder owned by this user with its own rules; one made by somebody else is refused and Setup installs. Whether a
+  release is staged is the helper's answer (`check`), asked before Restart to Update is offered and again when chosen.
+- After a staged update the installation's files carry the staging folder's access rules, so only the installing user
+  and administrators can read them.
 
-A release that could not be staged or swapped in is remembered until it (or a newer one) is running: every later start
-installs that release with Setup instead of staging it again. The helper's record is `<staging>/failed.json`; main's is
-`update-failed.json` in the profile, written when an archive cannot be unpacked (the same run then falls back to Setup
-without an error, and reuses that Setup in later runs), when a staged release is gone at Restart to Update, and, before
-the helper is started, for every swap. That last one is never taken back (the new version ignores a record that is not
-newer than itself), so a helper that cannot be started (Varia then starts again as it is) and one that is ended before
-it can say anything, by security software for instance, both leave the release to Setup instead of leaving it "ready"
-for a restart that fails the same way each time. The first start after a failed swap says so in the status bar
-(**Update failed**), once. `<staging>/update.log` has a line for each step and is kept with the record.
+### Timing and failures
 
-Between the two renames there is no installation. Before the first, the helper writes `<staging>/swap.json` (the
-installation's folder, the executable's name and the versions) and registers its copy in the staging folder under the
-user's `RunOnce` key as `Varia.Updater.exe recover`; both are removed when the swap ends with an installation in
-place, whichever version that is. If the helper is cut short in between (the power goes), the next sign-in runs it: it
-reads the journal beside itself and, from where the folders are, moves the staged release into place, or the old
-version back when the staged one is not whole, without starting Varia. An empty folder that something made where the
-installation was is removed first; one that holds anything is left, with both versions, for Setup to repair. A journal
-left after both renames only has the old version removed: the installation may be another version by then. When the
-running version is the latest, main has the helper end any recovery still registered (`forget`) before it removes the
-staging folder. The journal is flushed to disk, and the registry key too, before the first rename. A recovery that
-fails (a scanner holding the folder for more than 20 seconds) registers itself again, for five sign-ins at most. Should
-the swap's own move back fail as well, the journal and the registration are left for that sign-in. `RunOnce` runs at
-most 260 characters, so an installation whose path makes the command longer is not registered and has no such recovery.
+- The helper waits up to 30 seconds for Varia to exit and tries the rename for up to 20 more. Half way, if no Varia runs
+  from the installation, it ends what still does (a left-behind backend or SQL language service), as Setup does; a copy
+  the user started meanwhile is left alone. The second rename, and the move back when it fails, get 5 seconds each.
+- If the release cannot be put in place, the helper restores the installation, starts the old version unless it is
+  running, and writes `failed.json`.
+- A release that could not be staged or swapped is installed with Setup on every later start until it (or a newer one)
+  runs. Records: the helper's `<staging>/failed.json`, and main's `update-failed.json` in the profile, written when an
+  archive cannot be unpacked (that run falls back to Setup silently and reuses it later), when a staged release is gone
+  at Restart to Update, and before starting the helper for every swap. That last record is never withdrawn (the new
+  version ignores a record not newer than itself), so a helper that cannot start, or is ended by security software,
+  leaves the release to Setup instead of a restart that fails the same way each time.
+- The first start after a failed swap shows **Update failed** in the status bar once. `<staging>/update.log` has a line
+  per step and is kept with the record.
 
-Nothing in this path asks for elevation, which is why an installation the user cannot write keeps the installer. (Varia
-run as administrator can write a per-machine installation and stages it; a swap interrupted there is not recovered at
-sign-in, which is not elevated.) Everything staging left is removed once the running version is the latest. A release staged by an earlier run is used again when
-`staged.json` names the manifest's archive (its version and SHA-512) and the application is there.
+### Recovery between the renames
+
+Between the two renames there is no installation. Before the first, the helper writes `<staging>/swap.json` (installation
+folder, executable name, versions), flushed to disk, and registers its staging copy under the user's `RunOnce` key as
+`Varia.Updater.exe recover`; both are removed when the swap ends with any version in place.
+
+- If the helper is cut short (power loss), the next sign-in runs it: from where the folders are, it moves the staged
+  release into place, or the old version back when the staged one is not whole, without starting Varia. An empty folder
+  where the installation was is removed first; one holding anything is left, with both versions, for Setup to repair.
+- A journal left after both renames only removes the old version.
+- A failed recovery (a scanner holding the folder over 20 seconds) re-registers itself, for five sign-ins at most. If the
+  swap's own move back fails too, journal and registration are left for that sign-in.
+- When the running version is the latest, main has the helper drop any registered recovery (`forget`) before removing
+  the staging folder.
+- `RunOnce` runs at most 260 characters; a longer command is not registered and has no recovery.
+
+Nothing here asks for elevation, which is why an installation the user cannot write keeps the installer. Varia run as
+administrator can stage a per-machine installation, but an interrupted swap there is not recovered at (unelevated)
+sign-in.
 
 ## Integrity
 
-A download is written beside a hidden `.partial` name and hashed as it arrives. It is kept only when its size and SHA-512
-match the manifest; otherwise it is deleted and the failure says a proxy may have changed it. A file verified by an
-earlier run is hashed again and reused, and Restart to Update hashes the file once more before it arms it (a staged
-release: its marker and executable are looked for), since it is run from a folder other programs can write to. The
-manifest's file names are release names only, sizes are bounded (1 GiB), and the manifest itself is at most 64 KiB. An
-archive may unpack to at most 8 GiB and 200,000 files. The real feed must end on `https`.
-
-The checksums come from the same place as the files, over TLS that trusts the operating system's certificate store, and
-the builds are not code signed: the checks catch damage and substitution by anything that cannot also replace the
-manifest.
+- A download is written to a hidden `.partial` name and hashed as it arrives; it is kept only when its size and SHA-512
+  match the manifest, else deleted with a failure saying a proxy may have changed it.
+- A file verified by an earlier run is hashed again and reused, and Restart to Update hashes it once more before arming
+  it (for a staged release, its marker and executable are looked for), since its folder is writable by other programs.
+- Manifest file names are release names only; sizes are at most 1 GiB; the manifest at most 64 KiB. An archive may unpack
+  to at most 8 GiB and 200,000 files. The real feed must use `https`.
+- Checksums come from the same place as the files, over TLS trusting the OS certificate store, and builds are not code
+  signed: the checks catch damage and substitution by anything that cannot also replace the manifest.
 
 ## Networks
 
-Requests go through Chromium's network stack in a session of their own (no cookies or cache): the system proxy settings
-(PAC files included), Windows or Kerberos sign-in to proxies, and the operating system's certificate store, so networks that
-inspect HTTPS work once their certificate is installed. A network must allow `github.com` and
-`release-assets.githubusercontent.com` (older releases may redirect to `objects.githubusercontent.com`).
+Requests use Chromium's network stack in their own session (no cookies or cache): system proxy settings (PAC included),
+Windows or Kerberos proxy sign-in, and the OS certificate store, so HTTPS-inspecting networks work once their certificate
+is installed. Allow `github.com` and `release-assets.githubusercontent.com` (older releases may redirect to
+`objects.githubusercontent.com`).
 
-Failures are named for what can be done about them, with the remedy in the toast and Copy details giving Chromium's error
-or the HTTP status:
+Failures carry a remedy in the toast; Copy details gives Chromium's error or the HTTP status:
 
 | Code | Typical cause |
 | --- | --- |
@@ -155,23 +150,17 @@ or the HTTP status:
 | `disk`, `notWritable` | No space, or the portable executable's or AppImage's folder is read-only. |
 | `staged` | The last Restart to Update could not swap the staged release in; Varia is still the earlier version. |
 
-An automatic check that fails shows only in the status bar (**Update check failed**, with the reason in its tooltip; select
-it to try again), so a network that blocks GitHub does not raise a toast every few hours. A failure of Check for Updates, of
-a download or of an install is a toast with **Try again** and **Open releases page**.
+A failed automatic check shows only in the status bar (**Update check failed**, reason in the tooltip, select to retry),
+so a network blocking GitHub does not raise a toast every few hours. A failed Check for Updates, download or install is a
+toast with **Try again** and **Open releases page**.
 
 ## Testing
 
-`tests/updater.test.ts` drives the updater with streamed answers (progress, checksums, filter pages, proxy errors, stalls,
-the schedule) and a stand-in for staging (the archive route, its fallbacks to Setup and how long they last, a failed
-swap reported at the next start); `tests/update-install.test.ts` swaps real files in a temporary folder and checks how the helper is started and
-what main keeps of a failure;
-`tests/update-manifest.test.ts` checks the manifest script against the release job's file names, and the first manifest
-against the schema 0.7.0 shipped. The helper's file work (staging, the swap, recovery, its refusals, and on Windows whose
-staging folder it accepts) is the offline .NET suite `UpdaterChecks`; its process work (waiting for Varia, ending what
-it left running, the sign-in entry, the uninstall entry, starting Varia) has no automated check. `scripts/updates-smoke.mjs` runs the app against a loopback feed (`VARIA_TEST_UPDATE_FEED`, honoured only
-in unpackaged smoke runs, with `VARIA_TEST_UPDATE_KIND`), whose install writes `update-applied.json` in the profile instead
-of running anything. Release builds run the helper for real, though not through main and without
-starting the swapped application: `scripts/windows-installer-smoke.ps1` installs with Setup, has the installed helper
-refuse another folder, stage that build's archive and swap it in, compares every packaged file's size with the result,
-interrupts a second swap by hand and runs the recovery, then uninstalls with a release staged and checks that both the
-application and the staging folder are gone.
+| Check | Covers |
+| --- | --- |
+| `tests/updater.test.ts` | Streamed answers (progress, checksums, filter pages, proxy errors, stalls, the schedule) and a staging stand-in (archive route, fallbacks to Setup and their duration, a failed swap reported at next start). |
+| `tests/update-install.test.ts` | Real file swaps in a temporary folder, how the helper starts, what main keeps of a failure. |
+| `tests/update-manifest.test.ts` | The manifest script against the release job's file names, and the first manifest against the schema 0.7.0 shipped. |
+| .NET `UpdaterChecks` (offline) | The helper's file work: staging, swap, recovery, refusals, and on Windows which staging folders it accepts. Its process work (waiting for Varia, ending leftovers, the sign-in and uninstall entries, starting Varia) has no automated check. |
+| `scripts/updates-smoke.mjs` | The app against a loopback feed (`VARIA_TEST_UPDATE_FEED`, only in unpackaged smoke runs, with `VARIA_TEST_UPDATE_KIND`); its install writes `update-applied.json` in the profile instead. |
+| `scripts/windows-installer-smoke.ps1` | Release builds: installs with Setup, has the installed helper refuse another folder, stage the build's archive and swap it in, compares every packaged file's size, interrupts a second swap and runs recovery, then uninstalls with a release staged and checks the application and staging folder are gone. Not through main, and without starting the swapped app. |

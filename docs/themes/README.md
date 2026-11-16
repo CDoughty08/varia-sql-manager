@@ -131,16 +131,18 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 258 keys are listed in [`tokens.md`](tokens.md#color-keys-258) by area: title bar and menus, buttons and inputs,
+Every colour key is listed in [`tokens.md`](tokens.md) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
-dialogs, notifications, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
-(`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
-`charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
-"Other". `charts.red` is a status color for marks such as a failed execution, never a series' color. Series colors are checked at 3:1 and chart text at
-4.5:1 against the editor, panel, widget and tile backgrounds. Under Windows High Contrast and other forced colors, charts
-use the system colors and tell series apart by their dashes. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
-are reserved for upcoming features (the new Object Explorer and results grid): they resolve now and take
-effect when those features ship.
+dialogs, notifications, status pills, chips, live views and tiles, connection colors, and charts. Keys marked (VS Code)
+mean the same as in VS Code; the rest are Varia's own. Some keys are reserved for upcoming features: they resolve now and
+take effect when those features ship.
+
+The `charts.*` keys (VS Code's names) color live charts: labels and legends (`charts.foreground`), grid lines
+(`charts.lines`), series (`charts.blue`, `charts.orange`, `charts.green`, `charts.yellow`, `charts.purple` in that order,
+the `chart1` to `chart5` slots) and a stacked chart's "Other" (`charts.gray`). `charts.red` is a status color (a failed
+execution, say), never a series color. Series colors are checked at 3:1 and chart text at 4.5:1 against the editor,
+panel, widget and tile backgrounds. Under Windows High Contrast and other forced colors, charts use system colors and
+tell series apart by dashes.
 
 A key that is not in the registry is ignored with a warning. Near misses get a "did you mean" suggestion, and a pasted
 block of VS Code keys gets one summary warning.
@@ -175,10 +177,9 @@ the entry (such as `harbor.json /palette/accent`), and a message.
 
 - **Warnings** (a bad value, an unknown key or scope, a reference that does not resolve) drop only the affected entry,
   which keeps its default. The theme still loads. Warnings are shown when you choose or reload a theme, not at startup.
-- **Errors** make the theme unusable: the file cannot be read, is a link or folder, is larger than 128 KiB, is not
-  UTF-8 or JSON, is nested too deeply, lacks a valid `kind`, `version`, `name`, or `type`, exceeds a count limit, or has
-  a bad, reserved, or duplicate file name.
-  The menu shows such themes as "(invalid)" and disabled.
+- **Errors** make the theme unusable (shown as "(invalid)" and disabled in the menu): the file cannot be read, is a link
+  or folder, is larger than 128 KiB, is not UTF-8 or JSON, is nested too deeply, lacks a valid `kind`, `version`, `name`,
+  or `type`, exceeds a count limit, or has a bad, reserved, or duplicate file name.
 - If the selected theme is missing, unusable, or has no variant for the current mode, Varia shows the built-in theme of
   that type and an alert. The choice is kept, so fixing the file and choosing **Reload Themes** brings it back.
 
@@ -224,23 +225,22 @@ bidirectional-text characters are removed from names, and the window chrome only
 - State is drawn with the states kit in `src/renderer/src/kit` (empty states, inline errors with Copy details, loading
   placeholders, status pills and environment tags, filter chips, live labels and metric tiles), never with ad-hoc
   colors. A pill has one of six tones (`src/shared/theme/tones.ts`: running, success, warning, critical, info, neutral),
-  each with its own `statusPill.<tone>Background` and `Foreground` keys, and always carries a word.
-  `contrast-pairs.ts` holds every tone's text to 4.5:1 over every surface pills sit on: documents, panels, dialogs,
-  tab strips, Object Explorer rows (hovered, selected, the active server) and every status bar state, which is why pill
-  text uses the status surface texts (`errorSurfaceText`, `warningSurfaceText`, `successText`) rather than the plain
-  status colors. `tests/states-kit.test.ts` checks the components' markup and words, and that a placeholder waits
+  each with `statusPill.<tone>Background` and `Foreground` keys, and always carries a word. `contrast-pairs.ts` holds
+  every tone's text to 4.5:1 over every surface pills sit on (documents, panels, dialogs, tab strips, Object Explorer
+  rows hovered, selected or active, every status bar state), so pill text uses the status surface texts
+  (`errorSurfaceText`, `warningSurfaceText`, `successText`). `tests/states-kit.test.ts` checks the components' markup and words, and that a placeholder waits
   `--varia-motion-delay` (300 ms) before it appears.
 - Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion, icon sizes and bar
   heights live in `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`,
   `--varia-space-*`, `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key),
   `--varia-motion-*`, `--varia-glyph-*`, `--varia-header`, `--varia-bar`, `--varia-control`, `--varia-row` and
-  `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
-  apart from the color keys' variables; `tests/theme-metrics.test.ts` rejects px font sizes, radii and shadows and literal
-  durations outside the tokens (1 px indicator edges excepted), glyph sizes on rules other than the icons `glyphUse` lists, and font-size literals in renderer code,
-  keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`), requires every
-  looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce` (which sets the
-  transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
-  with `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
+  `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and apart from the color keys' variables.
+  `tests/theme-metrics.test.ts` rejects px font sizes, radii, shadows and literal durations outside the tokens (1 px
+  indicator edges excepted), glyph sizes on rules other than the icons `glyphUse` lists, and font-size literals in
+  renderer code; keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`);
+  requires every looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce`
+  (which sets transitions to 0 ms); and regenerates [`metrics.md`](metrics.md) with
+  `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
   checks never read a color partway through a transition.
 - Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
   UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without
