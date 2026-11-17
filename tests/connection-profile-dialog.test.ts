@@ -7,7 +7,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ConnectionLibrary, ConnectionProfile } from '../src/shared/connections'
 import type { ConnectionOptions, VariaApi } from '../src/shared/contracts'
-import { connectionDefaults } from '../src/shared/connections'
+import { connectionDefaults, connectionKey } from '../src/shared/connections'
 import { readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 import { acceptConnectionReceipt } from '../src/renderer/src/services/connection-receipts'
@@ -35,7 +35,9 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
     return { ok: true, value: { library, savedPasswords: setup.savedPasswords ?? [], windowsIdentity: 'DOMAIN\\reader', passwordStorage: { available: true } } }
   })
   const saveConnectionProfile = vi.fn<VariaApi['saveConnectionProfile']>(async input => {
-    library = { ...library, profiles: library.profiles.map(value => value.id === input.id ? { ...value, options: input.options, autoReconnect: input.autoReconnect, favorite: input.favorite ?? value.favorite, registered: input.registered ?? value.registered } : value) }
+    // As main's upsert: without an id, the first entry with these settings.
+    const target = input.id ?? library.profiles.find(value => connectionKey(value.options) === connectionKey(input.options))?.id
+    library = { ...library, profiles: library.profiles.map(value => value.id === target ? { ...value, options: input.options, autoReconnect: input.autoReconnect, favorite: input.favorite ?? value.favorite, registered: input.registered ?? value.registered } : value) }
     return { ok: true, value: { library, savedPasswords: setup.savedPasswords ?? [] } }
   })
   workbench.api.connect.mockImplementation(async (options, context) => ({ ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', authentication: { principal: { provider: 'sqlServer', authentication: options.authentication, id: 'sid:fixture' } } } }))
@@ -501,6 +503,23 @@ describe('saving connection details', () => {
     expect(prompt()?.textContent).toContain('Save changes to Second alias?')
     await act(async () => promptButton('Save').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: second.id }))
+  })
+
+  it('applies only the changed labels when a save without an id updates the entry with these settings', async () => {
+    const first = profile('First', 1, 'off'), other = { ...profile('Other', 2, 'off'), options: { ...first.options, database: 'OtherDb', displayName: 'Other' } }
+    const view = await mount(undefined, { profiles: [first, other], initial: first.options, beforeRender: live(other.options, { ...detailsOf(other.options, 'off'), environment: 'Staging' }) })
+    await pick(view, '#connect-name', 'Renamed other')
+    await pick(view, '#connect-database', 'OtherDb')
+    await act(async () => view.button('Save').click())
+    expect(view.saveConnectionProfile.mock.calls.at(-1)?.[0].id).toBeUndefined()
+    expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Renamed other', environment: 'Staging' })
+  })
+
+  it('sends main the alias the edits began on, so the reconnect policy lands with the labels', async () => {
+    const [first, second] = aliasPair(), view = await mount(undefined, { profiles: [first, second], initial: second.options })
+    await pick(view, '#connect-name', 'Renamed alias')
+    await act(async () => view.button('Connect').click())
+    expect(view.api.connect.mock.calls[0]?.[1]).toMatchObject({ selectedProfileId: second.id })
   })
 
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {

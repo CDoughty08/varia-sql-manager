@@ -364,7 +364,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** Writes to History and gives the saved entry's changed labels to the Explorer connections it describes. */
   async function persist(input: ConnectionProfileInput, labelled: ConnectionOptions, id?: string) {
-    const previous = library.profiles.find(item => item.id === input.id)
+    // Without an id main updates the first entry with these settings: that one's labels are the ones being replaced.
+    const previous = input.id ? library.profiles.find(item => item.id === input.id) : library.profiles.find(item => entryKey(item.options) === entryKey(labelled))
     const value = unwrap(await window.varia.saveConnectionProfile(input))
     const saved = id ? value.library.profiles.find(item => item.id === id) : savedEntry(value.library.profiles, new Map(value.library.profiles.map(item => [item.id, entryKey(item.options)])), labelled, input.id)
     if (saved) applySavedDetails(connections, value.library.profiles, saved, previous && detailsOf(previous.options, previous.autoReconnect ?? 'inherit'))
@@ -428,7 +429,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     connectAbort.current = controller
     connectRequest.current = requestId
     const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
-    const selectedProfileId = selectedId ?? savedEntry(library.profiles, entryKeys, labelled)?.id
+    const selectedProfileId = selectedId ?? baseEntry(labelled)?.id ?? savedEntry(library.profiles, entryKeys, labelled)?.id
     let attempt: ConnectionAttempt | undefined
     try {
       await connectionReady
@@ -458,7 +459,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       const owner = [selected, baseEntry(labelled)].find(profile => profile && entryKey(profile.options) === entryKey(labelled)) ?? library.profiles.find(profile => entryKey(profile.options) === entryKey(labelled))
       const pick = <K extends 'displayName' | 'color' | 'environment'>(field: K, value: ConnectionOptions[K]) => owner && !changedDetails.includes(field) ? owner.options[field] : value
       const environment = ownsEnvironment() ? labelled.environment : labelled.environment ?? (result.ok ? result.value.environment : undefined)
-      const recorded = !result.ok || !changedDetails.length || await recordDetails({ ...labelled, displayName: pick('displayName', labelled.displayName), color: pick('color', labelled.color), environment: pick('environment', environment) },
+      // After Stop, nothing of this connect is kept: History and Explorer keep their labels.
+      const recorded = !result.ok || !changedDetails.length || controller.signal.aborted || await recordDetails({ ...labelled, displayName: pick('displayName', labelled.displayName), color: pick('color', labelled.color), environment: pick('environment', environment) },
         owner && !changedDetails.includes('autoReconnect') ? owner.autoReconnect ?? 'inherit' : autoReconnect, owner?.id)
       // The dialog closes once connected, so a failed History save is reported where Connect reports history warnings.
       if (result.ok) { const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, changedDetails); targetAttempt.current = undefined }
