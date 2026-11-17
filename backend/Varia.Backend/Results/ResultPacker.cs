@@ -179,7 +179,8 @@ internal sealed class ResultPacker : IDisposable
             if (set.Budget.Live is not null || !visibility.State(set.ResultId, out var hidden, out var since)) continue;
             // A shown result whose grid is sorted or filtered (an open view) is packed once idle like any other: a view's
             // 128-row tile reads a page or so a row, about 3 ms packed against 0.5 ms raw (p99 7 against 1.3 ms through main,
-            // node.viewTile.*), which the grid's prefetch hides while scrolling and a jump pays once. Its sort and screens
+            // node.viewTile.*, with room for a tile's unpack group; about 45 ms a screen on one thread when the budget refuses
+            // it), which the grid's prefetch hides while scrolling and a jump pays once. Its sort and screens
             // read the packed pages; nothing unpacks it whole for its view.
             if (!hidden && idle is null) continue;
             if (!set.NeedsPacking || set.BytesStored is var bytes && bytes < floor) continue;
@@ -339,7 +340,9 @@ internal sealed class ResultPacker : IDisposable
     /// <para>Never one an operation unpacked whole and that is still in use (touched within the wait the policy would give
     /// it): its next operation would need its unpack's room again and could be refused, so the new query is truncated
     /// instead, as without the policy. A shown result with a sorted or filtered grid is a candidate like any other: its
-    /// screens read the packed pages a few milliseconds a tile slower.</para></summary>
+    /// screens read the packed pages, and while the budget stays full (the room went to the new query) a tile unpacks each
+    /// row's page on one thread (<see cref="ViewPages.UnpackTogether"/>), tens of milliseconds, instead of a few: the
+    /// price of the new query keeping its rows.</para></summary>
     private bool ForRoom(ResultSetBuffer set, bool all, QueryBudget[] queries)
     {
         if (set.Budget.Live is not null || !all && !queries.Contains(set.Budget) || !set.NeedsPacking || set.BytesStored < floor) return false;

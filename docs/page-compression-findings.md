@@ -58,9 +58,12 @@ minute. Hidden results keep 5 s.
   1,000,000-row view takes about 3.1 ms packed against 0.5 ms raw on 16 cores (p99 7.0 against 1.3 ms; on 4, 7.2 ms
   packed, p99 19 ms; `node.viewTile.*`). The grid
   prefetches two views either way once scrolling pauses and reads nothing during a fast scroll until it settles, so
-  scrolling rarely waits on it and a jump pays one or two tiles. A shown result with an open view is packed once idle,
+  scrolling rarely waits on it and a jump pays one or two tiles. Those figures are with room in the budget: a tile
+  unpacks its pages on the workers as a group (`ViewPages.UnpackTogether`, up to 16 MiB of working memory). When the
+  budget refuses the group, as when packing for room just gave its room to a new query, the tile unpacks each row's
+  page on one thread through the cache, about 45 ms a screen, until the budget has room again. A shown result with an open view is packed once idle,
   and the sort reads a packed result fused and its screens read the packed pages. Unpacking it whole for its view would
-  give the budget back the raw bytes (131 MiB for a 256 MiB `orders` result) for tiles a few milliseconds faster.
+  keep the raw bytes out of the budget (131 MiB for a 256 MiB `orders` result) for tiles a few milliseconds faster.
   `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a packed shown
   result grows the budget by more than its view's order.
 - **Find through a sorted grid reads in page order.** A search through a view far from its packed pages' order reads

@@ -11,7 +11,7 @@
 
 ### Changes to everyday use
 
-- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll. Find searches it as it is.
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
 - **Peek from the query editor:** Hold Ctrl \(Cmd on macOS\) and rest the pointer on a table or other object name to Peek it in a card beside the name, as in Object Explorer\. Alt\+F12 opens the same card at the caret, and Ctrl\+click now opens a Peek tab instead of scripting the object; F12 still scripts it as CREATE\.
 - **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
 

@@ -220,8 +220,7 @@ internal static class IdlePackerChecks
         rig.Clock += Idle;
         rig.Packer.PackDue();
         check(AllPacked(set), "the fixture: a shown result packed once idle");
-        // Each operation that unpacks it whole (a search through a sorted grid, a comparison read far out of order, a
-        // transposed Copy or Save) doubles its wait, up to eight times.
+        // Each operation that unpacks it whole (a comparison read far out of order, a sort whose extract was refused) doubles its wait, up to eight times.
         var waits = new List<long>();
         var ok = true;
         for (var k = 1; k <= 5; k++)
@@ -303,8 +302,7 @@ internal static class IdlePackerChecks
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         check(view.Rows == set.RowsAvailable && AllPacked(set) && !set.NeedsPacking && set.Unpacks == 0 && State(rig.Store, set) == "packed",
             "a sort of a packed shown result reads it packed and leaves it packed");
-        // An operation that still unpacks first (a search through a grid sorted far from the pages' order, a transposed Copy
-        // or Save) counts as a use.
+        // An operation that still unpacks first (a comparison read far out of order, a sort whose extract was refused) counts as a use.
         bool unpacked;
         using (set.Pin()) unpacked = set.TryUnpackAll();
         check(unpacked && !set.HasPacked && set.NeedsPacking && set.Unpacks == 1, "an operation's unpack of a packed shown result leaves it raw and due again");
