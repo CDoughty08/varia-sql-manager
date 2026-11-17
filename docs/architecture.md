@@ -375,9 +375,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
   `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
-  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators` probe (source `query.plan`) is the one exception: its SQL is inline in
-  `Plans/LivePlanSampler.cs` (the server pool with `LiveSql.UncommittedPrologue`, a permission check in the same batch,
-  three per-edition and version variants, `DB_NAME()` on Azure) and no offline lint covers it. Probes run on their scope's
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators`
+  probe (source `query.plan`, run by `Plans/LivePlanSampler.cs` on the server pool) takes its SQL from
+  `Plans/LivePlanSql.cs`: one text per permission scope (Azure SQL Database, SQL Server 2022 and later, older versions and
+  Managed Instance), each with `LiveSql.UncommittedPrologue` and its permission check in the same batch, held to `LiveSql`'s
+  lint except that `DB_NAME()` may appear once, in Azure's permission check. Probes run on their scope's
   own pool (" - Activity Monitor" for server DMVs, " - Integration Services" in the catalog's database) with its prologue
   (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
   gates and one budget per probe (shared by an `ActivityReader` probe's statements); failures are values that back off.

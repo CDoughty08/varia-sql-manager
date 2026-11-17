@@ -70,8 +70,8 @@ benchmarks only when a change can move them. CI runs everything on every PR.
 
 ## Environment
 
-- **Cloud sessions.** `.claude/hooks/session-start.sh` installs Node 24 and, when the SDK check finds none, `dotnet-sdk-11.0` from
-  apt, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), puts
+- **Cloud sessions.** `.claude/hooks/session-start.sh` installs Node 24 and, when `dotnet --list-sdks` shows no 11.0 SDK, `dotnet-sdk-11.0` from
+  apt (`tests/session-start-hook.test.ts` keeps the check, the package and `global.json` on one band), runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), puts
   `/opt/node24/bin` on PATH, and starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433),
   exporting the SQL variables once it is ready. After clear or compact it skips `npm install` and the builds; it still ensures the SQL container, the SDK and Node. Without
   Docker, live checks are skipped rather than failing.

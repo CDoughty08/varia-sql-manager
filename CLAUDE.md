@@ -70,7 +70,7 @@ Results and live data:
 SQL the backend runs:
 - Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
   its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
-  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`; Live Plan's inline probe in `LivePlanSampler` is unlinted), object actions and
+  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`, `LivePlanSql`), object actions and
   Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
   (`ActualPlanSql`, its own observer connection, no prologue, event-session DDL only), session actions, SSIS. Read the area's
   bullet in docs/architecture.md before touching any of them.
