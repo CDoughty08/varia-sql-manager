@@ -7,6 +7,7 @@ import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
 import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView, pane, selectOpenDocument } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -102,7 +103,7 @@ try {
     await queryBarButton(page, 'Display Estimated Execution Plan').click()
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
     if (!live) {
-      const calls = (await readFile(join(control, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+      const calls = parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8'))
       expect(calls.filter(call => call.method === 'plans.estimate').at(-1).params).toMatchObject({ sql: 'SELECT name FROM sys.objects;', startLine: 2 })
       expect(calls.filter(call => call.method === 'query.execute')).toHaveLength(1)
     }

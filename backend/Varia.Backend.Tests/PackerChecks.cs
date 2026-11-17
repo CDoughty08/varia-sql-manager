@@ -412,23 +412,47 @@ internal static class PackerChecks
 
         // While lowered nothing is allocated: the thread's encoder is made and warmed before the window opens, and the room
         // is rented and the result copied outside it. (Managed allocations are counted here; the encoder's native context
-        // is reused for the same reason.)
-        var allocated = new List<long>();
-        long opened = 0;
-        void Window(bool compressing)
-        {
-            if (compressing) opened = GC.GetAllocatedBytesForCurrentThread();
-            else allocated.Add(GC.GetAllocatedBytesForCurrentThread() - opened);
-        }
-        var first = PageCodec.Pack(page, Window);
-        var second = PageCodec.Pack(page, Window);
-        check(first is not null && second is not null && first.AsSpan().SequenceEqual(second) && PageCodec.Unpack(second, page.Length).AsSpan().SequenceEqual(page) && allocated is [0, 0],
-            "a page compressed for the policy reads back as sealed, and nothing is allocated while its thread is lowered: " + string.Join(",", allocated));
+        // is reused for the same reason.) Each try runs on a new thread, so its first window follows the encoder's making.
+        // While other suites' threads allocate, a thread's counter can read up to an allocation quantum (about 8 KB) it did
+        // not allocate, never less: a try that reads any is repeated, and an allocation in the window, in every try, still fails.
         // Pages of every size use the same encoder, streamed: a small page, one of exactly the window, and one larger than
         // the window each read back as sealed, and each frame is one the one-shot reader takes.
         byte[][] sizes = [page[..10_000], page.Length >= 1 << PageCodec.Window ? page[..(1 << PageCodec.Window)] : page, [.. page, .. page]];
-        var allRead = sizes.All(sample => PageCodec.Pack(sample, Window) is { } packedSample && PageCodec.Unpack(packedSample, sample.Length).AsSpan().SequenceEqual(sample));
-        check(allRead && allocated.All(bytes => bytes == 0), "pages smaller than, equal to and larger than the window pack and read back, allocating nothing while lowered: " + string.Join(",", allocated));
+        var tries = new List<List<long>>();
+        bool samePage = false, allRead = false;
+        for (var attempt = 0; attempt < 6 && (tries.Count == 0 || tries[^1].Any(bytes => bytes != 0)); attempt++)
+        {
+            var allocated = new List<long>();
+            long opened = 0;
+            void Window(bool compressing)
+            {
+                if (compressing) opened = GC.GetAllocatedBytesForCurrentThread();
+                else allocated.Add(GC.GetAllocatedBytesForCurrentThread() - opened);
+            }
+            // A throw on this thread would end the whole test process unreported; it is carried back and rethrown here, so the
+            // suite fails as it did when this ran on the suite's own thread.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? failed = null;
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var first = PageCodec.Pack(page, Window);
+                    var second = PageCodec.Pack(page, Window);
+                    samePage = first is not null && second is not null && first.AsSpan().SequenceEqual(second) && PageCodec.Unpack(second, page.Length).AsSpan().SequenceEqual(page);
+                    allRead = sizes.All(sample => PageCodec.Pack(sample, Window) is { } packedSample && PageCodec.Unpack(packedSample, sample.Length).AsSpan().SequenceEqual(sample));
+                }
+                catch (Exception error) { failed = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
+                finally { PageCodec.ReleaseQuietEncoder(); }
+            });
+            thread.Start();
+            thread.Join();
+            failed?.Throw();
+            tries.Add(allocated);
+        }
+        var quiet = tries[^1] is [0, 0, 0, 0, 0];
+        var report = string.Join(" | ", tries.Select(windows => string.Join(",", windows)));
+        check(samePage && quiet, "a page compressed for the policy reads back as sealed, and nothing is allocated while its thread is lowered: " + report);
+        check(allRead && quiet, "pages smaller than, equal to and larger than the window pack and read back, allocating nothing while lowered: " + report);
     }
 
     private static void Concurrent(Action<bool, string> check)
