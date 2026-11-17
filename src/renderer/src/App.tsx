@@ -119,6 +119,12 @@ export default function App() {
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
+  // A document that is not a query has no output: it takes the docked output's space while it is active (DockWorkspace).
+  // Only a change between a query and such a document decides again, so output the user showed over one (Plan history's
+  // Open saved plan… opens another) stays until a query is active. A query shown in another editor group keeps it, so
+  // moving between the two does not resize the editor each time.
+  const yieldsOutput = !!active.id && !isQuery && !queryInSplit
+  useEffect(() => { workspaceRef.current?.yieldOutput(yieldsOutput) }, [yieldsOutput])
   const accent = useConnectionAccent(connection?.color)
   const versions = health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined
 

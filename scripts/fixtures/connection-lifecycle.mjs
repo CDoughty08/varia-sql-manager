@@ -9,6 +9,7 @@ import {
   activeDocumentName, backendReady, documentTab, documentTabs, editorTextbox, explorerLabel, outputStatus,
   queryServer, queryStatus, resultGrid, selectOpenDocument, toolbarButton
 } from './ui.mjs'
+import { parseCalls } from './call-log.mjs'
 
 export async function connectionLifecycle() {
   await mkdir('artifacts', { recursive: true })
@@ -22,7 +23,7 @@ export async function connectionLifecycle() {
   let app, page, passed = false
   const failures = []
   const watchdog = setTimeout(() => { console.error('Integrated connection lifecycle timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 180_000)
-  const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
   const roots = () => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
   const disconnectDialog = () => page.getByRole('dialog', { name: /^Disconnect Lifecycle production\?$/ })
   async function launch() {

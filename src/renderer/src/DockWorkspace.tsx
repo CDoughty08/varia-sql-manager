@@ -19,6 +19,7 @@ import { PopoutMoves } from './popouts/moves'
 import { paneDrag } from './popouts/drag'
 import { watchModals, windows } from './core/windows'
 import { focusToReturn, returnFocusTo } from './core/focus'
+import { OutputYield } from './output-yield'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -105,6 +106,11 @@ export interface WorkspaceHandle {
   /** SSMS's Ctrl+R: closes every open output panel while one shows, else reveals the output. */
   toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown'
   /**
+   * Whether the active document is one that is not a query, which takes the output's space: the output group docked below
+   * the query editor hides, and shows again at its size once a query is active (`OutputYield`). Called when it changes.
+   */
+  yieldOutput(yielding: boolean): void
+  /**
    * Writes the layout now. With `closing` it is the window's last write before it closes: popout windows that close after
    * it (a quit closes every window, in any order) leave the saved layout as it is, unless `closeCancelled` follows.
    */
@@ -159,6 +165,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   const returnLocations = useRef<Partial<Record<PaneId, { reference?: PaneId; position: 'center' | 'left' | 'right' | 'top' | 'bottom'; index?: number; edge?: boolean; width: number; height: number }>>>({})
   // The output panels Ctrl+R last closed, and which of them showed in their groups, for the Ctrl+R that brings them back.
   const hiddenOutput = useRef<{ ids: OutputPaneId[]; shown: OutputPaneId[] } | null>(null)
+  // The output group hidden while a document that is not a query is active, and whether one is active.
+  const [outputYield] = useState(() => new OutputYield())
+  const yieldWanted = useRef(false)
   useLayoutEffect(() => { for (const host of Object.values(paneHosts.hosts)) if (!host.parentElement) parking.current?.append(host) }, [paneHosts])
 
   function rememberDock(id: PaneId) {
@@ -397,7 +406,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (previous?.edge) panel.group.api.moveTo({ position: previous.position })
       if (fillEditor) explorer?.api.setSize({ width: 278 })
     }
-    // Only change what differs, so revealing an already-active panel does not rewrite the layout file.
+    // Only change what differs, so revealing an already-active panel does not rewrite the layout file. A panel shown over
+    // a document that is not a query stays shown until a query is active.
+    outputYield.release(panel.group.id)
     if (!panel.group.api.isVisible) panel.group.api.setVisible(true)
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup()
     if (!panel.api.isActive) panel.api.setActive()
@@ -442,6 +453,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const api = apiRef.current
     // Panels in popout windows stay: Ctrl+R hides and shows the main window's output panels.
     if (!api || !outputPaneIds.some(id => showing(api, id) && !recordOf(id))) { revealOutput(view); return 'shown' }
+    // A group hidden for a document that is not a query shows first, so its panels return at their real size.
+    outputYield.restore(api)
     const ids = outputPaneIds.filter(id => api.getPanel(id)), shown = ids.filter(id => api.getPanel(id)!.group.activePanel?.id === id)
     for (const id of ids) close(id)
     hiddenOutput.current = { ids, shown }
@@ -458,10 +471,24 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     changed()
   }
 
+  function yieldOutput(yielding: boolean) {
+    yieldWanted.current = yielding
+    syncYield()
+  }
+  function syncYield() {
+    const api = apiRef.current
+    if (!api || !ready.current) return
+    if (!yieldWanted.current) { outputYield.restore(api); return }
+    const group = outputYield.yieldSpace(api)
+    // Focus left in the output (Ctrl+Tab from a grid) goes to the document that took its space.
+    if (group?.element.contains(document.activeElement)) workbench.documents.focusActive()
+  }
+
   function cancelTimer() { if (timer.current) clearTimeout(timer.current); timer.current = null }
   function snapshot() {
     const popped = popoutsRef.current.map(record => ({ id: record.id, panes: [...record.panes], active: record.active, bounds: windowBounds(record) }))
-    return withoutHeaderState(parseWorkspaceLayout({ ...apiRef.current!.toJSON(), ...popped.length ? { windows: popped } : {} }))
+    // Saved with the output that a document which is not a query hid, so the yield writes nothing and a restart shows it.
+    return outputYield.saved(withoutHeaderState(parseWorkspaceLayout({ ...apiRef.current!.toJSON(), ...popped.length ? { windows: popped } : {} })))
   }
   function update(next: LayoutState) { stateRef.current = next; setState(next) }
   async function persist(next = stateRef.current) {
@@ -491,6 +518,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const validated = parseWorkspaceLayout(layout)
     const previous = snapshot()
     const width = api.width, height = api.height
+    // The layout replaces the groups: the hidden output shows first, and hides again in the new layout if it should.
+    outputYield.restore(api)
     restoring.current = true
     try {
       // Reuse live panels so layout changes never recreate Monaco or lose its undo history.
@@ -499,9 +528,12 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       api.layout(width, height)
     } catch (error) {
       api.fromJSON(previous, { reuseExistingPanels: true })
+      restoring.current = false
+      syncYield()
       throw error
     } finally { restoring.current = false }
     syncWindows(validated.windows ?? [])
+    syncYield()
     changed()
   }
   function manage(mode: 'save' | 'load' = 'load') {
@@ -513,7 +545,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useImperativeHandle(ref, () => ({ manage, flush: async closingNow => { if (closingNow) { cancelTimer(); closing.current = true } await flush() }, closeCancelled, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal, close, location, float, dock, moveToWindow, moveToMainWindow: id => moveToMainWindow(id), dockAt, tabWith, revealOutput, toggleOutput }))
+  }, reveal, close, location, float, dock, moveToWindow, moveToMainWindow: id => moveToMainWindow(id), dockAt, tabWith, revealOutput, toggleOutput, yieldOutput }))
   /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
   function publishVisibility(api: DockviewApi) {
     const where = (id: PaneId): PaneLocation => location(id)
@@ -593,7 +625,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (loaded.state.current) { try { apply(loaded.state.current) } catch (error) { setError('Could not restore the saved workspace layout: ' + message(error)) } }
       if (loaded.warning) setError(loaded.warning)
       ready.current = true
-      const layout = api.onDidLayoutChange(() => { syncHeaders(api); changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
+      const layout = api.onDidLayoutChange(() => { outputYield.check(api); syncHeaders(api); changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
       const panels = [api.onDidAddPanel(() => syncHeaders(api)), api.onDidRemovePanel(() => syncHeaders(api)), api.onDidAddGroup(() => syncHeaders(api))]
       subscription.current = { dispose: () => { layout.dispose(); maximized.dispose(); panels.forEach(item => item.dispose()) } }
       syncHeaders(api)
@@ -637,6 +669,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       const previous = subscription.current
       subscription.current = { dispose: () => { previous?.dispose(); dragDispose.dispose() } }
       setRestored(true)
+      syncYield()
       const pending = [...pendingReveals.current]
       pendingReveals.current.clear()
       for (const [id, options] of pending) reveal(id, options)

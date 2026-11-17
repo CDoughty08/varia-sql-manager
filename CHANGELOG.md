@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
+
 ### Fixes
 
 - **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
