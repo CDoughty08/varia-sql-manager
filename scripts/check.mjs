@@ -121,11 +121,9 @@ const sinceCheck = () => ((Date.now() - checkStarted) / 1000).toFixed(1)
 
 export const run = (name, command, write = text => process.stdout.write(text), env = {}, background = false) => new Promise(resolve => {
   const started = performance.now(), output = [], from = sinceCheck()
-  // Below normal priority for a background lane, inherited by every process it starts: nice on POSIX (a lane is one
-  // command), and on Windows the shell's priority class, set before cmd.exe starts the command.
-  const posixBackground = background && process.platform !== 'win32'
-  const child = spawn(posixBackground ? `nice -n 10 ${command}` : command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', VARIA_CHECK_STARTED: String(checkStarted), ...env } })
-  if (background && !posixBackground && child.pid) try { setPriority(child.pid, constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* runs at normal priority */ }
+  const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', VARIA_CHECK_STARTED: String(checkStarted), ...env } })
+  // Set on the shell before it starts the command, so every process the lane starts inherits it.
+  if (background && child.pid) try { setPriority(child.pid, constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* runs at normal priority */ }
   const lane = { name, started, output, child }
   running.add(lane)
   child.stdout.on('data', chunk => output.push(chunk))
