@@ -53,6 +53,26 @@ export function returnFocusTo(element: HTMLElement | null | undefined, main: Win
   if (view && view !== main && !view.closed) view.focus()
   element.focus()
 }
+const focusable = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+/**
+ * `returnFocusTo` for a modeless dialog (Options and About in their own windows): another dialog may have opened over the
+ * main window meanwhile, and focus behind its backdrop would type into the query beneath it. That dialog takes focus
+ * instead; `dialog` is the closing one, still in the page while React removes it. With no element, `otherwise` runs.
+ */
+export function returnFocusBeside(element: HTMLElement | null | undefined, dialog: Element | null | undefined, otherwise: () => void, main: Window | undefined = typeof window === 'undefined' ? undefined : window): void {
+  const doc = element?.isConnected ? element.ownerDocument : mainDocument()
+  const blocking = Array.from(doc?.querySelectorAll?.('[aria-modal="true"]') ?? []).reverse()
+    .find(modal => isElement(modal) && modal !== dialog && !dialog?.contains(modal) && !(element && modal.contains(element)))
+  if (isElement(blocking)) {
+    const view = blocking.ownerDocument.defaultView
+    if (view && view !== main && !view.closed) view.focus()
+    const first = blocking.querySelector(focusable)
+    ;(isElement(first) ? first : blocking).focus()
+    return
+  }
+  if (element?.isConnected) returnFocusTo(element, main)
+  else otherwise()
+}
 /** The first element matching `selector` in any of the workbench's windows: Object Explorer's tree may be in a popout. */
 export function findInWindows(selector: string): HTMLElement | null {
   for (const target of windows.all()) {

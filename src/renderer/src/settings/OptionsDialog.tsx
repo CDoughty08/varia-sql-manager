@@ -9,7 +9,7 @@ import {
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
-import { focusToReturn, isElement, returnFocusTo } from '../core/focus'
+import { focusToReturn, isElement, returnFocusBeside } from '../core/focus'
 import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
 import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
 import type { CaptureSource } from './shortcuts/CaptureField'
@@ -126,7 +126,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
 
   // What opened the dialog may be gone once its changes apply (the status bar's Results discarded item, for one): the
   // keyboard goes to the active document rather than to nothing.
-  const restoreFocus = () => { if (returnFocus?.isConnected) returnFocusTo(returnFocus); else documents.focusActive() }
+  const restoreFocus = () => returnFocusBeside(returnFocus, formElement, () => documents.focusActive())
   // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
     if (saving) return

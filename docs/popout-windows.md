@@ -87,8 +87,9 @@ can move off the main window, onto another display.
   `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
   screen. About has a fixed size. A window opens centred on the main window.
 - **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel; closing the dialog closes its window
-  and gives focus back to where it was, in the main window or the popout it opened from. A window torn down without its
-  `pagehide` (by the OS, or a crash) is noticed within a second, as a popout's is.
+  and gives focus back to where it was, in the main window or the popout it opened from (or to a dialog opened over the
+  main window meanwhile). A window torn down without its `pagehide` (by the OS, or a crash) is noticed within a second,
+  as a popout's is.
 - **Their own document.** Code inside a dialog reads its element's `ownerDocument` (or `windows.activeDocument()`), never
   the global `document`, and tests elements with `isElement` and `tagName` (`core/focus.ts`): `instanceof HTMLElement`
   is false for another window's elements, as in popouts.

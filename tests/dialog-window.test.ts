@@ -7,6 +7,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { modalOpen, openModal } from '../src/renderer/src/core/modal'
 import { windows } from '../src/renderer/src/core/windows'
+import { returnFocusBeside } from '../src/renderer/src/core/focus'
 import { dialogWindowKinds, dialogWindowName } from '../src/shared/popouts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -167,6 +168,29 @@ describe('DialogWindow', () => {
       cleanups.splice(0).reverse().forEach(clean => clean())
       vi.restoreAllMocks()
     }
+  })
+  it('gives focus back beside the dialog: to a dialog opened over the main window meanwhile, never behind its backdrop', () => {
+    const editor = document.createElement('textarea'), closing = document.createElement('form'), connect = document.createElement('section')
+    closing.setAttribute('aria-modal', 'true')
+    connect.setAttribute('aria-modal', 'true')
+    const server = document.createElement('input')
+    connect.append(server)
+    document.body.append(editor, closing)
+    const otherwise = vi.fn()
+    try {
+      // Only the closing dialog (Options over the main window, while React removes it): focus goes back to the editor.
+      returnFocusBeside(editor, closing, otherwise)
+      expect(document.activeElement).toBe(editor)
+      // Connect opened over the main window while Options was open: its first field takes focus, not the editor behind it.
+      document.body.append(connect)
+      returnFocusBeside(editor, closing, otherwise)
+      expect(document.activeElement).toBe(server)
+      returnFocusBeside(null, null, otherwise)
+      expect(otherwise).not.toHaveBeenCalled()
+      connect.remove()
+      returnFocusBeside(null, closing, otherwise)
+      expect(otherwise).toHaveBeenCalledTimes(1)
+    } finally { editor.remove(); closing.remove(); connect.remove() }
   })
   it('holds the keys only while the user is in the dialog window: the main window works beside it', async () => {
     const view = await mount()
