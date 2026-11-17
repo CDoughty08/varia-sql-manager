@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
+
 ## [0.9.0] - 2026-11-15
 
 Organize, name and keep far larger results, see what is slowing your server with the rest of Activity Monitor, and pick up where you left off with restored connections\.

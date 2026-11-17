@@ -1,6 +1,6 @@
 // The Activity Monitor document in the real app on the fake backend's activity source (tests/fixtures/backend.mjs,
 // workbench mode): with no server connected it opens the Connect dialog and then the monitor; it opens from Object
-// Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection;
+// Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection, and takes the whole document area (the docked Results panel hides, and returns at its size for a query);
 // its tiles fill after two samples and two charts are open (all eight may be); Sessions shows the sessions probe's rows in the results grid and its filters, funnels and sort reach the backend; Blocking and Active Expensive Queries show its other tables; Resource Waits and Data File I/O show the resources probe's tables and their chips reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -193,6 +193,38 @@ try {
   await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(1)
   expect(await handles()).toHaveLength(1)
   console.log('Opening passed: from the server menu, View, the palette and the toolbar, one monitor and one subscription per connection.')
+
+  step = 'document area'
+  // A document that is not a query has no output: the Results panel docked below the editor hides while the monitor is
+  // active, the monitor fills the document area, and the panel comes back at its size when a query tab is active again.
+  const queryTab = queryTabs().filter({ hasText: 'SQLQuery1' }), monitorTab = queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })
+  await expect(monitorTab).toHaveAttribute('aria-selected', 'true')
+  await expect(pane(page, 'results')).toBeHidden()
+  await expect(outputPane(page)).toHaveCount(0)
+  await expect.poll(async () => Math.round((await box(pane(page, 'editor'))).height)).toBeGreaterThan(0)
+  const filled = Math.round((await box(pane(page, 'editor'))).height)
+  await queryTab.click()
+  await expect(pane(page, 'results')).toBeVisible()
+  const shared = Math.round((await box(pane(page, 'editor'))).height), resultsHeight = Math.round((await box(pane(page, 'results'))).height)
+  expect(resultsHeight).toBeGreaterThan(50)
+  // The editor gave up the Results panel's height, and the sash between them, and no more.
+  expect(filled - shared - resultsHeight).toBeGreaterThanOrEqual(0)
+  expect(filled - shared - resultsHeight).toBeLessThan(80)
+  await monitorTab.click()
+  await expect(pane(page, 'results')).toBeHidden()
+  await expect.poll(async () => Math.round((await box(pane(page, 'editor'))).height)).toBe(filled)
+  await queryTab.click()
+  await expect.poll(async () => Math.round((await box(pane(page, 'results'))).height)).toBe(resultsHeight)
+  // Window › Results asked for over the monitor shows the panel until a query is active; leaving that query for the
+  // monitor hides it again.
+  await monitorTab.click()
+  await expect(pane(page, 'results')).toBeHidden()
+  await menu('window.results')
+  await expect(pane(page, 'results')).toBeVisible()
+  await queryTab.click()
+  await monitorTab.click()
+  await expect(pane(page, 'results')).toBeHidden()
+  console.log('Document area passed: the monitor fills it, Results returns at its size for a query, and Window › Results shows it on request.')
 
   step = 'tiles'
   // Rates have a value from the second sample.
