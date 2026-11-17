@@ -12,7 +12,7 @@ database management tools in one app, with SSMS's features and keys and a modern
 
 ## Highlights
 
-- **Query editor**: Monaco-based T-SQL editor with IntelliSense, Go To Definition (F12) and Peek (Alt+F12), `GO`
+- **Query editor**: Monaco-based T-SQL editor with IntelliSense, Go To Definition (F12) and Peek (Ctrl+hover, Alt+F12), `GO`
   batches, and a separate session per query tab.
 - **Results**: in-memory sort, filter, search, highlight, transpose, pivot, column profiles and result comparison, with
   no re-query. Results show as tabs or stacked, can be [named](docs/named-result-sets-scope.md) from the query text, and

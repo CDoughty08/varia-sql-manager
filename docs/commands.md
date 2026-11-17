@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (342)
+## Commands (346)
 
 ### File
 
@@ -69,6 +69,10 @@ keys it uses are listed below.
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
 | Go To Definition | `edit.goToDefinition` | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Go To Definition |
 | Peek Definition | `edit.peekDefinition` | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | ⌥F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Peek Definition |
+| Open Definition in Peek Tab | `edit.openPeekTab` | — | — | — | `backendReady` | Editor context menu › Open Definition in Peek Tab |
+| Toggle Brackets | `edit.toggleBrackets` | Ctrl+[ (`editorTextFocus`) | Ctrl+[ (`editorTextFocus`) | ⌘[ (`editorTextFocus`) | `activeDocumentIsQuery` | Edit › Advanced › Toggle Brackets; Editor context menu › Toggle Brackets |
+| Move Commas to Front | `edit.commasToFront` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to Front; Editor context menu › Move Commas to Front |
+| Move Commas to End | `edit.commasToEnd` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to End; Editor context menu › Move Commas to End |
 | Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
 | Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
@@ -519,6 +523,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `3_comment` | **T**oggle Line Comment | `edit.toggleLineComment` | Always |
 | `4_indent` | **I**ncrease Line Indent | `edit.increaseIndent` | Always |
 | `4_indent` | **D**ecrease Line Indent | `edit.decreaseIndent` | Always |
+| `5_sql` | Toggle **B**rackets | `edit.toggleBrackets` | Always |
+| `5_sql` | Move Commas to **F**ront | `edit.commasToFront` | Always |
+| `5_sql` | Move Commas to **E**nd | `edit.commasToEnd` | Always |
 
 #### Edit › Bookmarks
 
@@ -655,6 +662,7 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
 | `2_definition` | **G**o To Definition | `edit.goToDefinition` | Always |
 | `2_definition` | Pee**k** Definition | `edit.peekDefinition` | Always |
+| `2_definition` | Open De**f**inition in Peek Tab | `edit.openPeekTab` | Always |
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
 | `2_execute` | **D**isplay Estimated Execution Plan | `query.estimatePlan` | Always |
@@ -662,6 +670,9 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `3_clipboard` | Cu**t** | `edit.cut` | Always |
 | `3_clipboard` | **C**opy | `edit.copy` | Always |
 | `3_clipboard` | **P**aste | `edit.paste` | Always |
+| `3_format` | Toggle **B**rackets | `edit.toggleBrackets` | Always |
+| `3_format` | **M**ove Commas to Front | `edit.commasToFront` | Always |
+| `3_format` | Mo**v**e Commas to End | `edit.commasToEnd` | Always |
 | `9_palette` | Comm**a**nd Palette… | `workbench.showCommands` | Always |
 
 #### Object Explorer context menu (`explorer.context`)

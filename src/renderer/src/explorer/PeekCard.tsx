@@ -14,8 +14,8 @@ import { useKeybindingsRevision } from '../core/useCommand'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
-import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
-import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
+import { formatPeekValue, peekObjectName, placePeek, placePeekAt } from './peek-format'
+import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekAnchor, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 import { settingsDocumentOptions } from '../services/documents'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
@@ -305,33 +305,59 @@ export class PeekBoundary extends Component<{ readonly peekId?: number; readonly
   render(): ReactNode { return this.state.failed ? null : this.props.children }
 }
 
-export default function PeekCard() {
+/**
+ * Places a card at its anchor, again as the anchor moves (the editor scrolls) or the window resizes, once a frame; the anchor
+ * going away (its text changed, its editor closed) closes the card. Returns the cleanup.
+ */
+function placeAtAnchor(anchor: PeekAnchor, setPlace: (update: (last: ReturnType<typeof placePeek> | undefined) => ReturnType<typeof placePeek>) => void, close: () => void): () => void {
+  const view = anchor.document.defaultView
+  if (!view) return () => {}
+  let frame = 0
+  const measure = () => { frame = 0; setPlace(last => placePeekAt(anchor.rect(), { width: view.innerWidth, height: view.innerHeight }, last)) }
+  const schedule = () => { if (!frame) frame = view.requestAnimationFrame(measure) }
+  measure()
+  const unwatch = anchor.watch(schedule, close)
+  view.addEventListener('resize', schedule)
+  return () => { if (frame) view.cancelAnimationFrame(frame); unwatch(); view.removeEventListener('resize', schedule) }
+}
+
+/**
+ * Where a card is drawn: `explorer` beside Object Explorer's rows (in its pane), `editor` beside a name in a query editor
+ * (the workbench's, `PeekAnchor`). Each placement draws only its own cards and closes only its own as it goes away.
+ */
+export type PeekPlacement = 'explorer' | 'editor'
+const ownCard = (open: OpenPeek | undefined, placement: PeekPlacement): open is OpenPeek => !!open && !!open.anchor === (placement === 'editor')
+
+export default function PeekCard({ placement = 'explorer' }: { readonly placement?: PeekPlacement }) {
   const { peek: service } = useWorkbench()
   const { open } = useServiceSnapshot(service)
-  return <PeekBoundary peekId={open?.id} close={() => service.close()}><PeekCardView /></PeekBoundary>
+  return <PeekBoundary peekId={open?.id} close={() => { if (ownCard(service.getSnapshot().open, placement)) service.close() }}><PeekCardView placement={placement} /></PeekBoundary>
 }
 
 /**
  * The Peek card: the object's definition on the left, its properties on the right, floating beside Object Explorer in the
- * window the pane is in (docs/popout-windows.md), so it is drawn into that window's body. Esc, a click outside it or
+ * window the pane is in (docs/popout-windows.md), so it is drawn into that window's body, or below a name in a query editor
+ * (its anchor's window). Esc, a click outside it or
  * another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not. Open as Tab (Ctrl+Enter, ⌘↩ on
  * macOS) moves it to a document tab.
  */
-function PeekCardView() {
+function PeekCardView({ placement }: { readonly placement: PeekPlacement }) {
   const { peek: service, commands, keybindings } = useWorkbench()
-  const { open } = useServiceSnapshot(service)
+  const snapshot = useServiceSnapshot(service)
+  const open = ownCard(snapshot.open, placement) ? snapshot.open : undefined
   // The tooltip names Open as Tab's key, which the Shortcuts page can change.
   useKeybindingsRevision()
   const tabKey = keybindings.lookup('explorer.openPeekTab')
   const anchor = useRef<HTMLSpanElement>(null)
   const card = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<ReturnType<typeof placePeek> | undefined>(undefined)
-  const doc = anchor.current?.ownerDocument
+  const doc = open?.anchor?.document ?? anchor.current?.ownerDocument
 
   // Placed again as the tree scrolls or the window resizes; a row scrolled out of the window keeps the card where it was.
   useLayoutEffect(() => {
     const here = anchor.current
     if (!open || !here) { setPlace(undefined); return }
+    if (open.anchor) return placeAtAnchor(open.anchor, setPlace, () => service.close())
     const view = here.ownerDocument.defaultView, tree = here.ownerDocument.querySelector<HTMLElement>('[data-explorer-tree]')
     if (!view) return
     let frame = 0
@@ -345,7 +371,7 @@ function PeekCardView() {
     tree?.addEventListener('scroll', schedule, { passive: true })
     view.addEventListener('resize', schedule)
     return () => { if (frame) view.cancelAnimationFrame(frame); tree?.removeEventListener('scroll', schedule); view.removeEventListener('resize', schedule) }
-  }, [open?.id, open?.rowId])
+  }, [open?.id, open?.rowId, open?.anchor])
 
   // The keyboard and the menu move focus into the card (once per peek), so Esc and screen readers reach it.
   const focused = useRef<number | undefined>(undefined)
@@ -365,11 +391,13 @@ function PeekCardView() {
   }, [open?.id, doc, service])
 
   const close = (refocus: boolean) => {
-    const tree = card.current?.ownerDocument.querySelector<HTMLElement>('[data-explorer-tree]')
+    const tree = card.current?.ownerDocument.querySelector<HTMLElement>('[data-explorer-tree]'), editor = open?.anchor
     service.close()
-    if (refocus) tree?.focus({ preventScroll: true })
+    if (!refocus) return
+    if (editor) editor.focus()
+    else tree?.focus({ preventScroll: true })
   }
-  // Tab stays within the card, so Esc keeps reaching it; Esc or Close returns to the tree.
+  // Tab stays within the card, so Esc keeps reaching it; Esc or Close returns to the tree, or to the editor the name is in.
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); return }
     if (event.key !== 'Tab' || !card.current) return
@@ -384,7 +412,7 @@ function PeekCardView() {
   const name = open ? peekName(open) : ''
   return <span ref={anchor} className="peek-anchor" hidden>
     {open && node && place && doc && createPortal(
-      <div ref={card} className="peek-card peek-view" role="dialog" aria-modal="false" aria-label={`Peek: ${name}`} tabIndex={-1} onKeyDown={keyDown} data-peek-source={open.source} data-peek-card=""
+      <div ref={card} className="peek-card peek-view" role="dialog" aria-modal="false" aria-label={`Peek: ${name}`} tabIndex={-1} onKeyDown={keyDown} data-peek-source={open.source} data-peek-card="" data-peek-placement={placement}
         style={{ left: place.left, top: place.top, width: place.width, height: place.height }}>
         <div className="peek-head">
           {open.back.length > 0 && <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => service.goBack()}><Icon name="arrow-left" /></button>}

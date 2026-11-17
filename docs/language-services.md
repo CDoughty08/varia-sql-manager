@@ -11,8 +11,20 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 
 - **Completion.** **Ctrl+Space**, or a provider trigger character such as `.`. Suggestions use the query tab's
   connection and database; switching tabs does not change another editor's pending request.
+- **Exact matches first.** A name that matches the typed word exactly, ignoring case and brackets, is listed and selected
+  first, above names that merely start with it, fuzzy matches and system objects. Monaco's own scoring would otherwise
+  prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case system view above `Orders`).
+  Each list is re-ranked as the word grows: a complete answer is reused for identifier characters typed at the caret,
+  and a truncated one is requested again.
+- **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
+  the bare name still filters, and so does a name after a typed `[` or `"`. A table or other name that is inserted in
+  brackets because it needs quoting also shows its brackets. Accepting a suggestion inside an auto-closed `[...]`
+  replaces the whole bracketed word, closing bracket included.
+- Because each list is requested again as you type, a list opened with **Ctrl+Space** shows *No suggestions* once
+  nothing matches, instead of keeping the last matches.
+- A table created after the query's metadata was loaded is not suggested until **Refresh Local Cache** (below).
 - **Columns** rank ahead of general suggestions of equal match quality. In supported SELECT scopes, unqualified column
-  suggestions carry their source qualifier (a self-join offers `t.high` and `b.high`; `hi` matches both). `t.` returns
+  suggestions carry their source qualifier (a self-join offers `t.[high]` and `b.[high]`; `hi` matches both). `t.` returns
   only that source's columns. Scope resolution uses a bounded parser and SQL Tools' binder per visible source (temporary
   probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
   incomplete expansion does not bring back ambiguous bare columns.
@@ -23,10 +35,20 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 ### Go To Definition
 
 **F12** scripts the table, view, procedure, function, synonym or user-defined type under the caret as CREATE to a new
-query tab; on a column it goes to the column's table, using the statement's aliases. **Alt+F12** opens it in a Peek tab.
-**Ctrl+click** (**⌘-click** on macOS; changeable among the Shortcuts page's mouse gestures) does what F12 does. Both keys
-work in query tabs and Peek's read-only definition editor. Go To Definition is implemented by Varia's backend, not SQL
-Tools.
+query tab; on a column it goes to the column's table, using the statement's aliases. The mouse and Peek work as on an
+Object Explorer row ([Peek](object-explorer.md#peek)):
+
+- **Ctrl+hover** (**⌘+hover** on macOS): rest the pointer on a name with Ctrl held and Peek's card opens below it (above
+  it near the bottom of the window) without taking focus. A press outside the card, editing the query or another peek
+  closes it; it follows the name as the editor scrolls.
+- **Alt+F12** (Peek Definition) opens the same card at the caret and moves focus into it; **Esc** returns to the editor.
+- **Ctrl+click** (**⌘-click**), **Open Definition in Peek Tab** on the editor's context menu, or **Ctrl+Enter** in the card
+  opens the object in a Peek tab.
+
+Both modifiers are changeable among the Shortcuts page's mouse gestures. F12 and Alt+F12 work in query tabs and Peek's
+read-only definition editor; hovering in Peek's own editor peeks nothing, since the new card would replace the one it is
+in. Keywords are never looked up on hover, and a hover that finds nothing says nothing. Go To Definition is implemented by
+Varia's backend, not SQL Tools.
 
 - Names resolve on the query's connection and database as SQL Server resolves them: three-part names in another
   database; a one-part name in your default schema, then dbo, then sys (`sp_who` finds `sys.sp_who`); a column through
@@ -34,6 +56,30 @@ Tools.
   (`t.Doc.value(...)`) goes to the column's table.
 - CTEs, derived tables, table variables and columns a statement declares have no definition. A name matching nothing, a
   temporary object or a linked server's object shows a short status-bar message, never an error dialog.
+
+### Toggle Brackets and comma placement
+
+These SQL Server commands read the query's tokens, so text in strings, comments, variables, temporary tables and quoted
+names never changes. Each is one undo step, on the editor's context menu, **Edit › Advanced** and the command palette.
+
+- **Toggle Brackets** (**Ctrl+[**, **⌘[** on macOS) brackets every name in the selection, or in the whole query when
+  nothing is selected: `dbo.Orders o` becomes `[dbo].[Orders] [o]`. When every name already has brackets, it takes them off
+  wherever that is safe, keeping them on reserved keywords (`[Order]`), names that are not regular identifiers
+  (`[Order Lines]`, `[1st]`) and `[GO]`. Keywords, built-in function names (a name a parenthesis follows, except a table a
+  column list follows), date parts (`DATEADD(day, …)`), type names where a type is expected (`@x int`, `CAST(a AS date)`),
+  labels, `geography::Point`, ODBC escapes (`{fn …}`), and the options of `WITH`, `OPTION (…)`, `FOR XML`/`FOR JSON`, `SET`
+  statements and cursor declarations, over as many lines as they take, are left alone. In statements about servers,
+  databases and security (`CREATE DATABASE`, `CREATE LOGIN`, `CREATE SEQUENCE`, `ALTER ROLE`, `GRANT`, `BACKUP` and the
+  like), which are mostly options, only the names are bracketed: `ALTER ROLE r ADD MEMBER u` becomes
+  `ALTER ROLE [r] ADD MEMBER [u]`.
+- **Move Commas to Front** moves each comma that ends a line to the start of the next item's line, into the last space of
+  its indent as Select Top Rows writes columns (`      ,[b]`); **Move Commas to End** moves each comma that starts a line
+  to the end of the item before it, ahead of a trailing comment. They act on the selection, or on the statement around the
+  caret (between semicolons, `GO` lines and blank lines), in SELECT lists, GROUP BY, ORDER BY, INSERT column lists,
+  VALUES rows, parameter lists and any other comma-separated list. A comma alone on its line moves with its line; commas in
+  the middle of a line, and those next to a parenthesis, a semicolon or `GO`, stay where they are.
+
+Nothing to change shows a short status-bar message. A query longer than 1,000,000 characters is not changed.
 
 ### Error checking
 

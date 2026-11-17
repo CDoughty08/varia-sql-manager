@@ -151,11 +151,18 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `QUOTENAME(@db)`; default schema, then dbo, then sys; server-level objects in the login's default database) within
     10 s. Not found or unavailable is `null` (a status-bar notice, never an error banner); an unreachable server or login
     is an error. A newer F12 supersedes one waiting; a query with no connection says so.
-  - F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
-    `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions; each editor drops
-    Monaco's Ctrl+hover link (`create-editor.ts`), which would query the backend for every word. F12 scripts CREATE to a
-    new query through Script As, Alt+F12 opens a Peek tab; both run on `editorTextFocus || peekEditorFocus` with no
-    query-tab precondition.
+  - F12, Alt+F12, Ctrl+hover and Ctrl+click are Varia's (`edit.goToDefinition`, `edit.peekDefinition`, gestures
+    `editor.peekHover` and `editor.goToDefinition`, through `EditorPeekService`); `KeybindingService` takes the keys before
+    Monaco's gotoSymbol actions, and each editor drops Monaco's Ctrl+hover link (`create-editor.ts`), which would query the
+    backend for every word crossed. F12 scripts CREATE to a new query through Script As; Alt+F12 and Ctrl+hover open
+    Object Explorer's Peek card (`PeekService.peekAt`, one card for both, drawn beside its `PeekAnchor` by the workbench's
+    `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
+    timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
+    `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+- **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
+  `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
+  change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
