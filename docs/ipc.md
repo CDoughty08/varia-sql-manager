@@ -2300,7 +2300,9 @@ and reports that block skipped.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
-  `globalThis.__variaTest`, and `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`).
+  `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
+  `VARIA_TEST_SHOW_WINDOW=1` (shows the main window inactive; the smoke fixture sets it under xvfb, where a never-shown
+  window sometimes ran no animation frames).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing

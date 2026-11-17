@@ -98,9 +98,17 @@ export function skippedNote(layout, skip) {
 /** The lanes still running, so a signal can print what they held. */
 export const running = new Set()
 
+/**
+ * The check's start, on the wall clock every lane shares (VARIA_CHECK_STARTED): each lane's header says when it ran from
+ * here, and vitest's slow-test list (tests/fixtures/slow-test-reporter.ts) uses it too, so a test starved on a 4 vCPU runner
+ * can be laid against the lanes beside it.
+ */
+export const checkStarted = Number(process.env.VARIA_CHECK_STARTED) || Date.now()
+const sinceCheck = () => ((Date.now() - checkStarted) / 1000).toFixed(1)
+
 export const run = (name, command, write = text => process.stdout.write(text), env = {}) => new Promise(resolve => {
-  const started = performance.now(), output = []
-  const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', ...env } })
+  const started = performance.now(), output = [], from = sinceCheck()
+  const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', VARIA_CHECK_STARTED: String(checkStarted), ...env } })
   const lane = { name, started, output, child }
   running.add(lane)
   child.stdout.on('data', chunk => output.push(chunk))
@@ -108,7 +116,7 @@ export const run = (name, command, write = text => process.stdout.write(text), e
   child.on('close', code => {
     running.delete(lane)
     const seconds = (performance.now() - started) / 1000
-    write(`\n::group::${name} (${seconds.toFixed(1)} s${code ? `, exit ${code}` : ''})\n${Buffer.concat(output).toString()}\n::endgroup::\n`)
+    write(`\n::group::${name} (${seconds.toFixed(1)} s, ${from}-${sinceCheck()} s into the check${code ? `, exit ${code}` : ''})\n${Buffer.concat(output).toString()}\n::endgroup::\n`)
     resolve({ name, code: code ?? 1, seconds })
   })
 })

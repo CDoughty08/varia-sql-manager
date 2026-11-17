@@ -7,6 +7,10 @@
 - **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl+click, and Filter for Selected Values (and Exclude Selected Values or Filter Between Lowest and Highest Selected) adds one filter per column from the cells selected in it, and a row must pass every column's filter.
 - **A keyboard-driven column filter list:** In the list Alt+Down opens, Down moves from the search into the values, the arrow keys, Page Up, Page Down, Home and End move through them, Space ticks or unticks one and Enter filters. Screen readers hear it as a list of checkable options.
 
+### Changes to everyday use
+
+- **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
+
 ### Fixes
 
 - **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.

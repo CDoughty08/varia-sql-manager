@@ -8,7 +8,7 @@ import {
   activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
   errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
   passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
-  warningBanner as warningBannerOf
+  warningBanner as warningBannerOf, pane
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -267,6 +267,8 @@ try {
     await expect(table()).toBeVisible()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(documentTab(page, 'Table Properties - dbo.Lines')).toHaveAttribute('aria-selected', 'true')
+    // It has no query output: the docked Results panel gives it the whole document area.
+    await expect(pane(page, 'results')).toBeHidden()
     await expect(documentSubtitle(table())).toHaveText('Table Properties')
     await expect(documentCrumbs(table())).toHaveText(['server-a', 'AppData', 'Tables'])
     await expect(sectionListOf(table()).getByRole('button')).toHaveText(['General', 'Permissions', 'Change Tracking', 'Storage', 'Extended Properties'])

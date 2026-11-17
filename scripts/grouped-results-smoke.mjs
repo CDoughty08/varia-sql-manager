@@ -11,7 +11,7 @@ import { join, resolve } from 'node:path'
 import { enlargeOutput, sizeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
-  anyResultGrid, backendReady, captionFits, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, popoutDockButton, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
+  anyResultGrid, backendReady, captionFits, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, dockPopoutBack, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
   resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
@@ -479,7 +479,7 @@ try {
   await popoutWidth(360)
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
-  await popoutDockButton(popout).click()
+  await dockPopoutBack(popout)
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()
   console.log('Grouped results checks: popped out, Results shows the same names, and its toolbar folds to the width of the popout with ⋯ opening there.')
   expect(failures).toEqual([])

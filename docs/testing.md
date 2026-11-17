@@ -184,7 +184,12 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   - Make a bound on a wait that returns as soon as its condition holds generous, and keep tight bounds for what the check
     means to time. Never use fixed sleeps or `WAITFOR` delays longer than the behaviour needs.
   - Wait for file-bound background work (a vault or library write that outlives its caller) by awaiting the promise its
-    owner exposes, such as `whenCancelledWorkDrained()`, never by polling a flag under `vi.waitFor`.
+    owner exposes, such as `whenCancelledWorkDrained()` or the updater's `whenSwept()`, never by polling a flag under `vi.waitFor`.
+  - `GC.GetAllocatedBytesForCurrentThread` can read up to one allocation quantum (about 8 KB) high while other suites'
+    threads allocate, never low: an allocation bound takes the least of several runs (`IdentityChecks.LeastAllocated`), and
+    a zero-allocation window is retried on a fresh thread before it fails.
+  - Smoke suites and fixtures read a JSON-lines log (`calls.jsonl`) only through `parseCalls`/`completeLines`
+    (`scripts/fixtures/call-log.mjs`): the fake backend appends asynchronously, so the last line can be half written.
   - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake), and
     give a sidecar with test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
     developer machine past the 90 % high-load threshold, where the real probe truncates every result.
