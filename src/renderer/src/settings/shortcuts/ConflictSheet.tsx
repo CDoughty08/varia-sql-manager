@@ -5,6 +5,8 @@ import type { KeybindingLabel } from '../../../../shared/commands/keybindings'
 import { shortcutScope, type ScopeId } from '../../../../shared/commands/scopes'
 import { trapFocus } from '../../trap-focus'
 import { KeyCaps } from './CaptureField'
+import { windows } from '../../core/windows'
+import { isElement } from '../../core/focus'
 import { ruleScope, scopeTitle } from './shortcut-draft'
 
 interface SheetProps {
@@ -23,13 +25,14 @@ export function Sheet({ title, role = 'alertdialog', onCancel, children, classNa
   const id = useId()
   // The element that opened the sheet (read while rendering, before the sheet's autoFocus moves focus) takes focus back
   // when the sheet closes, so Options' focus trap and Escape keep working.
-  const [opener] = useState(() => document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : undefined)
+  // Options may be in a dialog window of its own: the document is the one the user is in.
+  const [opener] = useState(() => { const doc = windows.activeDocument() ?? document; return isElement(doc.activeElement) && doc.activeElement !== doc.body ? doc.activeElement : undefined })
   useEffect(() => () => {
     // Only when focus was lost with the sheet: an action that focused something else keeps it, and StrictMode's
     // replayed cleanup (focus still in the sheet) does nothing.
-    const active = document.activeElement
-    if (active && active !== document.body) return
-    const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('.shortcuts-table [data-row][tabindex="0"]')
+    const doc = opener?.ownerDocument ?? windows.activeDocument() ?? document, active = doc.activeElement
+    if (active && active !== doc.body) return
+    const target = opener?.isConnected ? opener : doc.querySelector<HTMLElement>('.shortcuts-table [data-row][tabindex="0"]')
     target?.focus()
   }, [opener])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -37,7 +40,7 @@ export function Sheet({ title, role = 'alertdialog', onCancel, children, classNa
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel() }
     // Enter presses the focused button; it never reaches Options' OK, and on a radio, checkbox or list it does not
     // submit the Options form either.
-    else if (event.key === 'Enter') { event.stopPropagation(); if (!(event.target instanceof HTMLButtonElement)) event.preventDefault() }
+    else if (event.key === 'Enter') { event.stopPropagation(); if (!(isElement(event.target) && event.target.tagName === 'BUTTON')) event.preventDefault() }
   }
   return <div className="shortcuts-scrim">
     <div className={'shortcuts-sheet' + (className ? ' ' + className : '')} role={role} aria-modal="true" aria-labelledby={id} tabIndex={-1} onKeyDown={keyDown}>

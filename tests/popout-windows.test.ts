@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
-import { popoutWindowName } from '../src/shared/popouts'
+import { dialogRequest, onDisplay, popoutRequest, PopoutWindows, scaleBounds, settledNativeTheme, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
+import { dialogLimits, dialogWindowKind, dialogWindowKinds, dialogWindowName, popoutWindowName } from '../src/shared/popouts'
+import { windowControls } from '../src/shared/theme/metrics'
 
 const name = 'varia-popout-' + crypto.randomUUID()
 const request = (overrides: Partial<OpenDetails> = {}): OpenDetails => ({ url: 'about:blank', frameName: name, features: 'left=100,top=80,width=640,height=420', disposition: 'new-window', ...overrides })
@@ -205,5 +206,125 @@ describe('main process wiring', () => {
   })
   it('keeps trusting only the main window\'s main frame: popouts have no preload and send no IPC', () => {
     expect(source).toContain('if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false')
+  })
+})
+
+describe('dialog windows', () => {
+  const source = readFileSync('src/main/index.ts', 'utf8')
+  const dialogName = (kind = 'options') => `varia-dialog-${kind}-${crypto.randomUUID()}`
+  const dialog = (overrides: Partial<OpenDetails> = {}): OpenDetails => request({ frameName: dialogName(), features: 'left=200,top=100,width=940,height=680', ...overrides })
+  const allowed = (answer: ReturnType<PopoutWindows<PopoutWindow>['open']>) => {
+    expect(answer.action).toBe('allow')
+    return (answer as { overrideBrowserWindowOptions: Record<string, unknown> }).overrideBrowserWindowOptions
+  }
+  it('are only about:blank children named for a dialog kind, with exact bounds at least the kind\'s minimum', () => {
+    expect(dialogRequest(dialog())).toEqual({ kind: 'options', bounds: { x: 200, y: 100, width: 940, height: 680 } })
+    expect(dialogRequest(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }))?.kind).toBe('about')
+    for (const refused of [
+      dialog({ frameName: dialogName('connect') }), dialog({ frameName: 'varia-dialog-options-1' }), dialog({ frameName: name }), dialog({ url: 'https://example.com/' }),
+      dialog({ disposition: 'foreground-tab' }), dialog({ features: 'left=200,top=100,width=300,height=680' }), dialog({ features: 'left=200,top=100,width=940,height=99999' }),
+      dialog({ features: 'width=940,height=680,left=200,top=100' })
+    ]) expect(dialogRequest(refused)).toBeUndefined()
+    expect(dialogWindowKind(dialogName('about'))).toBe('about')
+    expect(dialogWindowName.test(name)).toBe(false)
+    // A popout request is never a dialog, and a dialog never a popout.
+    expect(popoutRequest(dialog())).toBeUndefined()
+  })
+  it('open frameless (the traffic lights on macOS), with no minimize or maximize, and the popouts\' secure preferences', () => {
+    const windows = allowed(registry().popouts.open(dialog(), base))
+    expect(windows).toMatchObject({ x: 200, y: 100, width: 940, height: 680, useContentSize: true, minWidth: dialogWindowKinds.options.minWidth, minHeight: dialogWindowKinds.options.minHeight,
+      title: 'Options', resizable: true, minimizable: false, maximizable: false, fullscreenable: false, frame: false })
+    // No window-controls overlay: the page draws the close button in the theme's colours.
+    expect(windows.titleBarOverlay).toBeUndefined()
+    expect(windows.titleBarStyle).toBeUndefined()
+    expect(windows.webPreferences).toEqual({ preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true })
+    const mac = allowed(registry({ platform: 'darwin' }).popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), base))
+    expect(mac).toMatchObject({ title: 'About Varia SQL Manager', resizable: false, titleBarStyle: 'hidden', trafficLightPosition: windowControls().trafficLights })
+    expect(mac.titleBarOverlay).toBeUndefined()
+    expect(mac.frame).toBeUndefined()
+    // Off every display: denied, as a popout is.
+    expect(registry({ workAreas: [primary] }).popouts.open(dialog({ features: 'left=-1500,top=200,width=940,height=680' }), base)).toEqual({ action: 'deny' })
+  })
+  it('are kept above the main window and leave the popout limit alone', () => {
+    const parent = fakeWindow(1).window, setParentWindow = vi.fn()
+    const popouts = new PopoutWindows<PopoutWindow>({ platform: 'win32', workAreas: () => [primary], zoomLevel: () => 0, setZoomLevel: vi.fn(), changed: vi.fn(), parent: () => parent })
+    const child = fakeWindow(2), panel = fakeWindow(3)
+    Object.assign(child.window, { setParentWindow }); Object.assign(panel.window, { setParentWindow: vi.fn() })
+    popouts.adopt(child.window, dialogName())
+    popouts.adopt(panel.window, name)
+    expect(setParentWindow).toHaveBeenCalledWith(parent)
+    expect(panel.window.setParentWindow).not.toHaveBeenCalled()
+    // Dialog windows deny popups and navigation like every child.
+    expect(child.openHandler()).toEqual({ action: 'deny' })
+    for (let id = 10; id < 25; id++) popouts.adopt(fakeWindow(id).window)
+    // 16 popouts with the dialog open: the dialog does not take a popout's place.
+    expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+    expect(popouts.size).toBe(17)
+    popouts.closeAll()
+    expect(child.window.destroy).toHaveBeenCalled()
+  })
+  it('hold theme source changes until a closed child window has been torn down, then apply the newest', () => {
+    vi.useFakeTimers()
+    try {
+      let now = 1000
+      const popouts = new PopoutWindows<PopoutWindow>({ platform: 'win32', workAreas: () => [primary], zoomLevel: () => 0, setZoomLevel: vi.fn(), changed: vi.fn(), now: () => now })
+      const native = { themeSource: 'dark' as 'dark' | 'light' | 'system', shouldUseDarkColors: true }
+      const theme = settledNativeTheme(native, popouts)
+      // No window has closed: the change lands at once.
+      theme.themeSource = 'light'
+      expect(native.themeSource).toBe('light')
+      const child = fakeWindow(60)
+      popouts.adopt(child.window, dialogName())
+      child.emit('closed')
+      theme.themeSource = 'dark'
+      theme.themeSource = 'system'
+      // Reads see the newest mode; Electron's waits until the window is gone.
+      expect(theme.themeSource).toBe('system')
+      expect(native.themeSource).toBe('light')
+      expect(theme.shouldUseDarkColors).toBe(true)
+      now += 499
+      vi.advanceTimersByTime(499)
+      expect(native.themeSource).toBe('light')
+      now += 1
+      vi.advanceTimersByTime(1)
+      expect(native.themeSource).toBe('system')
+      expect(theme.themeSource).toBe('system')
+    } finally { vi.useRealTimers() }
+  })
+  it('are bounded: one may open while the last of its kind is still closing, but no more than the limit', () => {
+    const popouts = registry().popouts
+    for (let id = 0; id < dialogLimits.maxWindows; id++) {
+      const kind = id % 2 ? 'about' : 'options'
+      allowed(popouts.open(dialog({ frameName: dialogName(kind) }), base))
+      popouts.adopt(fakeWindow(40 + id).window, dialogName(kind))
+    }
+    expect(dialogLimits.maxWindows).toBe(Object.keys(dialogWindowKinds).length * 2)
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+  })
+  it('count dialog windows still being created against the limit, and apart from the popouts\'', () => {
+    const popouts = registry().popouts
+    // A page that asks again and again before any window arrives gets no more than the limit.
+    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog({ frameName: dialogName(id % 2 ? 'about' : 'options') }), base))
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    // Popouts still have every slot of their own.
+    allowed(popouts.open(request(), base))
+  })
+  it('allow two of a kind at once, one opening while the last closes', () => {
+    const popouts = registry().popouts
+    allowed(popouts.open(dialog(), base))
+    allowed(popouts.open(dialog(), base))
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    // About has its own two.
+    allowed(popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), base))
+    // Adopting an Options window takes an Options request off the pending list, not About's.
+    popouts.adopt(fakeWindow(70).window, dialogName())
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    allowed(popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), base))
+  })
+  it('are wired in main: the page\'s window-open handler and the main window as parent', () => {
+    expect(source).toContain("contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))")
+    expect(source).toContain('parent: () => mainWindow ?? undefined')
+    expect(source).not.toContain('popouts.chrome(')
+    expect(source).toContain('nativeTheme: settledNativeTheme(nativeTheme, popouts)')
   })
 })

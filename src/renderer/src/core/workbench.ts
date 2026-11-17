@@ -123,7 +123,7 @@ import { KeybindingService } from './keybindings'
 import { gesturesFor, type GestureService } from './gestures'
 import { ShortcutsService } from './ShortcutsService'
 import { MenuStatePublisher } from './menu-state'
-import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
+import { focusHeld, focusWhenDrawn, modalOpen, openModal } from './modal'
 import { nextFrame as frame } from './frame'
 import { windows } from './windows'
 import { peekEditorHasTextFocus } from '../explorer/peek-editor'
@@ -268,6 +268,8 @@ export interface Workbench extends Disposable {
    * and presses `MenuService`, and its focus counts as the user's window (`windows`).
    */
   attachWindow(target: Window): Disposable
+  /** Tools › Options and Help › About open in dialog windows of their own (popouts/DialogWindow.tsx); unit tests' workbenches leave it out. */
+  readonly dialogWindows?: boolean
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -527,7 +529,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
-    modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
+    modalContains: element => openModal()?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
     editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
@@ -635,6 +637,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     updates,
     releaseNotes,
     help,
+    dialogWindows: true,
     attachWindow: target => {
       const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }

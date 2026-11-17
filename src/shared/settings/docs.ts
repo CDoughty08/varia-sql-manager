@@ -22,6 +22,8 @@ function typeText(def: SettingDef): string {
 const applies = { immediately: 'At once', nextExecution: 'Next execution', newConnections: 'New connections' } as const
 function notes(def: SettingDef): string {
   const parts = [def.description]
+  if (def.hint) parts.push(`Shown after the field: ${def.hint}.`)
+  if (def.title) parts.push(`Named "${def.title}" outside its section.`)
   if (def.varia) parts.push('Not in SSMS.')
   if (def.hidden) parts.push('Not shown in Options.')
   if (def.disabledWhen) parts.push(`Greyed while ${code(def.disabledWhen)} is True.`)
@@ -35,9 +37,14 @@ function pageSection(page: SettingPage): string {
   const intro = [page.description, page.provider === 'theme' ? 'Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).' : '',
     page.layout === 'propertyGrid' ? 'A property grid: True/False lists, values that differ from their default in bold.' : '',
     page.layout === 'shortcuts' ? 'Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).' : ''].filter(Boolean).join(' ')
-  const rows = defs.map(def => [code(def.key), def.label, typeText(def), valueText(def, def.default), def.ssmsDefault === undefined ? '' : valueText(def, def.ssmsDefault),
+  // A sectioned page lists its sections, and its table leads with each row's section, in the order Options shows them.
+  const sections = page.sections ?? []
+  const sectionList = sections.length ? 'Sections: ' + sections.map(section => section.description ? `**${section.label}** (${section.description.replace(/\.$/, '')})` : `**${section.label}**`).join(', ') + '.' : ''
+  const ordered = sections.length ? sections.flatMap(section => defs.filter(def => def.group === section.label)) : defs
+  const rows = ordered.map(def => [...sections.length ? [def.group ?? ''] : [], code(def.key), def.label, typeText(def), valueText(def, def.default), def.ssmsDefault === undefined ? '' : valueText(def, def.ssmsDefault),
     def.platforms ? def.platforms.join(', ') : 'All', applies[def.applies ?? 'immediately'], notes(def)])
-  return [`### ${breadcrumb(page)}`, intro, rows.length ? table(['Setting key', 'Label', 'Type and bounds', 'Default', 'SSMS default', 'Platforms', 'Applies', 'What it changes'], rows) : '_No settings yet._']
+  const header = [...sections.length ? ['Section'] : [], 'Setting key', 'Label', 'Type and bounds', 'Default', 'SSMS default', 'Platforms', 'Applies', 'What it changes']
+  return [`### ${breadcrumb(page)}`, intro, sectionList, rows.length ? table(header, rows) : '_No settings yet._']
     .filter(Boolean).join('\n\n')
 }
 

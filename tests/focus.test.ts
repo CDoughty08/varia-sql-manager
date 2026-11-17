@@ -64,7 +64,7 @@ describe('focusWhenDrawn', () => {
     body.append(control, new FakeElement(doc, 'div', { className: 'quick-input' }).append(palette), new FakeElement(doc, 'div', { className: 'menu-layer' }).append(item),
       new FakeElement(doc, 'nav', { className: 'title-bar-menus' }).append(menubar))
     let modal: FakeElement | null = null
-    vi.stubGlobal('document', Object.assign(doc, { body, querySelector: (selector: string) => selector === '[aria-modal="true"]' ? modal : body.querySelector(selector) }))
+    vi.stubGlobal('document', Object.assign(doc, { body, querySelector: (selector: string) => selector === '[aria-modal="true"]' ? modal : body.querySelector(selector), querySelectorAll: (selector: string) => selector === '[aria-modal="true"]' && modal ? [modal] : [] }))
     const frames: (() => void)[] = []
     const later = (options?: { preserveUserInput?: boolean }) => focusWhenDrawn(callback => frames.push(callback), () => control.focus(), options)
     const drawn = () => { for (const frame of frames.splice(0)) frame() }

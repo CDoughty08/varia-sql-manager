@@ -46,7 +46,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 
 Security boundary:
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, no navigation or popups (except
-  popouts, `src/main/popout-windows.ts`). It reaches the system only through `window.varia` (`src/preload/index.ts`); never
+  popouts and dialog windows, `src/main/popout-windows.ts`). It reaches the system only through `window.varia` (`src/preload/index.ts`); never
   expose generic IPC or shell APIs, and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()`).
   Built pages load only from `app://varia/`, never `file:`. Packaged builds keep the Electron fuses in `build/fuses.cjs`.
 - A backend method is added in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema
