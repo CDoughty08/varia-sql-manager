@@ -156,6 +156,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .dialog-window-root { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .dialog-window-root > .connection-modal[role="dialog"] { flex: 1; width: 100%; height: auto; max-height: none; min-height: 0; border: 0; border-radius: 0; box-shadow: none; animation: none; }
 .dialog-titlebar { flex-shrink: 0; display: flex; align-items: center; height: env(titlebar-area-height, var(--varia-header)); padding: 0 var(--varia-space-3); background: var(--varia-titleBar-activeBackground); color: var(--varia-titleBar-activeForeground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; -webkit-app-region: drag; }
+:root[data-window-focus="inactive"] .dialog-titlebar { background: var(--varia-titleBar-inactiveBackground); color: var(--varia-titleBar-inactiveForeground); }
 .dialog-titlebar:not([data-platform="darwin"]) { height: var(--varia-header); padding-right: 0; }
 .dialog-titlebar[data-platform="darwin"] { padding-left: 80px; }
 .dialog-window-close { flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 100%; margin-left: auto; padding: 0; border: 0; background: transparent; color: inherit; -webkit-app-region: no-drag; }

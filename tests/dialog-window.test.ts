@@ -172,6 +172,7 @@ describe('DialogWindow', () => {
   it('gives focus back beside the dialog: to a dialog opened over the main window meanwhile, never behind its backdrop', () => {
     const editor = document.createElement('textarea'), closing = document.createElement('form'), connect = document.createElement('section')
     closing.setAttribute('aria-modal', 'true')
+    closing.setAttribute('data-closing', '')
     connect.setAttribute('aria-modal', 'true')
     // Its heading's close button comes first, as in the real dialogs: focus goes to the field, not the button.
     const heading = document.createElement('header'), dismiss = document.createElement('button'), server = document.createElement('input'), user = document.createElement('input')
@@ -182,29 +183,41 @@ describe('DialogWindow', () => {
     const otherwise = vi.fn()
     try {
       // Only the closing dialog (Options over the main window, while React removes it): focus goes back to the editor.
-      returnFocusBeside(editor, closing, otherwise)
+      returnFocusBeside(editor, '[data-closing]', otherwise)
       expect(document.activeElement).toBe(editor)
+      // Options closed with its window mid-save remounts over the main window: that copy of the closing dialog is skipped too.
+      const remounted = document.createElement('form')
+      remounted.setAttribute('aria-modal', 'true')
+      remounted.setAttribute('data-closing', '')
+      remounted.append(document.createElement('input'))
+      document.body.append(remounted)
+      returnFocusBeside(editor, '[data-closing]', otherwise)
+      expect(document.activeElement).toBe(editor)
+      remounted.remove()
       // Connect opened over the main window while Options was open: its first field takes focus, not the editor behind it.
       document.body.append(connect)
-      returnFocusBeside(editor, closing, otherwise)
+      returnFocusBeside(editor, '[data-closing]', otherwise)
       expect(document.activeElement).toBe(server)
       // Where the user was in it, when they had moved on to another field.
       user.focus()
       editor.focus()
       user.focus()
-      returnFocusBeside(editor, closing, otherwise)
+      returnFocusBeside(editor, '[data-closing]', otherwise)
       expect(document.activeElement).toBe(user)
       // From a popout's element: the main window's dialog holds the popout too.
       const popout = document.implementation.createHTMLDocument(''), grid = popout.createElement('div')
       grid.tabIndex = 0
       popout.body.append(grid)
       server.focus()
-      returnFocusBeside(grid, null, otherwise)
+      const raise = vi.spyOn(window, 'focus').mockImplementation(() => {})
+      returnFocusBeside(grid, '[data-closing]', otherwise)
       expect(document.activeElement).toBe(server)
-      returnFocusBeside(null, null, otherwise)
+      // The main window comes forward with it: the OS might otherwise raise the popout, whose keys the dialog holds.
+      expect(raise).toHaveBeenCalled()
+      returnFocusBeside(null, '[data-closing]', otherwise)
       expect(otherwise).not.toHaveBeenCalled()
       connect.remove()
-      returnFocusBeside(null, closing, otherwise)
+      returnFocusBeside(null, '[data-closing]', otherwise)
       expect(otherwise).toHaveBeenCalledTimes(1)
     } finally { editor.remove(); closing.remove(); connect.remove() }
   })

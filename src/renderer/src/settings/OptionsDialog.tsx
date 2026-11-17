@@ -126,7 +126,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
 
   // What opened the dialog may be gone once its changes apply (the status bar's Results discarded item, for one): the
   // keyboard goes to the active document rather than to nothing.
-  const restoreFocus = () => returnFocusBeside(returnFocus, formElement, () => documents.focusActive())
+  const restoreFocus = () => returnFocusBeside(returnFocus, '[data-options-dialog]', () => documents.focusActive())
   // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
     if (saving) return

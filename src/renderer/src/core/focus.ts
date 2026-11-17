@@ -57,16 +57,18 @@ const focusable = 'button:not(:disabled), input:not(:disabled), select:not(:disa
 /**
  * `returnFocusTo` for a modeless dialog (Options and About in their own windows): another dialog may have opened over the
  * main window meanwhile, and focus behind its backdrop would type into the query beneath it. That dialog takes focus
- * instead; `dialog` is the closing one, still in the page while React removes it. With no element, `otherwise` runs.
+ * instead. `closing` matches the closing dialog, still in the page while React removes it (a selector, not the element:
+ * Options closed with its window mid-save remounts over the main window). With no element, `otherwise` runs.
  */
-export function returnFocusBeside(element: HTMLElement | null | undefined, dialog: Element | null | undefined, otherwise: () => void, main: Window | undefined = typeof window === 'undefined' ? undefined : window): void {
+export function returnFocusBeside(element: HTMLElement | null | undefined, closing: string, otherwise: () => void, main: Window | undefined = typeof window === 'undefined' ? undefined : window): void {
   const own = element?.isConnected ? element.ownerDocument : undefined, top = mainDocument()
   // A dialog over the main window holds every popout too, so the main window's comes before the element's own window.
   const blocking = [top, ...own && own !== top ? [own] : []].flatMap(doc => Array.from(doc?.querySelectorAll?.('[aria-modal="true"]') ?? []).reverse())
-    .find(modal => isElement(modal) && modal !== dialog && !dialog?.contains(modal) && !(element && modal.contains(element)))
+    .find(modal => isElement(modal) && !modal.closest(closing) && !(element && modal.contains(element)))
   if (isElement(blocking)) {
+    // Its window comes forward, the main window too: closing a dialog opened from a popout leaves the OS to pick a window.
     const view = blocking.ownerDocument.defaultView
-    if (view && view !== main && !view.closed) view.focus()
+    if (view && !view.closed) view.focus()
     // Where the user was in it (a document keeps its focused element while another window has the keyboard), else its
     // first field rather than its heading's close button.
     const active = blocking.ownerDocument.activeElement

@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { productDescription, productName } from '../../../shared/product'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -16,14 +16,13 @@ export default function AboutDialog({ onClose, raise }: { readonly onClose: () =
   const { commands, documents, platform, updates } = useWorkbench()
   const state = useServiceSnapshot(updates), update = aboutUpdate(state, platform), details = versionDetails(state, platform)
   const [returnFocus] = useState(focusToReturn)
-  const dialog = useRef<HTMLElement>(null)
   const [copied, setCopied] = useState<CopyRecord>()
   const [error, setError] = useState('')
   const action = update.action
   const actionEnabled = useCommandEnabled(action?.command ?? 'help.checkForUpdates')
   const close = () => {
     onClose()
-    returnFocusBeside(returnFocus, dialog.current, () => documents.focusActive())
+    returnFocusBeside(returnFocus, '.about-dialog', () => documents.focusActive())
   }
   const run = async (id: AboutUpdateCommand | 'help.openProject' | 'help.reportIssue') => {
     setError('')
@@ -41,7 +40,7 @@ export default function AboutDialog({ onClose, raise }: { readonly onClose: () =
     trapFocus(event)
     if (event.key === 'Escape' || closesDialogWindow(event, platform)) { event.preventDefault(); event.stopPropagation(); close() }
   }
-  return <DialogWindow kind="about" onClose={close} raise={raise}><section ref={dialog} className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" tabIndex={-1} onKeyDown={keyDown}>
+  return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" tabIndex={-1} onKeyDown={keyDown}>
     <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
     <div className="connection-scroll">
       <div className="about-identity"><div className="about-brand"><Icon name="varia" /></div><div><h3>{productName}</h3><p>{productDescription}</p></div></div>

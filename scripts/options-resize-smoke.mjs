@@ -15,8 +15,8 @@ let stage = 'launch'
 const failures = []
 const watchdog = setTimeout(() => { console.error('Options resize regression exceeded two minutes.'); application?.process()?.kill(); process.exitCode = 1 }, 120000)
 const tools = () => page.getByRole('menu', { name: 'Tools', exact: true })
-// Options opens in a dialog window of its own: none is open while the application has only its main window.
-const optionsOpen = () => application.windows().length > 1
+// Options opens in a dialog window of its own, or over the main window where its window cannot open.
+const optionsOpen = async () => application.windows().length > 1 || await page.getByRole('dialog', { name: 'Options' }).count() > 0
 const text = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
 const openTools = async () => {
   await editorTextbox(page).focus()
@@ -64,7 +64,9 @@ try {
   await expect(tools()).toHaveCount(0)
   await page.keyboard.press('o')
   await expect.poll(text).toContain('o')
-  expect(optionsOpen()).toBe(false)
+  // Its window opens a moment after the key: it stays closed for a while, not only at once.
+  const opened = await application.waitForEvent('window', { timeout: 1500 }).then(() => true, () => false)
+  expect(opened || await optionsOpen()).toBe(false)
   console.log('Options resize regression reproduced: delayed resize dismisses Tools and sends O to the editor.')
 
   stage = 'verify resize event barrier'
