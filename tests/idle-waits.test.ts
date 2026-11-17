@@ -121,7 +121,7 @@ describe('idle waits', () => {
     const lines = (name: string) => found.find(file => file.name === name)!.matched
     const tree = found.find(file => file.name === 'explorer-tree-model.test.ts')!
     expect(lines('explorer-tree-model.test.ts').map(line => tree.text.split('\n')[line - 1].trim())).toContain('const t = sample(250_000)')
-    expect(lines('explorer-service.test.ts').length).toBeGreaterThanOrEqual(4)
+    expect(lines('explorer-service.test.ts').length).toBeGreaterThanOrEqual(2)
     expect(lines('shortcut-store.test.ts').length).toBeGreaterThanOrEqual(1)
   })
   it('find heavy tests built through helpers, under test( and it.each(', () => {

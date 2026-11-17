@@ -149,17 +149,14 @@ in CLAUDE.md, which the owner decides.
 5. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). Ends the Intel image GitHub is
    retiring; `--dir` skips the DMG and hdiutil step behind 2 of the 3 infrastructure false failures.
 6. **Split the Host offline suite** (S). It is the floor of the offline lanes (its `Thread.Sleep(1200)` and budget waits).
-7. **Shrink the CPU-bound vitest files** (S). explorer-service's 99,000-row reconcile tests (about 33 s of Windows's
-   vitest lane) pass `heavyTimeout`, which stops false failures but not the minutes; their bounds come from the work
-   meter, so 10,000 rows may prove the same.
-8. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each, starving async timing
+7. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each, starving async timing
    checks; `TaskCreationOptions.LongRunning` lanes or a raised `ThreadPool.SetMinThreads` may let widened bounds tighten.
    Measure with `scripts/offline-stress.mjs`.
-9. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42, about
+8. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42, about
    0.5 s each).
-10. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
-    but leaked module state can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded against
-    mocks, timers, globals and `process.env`.
+9. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
+   but leaked module state can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded against
+   mocks, timers, globals and `process.env`.
 
 Considered and rejected (do not re-propose without new numbers):
 
