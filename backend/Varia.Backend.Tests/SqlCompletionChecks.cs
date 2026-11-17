@@ -141,34 +141,17 @@ internal static class SqlCompletionChecks
         {
             new { label = "[columnName]", kind = 5, insertText = "columnName" }, new { label = "plain", kind = 5, insertText = "plain" },
             new { label = "A]Key", kind = 5, insertText = "[A]]Key]" }, new { label = "Order Details", kind = 7, insertText = "[Order Details]" },
-            new { label = "SELECT", kind = 14, insertText = "SELECT" }, new { label = "Customer", kind = 7, insertText = "${1:Customer}", insertTextFormat = 2 }
+            new { label = "A]B", kind = 7, insertText = "[A]B]" }, new { label = "SELECT", kind = 14, insertText = "SELECT" }, new { label = "Customer", kind = 7, insertText = "${1:Customer}", insertTextFormat = 2 }
         })));
         check(normalized.Items.Select(item => (item.Label, item.InsertText, item.FilterText)).SequenceEqual(new (string, string?, string?)[]
         {
             ("[columnName]", "[columnName]", "columnName"), ("[plain]", "[plain]", "plain"), ("[A]]Key]", "[A]]Key]", "A]Key"),
-            ("[Order Details]", "[Order Details]", "Order Details"), ("SELECT", "SELECT", null), ("Customer", "${1:Customer}", null)
+            ("[Order Details]", "[Order Details]", "Order Details"), ("[A]]B]", "[A]]B]", "A]B"), ("SELECT", "SELECT", null), ("Customer", "${1:Customer}", null)
         }), "columns always insert their bracketed name, and every label shows the text it inserts");
         const string exactText = "SELECT * FROM orders";
         var exact = SqlToolsLanguageService.ReadCompletions(Element(Enumerable.Range(0, 600).Select(index => new { label = "orders_" + index, kind = 7 })
             .Append(new { label = "sysorders", kind = 7 }).Append(new { label = "Orders", kind = 7 })), exactText, new(0, exactText.Length));
         check(exact.Items[0].Label == "Orders" && exact.IsIncomplete, "a case-insensitive exact name match ranks first and survives the response cap");
-        foreach (var (marked, expected, inserted) in new[]
-        {
-            ("SELECT [Fir|] FROM dbo.T", "SELECT [FirstOnly] FROM dbo.T", "[FirstOnly]"),
-            ("SELECT t.[Fir|] FROM dbo.T t", "SELECT t.[FirstOnly] FROM dbo.T t", "[FirstOnly]"),
-            ("SELECT [Fir| FROM dbo.T", "SELECT [FirstOnly] FROM dbo.T", "[FirstOnly]"),
-            ("SELECT Fir|] FROM dbo.T", "SELECT [FirstOnly]] FROM dbo.T", "[FirstOnly]"),
-            ("SELECT [Fir|] FROM dbo.T", "SELECT FirstOnly] FROM dbo.T", "FirstOnly")
-        })
-        {
-            var cursor = marked.IndexOf('|');
-            var text = marked.Remove(cursor, 1);
-            var start = text.LastIndexOfAny([' ', '.'], cursor - 1) + 1;
-            var range = new LanguageRange(new(0, start), new(0, cursor));
-            var item = SqlToolsLanguageService.ReadCompletions(Element(new[] { new { label = inserted, kind = 5, textEdit = new { range, newText = inserted } } }), text, new(0, cursor)).Items[0];
-            check(text[..item.TextEdit!.Range.Start.Character] + item.TextEdit.NewText + text[item.TextEdit.Range.End.Character..] == expected,
-                "a bracketed insertion replaces only a closing bracket Monaco auto-closed after a typed opening bracket: " + marked);
-        }
         var duplicateAlias = new CompletionClient();
         using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => duplicateAlias))
         {

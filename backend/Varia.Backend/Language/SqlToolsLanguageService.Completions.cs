@@ -138,6 +138,8 @@ internal sealed partial class SqlToolsLanguageService
         else if (label != insert && IsQuoted(insert) && UnquoteCompletion(insert) == label) (quoted, name) = (insert, label);
         else if (label != insert && IsQuoted(label) && UnquoteCompletion(label) == insert) (quoted, name) = (label, insert);
         else return null;
+        // STS wraps names in delimiters without escaping them: A]B arrives as [A]B].
+        quoted = quoted[0] == '"' ? "\"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"" : "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
         if (label == quoted && insert == quoted && String(item, "filterText") == name) return null;
         var node = JsonSerializer.SerializeToNode(item, CompletionJson)!.AsObject();
         node["label"] = quoted;
