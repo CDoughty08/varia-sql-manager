@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
-import { popoutWindowName } from '../src/shared/popouts'
+import { dialogRequest, onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
+import { dialogWindowKind, dialogWindowKinds, dialogWindowName, popoutWindowName } from '../src/shared/popouts'
+import { windowControls } from '../src/shared/theme/metrics'
 
 const name = 'varia-popout-' + crypto.randomUUID()
 const request = (overrides: Partial<OpenDetails> = {}): OpenDetails => ({ url: 'about:blank', frameName: name, features: 'left=100,top=80,width=640,height=420', disposition: 'new-window', ...overrides })
@@ -205,5 +206,74 @@ describe('main process wiring', () => {
   })
   it('keeps trusting only the main window\'s main frame: popouts have no preload and send no IPC', () => {
     expect(source).toContain('if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false')
+  })
+})
+
+describe('dialog windows', () => {
+  const source = readFileSync('src/main/index.ts', 'utf8')
+  const dialogName = (kind = 'options') => `varia-dialog-${kind}-${crypto.randomUUID()}`
+  const dialog = (overrides: Partial<OpenDetails> = {}): OpenDetails => request({ frameName: dialogName(), features: 'left=200,top=100,width=940,height=680', ...overrides })
+  const overlay = { color: '#111317', symbolColor: '#d9dce3' }
+  const allowed = (answer: ReturnType<PopoutWindows<PopoutWindow>['open']>) => {
+    expect(answer.action).toBe('allow')
+    return (answer as { overrideBrowserWindowOptions: Record<string, unknown> }).overrideBrowserWindowOptions
+  }
+  it('are only about:blank children named for a dialog kind, with exact bounds at least the kind\'s minimum', () => {
+    expect(dialogRequest(dialog())).toEqual({ kind: 'options', bounds: { x: 200, y: 100, width: 940, height: 680 } })
+    expect(dialogRequest(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }))?.kind).toBe('about')
+    for (const refused of [
+      dialog({ frameName: dialogName('connect') }), dialog({ frameName: 'varia-dialog-options-1' }), dialog({ frameName: name }), dialog({ url: 'https://example.com/' }),
+      dialog({ disposition: 'foreground-tab' }), dialog({ features: 'left=200,top=100,width=300,height=680' }), dialog({ features: 'left=200,top=100,width=940,height=99999' }),
+      dialog({ features: 'width=940,height=680,left=200,top=100' })
+    ]) expect(dialogRequest(refused)).toBeUndefined()
+    expect(dialogWindowKind(dialogName('about'))).toBe('about')
+    expect(dialogWindowName.test(name)).toBe(false)
+    // A popout request is never a dialog, and a dialog never a popout.
+    expect(popoutRequest(dialog())).toBeUndefined()
+  })
+  it('open with the main window\'s hidden title bar, a themed overlay or the traffic lights, only a close button, and the popouts\' secure preferences', () => {
+    const windows = allowed(registry().popouts.open(dialog(), { ...base, overlay }))
+    expect(windows).toMatchObject({ x: 200, y: 100, width: 940, height: 680, useContentSize: true, minWidth: dialogWindowKinds.options.minWidth, minHeight: dialogWindowKinds.options.minHeight,
+      title: 'Options', resizable: true, minimizable: false, maximizable: false, fullscreenable: false, titleBarStyle: 'hidden', titleBarOverlay: { ...overlay, height: windowControls().overlayHeight } })
+    expect(windows.webPreferences).toEqual({ preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true })
+    const mac = allowed(registry({ platform: 'darwin' }).popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), { ...base, overlay }))
+    expect(mac).toMatchObject({ title: 'About Varia SQL Manager', resizable: false, trafficLightPosition: windowControls().trafficLights })
+    expect(mac.titleBarOverlay).toBeUndefined()
+    // Off every display: denied, as a popout is.
+    expect(registry({ workAreas: [primary] }).popouts.open(dialog({ features: 'left=-1500,top=200,width=940,height=680' }), base)).toEqual({ action: 'deny' })
+  })
+  it('are kept above the main window, follow the theme, and leave the popout limit alone', () => {
+    const parent = fakeWindow(1).window, setParentWindow = vi.fn(), setTitleBarOverlay = vi.fn(), popoutOverlay = vi.fn()
+    const popouts = new PopoutWindows<PopoutWindow>({ platform: 'win32', workAreas: () => [primary], zoomLevel: () => 0, setZoomLevel: vi.fn(), changed: vi.fn(), parent: () => parent })
+    const child = fakeWindow(2), panel = fakeWindow(3)
+    Object.assign(child.window, { setParentWindow, setTitleBarOverlay }); Object.assign(panel.window, { setParentWindow: vi.fn(), setTitleBarOverlay: popoutOverlay })
+    popouts.adopt(child.window, dialogName())
+    popouts.adopt(panel.window, name)
+    expect(setParentWindow).toHaveBeenCalledWith(parent)
+    expect(panel.window.setParentWindow).not.toHaveBeenCalled()
+    // Dialog windows deny popups and navigation like every child.
+    expect(child.openHandler()).toEqual({ action: 'deny' })
+    popouts.chrome(overlay)
+    expect(setTitleBarOverlay).toHaveBeenCalledWith(overlay)
+    expect(popoutOverlay).not.toHaveBeenCalled()
+    for (let id = 10; id < 25; id++) popouts.adopt(fakeWindow(id).window)
+    // 16 popouts with the dialog open: the dialog does not take a popout's place.
+    expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+    expect(popouts.size).toBe(17)
+    popouts.closeAll()
+    expect(child.window.destroy).toHaveBeenCalled()
+  })
+  it('leave macOS\'s traffic lights to the system when the theme changes', () => {
+    const popouts = new PopoutWindows<PopoutWindow>({ platform: 'darwin', workAreas: () => [primary], zoomLevel: () => 0, setZoomLevel: vi.fn(), changed: vi.fn() })
+    const child = fakeWindow(2), setTitleBarOverlay = vi.fn()
+    Object.assign(child.window, { setTitleBarOverlay })
+    popouts.adopt(child.window, dialogName())
+    popouts.chrome(overlay)
+    expect(setTitleBarOverlay).not.toHaveBeenCalled()
+  })
+  it('are wired in main: the page\'s window-open handler gets the theme\'s overlay, and theme changes reach them', () => {
+    expect(source).toContain("contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))")
+    expect(source).toContain('parent: () => mainWindow ?? undefined')
+    expect(source).toMatch(/function applyWindowChrome[\s\S]*?popouts\.chrome\(/)
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { pageById, pagePath, type SettingKey } from '../../../shared/settings/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import DialogWindow, { DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
   ancestorIds, commitOptions, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
@@ -84,7 +85,9 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const [saving, setSaving] = useState(false)
   // Read while rendering, before the search box takes focus.
   const [returnFocus] = useState(focusToReturn)
-  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string | undefined>(setting)
+  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), formRef = useRef<HTMLFormElement>(null), focusSetting = useRef<string | undefined>(setting)
+  // Tools › Options… again while the dialog is open: its window comes forward, on the page asked for.
+  const request = useServiceSnapshot(settings.dialog)
   const found = useMemo(() => searchPages(query, platform), [query, platform])
   const rows = treeRows(expanded, found?.shown)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
@@ -98,8 +101,18 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     const key = focusSetting.current
     if (!key) return
     focusSetting.current = undefined
-    document.getElementById(controlId(key))?.focus()
+    // The dialog's own document: in a dialog window it is not the main window's.
+    ;(formRef.current?.ownerDocument ?? document).getElementById(controlId(key))?.focus()
   })
+  const firstRequest = useRef(request)
+  useEffect(() => {
+    if (request === firstRequest.current || !request.open) return
+    firstRequest.current = request
+    if (request.page && pageById(request.page)) showPage(request.page)
+    if (request.setting) { focusSetting.current = request.setting; setFocused(request.setting) }
+  // showPage only sets state; the request is what changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request])
 
   // What opened the dialog may be gone once its changes apply (the status bar's Results discarded item, for one): the
   // keyboard goes to the active document rather than to nothing.
@@ -212,9 +225,9 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const path = pagePath(form.page.id), ancestors = path.slice(0, -1).map(node => node.title).join(' › ')
 
   // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
-  return <div className="modal-backdrop"><form className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
+  return <DialogWindow kind="options" onClose={close} raise={request}><form ref={formRef} className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void ok() }} onKeyDown={keyDown}>
-    <div className="connection-heading"><h2 id="options-title">Options</h2><button type="button" className="icon-button" aria-label="Close options" disabled={saving} onClick={close}><Icon name="close" /></button></div>
+    <DialogHeading id="options-title" title="Options" closeLabel="Close options" disabled={saving} onClose={close} />
     <div className="options-body">
       <div className="options-nav">
         <input ref={search} type="search" className="options-search" data-options-search placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
@@ -250,5 +263,5 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
       <span className="options-staged">{staged > 0 && <><span className="shortcuts-dot" aria-hidden="true" />{staged === 1 ? '1 shortcut change' : `${staged} shortcut changes`} staged · applied on OK</>}</span>
       <button className="primary" type="submit" disabled={saving}>OK</button><button type="button" disabled={saving} onClick={close}>Cancel</button>
     </div>
-  </form></div>
+  </form></DialogWindow>
 }

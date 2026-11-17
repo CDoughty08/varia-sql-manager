@@ -158,7 +158,8 @@ const popouts = new PopoutWindows<BrowserWindow>({
   workAreas: () => screen.getAllDisplays().map(display => display.workArea),
   zoomLevel: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getZoomLevel() : 0,
   setZoomLevel: level => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(level) },
-  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') }
+  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') },
+  parent: () => mainWindow ?? undefined
 })
 /** The window the user is working in: a focused popout, else the main window. */
 function activeWindow(): { window: BrowserWindow; activation: UserActivation } | undefined {
@@ -535,6 +536,8 @@ function applyWindowChrome(): void {
   if (process.platform !== 'darwin') {
     try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
   }
+  // Dialog windows keep the active title bar's colors: their own focus is not tracked.
+  popouts.chrome(windowChromeFor(previewTheme ?? appearance.state.active).overlay)
 }
 
 /** Drops any preview, including one still being resolved, and shows the active theme's chrome again. */
@@ -590,8 +593,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     window.on('focus', () => activate(true))
     window.on('blur', () => activate(false))
   }
-  // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
-  contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
+  // The page may open only its own popout and dialog windows: same-origin about:blank children with Varia's names, on a display.
+  contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
   // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
   const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }

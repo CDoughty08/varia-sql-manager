@@ -5,6 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import { focusToReturn, returnFocusTo } from '../core/focus'
 import Icon from '../Icon'
+import DialogWindow, { DialogHeading } from '../popouts/DialogWindow'
 import InlineError from '../kit/InlineError'
 import { copyStatus, copyText, type CopyRecord } from '../kit/format'
 import { trapFocus } from '../trap-focus'
@@ -39,8 +40,8 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
   }
-  return <div className="modal-backdrop"><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
-    <div className="connection-heading"><h2 id="about-title">About Varia</h2><button type="button" className="icon-button" aria-label="Close About Varia" onClick={close}><Icon name="close" /></button></div>
+  return <DialogWindow kind="about" onClose={close}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
+    <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
     <div className="connection-scroll">
       <div className="about-identity"><div className="about-brand"><Icon name="varia" /></div><div><h3>{productName}</h3><p>{productDescription}</p></div></div>
       <p className="about-version">{state.currentVersion ? `Version ${state.currentVersion}` : 'Version information unavailable'}<span>{platformName(platform)}</span></p>
@@ -62,5 +63,5 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
       {error && <InlineError message={error} copy={false} />}
     </div>
     <div className="connection-footer"><span /><button type="button" autoFocus onClick={close}>Done</button></div>
-  </section></div>
+  </section></DialogWindow>
 }

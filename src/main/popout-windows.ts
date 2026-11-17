@@ -1,4 +1,5 @@
-import { popoutLimits, popoutWindowName } from '../shared/popouts'
+import { dialogLimits, dialogWindowKind, dialogWindowKinds, popoutLimits, popoutWindowName, type DialogWindowKind } from '../shared/popouts'
+import { windowControls } from '../shared/theme/metrics'
 import { UserActivation } from './window-roles'
 
 export interface Bounds { x: number; y: number; width: number; height: number }
@@ -20,6 +21,20 @@ export function popoutRequest(details: OpenDetails): Bounds | undefined {
   return { x, y, width, height }
 }
 
+/**
+ * The kind and bounds a dialog window request asks for, or undefined when it is not one: a new `about:blank` window named
+ * `varia-dialog-<kind>-<uuid>` with exactly `left`, `top`, `width` and `height`, at least its kind's minimum size.
+ */
+export function dialogRequest(details: OpenDetails): { readonly kind: DialogWindowKind; readonly bounds: Bounds } | undefined {
+  const kind = dialogWindowKind(details.frameName)
+  if (details.url !== 'about:blank' || details.disposition !== 'new-window' || !kind) return undefined
+  const match = featurePattern.exec(details.features)
+  if (!match) return undefined
+  const [x, y, width, height] = match.slice(1).map(Number), limits = dialogWindowKinds[kind]
+  if (width < limits.minWidth || height < limits.minHeight || width > dialogLimits.maxSize || height > dialogLimits.maxSize) return undefined
+  return { kind, bounds: { x, y, width, height } }
+}
+
 /** Whether enough of `bounds` lies on one display's work area to grab the window there: its top strip, at least. */
 export function onDisplay(bounds: Bounds, workAreas: readonly Bounds[]): boolean {
   return workAreas.some(area => {
@@ -38,7 +53,7 @@ export function scaleBounds(bounds: Bounds, factor: number): Bounds {
 }
 
 /** The parts of a popout `BrowserWindow` the registry uses, so tests can pass a fake. */
-export interface PopoutWindow {
+export interface PopoutWindow<W = unknown> {
   readonly id: number
   isDestroyed(): boolean
   isFocused(): boolean
@@ -52,6 +67,9 @@ export interface PopoutWindow {
   destroy(): void
   setMenuBarVisibility(visible: boolean): void
   setAutoHideMenuBar(hide: boolean): void
+  /** A dialog window stays above the main window and goes with it (BrowserWindow has both; test fakes may leave them out). */
+  setParentWindow?(parent: W | null): void
+  setTitleBarOverlay?(options: { color: string; symbolColor: string }): void
   on(event: 'closed', listener: () => void): void
   once(event: 'focus', listener: () => void): void
   removeListener(event: 'focus', listener: () => void): void
@@ -71,13 +89,17 @@ export interface PopoutWindow {
  * of its own: `trusted()` still accepts only the main window's main frame), denies popups and navigation, and goes when
  * the page that opened it reloads, crashes or closes, since its content is that page's.
  */
+/** Explicit, not inherited: no preload, the same sandbox and isolation, no Node, and no test arguments. */
+const childPreferences = { preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true } as const
+/** What main passes for every window the page opens: its background, whether it shows, and the theme's overlay colors. */
+export interface WindowBase { readonly backgroundColor: string; readonly show: boolean; readonly overlay?: { readonly color: string; readonly symbolColor: string } }
 /** How long an allowed popout counts against the limit before Electron creates it. */
 const pendingMs = 10_000
 /** How long after a restore a popout that takes focus gives it back: macOS activates it only once its animation ends. */
 export const restoreFocusMs = 2000
 
-export class PopoutWindows<W extends PopoutWindow> {
-  private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string }>()
+export class PopoutWindows<W extends PopoutWindow<W>> {
+  private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string; dialog?: DialogWindowKind }>()
   /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
   private pending: number[] = []
   constructor(private readonly options: {
@@ -92,11 +114,15 @@ export class PopoutWindows<W extends PopoutWindow> {
     changed(open: number): void
     /** The clock pending windows expire by (tests pass their own). */
     now?(): number
+    /** The main window, which a dialog window is kept above. */
+    parent?(): W | undefined
   }) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
 
-  /** `allow` with the window's options for a popout request on a display; `deny` for anything else. */
-  open(details: OpenDetails, base: { readonly backgroundColor: string; readonly show: boolean }): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
+  /** `allow` with the window's options for a popout or dialog window request on a display; `deny` for anything else. */
+  open(details: OpenDetails, base: WindowBase): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
+    const dialog = dialogRequest(details)
+    if (dialog) return this.openDialog(dialog.kind, dialog.bounds, base)
     const requested = popoutRequest(details)
     if (!requested) return { action: 'deny' }
     // The page measures in CSS pixels, which its zoom scales; windows are placed in screen DIPs.
@@ -104,13 +130,32 @@ export class PopoutWindows<W extends PopoutWindow> {
     // An allowed window Electron failed to create never arrives: it stops counting after a while.
     const now = this.now()
     this.pending = this.pending.filter(at => now - at < pendingMs)
-    if (this.windows.size + this.pending.length >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    if (this.popoutCount() + this.pending.length >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
     this.pending.push(now)
     return { action: 'allow', overrideBrowserWindowOptions: {
       ...bounds, useContentSize: true, minWidth: popoutLimits.minWidth, minHeight: popoutLimits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
       autoHideMenuBar: false, title: 'Varia SQL Manager',
-      // Explicit, not inherited: no preload, the same sandbox and isolation, no Node, and no test arguments.
-      webPreferences: { preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true }
+      webPreferences: childPreferences
+    } }
+  }
+  private popoutCount(): number { return [...this.windows.values()].filter(item => !item.dialog).length }
+  /**
+   * A dialog window: one of each kind at a time, on a display, with the main window's hidden title bar (the traffic lights
+   * on macOS, the themed window-controls overlay elsewhere) and only a close button, kept above the main window by `adopt`.
+   */
+  private openDialog(kind: DialogWindowKind, requested: Bounds, base: WindowBase): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
+    const bounds = scaleBounds(requested, zoomFactor(this.options.zoomLevel())), limits = dialogWindowKinds[kind], controls = windowControls()
+    const open = [...this.windows.values()].filter(item => item.dialog && !item.window.isDestroyed())
+    if (open.some(item => item.dialog === kind) || open.length >= dialogLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    const now = this.now()
+    this.pending = this.pending.filter(at => now - at < pendingMs)
+    this.pending.push(now)
+    return { action: 'allow', overrideBrowserWindowOptions: {
+      ...bounds, useContentSize: true, minWidth: limits.minWidth, minHeight: limits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
+      title: limits.title, resizable: limits.resizable, minimizable: false, maximizable: false, fullscreenable: false, autoHideMenuBar: false,
+      titleBarStyle: 'hidden',
+      ...this.options.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...base.overlay, height: controls.overlayHeight } },
+      webPreferences: childPreferences
     } }
   }
 
@@ -119,7 +164,9 @@ export class PopoutWindows<W extends PopoutWindow> {
   adopt(window: W, name?: string): void {
     const activation = new UserActivation()
     this.pending.shift()
-    this.windows.set(window.id, { window, activation, ...name !== undefined && popoutWindowName.test(name) ? { name } : {} })
+    const dialog = name === undefined ? undefined : dialogWindowKind(name)
+    this.windows.set(window.id, { window, activation, ...name !== undefined && (popoutWindowName.test(name) || dialog) ? { name } : {}, ...dialog ? { dialog } : {} })
+    if (dialog) { const parent = this.options.parent?.(); if (parent && !parent.isDestroyed()) window.setParentWindow?.(parent) }
     const contents = window.webContents
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     for (const event of ['will-navigate', 'will-frame-navigate', 'will-redirect'] as const) contents.on(event, navigation => navigation.preventDefault())
@@ -165,6 +212,14 @@ export class PopoutWindows<W extends PopoutWindow> {
     }
     window.moveTop()
     return true
+  }
+  /** The dialog windows' overlay follows the theme, as the main window's does (macOS draws its own traffic lights). */
+  chrome(overlay: { readonly color: string; readonly symbolColor: string }): void {
+    if (this.options.platform === 'darwin') return
+    for (const { window, dialog } of this.windows.values()) {
+      if (!dialog || window.isDestroyed()) continue
+      try { window.setTitleBarOverlay?.({ ...overlay }) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
+    }
   }
   /** Every popout follows the main window's zoom. */
   zoom(level: number): void { for (const { window } of this.windows.values()) if (!window.isDestroyed()) window.webContents.setZoomLevel(level) }

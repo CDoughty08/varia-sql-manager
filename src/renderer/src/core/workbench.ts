@@ -265,6 +265,8 @@ export interface Workbench extends Disposable {
    * and presses `MenuService`, and its focus counts as the user's window (`windows`).
    */
   attachWindow(target: Window): Disposable
+  /** Tools › Options and Help › About open in dialog windows of their own (popouts/DialogWindow.tsx); unit tests' workbenches leave it out. */
+  readonly dialogWindows?: boolean
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -627,6 +629,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     updates,
     releaseNotes,
     help,
+    dialogWindows: true,
     attachWindow: target => {
       const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }

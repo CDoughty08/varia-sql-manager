@@ -2,9 +2,15 @@ import { windows } from './windows'
 
 /**
  * A modal dialog owns the keyboard and the workbench behind it: keys, menus, and the palette do not act while one is open.
- * Dialogs open in the main window, and hold every popout window too.
+ * A dialog over the main window holds every popout window too. A dialog window (Tools › Options, Help › About) holds only
+ * itself: while the user is in it, it owns the keys; in the main window, the workbench works beside it.
  */
-export const modalOpen = (): boolean => typeof document !== 'undefined' && !!document.querySelector('[aria-modal="true"]')
+export const modalOpen = (): boolean => {
+  if (typeof document === 'undefined') return false
+  if (document.querySelector('[aria-modal="true"]')) return true
+  const active = windows.activeDocument()
+  return !!active && active !== document && !!active.querySelector('[aria-modal="true"]')
+}
 
 /** Transient surfaces that take focus only while open (the quick input and the menus): closing them gives focus back. */
 export const transientSurfaces = '.quick-input, .menu-layer, .title-bar-menus'
