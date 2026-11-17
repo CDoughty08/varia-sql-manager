@@ -339,7 +339,7 @@ internal static class PackerChecks
         string? code = null;
         try { service.DispatchAsync("results.search", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "still no such text", fromRow = 0, maxMatches = 10 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
         catch (RequestException error) { code = error.Code; }
-        check(code == "TOO_LARGE" && AllPacked(set) && rig.Store.UsedBytes == used, "a search refused the budget to unpack a packed result answers TOO_LARGE and leaves it packed");
+        check(code == "TOO_LARGE" && AllPacked(set) && rig.Store.UsedBytes == used, "a search through a sorted view refused the budget for the view's inverse answers TOO_LARGE and leaves it packed");
     }
 
     private static void UsedWhileDue(Action<bool, string> check)

@@ -207,7 +207,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
-  of one the view's inverse, 4 bytes a row); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  of one the view's inverse, 4 bytes a row of the result); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws

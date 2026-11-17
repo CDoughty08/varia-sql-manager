@@ -67,7 +67,7 @@ minute. Hidden results keep 5 s.
   `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a packed shown
   result grows the budget by more than its view's order.
 - **Find through a sorted grid reads in page order.** A search through a view far from its packed pages' order reads
-  the result in page order, fused, each row placed at its view position through the view's inverse (4 bytes a row, for
+  the result in page order, fused, each row placed at its view position through the view's inverse (4 bytes a row of the result, for
   the search's length), keeping per run only the rows its answer may take. It never unpacks the result: a sorted
   1,000,000-row view of a packed W1 result searched whole in about 33 ms, the budget as before (`node.packedSearch.*`).
 - **Value lists do not keep a result raw.** A distinct snapshot keeps its result's pages, not their bytes, so its later

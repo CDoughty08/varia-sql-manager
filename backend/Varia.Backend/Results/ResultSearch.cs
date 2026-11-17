@@ -388,14 +388,14 @@ internal static class ResultSearcher
     }
 
     /// <summary>What a search answers (TOO_LARGE) when the budget has no room for the rooms a packed result is read through,
-    /// or to unpack it first.</summary>
+    /// or, through a view far from its pages' order, for the view's inverse (ByPages).</summary>
     public const string TooLarge = "There is not enough result memory to search these rows. Close other results and try again.";
 
     /// <summary>Slots a run keeps when the result is packed: each holds a room, and a run reads its pages in order.</summary>
     internal const int PackedSlots = 2;
 
     /// <summary>Unpacks a fused search through a view may make per packed page, with <see cref="PackedSlots"/> slots,
-    /// before a packed result is unpacked first instead.</summary>
+    /// before the search reads the result in page order instead (ByPages).</summary>
     internal const int UnpacksPerPage = 4;
 
     /// <summary>Whether a search through a view of this order would read the packed pages in about their order: with
