@@ -1976,7 +1976,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
     /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
-    /// reserves nothing for them; a packed result is read fused, through rooms it reserves (ResultSearcher.Search). It
+    /// reserves nothing for them; a packed result is read fused, through rooms it reserves, and through a view far from its pages' order with the view's
+    /// inverse, 4 bytes a row, reserved too (ResultSearcher.Search). It
     /// stops at its next checkpoint once the result is released or the view closed.</summary>
     private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
     {

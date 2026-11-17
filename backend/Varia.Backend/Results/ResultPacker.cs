@@ -53,7 +53,7 @@ internal sealed class ResultPacker : IDisposable
     private volatile bool stopping;
     private int passes;
     /// <summary>Each result an operation has unpacked: its unpack count when the policy noticed it, and when. An operation's
-    /// unpack counts as a use, so a hidden result an unpacking operation (a search through a sorted grid, a far-ordered comparison) reads again and again is not packed between runs.
+    /// unpack counts as a use, so a hidden result an unpacking operation (a far-ordered comparison, say) reads again and again is not packed between runs.
     /// Only results still stored are kept.</summary>
     private readonly Dictionary<uint, (int Unpacks, long At, bool Held)> used = [];
     /// <summary>Who asked for room since the last pass for it: some query for the global budget, and queries for their own half.</summary>

@@ -508,7 +508,7 @@ internal static class IdlePackerChecks
 
     private static void RoomSpares(Action<bool, string> check)
     {
-        // Packing for room passes over a result an operation has just unpacked (a search through a sorted grid, say) and may
+        // Packing for room passes over a result an operation has just unpacked (a far-ordered comparison, say) and may
         // need again, but not a shown one whose grid is sorted: that one is packed with the hidden one, which makes the room
         // the query needs.
         var (store, visibility, packer) = Running(40L << 20, 40L << 20);

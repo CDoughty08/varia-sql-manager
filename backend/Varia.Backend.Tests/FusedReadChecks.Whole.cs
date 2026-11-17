@@ -8,8 +8,8 @@ namespace Varia.Backend.Tests;
 /// gives exactly what it gives over the same rows unpacked, leaves the results packed and the budget as it was, unpacks
 /// a bounded number of pages (a diff's revisits served by its readers' kept pages, a snapshot's search reading each page
 /// once), and gives its rooms back when cancelled or refused, with the operation's own sentence. A diff whose first
-/// result is read far from its pages' order unpacks that result in place instead, as before, and a search through a sorted
-/// view does too. The suite sets each store's packing itself, so it is not in the packed pass.</summary>
+/// result is read far from its pages' order unpacks that result in place instead, as before; a search through a sorted view reads
+/// the result in page order and never unpacks it. The suite sets each store's packing itself, so it is not in the packed pass.</summary>
 internal static partial class FusedReadChecks
 {
     public static void RunWhole(Action<bool, string> check)

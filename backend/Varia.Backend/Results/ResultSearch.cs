@@ -59,7 +59,7 @@ internal static class ResultSearcher
     /// outcome is the one a single pass gives.</summary>
     /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
-    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool? local = null)
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
     {
         var columns = set.Wires.Count;
         using var pin = set.Pin();
@@ -69,14 +69,17 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
-        // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
-        // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
-        using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
         // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
         // reads base order or a view near it). Through a view far from its packed pages' order (a sort, not Local) it is read
-        // in page order instead, each row placed at its view position (ByPages), so it is never unpacked whole.
-        if (view is not null && !(local ?? Local(pages, view.Order, token)))
-            return ByPages(set, pages, view, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads);
+        // in page order instead, each row placed at its view position (ByPages), so it is never unpacked whole; that reads
+        // every base row, so its threads are sized by them, not by the view's rows.
+        var byPages = view is not null && !Local(pages, view.Order, token);
+        var read = byPages ? baseRows : rows;
+        // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
+        // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
+        using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(read / MinSlice, ViewSorter.Workers)));
+        if (byPages)
+            return ByPages(set, pages, view!, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads);
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
