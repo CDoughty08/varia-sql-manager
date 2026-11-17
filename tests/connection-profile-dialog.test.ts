@@ -362,6 +362,34 @@ describe('saving connection details', () => {
     expect(view.closed).toHaveBeenCalledTimes(3)
   })
 
+  it('leaves a live connection-only label alone when a save changes no labels', async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], beforeRender: live(saved.options, { ...detailsOf(saved.options, 'off'), environment: 'Staging' }) })
+    await view.choose('Off profile')
+    await act(async () => view.button('Register server').click())
+    await act(async () => view.button('Unfavorite Off profile').click())
+    expect(view.saveConnectionProfile).toHaveBeenCalledTimes(2)
+    expect(view.connections.get(id(50))).toMatchObject({ environment: 'Staging' })
+  })
+
+  it('asks about edits to an alias the form found by its labels, and saves them to that alias', async () => {
+    const first = profile('First alias', 1, 'off'), second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
+    const view = await mount(undefined, { profiles: [first, second], initial: second.options })
+    await pick(view, '#connect-name', 'Renamed alias')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save changes to Second alias?')
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: second.id, options: expect.objectContaining({ displayName: 'Renamed alias' }) }))
+  })
+
+  it('keeps the environment main kept when Connect saves edited details from a form without one', async () => {
+    const first = profile('First alias', 1, 'off'), second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
+    const view = await mount(undefined, { profiles: [first, second], initial: { ...first.options, displayName: '' } })
+    view.api.connect.mockImplementation(async (options, context) => ({ ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', environment: 'Production', authentication: { principal: { provider: 'sqlServer', authentication: options.authentication, id: 'sid:fixture' } } } }))
+    await pick(view, '#connect-name', 'Named now')
+    await act(async () => view.button('Connect').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ displayName: 'Named now', environment: 'Production' }) }))
+  })
+
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
     const view = await mount()
     await view.choose('Off profile')
