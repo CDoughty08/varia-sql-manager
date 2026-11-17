@@ -14,6 +14,7 @@
 ### Fixes
 
 - **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.
+- **IntelliSense ranks exact matches first and brackets columns consistently:** A name you type exactly, in any case, is now first in the completion list instead of below names that only start with it, fuzzy matches or system objects, and it is no longer missing from the visible list. Every column suggestion shows and inserts its bracketed name, so a column of the alias `[bob]` inserts `[bob].[columnName]` just as the list shows.
 
 ## [0.9.0] - 2026-11-15
 
