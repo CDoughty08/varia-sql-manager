@@ -1,6 +1,6 @@
 import { scriptLimits } from '../shared/scripting/catalog'
 import { parseStoredScriptingOptions, scriptingOptionKeys, type ScriptingOptions } from '../shared/scripting/options'
-import { defaultSettings, settingDef, settingsLimits, type SettingKey, type SettingsValues } from '../shared/settings/catalog'
+import { defaultSettings, settingsLimits, settingTitle, type SettingKey, type SettingsValues } from '../shared/settings/catalog'
 import { scriptingSettingPrefix } from '../shared/settings/object-explorer'
 import {
   parseStoredSettings, settingsPatchSchema, storedSettings, withDefaults, type SettingsLoad, type SettingsPatch, type SettingsState, type UnknownSettingValue
@@ -18,7 +18,7 @@ const reasons = (bytes: number): Record<JsonInvalidReason | 'values', string> =>
 export const unreadableSettings = 'Settings could not be read, so changes are not saved.'
 /** The salvage warning, naming at most `settingsLimits.warningLabels` settings. */
 export function salvageWarning(keys: readonly SettingKey[]): string {
-  const labels = keys.map(key => settingDef(key).label), shown = labels.slice(0, settingsLimits.warningLabels).join(', ')
+  const labels = keys.map(settingTitle), shown = labels.slice(0, settingsLimits.warningLabels).join(', ')
   const more = labels.length > settingsLimits.warningLabels ? ` and ${labels.length - settingsLimits.warningLabels} more` : ''
   return `Some settings had values this version does not support (${shown}${more}) and were reset to their defaults; the original file was kept.`
 }

@@ -59,7 +59,7 @@ import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMe
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { installPermissionHandlers } from './permissions'
-import { PopoutWindows } from './popout-windows'
+import { PopoutWindows, settledNativeTheme } from './popout-windows'
 import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
@@ -158,7 +158,8 @@ const popouts = new PopoutWindows<BrowserWindow>({
   workAreas: () => screen.getAllDisplays().map(display => display.workArea),
   zoomLevel: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getZoomLevel() : 0,
   setZoomLevel: level => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(level) },
-  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') }
+  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') },
+  parent: () => mainWindow ?? undefined
 })
 /** The window the user is working in: a focused popout, else the main window. */
 function activeWindow(): { window: BrowserWindow; activation: UserActivation } | undefined {
@@ -593,8 +594,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     window.on('focus', () => activate(true))
     window.on('blur', () => activate(false))
   }
-  // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
-  contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
+  // The page may open only its own popout and dialog windows: same-origin about:blank children with Varia's names, on a display.
+  contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
   // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
   const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
@@ -867,7 +868,7 @@ app.whenReady().then(async () => {
   connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
-  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
+  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme: settledNativeTheme(nativeTheme, popouts) })
   await appearance.initialize()
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())

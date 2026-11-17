@@ -18,6 +18,7 @@ import {
   commandRows, draftProblems, importSummary, mergeImport, removeEntries, replaceImport, resetAll, resetAllCounts, resetRow, stagedChanges, type CommandRow, type ImportSummary
 } from './shortcut-draft'
 import { chipCounts, chipTokens, commandCount, filterShortcutRows, hasToken, isEmptyQuery, parseShortcutQuery, shortcutSearchChars, showsKind, toggleToken, type ChipToken, type ShortcutRowMatch } from './shortcuts-search'
+import { windows } from '../../core/windows'
 import ShortcutTable, { platformTitles, selectionKey, type ShortcutSelection } from './ShortcutTable'
 
 /** Main's file dialogs, through `ShortcutsService`: Import reads and validates a file without saving it; Export writes one. */
@@ -113,7 +114,7 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
     if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') }
     else if (event.key === 'Enter' || event.key === 'ArrowDown') {
       event.preventDefault(); event.stopPropagation()
-      document.querySelector<HTMLElement>('.shortcuts-table [data-row][tabindex="0"]')?.focus()
+      event.currentTarget.ownerDocument.querySelector<HTMLElement>('.shortcuts-table [data-row][tabindex="0"]')?.focus()
     }
   }
   const startImport = async () => {
@@ -194,7 +195,7 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
       : <>
         <ShortcutTable groups={groups} platform={platform} gestures={gestures} onShowMouse={() => setView('mouse')}
           selected={current ? selectionOf(current) : undefined}
-          onSelect={setSelected} onActivate={() => document.getElementById(captureFieldId)?.focus()} onReset={binding => { if (current) setPinned({ command: current.row.id, query: searched }); onChange(resetRow(draft, binding)) }}
+          onSelect={setSelected} onActivate={() => (windows.activeDocument() ?? document).getElementById(captureFieldId)?.focus()} onReset={binding => { if (current) setPinned({ command: current.row.id, query: searched }); onChange(resetRow(draft, binding)) }}
           builtIn={filtering ? undefined : { open: builtInOpen, onToggle: () => setBuiltInOpen(!builtInOpen) }}
           byPlatform={platformRows}
           empty={<><div>{recording && record.length ? 'No shortcut uses those keys.' : 'No shortcuts match.'}</div><button type="button" className="shortcuts-link" onClick={clearFilters}>Clear filters</button></>} />

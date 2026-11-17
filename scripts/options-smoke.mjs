@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  backendReady, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsDescription, optionsForm, optionsHeading, optionsNotes, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown
+  backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -16,6 +16,8 @@ await mkdir('artifacts', { recursive: true })
 const control = await mkdtemp(resolve('artifacts', 'options-backend-'))
 const mac = process.platform === 'darwin'
 let profile, application, page
+// Tools › Options opens in a dialog window of its own (popouts/DialogWindow.tsx): the page of that window while it is open.
+let options
 const failures = []
 const watchdog = setTimeout(() => { console.error('Options suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 420000)
 
@@ -39,7 +41,8 @@ async function close() {
   await application.close()
 }
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
-const dialog = () => page.getByRole('dialog', { name: 'Options', exact: true })
+const dialog = () => options.getByRole('dialog', { name: 'Options', exact: true })
+const closed = () => dialogClosed(options, 'Options')
 const tree = () => dialog().getByRole('tree', { name: 'Options pages', exact: true })
 const node = name => tree().getByRole('treeitem', { name, exact: true })
 const field = label => dialog().getByLabel(label, { exact: true })
@@ -64,8 +67,16 @@ async function openOptions() {
     await expect(page.getByRole('menu', { name: 'Tools', exact: true }).getByRole('menuitem', { name: 'Options…', exact: true })).toBeFocused()
     await page.keyboard.press('o')
   } else await menu('preferences.options')
+  options = await dialogWindow(application, 'Options')
+  options.setDefaultTimeout(15000)
+  if (options !== page) options.on('pageerror', error => failures.push(error.message))
   await expect(dialog()).toBeVisible()
 }
+/** The Options window as main has it: its own OS window, kept above the main window, resizable, with only a close button. */
+const optionsWindow = () => application.evaluate(({ BrowserWindow }) => {
+  const window = BrowserWindow.getAllWindows().find(item => item.getTitle() === 'Options')
+  return window && { parent: window.getParentWindow()?.getTitle().endsWith('Varia SQL Manager') ?? false, resizable: window.isResizable(), minimizable: window.isMinimizable(), maximizable: window.isMaximizable(), size: window.getContentSize() }
+})
 /** Shows a page by clicking each node of its path; a category shows its first page. */
 async function showPage(...path) {
   for (const name of path) await node(name).click()
@@ -73,7 +84,7 @@ async function showPage(...path) {
 }
 const searchKey = mac ? 'Meta+e' : 'Control+e'
 const treeNames = () => tree().getByRole('treeitem').evaluateAll(items => items.map(item => '  '.repeat(Number(item.getAttribute('aria-level')) - 1) + item.textContent))
-const layout = () => page.evaluate(() => {
+const layout = () => options.evaluate(() => {
   const box = document.querySelector('[role="dialog"]').getBoundingClientRect()
   return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight }
 })
@@ -114,11 +125,11 @@ try {
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The tree's keys: Up and Down show the page they reach, Left goes to the parent, Home to the first node.
   await node('Scripting').focus()
-  await page.keyboard.press('ArrowUp')
+  await options.keyboard.press('ArrowUp')
   await expect(node('Commands')).toBeFocused()
-  await page.keyboard.press('ArrowLeft')
+  await options.keyboard.press('ArrowLeft')
   await expect(node('SQL Server Object Explorer')).toBeFocused()
-  await page.keyboard.press('Home')
+  await options.keyboard.press('Home')
   await expect(node('Environment')).toBeFocused()
   await expect(heading()).toHaveText('Environment › General')
   // Shortcuts (SSMS's Keyboard) is a page of its own layout: no notes, no description pane, no Reset to Defaults.
@@ -162,28 +173,28 @@ try {
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
   await node('Shortcuts').focus()
-  await page.keyboard.press(searchKey)
+  await options.keyboard.press(searchKey)
   await expect(search()).toBeFocused()
-  await page.keyboard.type('time-out')
+  await options.keyboard.type('time-out')
   expect(await treeNames()).toEqual(['Query Execution', '  SQL Server', '    General'])
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(optionsForm(dialog()).locator('mark')).toHaveText('time-out')
   // The key is the catalogue's options.focusSearch, a modal key: from a page's field it focuses the box and selects its
   // text, and Shift with it does nothing.
   await field('Execution time-out').focus()
-  await page.keyboard.press(mac ? 'Meta+Shift+e' : 'Control+Shift+e')
+  await options.keyboard.press(mac ? 'Meta+Shift+e' : 'Control+Shift+e')
   await expect(field('Execution time-out')).toBeFocused()
-  await page.keyboard.press(searchKey)
+  await options.keyboard.press(searchKey)
   await expect(search()).toBeFocused()
   expect(await search().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 'time-out'.length])
-  await page.keyboard.press('End')
-  await page.keyboard.type('zzz')
+  await options.keyboard.press('End')
+  await options.keyboard.type('zzz')
   await expect(dialog().getByText('No settings match.', { exact: true })).toBeVisible()
-  await page.keyboard.press('Escape')
+  await options.keyboard.press('Escape')
   await expect(search()).toHaveValue('')
   await expect(dialog()).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(dialog()).toHaveCount(0)
+  await pressToClose(options, 'Escape')
+  await closed()
   console.log('Options checks: Ctrl+E focuses the search, which filters the tree and highlights matches; Escape clears it, then cancels.')
 
   // 3. Changes across pages, one OK: settings.json holds exactly the changed keys, and each takes effect.
@@ -214,8 +225,8 @@ try {
   await showPage('Environment', 'Connections')
   await expect(field('Automatically reconnect on startup')).toBeChecked()
   await field('Automatically reconnect on startup').uncheck()
-  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
-  await expect(dialog()).toHaveCount(0)
+  await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
+  await closed()
   await expect.poll(stored).toEqual({ version: 1, values: {
     'environment.connections.autoReconnect': false,
     'objectExplorer.followActiveQuery': false, 'objectExplorer.pinnedServerHeadersBottom': 3, 'objectExplorer.pinnedServerHeadersTop': 1,
@@ -274,14 +285,15 @@ try {
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(dialog().getByText('Execution time-out must be a whole number from 0 to 86,400.', { exact: true })).toBeVisible()
   await expect(field('Execution time-out')).toBeFocused()
-  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(dialog()).toHaveCount(0)
+  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+  await closed()
   expect((await stored()).values).toMatchObject({ 'environment.connections.autoReconnect': false, 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
   await openOptions()
   await expect(field('Execution time-out')).toHaveValue('7')
   await showPage('Environment', 'Connections')
   await expect(field('Automatically reconnect on startup')).not.toBeChecked()
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   console.log('Options checks: OK names the bounds of an out-of-range value and focuses it; Cancel discards a draft across pages.')
 
   // 10. At 1024×768 the dialog fits; screenshots in Dark and Light (the window keeps this size from here on).
@@ -291,20 +303,81 @@ try {
   await node('SQL Server Object Explorer').click()
   await node('Scripting').click()
   expect(await layout()).toEqual({ inside: true, overflow: false })
-  await page.screenshot({ path: resolve('artifacts', 'options-dark.png') })
+  await options.screenshot({ path: resolve('artifacts', 'options-dark.png') })
   // A form page: checkboxes, number fields with their units, and radio buttons.
   await showPage('Text Editor', 'Transact-SQL', 'Tabs')
   expect(await layout()).toEqual({ inside: true, overflow: false })
-  await page.screenshot({ path: resolve('artifacts', 'options-form-dark.png') })
-  await page.keyboard.press('Escape')
+  await options.screenshot({ path: resolve('artifacts', 'options-form-dark.png') })
+  await pressToClose(options, 'Escape')
+  await closed()
   await menu('theme.mode.light')
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
   await openOptions()
+  // The dialog window follows the theme, as popouts do.
+  await expect.poll(() => options.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
   expect(await layout()).toEqual({ inside: true, overflow: false })
-  await page.screenshot({ path: resolve('artifacts', 'options-light.png') })
-  await page.keyboard.press('Escape')
+  await options.screenshot({ path: resolve('artifacts', 'options-light.png') })
+  await pressToClose(options, 'Escape')
+  await closed()
   await menu('theme.mode.dark')
-  console.log('Options checks: the dialog fits at 1024×768 in Dark and Light (artifacts/options-dark.png, options-form-dark.png, options-light.png).')
+  console.log('Options checks: the dialog fits its window in Dark and Light (artifacts/options-dark.png, options-form-dark.png, options-light.png).')
+
+  // 4b. Sections and alignment: Results to Grid groups its rows under headings, and every field and list on a page shares
+  // one control column. The window is the main window's resizable child, and opens again at the size it was left.
+  await openOptions()
+  // Electron reports minimizable and maximizable only on Windows and macOS; on Linux the window manager decides, and
+  // tests/popout-windows.test.ts checks that main asks for neither.
+  expect(await optionsWindow()).toMatchObject({ parent: true, resizable: true, ...process.platform === 'linux' ? {} : { minimizable: false, maximizable: false } })
+  await showPage('Query Results', 'SQL Server', 'Results to Grid')
+  for (const name of ['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan']) await expect(optionsSection(dialog(), name)).toBeVisible()
+  await expect(optionsSection(dialog(), 'Execution plan').getByRole('checkbox', { name: 'Show outline', exact: true })).toBeChecked()
+  await expect(optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true })).toHaveValue('220')
+  await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('0 = no limit')
+  await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('GiB · 0 = automatic')
+  const columns = await optionsControls(dialog()).evaluateAll(controls => controls.map(control => { const box = control.getBoundingClientRect(); return `${Math.round(box.left)}:${Math.round(box.width)}` }))
+  expect(columns.length).toBeGreaterThan(5)
+  expect(new Set(columns).size).toBe(1)
+  // Searching a section's name finds its rows.
+  await search().fill('execution plan')
+  await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')
+  await search().fill('')
+  // A text field in the dialog window has its menu, by mouse and by Shift+F10; Escape closes the menu, not the dialog.
+  const fieldMenu = options.getByRole('menu', { name: 'Text field', exact: true })
+  await search().click({ button: 'right' })
+  await expect(fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true })).toBeVisible()
+  await options.keyboard.press('Escape')
+  await expect(fieldMenu).toHaveCount(0)
+  await expect(search()).toBeFocused()
+  await options.keyboard.press('Shift+F10')
+  await expect(fieldMenu.getByRole('menuitem', { name: 'Undo', exact: true })).toBeFocused()
+  await options.keyboard.press('Escape')
+  await expect(search()).toBeFocused()
+  await expect(dialog()).toBeVisible()
+  // Tools › Options… again from the main window raises the open window rather than opening another; the main window
+  // works beside it (the dialog is modeless), and keys in the dialog window stay the dialog's.
+  const windowCount = application.windows().length
+  await menu('preferences.options')
+  await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')
+  expect(application.windows().length).toBe(windowCount)
+  const tabs = () => documentTabSlots(page).count(), before = await tabs(), newQuery = mac ? 'Meta+n' : 'Control+n'
+  await search().focus()
+  await options.keyboard.press(newQuery)
+  await options.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  expect(await tabs()).toBe(before)
+  await textbox().filter({ visible: true }).focus()
+  await page.keyboard.press(newQuery)
+  await expect.poll(tabs).toBe(before + 1)
+  await expect(dialog()).toBeVisible()
+  // Smaller than the default and than CI's screens: a reopened window is kept 32 px inside the screen.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(item => item.getTitle() === 'Options').setContentSize(900, 600))
+  await expect.poll(() => options.evaluate(() => [innerWidth, innerHeight])).toEqual([900, 600])
+  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+  await closed()
+  await openOptions()
+  expect((await optionsWindow()).size).toEqual([900, 600])
+  await pressToClose(options, 'Escape')
+  await closed()
+  console.log('Options checks: Results to Grid shows its four sections with one aligned control column; the window is modeless, resizable and reopens at its last size.')
 
   // 5. A restart keeps the values; Alt+Z toggles word wrap and saves it.
   await close()
@@ -318,7 +391,8 @@ try {
   await expect(field('Pinned server headers at bottom')).toHaveValue('3')
   await showPage('Environment', 'Connections')
   await expect(field('Automatically reconnect on startup')).not.toBeChecked()
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   if (!mac) {
     await textbox().focus()
     await page.keyboard.press('Alt+z')
@@ -362,21 +436,21 @@ try {
     await inspector.getByRole('button', { name: 'Remove ' + newKey, exact: true }).click()
     const capture = inspector.getByLabel('Press shortcut keys', { exact: true })
     await capture.focus()
-    await page.keyboard.press('Shift+F9')
+    await options.keyboard.press('Shift+F9')
     await expect(capture).toHaveValue(mac ? '⇧F9' : 'Shift+F9')
     await inspector.getByRole('button', { name: 'Assign', exact: true }).click()
     await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
   }
   if (!mac) {
     await remapNewQuery()
-    await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(dialog()).toHaveCount(0)
+    await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
+    await closed()
     expect(await shortcutsFile()).toBeNull()
     expect(await fileMenuKeys()).toBe('Control+N')
 
     await remapNewQuery()
-    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
-    await expect(dialog()).toHaveCount(0)
+    await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
+    await closed()
     await expect.poll(async () => (await shortcutsFile())?.bindings).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: 'file.new', key: 'mod+n', remove: true }), expect.objectContaining({ command: 'file.new', key: 'shift+f9' })
     ]))
@@ -423,8 +497,8 @@ try {
     await reset.getByRole('button', { name: 'Reset All', exact: true }).click()
     await expect(reset).toHaveCount(0)
     await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
-    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
-    await expect(dialog()).toHaveCount(0)
+    await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
+    await closed()
     await expect.poll(async () => { const file = await shortcutsFile(); return file && (file.bindings ?? []) }).toEqual([])
     await expect.poll(fileMenuKeys).toBe('Control+N')
     await opens(page, () => editor().focus(), 'Control+n', 1)
@@ -442,7 +516,8 @@ try {
   await openOptions()
   await node('Query Execution').click()
   await expect(field('Execution time-out')).toHaveValue('30')
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   await page.reload()
   await expectEditorShown(page)
   // The workbench asked main for its settings before this call, so its answer is in once this one is.
@@ -460,7 +535,8 @@ try {
   await node('SQL Server Object Explorer').click()
   await node('Scripting').click()
   await expect(field('Script USE <database>')).toHaveValue('false')
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   expect(await stored()).toEqual({ version: 1, values: { 'objectExplorer.scripting.scriptUseDatabase': false } })
   expect(await readFile(join(profile, 'scripting-options.json'), 'utf8')).toBe(legacy)
   console.log('Options checks: scripting-options.json is imported into settings.json once and left as it was.')

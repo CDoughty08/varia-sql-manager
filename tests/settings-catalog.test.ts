@@ -4,7 +4,7 @@ import { limits } from '../src/shared/ipc/wire/protocol'
 import { defaultScriptingOptions, scriptingOptionDefs, scriptingOptionGroupLabels } from '../src/shared/scripting/options'
 import { selectTopRowsScript } from '../src/shared/sql/identifiers'
 import {
-  commandTitle, defaultSettings, pageById, pagePath, scriptingOptionsFrom, settingDef, settingDefs, settingKeyPattern, settingKeys, settingPages, settingsLimits,
+  commandTitle, defaultSettings, pageById, pagePath, scriptingOptionsFrom, settingDef, settingDefs, settingKeyPattern, settingKeys, settingPages, settingsLimits, settingTitle,
   visibleSettings, type SettingDef
 } from '../src/shared/settings/catalog'
 import { renderSettingsDocs } from '../src/shared/settings/docs'
@@ -143,6 +143,28 @@ describe('settings catalogue', () => {
     const keyed = [...settingDefs, ...settingPages].filter(item => /\b(Ctrl|Alt)\b/.test(item.description ?? '') && !('platforms' in item && item.platforms))
     expect(keyed.filter(item => !/macOS|Windows and Linux/.test(item.description ?? '')).map(item => 'key' in item ? item.key : item.id)).toEqual([])
     expect(keyed.length).toBeGreaterThan(0)
+  })
+  it('puts every setting of a sectioned page in one of its sections, and leaves no section empty', () => {
+    for (const page of settingPages.filter(item => item.sections)) {
+      const labels = page.sections!.map(section => section.label), defs = settingDefs.filter(def => def.page === page.id)
+      expect(new Set(labels).size, page.id).toBe(labels.length)
+      expect(page.layout, page.id).toBe('form')
+      for (const def of defs) expect(labels, `${def.key} names a section of ${page.id}`).toContain(def.group)
+      for (const label of labels) expect(defs.some(def => def.group === label && !def.hidden), `${page.id} › ${label}`).toBe(true)
+      for (const section of page.sections!) if (section.description) expect(section.description, `${page.id} › ${section.label}`).toMatch(/^[A-Z].*\.$/)
+    }
+    // The owner's example: Results to Grid as four sections, its execution plan rows together.
+    expect(pageById('queryResults.sqlServer.grid')?.sections?.map(section => section.label)).toEqual(['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan'])
+    expect(settingDefs.filter(def => def.group === 'Execution plan').map(def => def.key)).toEqual(settingDefs.filter(def => def.key.startsWith('queryResults.plan.')).map(def => def.key))
+  })
+  it('gives a short label leaning on its section a full title, and keeps units and hints out of labels', () => {
+    for (const def of settingDefs) {
+      expect(def.label, def.key).not.toMatch(/\(\d+: /)
+      if (def.title !== undefined) { expect(def.group, def.key).toBeDefined(); expect(def.title, def.key).not.toBe(def.label) }
+      if (def.hint !== undefined) expect(def.hint.length, def.key).toBeLessThanOrEqual(40)
+    }
+    expect(settingTitle('queryResults.plan.outline')).toBe('Show execution plan outline')
+    expect(settingTitle('textEditor.sql.tabSize')).toBe('Tab size')
   })
   it('titles Select Top Rows from its setting, and leaves other commands and invalid values alone', () => {
     expect(commandTitle('explorer.selectTopRows')).toBe('Select Top 1000 Rows')

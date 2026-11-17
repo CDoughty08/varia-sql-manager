@@ -102,7 +102,9 @@ export const indicators = {
 /** `--varia-<name>`, in px: the widest some surfaces that show user text grow before the text ends in an ellipsis; the
  *  whole text stays in their tooltip and accessible name. */
 export const widths = {
-  resultTab: { px: 240, use: 'A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound.' }
+  resultTab: { px: 240, use: 'A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound.' },
+  optionsLabel: { px: 240, use: 'The label column of a Tools › Options form page, where longer labels wrap; checkboxes span it and the control column.' },
+  optionsControl: { px: 220, use: 'The control column of an Options form page: every number field and list is this wide, so they line up.' }
 } as const
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
@@ -129,7 +131,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * keep their sizes until the shell, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: ['.title-bar'],
+  header: ['.title-bar', '.dialog-titlebar:not([data-platform="darwin"])'],
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   documentTab: ['.query-shelf-more'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],

@@ -4,6 +4,8 @@
 
 ### New and improved
 
+- **A clearer Tools › Options:** Every page lines its labels, fields and lists up in columns, and longer pages group their settings under headings, such as Results to Grid's Grid display, Copy and save, Limits and memory, and Execution plan\. Units and hints such as "0 = no limit" sit beside the field, and searching a heading's name finds its settings\.
+- **Options and About in their own windows:** Tools › Options and Help › About open in themed windows of their own that you can move anywhere, even to another monitor\. Options can be resized, opens at the size you last left it, and lets you keep working in the main window while it is open\.
 - **Arrange your servers:** Drag servers in Object Explorer to reorder them, or use Move Up and Move Down (Alt+Up and Alt+Down). The order is kept across restarts.
 - **Object Explorer opens as you left it:** Servers that reconnect at startup expand only the nodes you had open when you closed Varia, instead of every server expanding.
 - **Quicker Peek:** Holding Ctrl (Cmd on macOS) over Object Explorer shows a zoom cursor on rows you can peek, and pressing it with the pointer already resting on a row peeks it without moving the mouse. Releasing it keeps the card open so you can move into it.

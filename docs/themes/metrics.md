@@ -90,6 +90,8 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use |
 | --- | --- | --- |
 | `--varia-resultTab` | 240 | A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound. |
+| `--varia-optionsLabel` | 240 | The label column of a Tools › Options form page, where longer labels wrap; checkboxes span it and the control column. |
+| `--varia-optionsControl` | 220 | The control column of an Options form page: every number field and list is this wide, so they line up. |
 
 ## Bars and rows
 
@@ -97,7 +99,7 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
-| `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
+| `--varia-header` | 40 | 44 | The title bar. | `.title-bar`, `.dialog-titlebar:not([data-platform="darwin"])` |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.editor-empty > .editor-group-actions`, `.explorer-header`, `.peek-head`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
 | `--varia-documentTab` | 44 | 48 | Two-line document tabs and their shelf overflow buttons. | `.query-shelf-more` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.object-search-field`, `.object-search-filter-button`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle`, `.activity-tool`, `.activity-filter-box input`, `.compare-side` |
