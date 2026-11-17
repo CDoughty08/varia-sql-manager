@@ -5,7 +5,12 @@ import { windows } from './windows'
  * A dialog over the main window holds every popout window too. A dialog window (Tools › Options, Help › About) holds only
  * itself: while the user is in it, it owns the keys; in the main window, the workbench works beside it.
  */
-export const modalOpen = (): boolean => !!openModal()
+export const modalOpen = (): boolean => {
+  if (typeof document === 'undefined') return false
+  if (document.querySelector('[aria-modal="true"]')) return true
+  const active = windows.activeDocument()
+  return !!active && active !== document && !!active.querySelector('[aria-modal="true"]')
+}
 
 /** The modal dialog that holds the keyboard (`modalOpen`): the top one over the main window, else the dialog window's the user is in. */
 export function openModal(): Element | undefined {
