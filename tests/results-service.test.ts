@@ -1483,6 +1483,19 @@ describe('results service filters', () => {
     expect(service.canFilterSelection('t1', key, 'in')).toBe(true)
   })
 
+  it('leaves a comparison\'s hidden tone column out of a selection filter across columns', async () => {
+    const columns = [{ name: 'id', dataType: 'int', wire: 'text' }, { name: 'name', dataType: 'nvarchar', wire: 'text' }, { name: 'tone', dataType: 'tinyint', wire: 'text', role: 'tone' }]
+    const { service, handle, select } = filtered(10, columns as ResultColumn[])
+    const key = keyAt(service, 't1', 0)
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    select([{ top: 0, bottom: 2, left: 0, right: 2 }])
+    expect(service.filterSelection('t1', key, 'in')).toBe(true)
+    expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'in', column: 0, cells: { ranges: [[0, 3]] } }, { op: 'in', column: 1, cells: { ranges: [[0, 3]] } }])
+    // The tone column alone filters nothing.
+    select([{ top: 0, bottom: 2, left: 2, right: 2 }])
+    expect(service.canFilterSelection('t1', key, 'in')).toBe(false)
+  })
+
   it('refuses a selection across more columns than a grid takes filters, and says so when the filters would not fit', async () => {
     const columns = Array.from({ length: 20 }, (_, index) => ({ name: 'c' + index, dataType: 'int', wire: 'text' as const }))
     const { service, handle, select, tab, flush } = filtered(10, columns as ResultColumn[])

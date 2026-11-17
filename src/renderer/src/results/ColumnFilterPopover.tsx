@@ -312,7 +312,14 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     return () => doc.removeEventListener('pointerdown', press, true)
   }, [grid, onClose])
 
+  /** OK is on its way (waiting for the ticks before it): Enter held down or OK pressed again applies nothing more. */
+  const applying = useRef(false)
   const apply = async () => {
+    if (applying.current) return
+    applying.current = true
+    try { await applyNow() } finally { applying.current = false }
+  }
+  const applyNow = async () => {
     let chosen: ColumnCondition | undefined
     if (condition === 'list') {
       if (!list || !summary) return
@@ -391,18 +398,22 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     setActive(next)
     if (!element) return
     const height = element.clientHeight || viewHeight, top = element.scrollTop
+    // The rows start below the list's top padding, which scrolls with them.
+    const pad = parseFloat((element.ownerDocument.defaultView ?? window).getComputedStyle(element).paddingTop) || 0
     const at = listWindow({ scrollTop: top, viewHeight: height, rowHeight, rows: listRows, overscan: 0 })
-    const position = at.offset(next) - top
+    const position = at.offset(next) + pad - top
     if (position >= 0 && position + rowHeight <= height) return
     // Within the scroll space a row sits at its own pixels; past it (a mapped list) the scroll bar spans the rows.
-    const scroll = listRows * rowHeight <= maxListSpace ? (position < 0 ? next * rowHeight : (next + 1) * rowHeight - height)
+    const scroll = listRows * rowHeight <= maxListSpace ? (position < 0 ? (next === 0 ? 0 : next * rowHeight + pad) : (next + 1) * rowHeight + pad - height)
       : Math.max(0, position < 0 ? next : next + 1 - height / rowHeight) / Math.max(1, listRows - height / rowHeight) * Math.max(1, at.space - height)
     element.scrollTop = Math.max(0, scroll)
     setScrollTop(element.scrollTop)
   }
-  /** Ticks or unticks the active row, as a click on it does; a row still being read has nothing to tick yet. */
+  /** Ticks or unticks the active row, as a click on it does, scrolling it into view first (the wheel may have moved it
+   *  out); a row still being read has nothing to tick yet. */
   const toggleActive = () => {
     if (!listing || !summary) return
+    moveTo(active)
     if (active < nullRows) return toggleNull()
     const at = active - nullRows, value = blocks.current.get(Math.floor(at / blockSize))?.[at % blockSize]
     if (value) toggle(value)
@@ -448,7 +459,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     {empty && <p className="column-filter-note">No values match.</p>}
     {/* One Tab stop: the arrows move the active row inside it (aria-activedescendant), so focus never sits on a row the
         list may stop drawing. */}
-    <div ref={viewport} className="column-filter-list" role="listbox" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
+    <div ref={viewport} className="column-filter-list" role="listbox" aria-multiselectable="true" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
       tabIndex={summary && listRows > 0 ? 0 : -1} aria-activedescendant={summary && active >= firstRow && active < lastRow ? `${rowId}-${active}` : undefined}
       onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onKeyDown={listKeyDown}>
       {summary && <div className="column-filter-space" role="presentation" style={{ height: win.space }}>

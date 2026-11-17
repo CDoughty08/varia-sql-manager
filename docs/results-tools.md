@@ -47,7 +47,8 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   most frequent first or by value, as a checklist with a search, Select all, Select none and NULL as an entry; OK keeps
   the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL. From the
   keyboard: Down in the search goes to the list, the arrows, Page Up, Page Down, Home and End move through it, Space ticks
-  the value, Enter is OK and Escape cancels; the list is one Tab stop between the search and the condition.
+  the value, Enter is OK and Escape cancels; the list is one Tab stop, after Select all and Select none and before the
+  condition.
 - **Search** (results toolbar, Ctrl+F in a grid) finds matching cells in every grid of the run, in memory, comparing text
   by its column's collation; Enter and Shift+Enter (F3 and Shift+F3 in a grid, ⌘G and ⇧⌘G on macOS) step through them in each grid's order.
   Its **Columns** mode searches column names instead and fades the columns that do not match.

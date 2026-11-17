@@ -178,7 +178,7 @@ internal sealed class ResultPacker : IDisposable
             // delay then rather than when it completes. Live tables are never packed and the renderer never reports them.
             if (set.Budget.Live is not null || !visibility.State(set.ResultId, out var hidden, out var since)) continue;
             // A shown result whose grid is sorted or filtered (an open view) is not packed while idle: each screen of a view
-            // reads a page or so a row, about 1 ms raw against 6 ms packed (a 256-row screen of a 256 MiB result on 16
+            // reads a page or so a row, about 0.9 ms raw against 4 to 6 ms packed (a 256-row screen of a 256 MiB result on 16
             // workers, measured). One already packed stays packed: its sort and screens read the packed pages, never
             // unpacking it whole. Closing its last view pokes the policy.
             if (!hidden && (idle is null || store.HasViews(set))) continue;

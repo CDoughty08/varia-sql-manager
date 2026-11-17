@@ -80,11 +80,13 @@ function fixture(o: { hold?: boolean } = {}) {
 }
 
 describe('column filter popover', () => {
-  it('is a listbox of options the arrow keys move through and Space ticks, one Tab stop between the search and OK', async () => {
+  it('is a listbox of options the arrow keys move through and Space ticks, one Tab stop', async () => {
     const view = fixture()
     await view.settle()
     const listbox = view.valueList()
     expect(listbox.tabIndex).toBe(0)
+    // Several values tick at once: a multi-select listbox, so a screen reader does not take focus for selection.
+    expect(listbox.getAttribute('aria-multiselectable')).toBe('true')
     expect(view.checkboxes()[0]!.getAttribute('aria-checked')).toBe('true')
     expect(view.checkboxes()[0]!.getAttribute('aria-setsize')).toBe(String(distinct))
     // The rows' drawn boxes take no Tab stop of their own: the listbox is the one.
@@ -121,10 +123,13 @@ describe('column filter popover', () => {
     const listbox = view.valueList()
     act(() => listbox.focus())
     view.key(listbox, ' ')
+    // Enter held down repeats: OK waits on the tick, and the repeats apply nothing more.
+    view.key(listbox, 'Enter')
     view.key(listbox, 'Enter')
     await view.settle()
     await act(async () => { view.tickRequests[0]!.resolve({ checked: distinct - 1, nullsChecked: true }); await Promise.resolve() })
     await view.settle()
+    expect(view.results.applyColumnFilter).toHaveBeenCalledTimes(1)
     expect(view.results.applyColumnFilter).toHaveBeenCalledWith('t', 'e1', 0, { kind: 'list', list: view.list })
     expect(view.onClose).toHaveBeenCalled()
     view.unmount()
@@ -142,6 +147,12 @@ describe('column filter popover', () => {
     expect(document.activeElement).toBe(view.valueList())
     // The active row is not drawn, so the listbox names no active descendant until it is scrolled back.
     expect(view.valueList().getAttribute('aria-activedescendant')).toBeNull()
+    // Space ticks it all the same, scrolling it back into view first.
+    view.key(view.valueList(), ' ')
+    await view.settle()
+    expect(view.valueList().scrollTop).toBe(0)
+    expect(view.list.tick).toHaveBeenLastCalledWith({ checked: false, groups: [0] })
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v00000 (1)')
     view.unmount()
   })
 
