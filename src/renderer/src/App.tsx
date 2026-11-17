@@ -36,7 +36,7 @@ import ConnectDialog from './ConnectDialog'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
 import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
-import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, withChangedDetails, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
@@ -220,11 +220,7 @@ export default function App() {
     setExplorerError(info.historyWarning ?? '')
     // Labels the user changed in Connect are their choice already, and only those reach a reused connection: its other
     // labels (a connection-only environment, say) stay. Without such a change, labels that differ still ask.
-    if (changedDetails.length) {
-      const selected = opened.reused ? { ...opened.current, ...Object.fromEntries(changedDetails.map(field => [field, opened.selected[field]])) } : opened.selected
-      await finishConnected({ ...opened, selected }, 'selected')
-      return
-    }
+    if (changedDetails.length) { await finishConnected(withChangedDetails(opened, changedDetails), 'selected'); return }
     if (needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
     await finishConnected(opened, 'current')
   }

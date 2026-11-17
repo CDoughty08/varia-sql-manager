@@ -12,7 +12,7 @@ import { readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred } from './fixtures/documents'
 import { acceptConnectionReceipt } from '../src/renderer/src/services/connection-receipts'
 import { detailsOf } from '../src/renderer/src/services/connections'
-import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation } from '../src/renderer/src/services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, withChangedDetails, type OpenedConnection } from '../src/renderer/src/services/connection-opening'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const cleanups: (() => void)[] = []
@@ -382,8 +382,8 @@ describe('saving connection details', () => {
   })
 
   it('keeps the environment main kept when Connect saves edited details from a form without one', async () => {
-    const first = profile('First alias', 1, 'off'), second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
-    const view = await mount(undefined, { profiles: [first, second], initial: { ...first.options, displayName: '' } })
+    const plain = profile('First alias', 1, 'off'), first = { ...plain, options: { ...plain.options, environment: 'Production' } }, second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
+    const view = await mount(undefined, { profiles: [first, second], initial: { ...first.options, displayName: '', environment: undefined } })
     view.api.connect.mockImplementation(async (options, context) => ({ ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', environment: 'Production', authentication: { principal: { provider: 'sqlServer', authentication: options.authentication, id: 'sid:fixture' } } } }))
     await pick(view, '#connect-name', 'Named now')
     await act(async () => view.button('Connect').click())
@@ -477,6 +477,32 @@ describe('saving connection details', () => {
     expect(prompt()).toBeNull()
   })
 
+  it('counts only labels the user edited, not an entry label filled in after editing began', async () => {
+    const master = profile('Master', 1, 'off'), sales = { ...profile('Sales', 2, 'off'), options: { ...master.options, database: 'sales', displayName: 'Sales', environment: 'Production' } }
+    const view = await mount(undefined, { profiles: [master, sales], initial: master.options })
+    await pick(view, '#connect-database', 'sales')
+    expect(view.host.querySelector<HTMLSelectElement>('#connect-environment')!.value).toBe('Production')
+    await pick(view, '#connect-name', 'Sales reporting')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[6]).toEqual(['displayName'])
+  })
+
+  it("saves only the changed labels from Connect, keeping the entry's others", async () => {
+    const saved = profile('Saved name', 1, 'off'), view = await mount(undefined, { profiles: [saved], initial: { ...saved.options, displayName: 'Connection name' } })
+    await pick(view, 'input[type="color"]', '#e51400')
+    await act(async () => view.button('Connect').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ displayName: 'Saved name', color: '#e51400' }), autoReconnect: 'off' }))
+  })
+
+  it('asks about and saves to the same alias when the labels are retyped to match another', async () => {
+    const [first, second] = aliasPair(), view = await mount(undefined, { profiles: [first, second], initial: second.options })
+    await pick(view, '#connect-name', 'First alias')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save changes to Second alias?')
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: second.id }))
+  })
+
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
     const view = await mount()
     await view.choose('Off profile')
@@ -489,5 +515,19 @@ describe('saving connection details', () => {
     expect(view.onConnected.mock.calls[1]?.[6]).toEqual(['color'])
     // Main records no labels when it reuses a live connection: the dialog saves them to that History entry itself.
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), options: expect.objectContaining({ color: '#e51400' }), autoReconnect: 'on' }))
+  })
+})
+
+describe('changed details on a reused connection', () => {
+  const opened = (reused: boolean): OpenedConnection => ({
+    id: 'handle', targetId: 'target', generation: 1, bindingRevision: 0, reused,
+    current: { displayName: 'Old', color: '#111111', environment: 'Staging', autoReconnect: 'off' },
+    selected: { displayName: 'New', color: '#222222', environment: 'Production', autoReconnect: 'on' }
+  })
+  it('applies only the changed fields to a reused connection and keeps its other labels', () => {
+    expect(withChangedDetails(opened(true), ['displayName']).selected).toEqual({ displayName: 'New', color: '#111111', environment: 'Staging', autoReconnect: 'off' })
+  })
+  it('leaves a new connection with every selected detail', () => {
+    expect(withChangedDetails(opened(false), ['displayName']).selected).toEqual(opened(false).selected)
   })
 })
