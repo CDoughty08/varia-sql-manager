@@ -1,6 +1,7 @@
 import type { Reporter, TestCase } from 'vitest/node'
 import { cpus, tmpdir } from 'node:os'
-import { readdirSync, readFileSync, rmSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 
 /** Tests at least this long are listed; on a healthy runner almost every test takes well under a second. */
@@ -30,7 +31,13 @@ export default class SlowTestReporter implements Reporter {
   private readonly diag: string[] = []
   onInit(): void {
     if (!process.env.CI) return
-    rmSync(join(tmpdir(), 'varia-diag'), { recursive: true, force: true })
+    // Which processes hold the CPU early in the check, when vitest workers stall.
+    const ps = "Get-Counter '\Process(*)\% Processor Time' -SampleInterval 2 -MaxSamples 1 | ForEach-Object { $_.CounterSamples } | Sort-Object CookedValue -Descending | Select-Object -First 14 | ForEach-Object { '{0} {1:N0}' -f $_.InstanceName, $_.CookedValue }"
+    for (const at of [12, 25, 35, 45]) setTimeout(() => {
+      const since = ((Date.now() - (this.checkStarted ?? Date.now())) / 1000).toFixed(1)
+      if (process.platform === 'win32') execFile('powershell', ['-NoProfile', '-Command', ps], (error, out) => this.diag.push(`processes at ${since} s: ${error ? error.message : out.trim().split(/\r?\n/).join(' | ')}`))
+      else execFile('ps', ['-eo', 'pcpu,nice,comm', '--sort=-pcpu'], (error, out) => this.diag.push(`processes at ${since} s: ${error ? error.message : out.trim().split('\n').slice(0, 14).join(' | ')}`))
+    }, at * 1000).unref()
     const idle = () => cpus().reduce((sum, cpu) => [sum[0] + cpu.times.idle, sum[1] + cpu.times.user + cpu.times.sys + cpu.times.idle + cpu.times.irq + cpu.times.nice], [0, 0])
     let last = performance.now(), before = idle(), cpu = process.cpuUsage(), ticks = 0
     setInterval(() => {
