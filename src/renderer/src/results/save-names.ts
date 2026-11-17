@@ -71,7 +71,7 @@ export function nameMeetsOthers(subject: SaveSubject, others: readonly SaveSubje
 }
 
 /**
- * Save Results As's suggested name (grouped results plan, Concurrency and limits; named result sets scope, Save names):
+ * Save Results As's suggested name (docs/results-tools.md, Save Results As names):
  * `{tab}-Result2`, `{tab}-Result2-Pivot`, `{tab}-Differences1`, with `-Transposed` when the grid is drawn so; a named
  * result's name stands where its number would, `{tab}-Open orders`, `{tab}-Open orders-Pivot`. The number stays beside a
  * name when the name alone could not tell the file apart: another result of the run makes the same file name, or the name

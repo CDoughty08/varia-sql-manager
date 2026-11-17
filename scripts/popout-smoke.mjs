@@ -6,8 +6,8 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
-  backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
-  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
+  backendReady, banner, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
+  dockPopoutBack, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -34,7 +34,7 @@ async function ready() {
   page.setDefaultTimeout(30000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
   await pinStackedResults(page)
 }
@@ -48,7 +48,14 @@ async function run(sql) {
 async function popsOut(move) {
   const opened = application.waitForEvent('window', { timeout: 30000 })
   await move()
-  const popout = await opened
+  // A rare Windows CI timeout here left nothing to go on: main denies a popout off every display's work area, and the
+  // page then shows why in its banner.
+  const popout = await opened.catch(async error => {
+    const banners = await banner(page).allTextContents().catch(reason => String(reason))
+    const screens = await application.evaluate(({ BrowserWindow, screen }) => ({ windows: BrowserWindow.getAllWindows().map(window => window.getBounds()), workAreas: screen.getAllDisplays().map(display => display.workArea) })).catch(reason => String(reason))
+    console.error('No popout window opened:', JSON.stringify({ banners, screens }))
+    throw error
+  })
   popout.setDefaultTimeout(30000)
   popout.on('pageerror', error => failures.push(error.message))
   await expect(popoutTabs(popout)).toBeVisible()
@@ -140,7 +147,7 @@ try {
   console.log('Popout checks: the popped-out grid copies by keys and by its own context menu, and the palette opens in its window.')
 
   // 3. Its window's button docks it back, and its window closes.
-  await popoutDockButton(results).click()
+  await dockPopoutBack(results)
   await expect(pane(page, 'results')).toBeVisible()
   await expect.poll(windowCount).toBe(1)
   await expect(gridCell(resultGrid(page), 0, 1)).toHaveText(w1(0)[1])
@@ -164,7 +171,7 @@ try {
   const planSizer = planViewer(plans).getByRole('separator', { name: 'Resize plan properties', exact: true })
   await planSizer.focus(); await plans.keyboard.press('ArrowLeft')
   await expect(planSizer).toHaveAttribute('aria-valuenow', '276')
-  await popoutDockButton(plans).click()
+  await dockPopoutBack(plans)
   await expect(planCanvas(page).locator('canvas')).toBeVisible()
   await expect(planViewer(page).getByRole('separator', { name: 'Resize plan properties', exact: true })).toHaveAttribute('aria-valuenow', '276')
   await expect.poll(windowCount).toBe(1)

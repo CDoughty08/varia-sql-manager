@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { documentCrumbs, documentFrame, documentTab, documentTabs, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'ssis-operations-profile-'))
@@ -43,7 +44,7 @@ const activeId = () => page.evaluate(({ grid, cell }) => {
   const row = active?.closest('[role="row"]')
   return row ? [...row.querySelectorAll(cell)].find(item => item.getAttribute('aria-colindex') === '2')?.textContent ?? null : null
 }, parts)
-const calls = async method => (await readFile(resolve(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method).map(call => call.params)
+const calls = async method => parseCalls(await readFile(resolve(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
 const operationsUpdates = async () => (await calls('live.update')).filter(update => update.args || update.refresh || update.paused !== undefined)
 const views = () => page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'ssis.operations'))
 const tile = name => frame().getByRole('group', { name: 'Operation counts', exact: true }).getByRole('button', { name: new RegExp(`^${name}: `) })

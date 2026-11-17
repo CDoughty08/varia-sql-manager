@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -87,7 +87,7 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   await stubDialogs()
 
   // 0. The command line's file opens in its own tab, after the first query; closing it leaves that query active.

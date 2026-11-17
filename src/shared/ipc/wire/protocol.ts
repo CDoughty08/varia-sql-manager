@@ -56,7 +56,9 @@ export const limits = {
   /** An error's `details`: the server that answered, and BACKEND_ERROR's exception types (ErrorDetailsLimits in C#). */
   errorDetails: { server: 256, exception: 512 },
   pending: { requests: 256, control: 32, stdinBytes: 32 * MiB },
-  backend: { inFlight: 288, metadataSlots: 8, sessions: 32, resultReads: 16 },
+  /** The backend's concurrency (HostOptions.MaxInFlight, MetadataSlots and ResultSlots, and SqlService.SessionLimit
+   *  in C#), which answers past them itself: main does not enforce them. */
+  backend: { inFlight: 288, metadataSlots: 8, sessions: 1000, resultReads: 16 },
   credit: { min: 64 * KiB, max: 16 * MiB, workerDefault: 4 * MiB, perStream: 16 * MiB, perPort: 64 * MiB },
   port: { outstanding: 64, invalidMessages: 100, opensPerMinute: 10 },
   worker: { cacheBytes: 64 * MiB, cachePages: 512, windowRows: 4096, windowCells: 262_144, windowCharacters: 4_000_000, displayCharacters: 1024 },

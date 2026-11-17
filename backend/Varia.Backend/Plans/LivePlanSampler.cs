@@ -58,19 +58,8 @@ internal sealed class LivePlanSampler(ILiveHost host, LiveGates gates, string co
             await using var command = observer.CreateCommand();
             command.CommandTimeout = 0;
             var profile = host.Profile(connectionId);
-            var scope = profile?.EngineEdition == 5 ? "DB_NAME(),'DATABASE','VIEW DATABASE STATE'"
-                : profile?.Major >= 16 ? "NULL,NULL,'VIEW SERVER PERFORMANCE STATE'" : "NULL,NULL,'VIEW SERVER STATE'";
             // A SPID alone is reusable. The physical connection and the backend's immutable batch token must both match.
-            command.CommandText = LiveSql.UncommittedPrologue + $"""
-                IF ISNULL(HAS_PERMS_BY_NAME({scope}),0)<>1 SELECT CAST(0 AS int);
-                ELSE BEGIN
-                SELECT CAST(1 AS int);
-                SELECT CONVERT(nvarchar(max),q.query_plan)
-                FROM sys.dm_exec_requests r JOIN sys.dm_exec_connections c ON r.connection_id=c.connection_id
-                CROSS APPLY sys.dm_exec_query_statistics_xml(r.session_id) q
-                WHERE r.session_id=@spid AND c.connection_id=@client AND q.request_id=r.request_id;
-                END;
-                """;
+            command.CommandText = LivePlanSql.For(profile?.EngineEdition, profile?.Major);
             command.Parameters.Add("@spid", SqlDbType.Int).Value = target.Spid;
             command.Parameters.Add("@client", SqlDbType.UniqueIdentifier).Value = target.ServerConnectionId;
             using var cancel = budget.Token.Register(() => { try { command.Cancel(); } catch (Exception e) when (e is SqlException or InvalidOperationException) { } });

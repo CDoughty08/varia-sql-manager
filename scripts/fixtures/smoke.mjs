@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { _electron, expect as baseExpect } from '@playwright/test'
 import { holdForEntry } from '../machine-lock.mjs'
 import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
+import { underXvfb } from './xvfb.mjs'
 
 ignoreCrashedTargetReplies()
 
@@ -177,6 +178,8 @@ export const electron = {
     // queries in the next launch on the same profile; only a suite that sets VARIA_TEST_HOT_EXIT=1 gets it.
     const env = { ...(options.env ?? process.env) }
     env.VARIA_TEST_HOT_EXIT ??= '0'
+    // On a virtual display the window is shown, inactive: hidden, Linux sometimes ran none of its animation frames (xvfb.mjs).
+    if (underXvfb(env)) env.VARIA_TEST_SHOW_WINDOW ??= '1'
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
     if (!motion) reduceMotion(application)

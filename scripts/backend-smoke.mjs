@@ -2,7 +2,8 @@ import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerSearchBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -36,7 +37,7 @@ async function launch(extra = {}, profile = undefined) {
   page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   return profile
 }
 /** Quits without the unsaved-query prompts (they would wait for a hidden dialog), killing the app if it hangs. */
@@ -194,7 +195,7 @@ try {
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
   await page.reload()
-  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  await expectEditorShown(page)
   const reloaded = await ready(2)
   expect(reloaded.pid).not.toBe(first.pid)
   await expect(backendReady(page)).toHaveText('Ready')
@@ -247,7 +248,7 @@ try {
   const control = await mkdtemp(resolve('artifacts', 'backend-control-'))
   temporary.push(control)
   await mkdir(join(control, 'hold'))
-  const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_BACKEND_LIVENESS_MS: '2000' })
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
   let dialog = await connectDialog()
@@ -442,7 +443,7 @@ try {
   step = 'quit'
   // Quitting stops every backend before the app exits, and starts no other. Restart now has just replaced a backend that
   // cannot act on stdin EOF (as a wedged one cannot), and the app quits at once: it must still wait for main to kill it.
-  const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).pid)
+  const spawns = async () => parseCalls(await readFile(join(control, 'spawns.jsonl'), 'utf8')).map(line => line.pid)
   const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
   const wedged = await hooks()
   orphans.push(wedged.pid)

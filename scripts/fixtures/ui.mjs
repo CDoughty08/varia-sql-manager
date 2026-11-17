@@ -33,6 +33,10 @@ export const part = {
   backendBanner: '.backend-banner',
   themeNotice: '.theme-notice',
   workbench: '.workbench',
+  /** A workbench panel's content (Object Explorer, the Query editor, an output panel), `data-pane` its id, and the Dockview
+   *  panel slot it is placed in; until placed it waits in a hidden holder. */
+  dockPane: '.dock-pane',
+  dockSlot: '.dock-slot',
   explorerPane: '.explorer',
   editorPane: '.editor-container',
   // Status bar and query status
@@ -393,6 +397,59 @@ export const statusBar = page => page.getByRole('contentinfo', { name: 'Status b
  * fake backend; by default the real one's .NET).
  */
 export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).getByTitle(new RegExp('^SQL backend: ' + (typeof runtime === 'string' ? runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : runtime.source)))
+/**
+ * Where each workbench panel's content is and why it might not show: in its Dockview slot or still in the hidden holder,
+ * the computed visibility and box of the content and of Dockview's render overlay around it, plus the page's visibility
+ * and size. Plain data, for a failure message.
+ */
+export function workbenchPanes(page) {
+  return page.evaluate(async ({ pane, slot }) => {
+    const box = element => { const { x, y, width, height } = element.getBoundingClientRect(); return [x, y, width, height].map(Math.round).join(',') }
+    const style = element => { const computed = getComputedStyle(element); return `${computed.display}/${computed.visibility}` }
+    // Dockview places an always-rendered panel's overlay from an animation frame: an overlay with a size but no left/top
+    // never had that frame, so say whether the page runs frames at all.
+    const frame = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve('none within 2 s'), 2000)
+      requestAnimationFrame(() => { clearTimeout(timer); resolve('ran') })
+    })
+    return {
+      visibilityState: document.visibilityState, hasFocus: document.hasFocus(), viewport: `${innerWidth}x${innerHeight}`, animationFrame: frame,
+      docks: document.querySelectorAll('.dv-dockview').length, overlays: document.querySelectorAll('.dv-render-overlay').length,
+      panes: [...document.querySelectorAll(pane)].map(host => {
+        const placed = host.parentElement?.matches(slot) ? host.parentElement : null
+        // Dockview renders always-rendered panels in an overlay layer positioned over their group.
+        const overlay = placed?.closest('.dv-render-overlay')
+        return {
+          id: host.dataset.pane, placed: !!placed, holder: placed ? undefined : host.parentElement ? `${host.parentElement.tagName.toLowerCase()}${host.parentElement.hidden ? '[hidden]' : ''}` : 'detached',
+          host: `${style(host)} ${box(host)}`, overlay: overlay ? `${style(overlay)} ${box(overlay)} ${overlay.style.cssText}` : undefined
+        }
+      })
+    }
+  }, { pane: part.dockPane, slot: part.dockSlot })
+}
+
+/** How long the failure report may take: a renderer too busy to answer must not turn a 30 s failure into the suite's watchdog. */
+const reportMs = 5000
+
+/**
+ * Waits for the query editor a new window shows. When it does not show, the error says where each workbench panel's
+ * content was (workbenchPanes), so a launch that never shows its panels names the cause instead of only "hidden".
+ */
+export async function expectEditorShown(page, { timeout = 30000 } = {}) {
+  try { await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout }) } catch (error) {
+    let timer
+    const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${reportMs / 1000} s`)), reportMs) })
+    const panes = await Promise.race([workbenchPanes(page), late])
+      .catch(failure => ({ unavailable: failure instanceof Error ? failure.message : String(failure) }))
+      .finally(() => clearTimeout(timer))
+    const report = '\nWorkbench panels: ' + JSON.stringify(panes, null, 2)
+    // Playwright's ExpectError writes its stack from the message when made, and Node prints an uncaught error's stack.
+    const original = error.message
+    error.message = original + report
+    if (typeof error.stack === 'string') error.stack = error.stack.includes(original) ? error.stack.replace(original, () => error.message) : error.message + '\n' + error.stack
+    throw error
+  }
+}
 /** The header's search box (the command centre). */
 export const searchBox = page => titleBar(page).getByRole('button', { name: 'Search', exact: true })
 /** The status bar's Object Explorer segment (renames, scripting, notices), a live region. */
@@ -548,6 +605,15 @@ export const popoutTabs = page => page.getByRole('tablist', { name: /^Panels in 
 /** A panel's tab in a popout window, which drags back onto the main window. */
 export const popoutTab = (page, id) => popoutTabs(page).locator(`[data-popout-tab="${id}"]`)
 export const popoutDockButton = page => page.getByRole('button', { name: 'Move back into main window', exact: true })
+/** Docks a popout's panels back and waits for its window to close. The button closes its own window, which can go
+ *  before Playwright's click returns ("Target page, context or browser has been closed"): that is the click working. */
+export async function dockPopoutBack(page) {
+  const closed = page.isClosed() ? Promise.resolve() : page.waitForEvent('close', { timeout: 30000 })
+  try { await popoutDockButton(page).click() } catch (error) {
+    if (!page.isClosed() && !/has been closed/.test(String(error?.message))) { closed.catch(() => {}); throw error }
+  }
+  await closed
+}
 
 // Query output
 

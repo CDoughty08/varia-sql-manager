@@ -1,203 +1,195 @@
 # Testing and test environment
 
-The full detail behind CLAUDE.md's Environment and Testing sections. docs/ci.md holds CI's layout, measurements and
-the rules that keep it lean.
+The detail behind CLAUDE.md's Environment and Testing sections. docs/ci.md holds CI's layout, measurements and lean-CI
+rules.
 
 ## Commands in detail
 
-- `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
-- `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
-- `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
-  prints each lane's seconds): every lane at once with 8 or more CPUs, otherwise (CI's runners) two chains side by side, so
-  time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either; `VARIA_CHECK_SKIP=typecheck`, as CI's Windows and
-  macOS jobs set, leaves out tsc, which Linux's job runs). Off CI it first takes the machine lock (below) and plans for its share
-  of the CPUs. A stopped check prints its running lanes' output. Run before every commit.
-- `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
-  from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
-  The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
-  frame a second, and every Playwright press waits for frames. Set `VARIA_SMOKE_PROFILE=<dir>` to save a Playwright trace
-  of each launch there (it holds the environment, so never upload one from a run with secrets).
-  Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
-- `npm run test:electron`: `check` followed by `test:smoke`.
-- `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
-  --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
-  (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
-- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`, `npm run bench:grid [-- --live]` and
-  `npm run bench:startup` (Electron, need `out/`): the IPC, results grid, and startup and memory benchmarks, not part of
-  `check`. `node scripts/check-bench.mjs
+- `npm run check` (`scripts/check.mjs`) prints each lane's seconds. Every lane runs at once with 8 or more CPUs,
+  otherwise (CI's runners) two chains side by side so time-bounded tests are not starved; `VARIA_CHECK_CPUS=<n>` tries
+  either. `VARIA_CHECK_SKIP=typecheck` (CI's Windows and macOS jobs) leaves out tsc. Off CI it first takes the machine
+  lock (below). A stopped check prints its running lanes' output.
+- `npm run test:smoke` runs the suites in package.json's `test:smoke`; `node scripts/smoke-shards.mjs 2/3` runs one CI
+  shard. The fixture launches the hidden smoke window with `--disable-frame-rate-limit` (Chromium otherwise draws it at
+  one frame a second, and every Playwright press waits for frames). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
+  of each launch there; it holds the environment, so never upload one from a run with secrets.
+- `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3`
+  runs one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`); `-- --live-suite <Name>` runs one live
+  suite (names in `LiveGroups.Suites`). `backend-sidecar.test.ts` and `*-live.test.ts` start the
+  Release backend: build it first with `npm run check` or `npm run backend:test`.
+- Benchmarks, not part of `check`: `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]`,
+  `npm run bench:grid [-- --live]` and `npm run bench:startup` (Electron, need `out/`). `node scripts/check-bench.mjs
   [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
-- The pivot benchmarks are run by hand and enforce nothing: `dotnet run --project
-  backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
-  stage) and `node scripts/pivot-bench.mjs` (the built app against `VARIA_TEST_SQL_SERVER`).
-  docs/pivot-performance-findings.md has their options and what they measured.
-- The page compression benchmark is run by hand and enforces nothing: `dotnet run --project
-  backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --page-compression-bench <GiB>
-  <shape>`, one size and shape a process. docs/page-compression-findings.md has its options and what it measured.
-- `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --
-  --fairness-bench [--rows N] [--runs N]` (by hand, enforces nothing) times a sort, a pivot and a profile alone and in
-  pairs started together, to see how they share the worker threads; docs/ipc.md's "Worker threads measured" holds what
-  it measured. Prefix `DOTNET_PROCESSOR_COUNT=n` for the workers a smaller machine would have.
-- `-- --result-work-bench [--rows N] [--runs N] [--only name,name]` on the same project times, stage by stage, a pivot's
-  Distinct Count, Compare Results and a column's distinct values past the coded limit on synthetic results (4,000,000 rows
-  by default); set `DOTNET_PROCESSOR_COUNT` to simulate fewer cores. Measures only, run by hand.
+- By-hand benchmarks that enforce nothing, each a flag after `--` on the tests project above:
+  - `--pivot-bench` (backend, stage by stage) and `node scripts/pivot-bench.mjs` (the built app against
+    `VARIA_TEST_SQL_SERVER`); docs/pivot-performance-findings.md.
+  - `--page-compression-bench <GiB> <shape>`, one size and shape a process; docs/page-compression-findings.md.
+  - `--fairness-bench [--rows N] [--runs N]`: a sort, a pivot and a profile alone and in pairs, to see how they share the
+    worker threads; docs/ipc.md's "Worker threads measured".
+  - `--result-work-bench [--rows N] [--runs N] [--only name,name]`: a pivot's Distinct Count, Compare Results and a
+    column's distinct values past the coded limit, stage by stage, on synthetic results (4,000,000 rows by default).
+  - Prefix `DOTNET_PROCESSOR_COUNT=n` to simulate a machine with fewer cores.
 
 ## Parallel sessions and the machine lock
 
-Several agent sessions (Claude, Codex) or a developer beside them often work in separate worktrees on one machine. Each
-running the full check, the benchmarks or the smoke suites at once overloaded it: time-bounded tests missed their deadlines,
-benchmarks measured each other, and smoke suites overwrote each other's clipboard. Two things keep them apart.
+Several agent sessions (Claude, Codex) or a developer often work in separate worktrees on one machine. Heavy runs at
+once overloaded it: time-bounded tests missed deadlines, benchmarks measured each other, smoke suites overwrote each
+other's clipboard.
 
-**Run only what applies while developing.** A change's own checks are the vitest files, .NET suite and smoke suite that
-cover it: `npx vitest run tests/<name>.test.ts`, and the smoke suite of the area you changed (`node scripts/<area>-smoke.mjs`
-after `npm run build:smoke`). Run `npm run check` once before committing, the whole `test:smoke` only when a change reaches
-across the UI, and the benchmarks only when a change can move them. CI runs everything on every PR.
+**Run only what applies while developing:** the vitest files, .NET suite and smoke suite that cover the change
+(`npx vitest run tests/<name>.test.ts`; `node scripts/<area>-smoke.mjs` after `npm run build:smoke`). Run
+`npm run check` once before committing, the whole `test:smoke` only when a change reaches across the UI, and the
+benchmarks only when a change can move them. CI runs everything on every PR.
 
-**The machine lock** (`scripts/machine-lock.mjs`) queues the heavy runs across every worktree and clone on the machine:
+**The machine lock** (`scripts/machine-lock.mjs`) queues heavy runs across every worktree and clone on the machine:
 
 | Tier | Taken by | Runs |
 | --- | --- | --- |
 | shared | `npm run check`, `npm run build:smoke`, `npm run backend:test` | up to `VARIA_LOCK_SHARED` at once (default 2) |
 | exclusive | every smoke suite and Electron benchmark (through `scripts/fixtures/smoke.mjs`), `npm run bench` | alone |
 
-- A run that has to wait prints `Waiting for the machine lock (<tier>) for <run>, held by <run> (pid, worktree, since)`, a
-  line a minute while it waits, then `Took the machine lock`. **Leave it running**: it continues by itself when the holder
-  finishes, and stopping it only loses its place. Agents should run long commands in the background so a tool timeout
-  does not kill a waiting run.
-- An exclusive run that is waiting goes ahead of shared runs that arrive after it; it then waits for the shared runs already
-  going. Each smoke suite takes the lock as it starts, so another session's check can run between two suites of
-  `test:smoke`.
-- The shard runner takes each suite's lock before spawning it and starting its execution watchdog. Waiting for the
-  machine does not spend the suite's test budget. Interrupting a queued suite releases only its own reservation and
-  launches no test process; a running suite keeps the existing whole-process-tree cleanup.
-- Each check plans for its share of the machine: the CPUs divided among the shared slots (12 of 24 with the default),
-  which picks its lane layout and caps each vitest lane's workers (`vitestWorkers` in `scripts/check.mjs`: the main lane
-  leaves room for the build and .NET lanes beside it, the Release-backend files get two), so two checks about fill the
-  machine rather than oversubscribe it. `VARIA_CHECK_CPUS` and `VITEST_MAX_WORKERS` still override it.
+- A waiting run prints `Waiting for the machine lock (<tier>) for <run>, held by <run> (pid, worktree, since)`, a line a
+  minute, then `Took the machine lock`. **Leave it running**: it continues when the holder finishes, and stopping it
+  only loses its place. Agents run long commands in the background so a tool timeout does not kill a waiting run.
+- A waiting exclusive run goes ahead of shared runs that arrive after it, then waits for the shared runs already going.
+  Each smoke suite takes the lock as it starts, so another session's check can run between two suites of `test:smoke`.
+- The shard runner takes each suite's lock before spawning it and starting its watchdog, so waiting does not spend the
+  suite's budget. Interrupting a queued suite releases only its own reservation and launches nothing; a running suite
+  keeps the whole-process-tree cleanup.
+- Each check plans for its share of the machine: the CPUs divided among the shared slots (12 of 24 by default), which
+  picks its lane layout and caps each vitest lane's workers (`vitestWorkers` in `scripts/check.mjs`), so two checks fill
+  the machine without oversubscribing it. `VARIA_CHECK_CPUS` and `VITEST_MAX_WORKERS` override it.
 - A run started with `node scripts/machine-lock.mjs` holds the lock under the wrapper's process: kill the whole process
   tree, not only the wrapper, or the command keeps running after the lock is cleared.
-- The lock is files in `<os temp>/varia-machine-lock` (`VARIA_LOCK_DIR` moves it), each naming its holder's process and
-  touched every few seconds. A file whose process has gone, or that nobody touched for a while (a killed run), is cleared,
-  so a crash never blocks the next run; nothing needs deleting by hand.
-- CI (`CI=true`) skips the lock: each job has its runner to itself. `VARIA_LOCK=off` skips it locally. A process started
-  under a holder (`VARIA_LOCK_HELD`, set by the holder) never waits, so the check's own vitest cannot wait on it.
+- The lock is files in `<os temp>/varia-machine-lock` (`VARIA_LOCK_DIR` moves it), each naming its holder and touched
+  every few seconds. A file whose process has gone or that nobody touched for a while is cleared, so a crash never blocks
+  the next run; nothing needs deleting by hand.
+- CI (`CI=true`) skips the lock; `VARIA_LOCK=off` skips it locally. A process started under a holder (`VARIA_LOCK_HELD`,
+  set by the holder) never waits, so the check's own vitest cannot wait on it.
 - `node scripts/machine-lock.mjs shared|exclusive <executable> [args...]` runs any other command under the lock.
 
 ## Environment
 
-- Node.js 24+ and the .NET 11 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
-  installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
-  puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
-- Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then adds live checks to its offline ones;
-  how many depends on the server version and authentication (Mixed Mode adds the low-privilege login checks, and
-  `VARIA_TEST_SQL_SCRATCH=1` adds the Object Explorer, Script As and object action scratch-database checks, the last in
-  their own `VariaScratch_…_act` database, and the script goldens in `tests/fixtures/scripting/`;
-  `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`; offline,
-  `VARIA_UPDATE_ORDINAL_CASING=1` rewrites the column-name casing table, `src/shared/ordinal-casing.ts`, from the runtime's casing), and `connections-smoke.mjs`
-  connects for real. Check counts are not recorded in docs: they change with almost every PR. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
-  session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
-  (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
-  Run live suites one at a time where you can. Runs that share one server tolerate each other's scratch objects and
-  load: the Object Explorer walk skips every scratch database (`ScratchDatabase.IsScratchName`), the injection matrix
-  leaves scratch-named server principals out of its inventory, the huge- and xml-value cancel checks bound the cancel
-  by `LiveResultChecks.CancelBound` (twice a reference the run just measured, at least 5 s) and also require the
-  cancelled script to leave rows unread (`LiveResultChecks.StoppedEarly`), which no load can fake, and those value timings
-  are measured once more when they miss their bound (`LiveResultChecks.OnceMore`). A new live check that walks shared
-  server state or times work against a fixed bound needs the same care.
-- SQL IntelliSense: after `npm run build:smoke`, `npm run test:language:live` runs the actual bundled SQL Tools Service
-  against `VARIA_TEST_SQL_SERVER` and requires `VARIA_TEST_SQL_SCRATCH=1` for its two uniquely owned, marked databases.
-  It validates scoped/qualified completion, hover after edits, diagnostics, metadata refresh, isolation and cleanup. `npm run test:language:ui` exercises the real Monaco
-  widgets through the full application against the same server. Both use bundled discovery without a service-path
-  override; SQL authentication uses the usual test user/password variables. `node scripts/language-diagnostics-smoke.mjs`
-  checks actual red/yellow marker decorations, messages, navigation, stale-result suppression and split contexts using the
-  fake backend; `--live` verifies real syntax and missing-column squiggles against `VARIA_TEST_SQL_SERVER`. See docs/language-services.md.
-- Microsoft Entra ID needs a tenant, so its live checks run only on request: `VARIA_TEST_ENTRA_SERVER`,
-  `VARIA_TEST_ENTRA_SP_CLIENT_ID` and `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL
-  database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
-  print the secret. Without them the offline checks cover Entra through a fake token source.
-- SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
+- **Cloud sessions.** `.claude/hooks/session-start.sh` installs Node 24 and, when `dotnet --list-sdks` shows no 11.0 SDK, `dotnet-sdk-11.0` from
+  apt (`tests/session-start-hook.test.ts` keeps the check, the package and `global.json` on one band), runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), puts
+  `/opt/node24/bin` on PATH, and starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433),
+  exporting the SQL variables once it is ready. After clear or compact it skips `npm install` and the builds; it still ensures the SQL container, the SDK and Node. Without
+  Docker, live checks are skipped rather than failing.
+- **Live SQL.** `VARIA_TEST_SQL_SERVER` turns on the live .NET checks and real connections in `connections-smoke.mjs`:
+  SQL authentication with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. Which checks
+  run depends on server version and authentication (Mixed Mode adds the low-privilege login checks). Never print the
+  password, and never record check counts in docs.
+- **Kerberos.** `VARIA_TEST_KERBEROS_NO_TICKET=1` (with `VARIA_TEST_SQL_SERVER`, Linux or macOS only; CI's Linux job sets
+  `KRB5CCNAME` to a cache that does not exist) runs `tests/kerberos-live.test.ts`: Integrated authentication without a
+  ticket must fail cleanly. A real Kerberos round trip needs a KDC and a domain-joined SQL Server, so it is a manual
+  check: `kinit`, then connect with Windows authentication to a server name or SPN registered for Kerberos.
+- **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
+  Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.
+- **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner
+  fixtures from the live server's backup history.
+- **Scratch.** `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the session hook) adds the Object Explorer, Script As and object
+  action scratch-database checks (actions in their own `VariaScratch_…_act`), the script goldens in
+  `tests/fixtures/scripting/`, and lets live vitest files create and drop a uniquely named, marked `varia_scratch_…`
+  database (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those are skipped.
+- **Rewriting fixtures.** `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`;
+  `VARIA_UPDATE_ORDINAL_CASING=1` (offline) rewrites `src/shared/ordinal-casing.ts` from the runtime's casing.
+- **Shared servers.** Run live suites one at a time where you can. Runs sharing a server tolerate each other's scratch
+  objects and load: the Object Explorer walk skips scratch databases (`ScratchDatabase.IsScratchName`), the injection
+  matrix leaves scratch-named server principals out of its inventory, and the huge- and xml-value cancel checks bound the
+  cancel by `LiveResultChecks.CancelBound` (twice a reference the run just measured, at least 5 s), require the cancelled
+  script to leave rows unread (`LiveResultChecks.StoppedEarly`), and measure once more when they miss
+  (`LiveResultChecks.OnceMore`). A new live check that walks shared server state or times work against a fixed bound
+  needs the same care.
+- **SQL IntelliSense.** After `npm run build:smoke`, `npm run test:language:live` runs the bundled SQL Tools Service
+  against `VARIA_TEST_SQL_SERVER` (requires `VARIA_TEST_SQL_SCRATCH=1` for its two marked databases): scoped and
+  qualified completion, hover after edits, diagnostics, metadata refresh, isolation and cleanup. `npm run
+  test:language:ui` drives the real Monaco widgets through the app against the same server. Both use bundled discovery
+  without a service-path override. `node scripts/language-diagnostics-smoke.mjs` checks marker decorations, messages,
+  navigation, stale-result suppression and split contexts on the fake backend; `--live` checks real squiggles against
+  `VARIA_TEST_SQL_SERVER`. See docs/language-services.md.
+- **Microsoft Entra ID** checks run only on request: `VARIA_TEST_ENTRA_SERVER`, `VARIA_TEST_ENTRA_SP_CLIENT_ID` and
+  `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL database `VARIA_TEST_ENTRA_DATABASE`
+  names) run the Service Principal checks; `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never print
+  the secret. Offline checks cover Entra through a fake token source.
+- **SSIS.** `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
   `tests/fixtures/ssisdb/`) and, where Integration Services is installed, runs Create Catalog's dry run (the catalog
-  backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` (and its tree probe, read only) and of the Integration Services
-  catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
-  rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
-  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) creates and
-  drops it, on a server whose owner allows it and only when the server has no `SSISDB`: it never drops a catalog it did
-  not create. docs/integration-services.md records what is verified.
-- Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
-  those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
-- Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
-  `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
-  `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
-  `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench` takes
-  cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the smoke fixture's default: no hot exit, so close prompts stay; docs/hot-exit.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
-  cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
-  holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
-  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
-  the synthetic live source, stands in for a hidden window and mounts a `LiveGridPane` over one (`mountGrid`, `grid`,
-  `sortGrid`, `saveGrid`, `unmountGrid`), and `window.__variaTestShellFault()`, which makes the
-  workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
-  and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
-  wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
-  that took 500 ms or more. A close that has not finished in 45 s kills the app and fails the suite without hiding its own
-  error (`boundedClose`; on Linux it first names the processes still in the app's process group, since Playwright's close waits
-  for pipes the backend and its language server inherit), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
-  cannot run its shard to the job's timeout.
-
+  backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes). `VARIA_TEST_SSIS=1` adds the
+  drift check of the real `SSISDB` (and its read-only tree probe) and of the Integration Services catalog backup
+  (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1` rewrites (then
+  regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These never create, alter or drop
+  `SSISDB`; only the opt-in `VARIA_TEST_SSIS_CREATE=1` creates and drops it, on a server whose owner allows it and only
+  when it has no `SSISDB`: it never drops a catalog it did not create. docs/integration-services.md records what is
+  verified.
+- **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
+  `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
+  sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs
+  on Linux too). `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
+  (with `VARIA_PACKAGED_PROFILE`) and `VARIA_PORTABLE_EXECUTABLE`. Only in unpackaged smoke runs main also honours:
+  - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
+    takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
+    prompts stay; docs/hot-exit.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
+    cipher);
+  - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
+    holdNextRenderer and releaseHolders);
+  - the renderer's test mode: `window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()` (saves
+    AutoRecover's copies at once), `window.__variaLive` (opens views on the synthetic live source, stands in for a hidden
+    window, mounts a `LiveGridPane` with `mountGrid`, `grid`, `sortGrid`, `saveGrid`, `unmountGrid`) and
+    `window.__variaTestShellFault()` (the workbench's next render throws), `window.__variaTestExplorerFault()`,
+    `window.__variaServerFiles`, `window.__variaRestore` and `window.__variaFailures`;
+  - and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`.
+- **Smoke fixture.** Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on
+  Windows (its runners can take seconds to write a file), and closing the app logs main's file operations of 500 ms or
+  more. `boundedClose` and the shard watchdog (docs/ci.md) keep one hang from running its shard to the job's timeout.
 
 ## Testing expectations
 
-- The existing connections Electron suite includes `scripts/fixtures/connection-lifecycle.mjs`, which uses the actual
-  main request/credential owners with an isolated fake backend and test-only cipher. It covers reuse and distinct
-  credentials, all details-dialog choices, dirty-close cancellation, retained results, selective close and mixed
-  startup reconnect outcomes without automatic query execution. Its sample secrets are never real credentials.
-- vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
-- .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
-  first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
-  `VARIA_TEST_SLOW_MS` is set; a suite still running after 3 minutes is named and the run exits,
-  `VARIA_TEST_OFFLINE_SUITE_MS=<ms>` to change that): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
-  `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes or measures process-wide state (the console,
-  environment variables, a static override, GC measurements, lock contention counts). The result suites (`packedPass` in Program.cs) then run a
-  second time with `ResultStore.DefaultPacking` = `EveryComplete`, so every complete result's pages are packed
-  (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
-  compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a
-  budget by what a result holds as sealed (`Held.AsSealed`), and a check about something other than pages (GC
-  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A sort, filter, profile, pivot, distinct list,
-  row identity, diff or search reads a packed result fused and holds rooms rather than its unpacked pages, so sizing its budget by `Held.AsSealed` leaves it
-  slack: a check that leaves just enough room for one adds `Held.Rooms` (an upper bound; how many rooms are made depends
-  on the threads), and a check whose margin must be exact (a thread-count retry) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`, except one that sets each store's packing itself
-  (`FusedReadChecks` and its `FusedWhole` suite, which compare every fused operation with the same rows unpacked).
-  The checks also run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails. Live checks follow and create only session-local temporary objects. They create databases (and logins) only
-  when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
-  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
-  scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
-  script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
-- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API. Suites and the Electron benches
-  find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
-  classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
-  the roles and names stable.
-- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs`, `scripts/grid-bench.mjs` and
-  `scripts/startup-bench.mjs` only measure; a new
-  metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
-  docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
-- Keep CI fast: docs/ci.md holds the measurements, the plan and the rules (queueing for the 20 shared runners sets most of a
-  run's wall time, so a job removed beats a step trimmed); measure with `node scripts/ci-timings.mjs`. Race a close or exit only
-  through `within()` (`tests/idle-waits.test.ts`), settle tests without `setTimeout` loops, fail offline connections with
-  `Unreachable.Source`, and find .NET waits with `VARIA_TEST_SLOW_MS=500`. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
-  `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
-  A bound on a wait that returns as soon as its condition holds costs nothing when it passes: make it generous (CI's 3 and
-  4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Wait for file-bound background work (a
-  vault or library write that outlives its caller) by awaiting the promise its owner exposes, such as
-  `whenCancelledWorkDrained()`, never by polling a flag under `vi.waitFor`: a starved runner's disk has no bound to promise. Two timers that race (a budget
-  that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
-  run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
-  Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or pass a fake one), and
-  give a sidecar with the test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
-  developer machine past the 90 % high-load threshold, where the real probe truncates every result.
-  A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
-  `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
-  each `Live suite name: n s` line. Before you add a smoke suite, check whether an existing suite's launch can take the
-  checks: each Electron launch costs seconds. Split any suite over about 90 s. Wait on conditions, never fixed sleeps or
-  `WAITFOR` delays longer than the behaviour needs. Put report-only measurements in the benchmarks, not the checks. A
-  live vitest file is named `*-live.test.ts`, so CI's live job runs it.
-
+- **vitest:** `tests/*.test.ts`, fixtures in `tests/fixtures/`. A live vitest file is named `*-live.test.ts`, so CI's live
+  job runs it.
+- **.NET:** `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls.
+  - Offline checks come first, in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`;
+    one when `VARIA_TEST_SLOW_MS` is set; a suite still running after 3 minutes is named and the run exits,
+    `VARIA_TEST_OFFLINE_SUITE_MS=<ms>` changes that). A new offline suite goes in Program.cs's `offlineSuites`, with its
+    measured seconds in `OfflineSuites.Weights` if over 0.3 s, and in `OfflineSuites.Alone` if it changes or measures
+    process-wide state (console, environment variables, a static override, GC measurements, lock contention counts).
+  - The result suites (`packedPass`) run a second time with `ResultStore.DefaultPacking` = `EveryComplete`, so every
+    reader meets packed pages through the accessor. A new result suite joins `packedPass` unless it sets each store's
+    packing itself (`FusedReadChecks` and its `FusedWhole` suite). In those checks: compare budget figures with
+    `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`; size a budget by `Held.AsSealed`; add
+    `Held.Rooms` (an upper bound) when leaving just enough room for a fused reader (sort, filter, profile, pivot, distinct
+    list, row identity, diff, search); and give the store `Packing = PagePacking.Off` when the check is not about pages
+    (GC measurements, a stop's figure) or needs an exact margin (a thread-count retry).
+  - The checks run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails.
+  - Live checks follow and create only session-local temporary objects; databases and logins only with
+    `VARIA_TEST_SQL_SCRATCH=1`, uniquely named, marked and dropped in `finally` (`ScratchDatabase.cs` also sweeps stale
+    `VariaScratch_` ones by name and age). A new live suite runs through `Suite(...)` with an entry in `LiveGroups.Suites`.
+  - `InjectionMatrix.cs` (scratch only) scripts objects named to break out of SMO's comments, strings, brackets and lines
+    with every DDL verb and runs each script in a rolled-back transaction, which must change only what its verb implies;
+    keep it when changing scripting.
+- **UI:** `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API. Suites and the Electron benches find
+  surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's classes
+  (for parts with no role; `tests/smoke-selectors.test.ts`), so markup changes update ui.mjs and keep roles and names
+  stable. The connections suite's `scripts/fixtures/connection-lifecycle.mjs` drives main's real request and credential
+  owners against an isolated fake backend and test cipher, with sample secrets that are never real credentials.
+- **Performance:** `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs`, `scripts/grid-bench.mjs` and
+  `scripts/startup-bench.mjs` only measure. A new metric needs a `tests/bench/floors.json` entry
+  (`tests/bench-floors.test.ts` checks both lists) and a row in docs/ipc.md. Floors stay well below what slow shared CI
+  runners measure. Put report-only measurements in the benchmarks, not the checks.
+- **Keep CI fast.** docs/ci.md's "Rules for keeping CI lean" holds the timer, race, stress and budget rules
+  (`within()`, no `setTimeout` loops, `Unreachable.Source`, `VARIA_TEST_SLOW_MS=500`, `node scripts/offline-stress.mjs`
+  before pushing an offline timing check, about a second between racing timers). Beyond those:
+  - Each smoke shard and live group has a 360 s budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
+    `LiveGroups.BudgetSeconds`); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks. Before adding
+    a smoke suite, check whether an existing launch can take the checks; split any suite over about 90 s.
+  - Make a bound on a wait that returns as soon as its condition holds generous, and keep tight bounds for what the check
+    means to time. Never use fixed sleeps or `WAITFOR` delays longer than the behaviour needs.
+  - Wait for file-bound background work (a vault or library write that outlives its caller) by awaiting the promise its
+    owner exposes, such as `whenCancelledWorkDrained()` or the updater's `whenSwept()`, never by polling a flag under `vi.waitFor`.
+  - `GC.GetAllocatedBytesForCurrentThread` can read up to one allocation quantum (about 8 KB) high while other suites'
+    threads allocate, never low: an allocation bound takes the least of several runs (`IdentityChecks.LeastAllocated`), and
+    a zero-allocation window is retried on a fresh thread before it fails.
+  - Smoke suites and fixtures read a JSON-lines log (`calls.jsonl`) only through `parseCalls`/`completeLines`
+    (`scripts/fixtures/call-log.mjs`): the fake backend appends asynchronously, so the last line can be half written.
+  - Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or with a fake), and
+    give a sidecar with test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
+    developer machine past the 90 % high-load threshold, where the real probe truncates every result.

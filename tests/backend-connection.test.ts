@@ -111,6 +111,12 @@ describe('BackendConnection malformed input', () => {
     for (const server of ['reason', 'exception']) expect(await failure(connect(server)), server).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
     expect(connection.lost).toBeUndefined()
   })
+  it('states the backend concurrency the backend enforces', () => {
+    // HostOptions and SqlService.SessionLimit in C#; a stale copy here misstates what BUSY and SESSION_LIMIT mean.
+    const host = readFileSync(resolve('backend/Varia.Backend/Protocol/ProtocolHost.cs'), 'utf8'), service = readFileSync(resolve('backend/Varia.Backend/SqlService.cs'), 'utf8')
+    const value = (source: string, name: string) => Number(new RegExp(`\\b${name} \\{ get; (?:init|set); \\} = (\\d+);`).exec(source)?.[1])
+    expect({ inFlight: value(host, 'MaxInFlight'), metadataSlots: value(host, 'MetadataSlots'), sessions: value(service, 'SessionLimit'), resultReads: value(host, 'ResultSlots') }).toEqual(wire.backend)
+  })
   it('bounds error details as the backend does', () => {
     // ErrorDetailsLimits and ConnectionFailures.MaxServerLength in C#, which cut what they send to these lengths.
     const contracts = readFileSync(resolve('backend/Varia.Backend/Contracts.cs'), 'utf8'), failures = readFileSync(resolve('backend/Varia.Backend/ConnectionFailures.cs'), 'utf8')
@@ -135,8 +141,7 @@ describe('BackendConnection malformed input', () => {
     expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL', message: sentences.invalid })
     // The request ended at the first event; the undecodable one after it is a late frame.
     expect(events).toHaveLength(1)
-    await new Promise(resolve => setTimeout(resolve, 100))
-    expect(connection.lateFrames).toBe(1)
+    await expect.poll(() => connection.lateFrames, { timeout: 5000 }).toBe(1)
   })
 })
 
@@ -159,6 +164,9 @@ describe('BackendConnection lifetime', () => {
   })
   it('cancels a request at its backstop and drops the late answer', async () => {
     const connection = fake('late', {}, '1500')
+    // The backstop starts at send, HELLO or not: a request still queued for a slow start when it fires is never written
+    // (the next test), so the late answer this test is about would never come.
+    await connection.ready
     expect(await failure(health(connection, 0, 1000))).toMatchObject({ code: 'TIMEOUT', message: sentences.timeout(1) })
     await expect.poll(() => connection.lateFrames, { timeout: 5000 }).toBe(1)
     expect((await health(connection)).cancels).toEqual([{ id: 1, reason: 2 }])
