@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -225,7 +225,7 @@ try {
   await showPage('Environment', 'Connections')
   await expect(field('Automatically reconnect on startup')).toBeChecked()
   await field('Automatically reconnect on startup').uncheck()
-  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
   await closed()
   await expect.poll(stored).toEqual({ version: 1, values: {
     'environment.connections.autoReconnect': false,
@@ -285,7 +285,7 @@ try {
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(dialog().getByText('Execution time-out must be a whole number from 0 to 86,400.', { exact: true })).toBeVisible()
   await expect(field('Execution time-out')).toBeFocused()
-  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
   await closed()
   expect((await stored()).values).toMatchObject({ 'environment.connections.autoReconnect': false, 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
   await openOptions()
@@ -371,7 +371,7 @@ try {
   // Smaller than the default and than CI's screens: a reopened window is kept 32 px inside the screen.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(item => item.getTitle() === 'Options').setContentSize(900, 600))
   await expect.poll(() => options.evaluate(() => [innerWidth, innerHeight])).toEqual([900, 600])
-  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
   await closed()
   await openOptions()
   expect((await optionsWindow()).size).toEqual([900, 600])
@@ -443,13 +443,13 @@ try {
   }
   if (!mac) {
     await remapNewQuery()
-    await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+    await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
     await closed()
     expect(await shortcutsFile()).toBeNull()
     expect(await fileMenuKeys()).toBe('Control+N')
 
     await remapNewQuery()
-    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+    await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
     await closed()
     await expect.poll(async () => (await shortcutsFile())?.bindings).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: 'file.new', key: 'mod+n', remove: true }), expect.objectContaining({ command: 'file.new', key: 'shift+f9' })
@@ -497,7 +497,7 @@ try {
     await reset.getByRole('button', { name: 'Reset All', exact: true }).click()
     await expect(reset).toHaveCount(0)
     await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
-    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+    await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
     await closed()
     await expect.poll(async () => { const file = await shortcutsFile(); return file && (file.bindings ?? []) }).toEqual([])
     await expect.poll(fileMenuKeys).toBe('Control+N')

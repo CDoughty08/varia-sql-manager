@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose, clickToClose } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -218,7 +218,7 @@ try {
   await (mac ? dialog().getByRole('searchbox', { name: 'Search Options', exact: true }) : dialog().getByRole('button', { name: 'Close options', exact: true })).focus()
   await options.keyboard.press('Shift+Tab')
   await expect(dialog().getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
-  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
   await closed()
   // Only what differs from the defaults is stored.
   await expect.poll(stored).toEqual({ version: 1, values: { [scriptingKey('scriptUseDatabase')]: false } })
