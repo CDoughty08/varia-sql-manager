@@ -1,0 +1,345 @@
+// Toggle Brackets and Commas to Front or End: token-aware SQL Server text transforms as pure functions over a string, so
+// they are tested without Monaco. Each returns offset edits on the original text; `sqlTransformOp` turns them into a TextOp
+// (one undo step) with the selections moved along with the text.
+import { contextualKeywords, isSignificant, lexSql, reservedKeywords, systemTypeNames, type SqlToken } from '../../../shared/sql/lexer.ts'
+import { maxIdentifierLength } from '../../../shared/sql/identifiers.ts'
+import { textOpLimits, type TextOp, type TextSelection } from './text-ops'
+
+export interface OffsetRange { readonly start: number; readonly end: number }
+export interface OffsetEdit { readonly start: number; readonly end: number; readonly text: string }
+
+export const sqlTransformMessages = {
+  tooLarge: `The query is too large to change (more than ${textOpLimits.characters.toLocaleString('en-US')} characters).`,
+  nothingToBracket: (selection: boolean) => selection ? 'The selection has no names to bracket or unbracket.' : 'The query has no names to bracket or unbracket.',
+  noCommas: (front: boolean, selection: boolean) => `No commas to move to the ${front ? 'front' : 'end'} of a line in the ${selection ? 'selection' : 'statement'}.`
+} as const
+
+const upper = (text: string, token: SqlToken) => text.slice(token.start, token.end).toUpperCase()
+const inRanges = (token: SqlToken, ranges: readonly OffsetRange[] | undefined) => !ranges || ranges.some(range => token.start >= range.start && token.end <= range.end)
+
+/** Statements that start at a word: a SET after one of these (other than UPDATE and ALTER) is a statement of its own. */
+const statementStarts = new Set(`SELECT INSERT UPDATE DELETE MERGE CREATE ALTER DROP DECLARE SET EXEC EXECUTE IF ELSE WHILE BEGIN END RETURN PRINT USE
+GRANT DENY REVOKE TRUNCATE WITH OPEN CLOSE FETCH DEALLOCATE BREAK CONTINUE GOTO WAITFOR RAISERROR THROW COMMIT ROLLBACK SAVE
+BACKUP RESTORE DBCC KILL`.split(/\s+/))
+/** Functions whose first argument is a date part (`day`, `mm`), never a column. */
+const datePartFunctions = new Set(['DATEADD', 'DATEDIFF', 'DATEDIFF_BIG', 'DATEPART', 'DATENAME', 'DATETRUNC', 'DATE_BUCKET'])
+/** Keywords before a name that a parenthesis follows as a column list, not as a function's arguments. */
+const nameBeforeParen = new Set(['INTO', 'TABLE', 'REFERENCES', 'INSERT', 'VIEW', 'FUNCTION', 'PROCEDURE', 'PROC', 'WITH', 'MERGE'])
+/** Where the word after is an object type (CREATE SEQUENCE, CREATE NONCLUSTERED COLUMNSTORE INDEX), not a name. */
+const typeKeywordAfter = new Set(['CREATE', 'ALTER', 'DROP', 'UNIQUE', 'CLUSTERED', 'NONCLUSTERED'])
+
+/**
+ * Which of `text`'s word tokens Toggle Brackets may bracket: names, never keywords, built-in function names (a word that a
+ * parenthesis follows, unless a column list follows a table's name), date parts, type names where a type is expected,
+ * labels, or the words of option lists (WITH (…), OPTION (…), FOR XML/JSON, SET options, cursor and FETCH options).
+ */
+function bracketableWords(text: string, tokens: readonly SqlToken[]): Set<SqlToken> {
+  const sig = tokens.filter(isSignificant)
+  const lineOf = lineIndex(text)
+  const result = new Set<SqlToken>()
+  const word = (index: number) => sig[index]?.kind === 'word' ? upper(text, sig[index]!) : undefined
+  const skip = new Set<number>()
+  /** Skips from `from` to the end of the parenthesised group that opens at `open`. */
+  const skipGroup = (open: number) => {
+    let depth = 0, index = open
+    for (; index < sig.length; index++) {
+      skip.add(index)
+      if (sig[index]!.kind === 'open') depth++
+      else if (sig[index]!.kind === 'close' && --depth === 0) break
+    }
+    return index
+  }
+  /** Skips the rest of `from`'s line (and any group opened on it), stopping at a semicolon or `stop`. */
+  const skipLine = (from: number, stop?: (index: number) => boolean) => {
+    const line = lineOf(sig[from - 1]?.start ?? sig[from]?.start ?? 0)
+    let depth = 0
+    for (let index = from; index < sig.length; index++) {
+      const token = sig[index]!
+      if (token.kind === 'semicolon' || (depth === 0 && lineOf(token.start) !== line) || (depth === 0 && stop?.(index))) break
+      if (token.kind === 'open') depth++
+      else if (token.kind === 'close') { if (depth === 0) break; depth-- }
+      skip.add(index)
+    }
+  }
+  // The word before each open parenthesis, innermost last, so a word knows the function it is an argument of.
+  const callers: (string | undefined)[] = []
+  const callerAt: (string | undefined)[] = []
+  for (let index = 0; index < sig.length; index++) {
+    const token = sig[index]!
+    callerAt[index] = callers[callers.length - 1]
+    if (token.kind === 'open') callers.push(word(index - 1))
+    else if (token.kind === 'close') callers.pop()
+  }
+  for (let index = 0; index < sig.length; index++) {
+    const token = sig[index]!
+    if (token.kind !== 'word' || skip.has(index)) continue
+    const name = upper(text, token), next = sig[index + 1]
+    if ((name === 'WITH' || name === 'OPTION') && next?.kind === 'open') { index = skipGroup(index + 1); continue }
+    if (name === 'FOR' && ['XML', 'JSON', 'BROWSE'].includes(word(index + 1) ?? '')) {
+      let depth = 0
+      for (let at = index + 1; at < sig.length; at++) {
+        const inside = sig[at]!
+        if (inside.kind === 'semicolon' || (depth === 0 && inside.kind === 'word' && statementStarts.has(upper(text, inside)))) break
+        if (inside.kind === 'open') depth++
+        else if (inside.kind === 'close') { if (depth === 0) break; depth-- }
+        skip.add(at)
+      }
+      continue
+    }
+    if (name === 'WITH' && next?.kind === 'word') {
+      const after = sig[index + 2]
+      const cte = after?.kind === 'open' || (after?.kind === 'word' && upper(text, after) === 'AS' && sig[index + 3]?.kind === 'open')
+      if (!cte && upper(text, next) !== 'TIES') skipLine(index + 1, at => word(at) === 'AS')
+      continue
+    }
+    if (name === 'SET') {
+      let head: string | undefined
+      for (let back = index - 1; back >= 0; back--) {
+        const before = sig[back]!
+        if (before.kind === 'semicolon' || before.kind === 'sqlcmd') break
+        const keyword = word(back)
+        if (keyword === 'GO' && lineOf(before.start) !== lineOf(token.start)) break
+        if (keyword !== undefined && statementStarts.has(keyword)) { head = keyword; break }
+      }
+      if (head === 'ALTER' || (head !== 'UPDATE' && next !== undefined && next.kind !== 'variable')) skipLine(index + 1)
+      continue
+    }
+    if (name === 'CURSOR' && sig[index - 1]?.kind !== 'variable') { skipLine(index + 1, at => word(at) === 'FOR'); continue }
+    if (name === 'FETCH') { skipLine(index + 1, at => word(at) === 'FROM'); continue }
+  }
+  for (let index = 0; index < sig.length; index++) {
+    const token = sig[index]!
+    if (token.kind !== 'word' || skip.has(index)) continue
+    const name = upper(text, token)
+    if (reservedKeywords.has(name) || contextualKeywords.has(name)) continue
+    const previous = sig[index - 1], next = sig[index + 1]
+    const before = word(index - 1), beforeThat = word(index - 2)
+    // Labels (`retry:`, GOTO retry), static members (geography::Point), and the word after keywords that name a type or option.
+    if (next?.kind === 'colon' || next?.kind === 'scope' || previous?.kind === 'scope') continue
+    if (before === 'GOTO' || before === 'COLLATE' || before === 'DBCC' || before === 'NEXT') continue
+    if (before !== undefined && typeKeywordAfter.has(before) && previous?.kind === 'word') continue
+    if (before === 'OR' && beforeThat === 'CREATE') continue
+    if (before === 'AS' && (beforeThat === 'EXEC' || beforeThat === 'EXECUTE')) continue
+    if (before === 'BY' && beforeThat === 'MATCHED') continue
+    if ((name === 'AT' && word(index + 1) === 'TIME' && word(index + 2) === 'ZONE') || (name === 'TIME' && before === 'AT' && word(index + 1) === 'ZONE') || (name === 'ZONE' && before === 'TIME' && beforeThat === 'AT')) continue
+    if (previous?.kind === 'open' && datePartFunctions.has(beforeThat ?? '') && next?.kind === 'comma') continue
+    if (systemTypeNames.has(name)) {
+      if (previous?.kind === 'variable' || before === 'RETURNS') continue
+      if (before === 'AS' && (sig[index - 2]?.kind === 'variable' || callerAt[index] === 'CAST' || callerAt[index] === 'TRY_CAST')) continue
+      if (previous?.kind === 'open' && (beforeThat === 'CONVERT' || beforeThat === 'TRY_CONVERT')) continue
+    }
+    if (next?.kind === 'open') {
+      // A name a column list follows (INSERT INTO t (…), REFERENCES s.t (…)); anything else before a parenthesis is a call.
+      let first = index
+      while (sig[first - 1]?.kind === 'dot' && ['word', 'bracketed', 'quoted'].includes(sig[first - 2]?.kind ?? '')) first -= 2
+      const keyword = word(first - 1)
+      if (keyword === undefined || !nameBeforeParen.has(keyword)) continue
+    }
+    result.add(token)
+  }
+  return result
+}
+
+/** A bracketed name's text, or undefined when taking its brackets off would change what it means. */
+function plainName(text: string, token: SqlToken): string | undefined {
+  const raw = text.slice(token.start, token.end)
+  if (!raw.endsWith(']') || raw.length < 3) return undefined
+  const name = raw.slice(1, -1)
+  if (name.length > maxIdentifierLength || !/^[\p{L}_][\p{L}\p{Nd}_@#$]*$/u.test(name)) return undefined
+  const key = name.toUpperCase()
+  if (reservedKeywords.has(key) || contextualKeywords.has(key)) return undefined
+  return name
+}
+
+/**
+ * Toggle Brackets: in the ranges (the whole text when undefined), brackets every name that has none, or, when every name
+ * already has them, takes them off the names that do not need them. Strings, comments, variables, temporary tables,
+ * quoted names and keywords are never changed.
+ */
+export function toggleBracketEdits(text: string, ranges?: readonly OffsetRange[]): { readonly mode: 'add' | 'remove' | 'none'; readonly edits: OffsetEdit[] } {
+  const tokens = lexSql(text)
+  const add = [...bracketableWords(text, tokens)].filter(token => inRanges(token, ranges))
+  if (add.length) return { mode: 'add', edits: add.map(token => ({ start: token.start, end: token.end, text: `[${text.slice(token.start, token.end)}]` })) }
+  const edits: OffsetEdit[] = []
+  const joins = (char: string | undefined) => char !== undefined && /[\p{L}\p{N}_@#$'"]/u.test(char)
+  for (const token of tokens) {
+    if (token.kind !== 'bracketed' || !inRanges(token, ranges)) continue
+    const name = plainName(text, token)
+    if (name === undefined) continue
+    // `AS[x]` and `[N]'…'` keep a space, so the name never runs into its neighbours.
+    edits.push({ start: token.start, end: token.end, text: (joins(text[token.start - 1]) ? ' ' : '') + name + (joins(text[token.end]) ? ' ' : '') })
+  }
+  return { mode: edits.length ? 'remove' : 'none', edits }
+}
+
+/** The statement around `offset`: between semicolons, GO lines, SQLCMD lines and blank lines. */
+export function statementAt(text: string, offset: number): OffsetRange {
+  const tokens = lexSql(text)
+  const boundaries: OffsetRange[] = []
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!
+    if (token.kind === 'semicolon') boundaries.push({ start: token.end, end: token.end })
+    else if (token.kind === 'sqlcmd') boundaries.push(token)
+    else if (token.kind === 'word' && text.slice(token.start, token.end).toUpperCase() === 'GO' && firstOnLine(tokens, index) && lastOnLine(tokens, index)) boundaries.push(token)
+    else if (token.kind === 'newline') {
+      let next = index + 1
+      if (tokens[next]?.kind === 'space') next++
+      if (tokens[next]?.kind === 'newline') boundaries.push({ start: token.end, end: tokens[next]!.start })
+    }
+  }
+  // A semicolon's boundary is empty and just after it, so a caret right after a statement's semicolon is in that statement.
+  let start = 0, end = text.length
+  for (const boundary of boundaries) {
+    if (boundary.end < offset || (boundary.end === offset && boundary.start !== boundary.end)) start = Math.max(start, boundary.end)
+    if (boundary.start >= offset) end = Math.min(end, boundary.start)
+  }
+  return { start, end: Math.max(start, end) }
+}
+
+const firstOnLine = (tokens: readonly SqlToken[], index: number) => {
+  for (let at = index - 1; at >= 0; at--) { const kind = tokens[at]!.kind; if (kind === 'newline') return true; if (kind !== 'space' && kind !== 'blockComment') return false }
+  return true
+}
+const lastOnLine = (tokens: readonly SqlToken[], index: number) => {
+  for (let at = index + 1; at < tokens.length; at++) { const kind = tokens[at]!.kind; if (kind === 'newline') return true; if (kind !== 'space' && kind !== 'lineComment' && kind !== 'blockComment') return false }
+  return true
+}
+
+/** Line numbers (from 0) by offset, through a sorted list of line starts. */
+function lineIndex(text: string): (offset: number) => number {
+  const starts = [0]
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) starts.push(index + 1)
+  }
+  return offset => {
+    let low = 0, high = starts.length
+    while (low < high) { const middle = (low + high) >> 1; if (starts[middle]! <= offset) low = middle + 1; else high = middle }
+    return low - 1
+  }
+}
+
+/**
+ * Commas to Front or Commas to End: every comma (outside strings and comments) in the ranges that ends a line moves to the
+ * start of the next item's line (`front`, SSMS's `      ,[b]` shape: into the indent's last space), or every comma that
+ * starts a line moves to the end of the item before it (`end`, ahead of a trailing comment). A comma before a closing
+ * parenthesis, a semicolon or GO, or after an opening one, stays.
+ */
+export function moveCommaEdits(text: string, ranges: readonly OffsetRange[], position: 'front' | 'end'): OffsetEdit[] {
+  const tokens = lexSql(text)
+  const lineOf = lineIndex(text)
+  const edits: OffsetEdit[] = []
+  const significant = (from: number, step: 1 | -1) => { for (let at = from + step; at >= 0 && at < tokens.length; at += step) if (isSignificant(tokens[at]!)) return at; return undefined }
+  const isGo = (index: number) => tokens[index]!.kind === 'word' && text.slice(tokens[index]!.start, tokens[index]!.end).toUpperCase() === 'GO'
+  for (let index = 0; index < tokens.length; index++) {
+    const comma = tokens[index]!
+    if (comma.kind !== 'comma' || !inRanges(comma, ranges)) continue
+    const p = significant(index, -1), n = significant(index, 1)
+    if (p === undefined || n === undefined) continue
+    const before = tokens[p]!, after = tokens[n]!
+    if (['open', 'comma', 'semicolon', 'sqlcmd'].includes(before.kind) || ['close', 'comma', 'semicolon', 'sqlcmd'].includes(after.kind) || isGo(n)) continue
+    const line = lineOf(comma.start)
+    const trailing = lineOf(after.start) > line, leading = lineOf(before.start) < line
+    if (position === 'front' ? !trailing : !leading) continue
+    // A comma alone on its line (white space around it, nothing else) takes its line with it.
+    const lineStart = tokens[index - 1]?.kind === 'space' ? index - 1 : index
+    const alone = leading && trailing && (lineStart === 0 || tokens[lineStart - 1]!.kind === 'newline')
+      && (tokens[index + 1]?.kind === 'newline' || (tokens[index + 1]?.kind === 'space' && tokens[index + 2]?.kind === 'newline'))
+    if (alone) {
+      const newline = tokens[index + 1]!.kind === 'newline' ? tokens[index + 1]! : tokens[index + 2]!
+      edits.push({ start: tokens[lineStart]!.start, end: newline.end, text: '' })
+    } else if (position === 'front') {
+      // `a ,   ⏎` loses the comma and the white space either side of it; a comment after it stays where it is.
+      let start = comma.start, end = comma.end
+      if (tokens[index - 1]?.kind === 'space') start = tokens[index - 1]!.start
+      if (tokens[index + 1]?.kind === 'space' && (tokens[index + 2] === undefined || tokens[index + 2]!.kind === 'newline')) end = tokens[index + 1]!.end
+      edits.push({ start, end, text: '' })
+    } else {
+      // `    , b` becomes `    b`; `      ,b` becomes `       b`, keeping b where it was.
+      const space = tokens[index + 1]
+      if (space?.kind === 'space') edits.push({ start: comma.start, end: space.end, text: '' })
+      else edits.push({ start: comma.start, end: comma.end, text: tokens[index - 1]?.kind === 'space' ? ' ' : '' })
+    }
+    if (position === 'front') {
+      const indent = tokens[n - 1]
+      const firstOnItsLine = indent?.kind === 'space' && (n - 1 === 0 || tokens[n - 2]!.kind === 'newline')
+      if (firstOnItsLine && text[after.start - 1] === ' ' && !(alone && edits[edits.length - 1]!.end > after.start - 1)) edits.push({ start: after.start - 1, end: after.start, text: ',' })
+      else edits.push({ start: after.start, end: after.start, text: ',' })
+    } else edits.push({ start: before.end, end: before.end, text: ',' })
+  }
+  return mergeEdits(edits)
+}
+
+/** Sorts edits and joins those that touch, so the editor never sees two at one place. */
+function mergeEdits(edits: readonly OffsetEdit[]): OffsetEdit[] {
+  const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end)
+  const merged: OffsetEdit[] = []
+  for (const edit of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && edit.start <= last.end) {
+      merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, edit.end), text: last.text + edit.text }
+    } else merged.push(edit)
+  }
+  return merged
+}
+
+/** `text` with sorted, non-overlapping `edits` applied. */
+export function applyOffsetEdits(text: string, edits: readonly OffsetEdit[]): string {
+  let result = '', at = 0
+  for (const edit of edits) { result += text.slice(at, edit.start) + edit.text; at = edit.end }
+  return result + text.slice(at)
+}
+
+/** Where `offset` in the original text is after the edits: an offset inside a replaced span moves to its end, one at an insertion stays before it. */
+export function mapOffset(edits: readonly OffsetEdit[], offset: number): number {
+  let delta = 0
+  for (const edit of edits) {
+    if (edit.start >= offset) break
+    if (edit.end > offset) return edit.start + delta + edit.text.length
+    delta += edit.text.length - (edit.end - edit.start)
+  }
+  return offset + delta
+}
+
+/** The parts of a Monaco text model the transforms read. */
+export interface SqlTransformModel {
+  getValue(): string
+  getValueLength(): number
+  getOffsetAt(position: { readonly lineNumber: number; readonly column: number }): number
+  getPositionAt(offset: number): { readonly lineNumber: number; readonly column: number }
+}
+
+/** The non-empty selections as offset ranges, or undefined when every selection is a caret. */
+export function selectedRanges(model: SqlTransformModel, selections: readonly TextSelection[]): OffsetRange[] | undefined {
+  const ranges = selections.map(selection => {
+    const anchor = model.getOffsetAt({ lineNumber: selection.selectionStartLineNumber, column: selection.selectionStartColumn })
+    const caret = model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn })
+    return { start: Math.min(anchor, caret), end: Math.max(anchor, caret) }
+  }).filter(range => range.end > range.start)
+  return ranges.length ? ranges : undefined
+}
+
+/** The model's text, or the size error when it holds more than a text operation changes. */
+export function transformText(model: SqlTransformModel): string {
+  if (model.getValueLength() > textOpLimits.characters) throw new Error(sqlTransformMessages.tooLarge)
+  return model.getValue()
+}
+
+/** `edits` as a TextOp on `model`, with each selection moved along with the text it was on. */
+export function sqlTransformOp(model: SqlTransformModel, text: string, edits: readonly OffsetEdit[], selections: readonly TextSelection[]): TextOp {
+  const after = applyOffsetEdits(text, edits)
+  const lineOf = lineIndex(after)
+  const lineStarts = (() => { const starts = [0]; for (let index = 0; index < after.length; index++) { const char = after[index]; if (char === '\n' || (char === '\r' && after[index + 1] !== '\n')) starts.push(index + 1) } return starts })()
+  const position = (offset: number) => { const line = lineOf(offset); return { lineNumber: line + 1, column: offset - lineStarts[line]! + 1 } }
+  const moved = (lineNumber: number, column: number) => position(mapOffset(edits, model.getOffsetAt({ lineNumber, column })))
+  return {
+    edits: edits.map(edit => {
+      const start = model.getPositionAt(edit.start), end = model.getPositionAt(edit.end)
+      return { range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column }, text: edit.text }
+    }),
+    selections: selections.map(selection => {
+      const anchor = moved(selection.selectionStartLineNumber, selection.selectionStartColumn), caret = moved(selection.positionLineNumber, selection.positionColumn)
+      return { selectionStartLineNumber: anchor.lineNumber, selectionStartColumn: anchor.column, positionLineNumber: caret.lineNumber, positionColumn: caret.column }
+    })
+  }
+}

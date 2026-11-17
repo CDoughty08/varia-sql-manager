@@ -2,6 +2,7 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { languagesContribution } from '../contributions/languages'
+import { EditorPeekService } from '../languages/EditorPeekService'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
@@ -219,6 +220,8 @@ export interface Workbench extends Disposable {
   readonly peek: PeekService
   /** Peek promoted to document tabs: each tab's view. */
   readonly peekTabs: PeekTabService
+  /** Go To and Peek Definition in SQL editors: F12's script, the card at a name (Alt+F12, Ctrl+hover), a Peek tab (Ctrl+click). */
+  readonly editorPeek: EditorPeekService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
   /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
@@ -456,6 +459,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek, documents, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
+  const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
     api, connections, explorer,
@@ -605,6 +609,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     peek,
     peekTabs,
+    editorPeek,
     actions,
     actionProgress,
     dialogs,

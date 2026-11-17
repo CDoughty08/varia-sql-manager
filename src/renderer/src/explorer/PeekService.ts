@@ -60,6 +60,19 @@ export interface OpenPeek {
   readonly rows?: PeekPart<PeekRows>
   /** The cards before this one, oldest first, when a dependency was followed. */
   readonly back: readonly PeekStep[]
+  /** Where a card not beside an Object Explorer row is anchored: a name in a query editor (`peekAt`). */
+  readonly anchor?: PeekAnchor
+}
+/**
+ * A place outside Object Explorer the card is drawn beside, in `document`'s window: `rect` is where it is now (undefined
+ * while it is scrolled out of view), `watch` reports it moving or going away (the card closes then), and `focus` takes focus
+ * back when the card closes from the keyboard.
+ */
+export interface PeekAnchor {
+  readonly document: Document
+  rect(): { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number } | undefined
+  watch(moved: () => void, gone: () => void): () => void
+  focus(): void
 }
 export interface PeekSnapshot { readonly open?: OpenPeek }
 /** What a read peeks; `subtype` (the tree's) says whether Script As can write a scripted kind's definition. */
@@ -514,7 +527,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     this.clearListeners()
   }
 
-  protected load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: PeekTab } = {}): void {
+  /** `carry.anchor`: the new card's anchor, `null` for a row's; left out, Back, a followed dependency and Refresh keep the card's. */
+  protected load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: PeekTab; readonly anchor?: PeekAnchor | null } = {}): void {
     if (node.ref.type !== 'object' || this.detached || this.disposed) return
     // A refresh asks for the same script again, so the one running is not worth keeping.
     this.reads.release(this.requests, !fresh)
@@ -525,7 +539,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     const tab = carry.tab && peekTabsOf(kind).includes(carry.tab) ? carry.tab : 'definition'
     // Rows the row's card does not own (a followed dependency) still anchor at that row.
     const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
-    this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [] } })
+    const anchor = carry.anchor === undefined ? this.getSnapshot().open?.anchor : carry.anchor ?? undefined
+    this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [], ...anchor ? { anchor } : {} } })
     this.reads.begin({ connectionId: node.connectionId, object: node.ref.object, kind, ...(node.subtype === undefined ? {} : { subtype: node.subtype }) }, fresh, requests, () => !this.disposed && !this.detached && this.getSnapshot().open?.id === id, change => {
       const open = this.getSnapshot().open
       if (open && open.id === id) this.publish({ open: { ...open, ...change } })
@@ -650,6 +665,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
 export class PeekService extends PeekView {
   private hoverTimer: unknown
   private hoverRow: number | undefined
+  /** The editor name `hoverAt` waits on; meaningful only while `hoverTimer` runs. */
+  private hoverKey: string | undefined
   private readonly timers: NonNullable<PeekServiceOptions['timers']>
 
   constructor(private readonly options: PeekServiceOptions) {
@@ -672,7 +689,34 @@ export class PeekService extends PeekView {
       if (source !== 'hover' && open.source === 'hover') this.publish({ open: { ...open, source } })
       return
     }
-    this.load(node, node.kind as PeekKind, source, false)
+    this.load(node, node.kind as PeekKind, source, false, { anchor: null })
+  }
+
+  /**
+   * Opens the card on `node` beside `anchor` (a name in a query editor), replacing any other; the object already shown there
+   * moves to the new anchor without reading it again. False when Peek cannot describe the object.
+   */
+  peekAt(node: ExplorerMenuNode, anchor: PeekAnchor, source: PeekSource): boolean {
+    this.cancelHover()
+    if (this.disposed || !this.canPeek(node)) return false
+    const open = this.getSnapshot().open
+    if (open?.anchor && !open.back.length && open.node.connectionId === node.connectionId && sameObject(open.node, node)) {
+      this.publish({ open: { ...open, anchor, source: source === 'hover' ? open.source : source } })
+      return true
+    }
+    this.load(node, node.kind as PeekKind, source, false, { anchor })
+    return true
+  }
+
+  /**
+   * A query editor's Peek on Hover rests on a name (`key` tells one from another): `open` runs after `peekLimits.hoverMs` on the
+   * row hover's timer, so whatever cancels that (the modifier released, another key, `cancelHover`) cancels this too.
+   */
+  hoverAt(key: string, open: () => void): void {
+    if (this.disposed || (this.hoverTimer !== undefined && this.hoverKey === key)) return
+    this.cancelHover()
+    this.hoverKey = key
+    this.hoverTimer = this.timers.setTimeout(() => { this.hoverTimer = undefined; this.hoverKey = undefined; open() }, peekLimits.hoverMs)
   }
 
   /** A view of a promoted tab's own, sharing the card's script cache. */

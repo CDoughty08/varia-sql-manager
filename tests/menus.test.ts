@@ -34,7 +34,7 @@ describe('menu model', () => {
       expect(outline('edit.findReplace', platform)).toEqual(['edit.find', 'edit.replace', '-', 'edit.findNext', 'edit.findPrevious'])
       // Word Wrap is here, where SSMS has it, and not in View.
       expect(outline('edit.advanced', platform)).toEqual(['edit.makeUppercase', 'edit.makeLowercase', '-', 'editor.toggleWhitespace', 'editor.toggleWordWrap', '-', 'edit.commentLines', 'edit.uncommentLines',
-        'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
+        'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent', '-', 'edit.toggleBrackets', 'edit.commasToFront', 'edit.commasToEnd'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
       expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense', '-', 'edit.nextSqlIssue', 'edit.previousSqlIssue'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
@@ -197,7 +197,7 @@ describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
     expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'query.estimatePlan', 'query.estimateSessionPlan', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
-      'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith', 'edit.goToDefinition', 'edit.peekDefinition'])
+      'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab', 'edit.toggleBrackets', 'edit.commasToFront', 'edit.commasToEnd'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.reopenClosed', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.increaseTabRows', 'editor.decreaseTabRows', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
@@ -384,7 +384,7 @@ describe('menu state', () => {
       // The Restore Database document's header verbs.
       'restoreDatabase.run', 'restoreDatabase.stop', 'restoreDatabase.refresh',
       // Go To Definition and Peek Definition: the query editor's menu and its keys, as in SSMS.
-      'edit.goToDefinition', 'edit.peekDefinition',
+      'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
       'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.close',
       // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.

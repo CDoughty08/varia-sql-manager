@@ -48,6 +48,10 @@ Edit
     ---
     &Increase Line Indent  ++++
     &Decrease Line Indent  ++++
+    ---
+    Toggle &Brackets  Ctrl+[  ++++
+    Move Commas to &Front  ++++
+    Move Commas to &End  ++++
   Boo&kmarks >
     &Toggle Bookmark  Ctrl+K Ctrl+K  ++++
     ---

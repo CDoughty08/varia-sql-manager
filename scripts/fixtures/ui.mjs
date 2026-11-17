@@ -569,6 +569,28 @@ export const queryEditorText = page => page.locator(part.activeEditorGroup).loca
 export const peekDefinitionText = scope => scope.getByRole('textbox', { name: /^Definition text/ })
 /** The body-level hosts of Peek editors' hover and message widgets in a window (createQueryEditor's widget host). */
 export const peekEditorWidgetHosts = page => page.locator('.editor-overflow-widgets[data-peek-editor]')
+/** Peek's card on an object (`dbo.Orders`), beside an Object Explorer row or a name in a query editor. */
+export const peekCard = (page, name) => page.getByRole('dialog', { name: `Peek: ${name}`, exact: true })
+/** Whether a Peek card is drawn beside a name in a query editor rather than beside an Object Explorer row. */
+export const peekCardInEditor = card => card.evaluate(element => element.getAttribute('data-peek-placement') === 'editor')
+/** The window point in the middle of `word`'s first appearance in the text of the editor inside `scope`, for pointer gestures. */
+export const editorWordPoint = (scope, word) => editorSurface(scope).evaluateAll((editors, word) => {
+  for (const editor of editors) {
+    const lines = editor.querySelector('.view-lines')
+    if (!lines || !editor.getClientRects().length) continue
+    const walker = editor.ownerDocument.createTreeWalker(lines, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.nodeValue.indexOf(word)
+      if (at < 0) continue
+      const range = editor.ownerDocument.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + word.length)
+      const box = range.getBoundingClientRect()
+      if (box.width) return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    }
+  }
+  throw new Error('No editor shows ' + word + '.')
+}, word)
 
 // Panes: the dock's panels, each with a tab in its group's header
 

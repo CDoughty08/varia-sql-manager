@@ -121,11 +121,19 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
-  // VS Code's Ctrl+click (⌘-click on macOS); Alt for those who moved Monaco's multi-cursor click to Ctrl (textEditor.multiCursorModifier).
+  // Object Explorer's Peek on Hover in the query editor: the same card, anchored at the name.
+  'editor.peekHover': {
+    title: 'Peek Definition on Hover', description: 'Peeks the object whose name the pointer rests on (a table, view, procedure, function and so on) in a card beside it.',
+    kind: 'modifier', scope: 'queryEditor', action: 'hover', target: 'an object name', modifiers: ['mod'],
+    // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
+    choices: [['mod'], ['shift']], keyboard: ['edit.peekDefinition']
+  },
+  // Ctrl+click (⌘-click on macOS) opens a Peek tab, as on an Object Explorer row; Alt for those who moved Monaco's multi-cursor
+  // click to Ctrl (textEditor.multiCursorModifier). The id is Go To Definition's click's, so a choice made for it carries over.
   'editor.goToDefinition': {
-    title: 'Go To Definition', description: 'Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does.',
+    title: 'Open Definition in Peek Tab', description: 'Opens Peek on the object whose name is clicked (a table, view, procedure, function and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'queryEditor', action: 'click', target: 'an object name', modifiers: ['mod'],
-    choices: [['mod'], ['alt']], keyboard: ['edit.goToDefinition']
+    choices: [['mod'], ['alt']], keyboard: ['edit.openPeekTab']
   },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',

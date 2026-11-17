@@ -8,6 +8,7 @@ import { followEditorBridge, registerEditorBridge, type BridgeMonaco } from '../
 import { onUnexpectedError } from '../core/errors'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
 import { applyTextOp, caseEdits, checkSelectionSize, indentEdits, type TextSelection } from '../editor/text-ops'
+import { moveCommaEdits, selectedRanges, sqlTransformMessages, sqlTransformOp, statementAt, toggleBracketEdits, transformText } from '../editor/sql-transforms'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
 
 /** The part of Monaco's SnippetController2 that inserts a snippet, typed here because Monaco does not export it. */
@@ -73,6 +74,21 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     const { indentSize, insertSpaces } = model.getOptions()
     applyTextOp(target, mode === 'increase' ? 'varia.increaseIndent' : 'varia.decreaseIndent', indentEdits(model, selections(target), { indentSize, insertSpaces }, mode))
   })
+  // Toggle Brackets acts on the selections, or the whole query when nothing is selected; the comma commands on the selections,
+  // or the statement around each caret. Nothing to change is a notice, not an error.
+  const toggleBrackets = withEditor((target, model) => {
+    const text = transformText(model), current = selections(target), ranges = selectedRanges(model, current)
+    const { mode, edits } = toggleBracketEdits(text, ranges)
+    if (mode === 'none') { commands.reportWarning(sqlTransformMessages.nothingToBracket(!!ranges)); return }
+    applyTextOp(target, 'varia.toggleBrackets', sqlTransformOp(model, text, edits, current))
+  })
+  const moveCommas = (position: 'front' | 'end') => withEditor((target, model) => {
+    const text = transformText(model), current = selections(target), selected = selectedRanges(model, current)
+    const ranges = selected ?? current.map(selection => statementAt(text, model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn })))
+    const edits = moveCommaEdits(text, ranges, position)
+    if (!edits.length) { commands.reportWarning(sqlTransformMessages.noCommas(position === 'front', !!selected)); return }
+    applyTextOp(target, position === 'front' ? 'varia.commasToFront' : 'varia.commasToEnd', sqlTransformOp(model, text, edits, current))
+  })
   const goToLine = withEditor((target, model) => {
     const tabId = documents.getSnapshot().activeId
     editorDialogs.openGoToLine({ tabId, lineCount: model.getLineCount(), line: target.getPosition()?.lineNumber ?? 1 })
@@ -109,6 +125,9 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     commands.register('edit.makeLowercase', { run: changeCase('lower') }),
     commands.register('edit.increaseIndent', { run: indent('increase') }),
     commands.register('edit.decreaseIndent', { run: indent('decrease') }),
+    commands.register('edit.toggleBrackets', { run: toggleBrackets }),
+    commands.register('edit.commasToFront', { run: moveCommas('front') }),
+    commands.register('edit.commasToEnd', { run: moveCommas('end') }),
     commands.register('editor.toggleWhitespace', { run: () => editorOptions.toggleWhitespace() }),
     commands.register('editor.toggleLineNumbers', { run: () => editorOptions.toggleLineNumbers() }),
     commands.register('edit.toggleBookmark', { run: () => { focusedEditor(documents); bookmarks.toggle() } }),

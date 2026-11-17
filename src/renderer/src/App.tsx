@@ -45,6 +45,7 @@ import EnvironmentTag from './EnvironmentTag'
 import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
+import PeekCard from './explorer/PeekCard'
 import MenuLayer from './menus/MenuLayer'
 import Toasts from './kit/Toasts'
 import { connectionDefaults } from '../../shared/connections'
@@ -320,6 +321,7 @@ export default function App() {
     {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
+    <PeekCard placement="editor" />
     <MenuLayer />
   </div>
 }

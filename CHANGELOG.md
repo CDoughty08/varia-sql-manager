@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Toggle Brackets:** Ctrl\+\[ \(Cmd\+\[ on macOS\), the editor's context menu or Edit › Advanced brackets every name in the selection or the whole query, or takes the brackets off again where they are not needed\. Strings, comments, variables and keywords are never touched\.
+- **Commas to front or end:** Move Commas to Front and Move Commas to End restyle SELECT lists, GROUP BY, ORDER BY, INSERT column lists, VALUES and parameter lists in the selection or the current statement, keeping trailing comments in place\.
+
+### Changes to everyday use
+
+- **Peek from the query editor:** Hold Ctrl \(Cmd on macOS\) and rest the pointer on a table or other object name to Peek it in a card beside the name, as in Object Explorer\. Alt\+F12 opens the same card at the caret, and Ctrl\+click now opens a Peek tab instead of scripting the object; F12 still scripts it as CREATE\.
+
 ## [0.9.0] - 2026-11-15
 
 Organize, name and keep far larger results, see what is slowing your server with the rest of Activity Monitor, and pick up where you left off with restored connections\.
