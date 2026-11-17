@@ -722,10 +722,12 @@ export class PeekService extends PeekView {
   /**
    * A key went down anywhere in the window (the key dispatcher's `keyDown`). Peek on Hover's modifier pressed with the
    * pointer resting on a row peeks it after `peekLimits.pressMs`, not the longer hover delay: the pointer is still, so the
-   * press is the request. Any other key before then makes it a chord (Ctrl+N), not a peek.
+   * press is the request. Any other key before then makes it a chord (Ctrl+N), not a peek. Any other key also forgets the
+   * pointer's row until the pointer moves again: a pointer left resting on the tree while typing elsewhere is not a request,
+   * so a shortcut whose modifier is held a while there (Ctrl+S in the editor) does not peek.
    */
   keyDown(key: string, repeat = false): void {
-    if (!this.isModifier(key)) { this.cancelHover(); return }
+    if (!this.isModifier(key)) { this.cancelHover(); this.pointerRow = undefined; return }
     if (repeat && this.armedStore.getSnapshot()) return
     this.armedStore.set(true)
     const node = this.pointerRow?.()

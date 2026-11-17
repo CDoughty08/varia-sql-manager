@@ -267,6 +267,17 @@ describe('PeekService', () => {
     expect(timers.callback).toBeUndefined()
     expect(api.explorerPeek).not.toHaveBeenCalled()
     service.keyUp('Control')
+    // A pointer left resting on a row while the user types elsewhere is forgotten: Ctrl held there a while (Ctrl+S in the
+    // editor) peeks nothing until the pointer moves again.
+    service.pointer(() => node('table'), false)
+    service.keyDown('s')
+    service.keyDown('Control')
+    expect(timers.callback).toBeUndefined()
+    service.keyUp('Control')
+    service.pointer(() => node('table'), false)
+    service.keyDown('Control')
+    expect(timers.callback).toBeDefined()
+    service.keyUp('Control')
     // A pointer moving with Ctrl held waits for the hover delay; another key makes the press a chord (Ctrl+C), not a peek.
     service.pointer(() => node('table'), true)
     expect(timers.callback).toBeDefined()
@@ -292,6 +303,9 @@ describe('PeekService', () => {
     shift.pointer(() => node('table'), false)
     shift.keyDown('Control')
     expect(fire).toBeUndefined()
+    // Ctrl was another key here, so the pointer must move again before the press counts.
+    shift.keyUp('Control')
+    shift.pointer(() => node('table'), false)
     shift.keyDown('Shift')
     fire?.()
     expect(api.explorerPeek).toHaveBeenCalledTimes(1)

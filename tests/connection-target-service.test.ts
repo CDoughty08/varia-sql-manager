@@ -263,12 +263,23 @@ describe('Object Explorer order and expansion in the connection workspace', () =
     expect(listener).toHaveBeenCalledTimes(1)
   })
 
-  it('gives restored targets their saved expansion (none saved: all collapsed) and targets added this run none', () => {
+  it('gives restored targets their saved expansion, and none to a target added this run or not connected at the last close', () => {
     const service = new ConnectionTargetService()
     const keys = [JSON.stringify(['', 'object', 'server', null, null, null, null, null, null, null])]
-    service.restore({ version: 1, targets: [{ ...record(1), explorerExpanded: keys }, record(2)] })
+    service.restore({ version: 1, explorerExpansion: true, targets: [{ ...record(1), explorerExpanded: keys }, { ...record(4), explorerExpanded: [] }, record(2)] })
     expect(service.savedExplorerExpansion(id(1))).toEqual(keys)
-    expect(service.savedExplorerExpansion(id(2))).toEqual([])
+    expect(service.savedExplorerExpansion(id(4))).toEqual([])
+    // Not connected at the last close: its first connect opens it to its first level, as a new connection's does.
+    expect(service.savedExplorerExpansion(id(2))).toBeUndefined()
+    // A file older than the saved expansion (no marker) restores every server collapsed; one written with it, where no
+    // server had anything to keep, does not.
+    const older = new ConnectionTargetService()
+    older.restore({ version: 1, targets: [record(1), record(2)] })
+    expect(older.savedExplorerExpansion(id(1))).toEqual([])
+    expect(older.savedExplorerExpansion(id(2))).toEqual([])
+    const none = new ConnectionTargetService()
+    none.restore(withExplorerExpansion({ version: 1, targets: [record(1)] }, new Map()))
+    expect(none.savedExplorerExpansion(id(1))).toBeUndefined()
     service.add(record(3))
     expect(service.savedExplorerExpansion(id(3))).toBeUndefined()
     expect(service.exportWorkspace().targets[0].explorerExpanded).toEqual(keys)

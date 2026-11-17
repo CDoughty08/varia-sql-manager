@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { bindExplorerDrop, dropIntoEditor, explorerDragType, maxDropText, parseExplorerDrop, type DropEditor, type DropEvent } from '../src/renderer/src/explorer/drop'
+import { bindExplorerDrop, dropIntoEditor, explorerDragType, explorerServerDragType, maxDropText, parseExplorerDrop, serverDragOf, type DropEditor, type DropEvent } from '../src/renderer/src/explorer/drop'
 
 interface Position { lineNumber: number; column: number }
 /** A one-model editor over lines of text: edits insert at a collapsed range, and the log records what the drop did. */
@@ -96,5 +96,17 @@ describe('dropping on the query editor', () => {
     expect(editor.lines[0]).toBe('SELECT [t]')
     binding.dispose()
     expect(listeners.has('drop')).toBe(false)
+  })
+})
+
+describe('Object Explorer server drag', () => {
+  it('moves a server only while the drag is that server drag, so a stale one never moves it on a file or name drop', () => {
+    const drag = (...types: string[]) => ({ dataTransfer: { types } })
+    expect(serverDragOf(drag(explorerServerDragType), 4)).toBe(4)
+    // A server drag whose dragend never arrived leaves its row id behind: a later file, text or table-name drag is not it.
+    expect(serverDragOf(drag('Files'), 4)).toBeUndefined()
+    expect(serverDragOf(drag('text/plain', explorerDragType), 4)).toBeUndefined()
+    expect(serverDragOf({ dataTransfer: null }, 4)).toBeUndefined()
+    expect(serverDragOf(drag(explorerServerDragType), undefined)).toBeUndefined()
   })
 })

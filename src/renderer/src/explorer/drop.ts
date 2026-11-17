@@ -6,6 +6,10 @@ import type { Disposable } from '../core/types'
 export const explorerDragType = 'application/x-varia-explorer'
 /** A server row being moved among the servers: the tree alone accepts it, so the query editor and other apps ignore it. */
 export const explorerServerDragType = 'application/x-varia-explorer-server'
+/** The server being dragged (`from`), only while the drag is that server drag: not a file, text or a table's name. */
+export function serverDragOf(event: { readonly dataTransfer: { readonly types: readonly string[] } | null }, from: number | undefined): number | undefined {
+  return from !== undefined && event.dataTransfer?.types.includes(explorerServerDragType) ? from : undefined
+}
 /** As long as a script may be. */
 export const maxDropText = 1_000_000
 

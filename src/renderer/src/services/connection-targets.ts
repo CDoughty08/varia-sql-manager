@@ -41,6 +41,8 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
   private readonly bindingRevisions = new Map<string, { readonly id: string; readonly generation: number; readonly revision: number }>()
   /** The targets the start's `restore` brought back, whose saved Explorer expansion applies. */
   private restored = new Set<string>()
+  /** The restored file predates Object Explorer's saved expansion (no `explorerExpansion` marker): its servers restore collapsed. */
+  private olderFile = false
 
   constructor() { super(Object.freeze([])) }
   get(id: string): ConnectionTarget | undefined { return this.getSnapshot().find(target => target.id === id) }
@@ -58,16 +60,20 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     this.operations.clear()
     this.bindingRevisions.clear()
     this.restored = new Set(parsed.targets.map(target => target.id))
+    this.olderFile = parsed.explorerExpansion !== true
     this.publish(Object.freeze(parsed.targets.map(target => entry(target, { state: 'disconnected' }))))
     return true
   }
 
   /**
-   * Object Explorer's expanded nodes from the last close, for a target the start restored: empty (all collapsed) when that
-   * close kept none. Undefined for a target this run added, whose server opens to its first level as a new connection does.
+   * Object Explorer's expanded nodes from the last close, for a target the start restored (empty: it closed collapsed).
+   * Undefined, so the server opens to its first level as a new connection does, for a target this run added and for one
+   * the last close did not show connected. A file older than the field restores every server collapsed instead.
    */
   savedExplorerExpansion(id: string): readonly string[] | undefined {
-    return this.restored.has(id) ? this.get(id)?.explorerExpanded ?? [] : undefined
+    if (!this.restored.has(id)) return undefined
+    const saved = this.get(id)?.explorerExpanded
+    return saved ?? (this.olderFile ? [] : undefined)
   }
 
   /**

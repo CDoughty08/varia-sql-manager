@@ -11,9 +11,9 @@ as `backend/Varia.Backend/Explorer/explorer-catalog.json`.
 
 ## Server
 
-A server connected this run expands on connect; its folders stay collapsed. A server reconnected at startup restores the
-nodes it had expanded when Varia last closed (collapsed when none were saved), and one that reconnects after a loss
-restores what it showed when it was lost.
+A server with no saved expansion (first connected this run, or never shown connected before) expands on connect; its folders
+stay collapsed. Otherwise a connect restores the nodes it last showed expanded: at Varia's last close, or when it was lost
+or disconnected (collapsed if it showed none, or if the session file predates this).
 
 | Folder | Id | Since | Cloud editions | Lists (query) | Filters |
 | --- | --- | --- | --- | --- | --- |
@@ -376,9 +376,11 @@ Peek (the context menu's Peek, Space on the selected row, or resting the pointer
 opens a card beside the row with the object's definition and its properties. One `explorer.peek` request reads the
 properties (and a module's text) on the Object Explorer pool, in one constant batch per kind (`Explorer/PeekSql.cs`)
 within 15,000 ms; the definition of a kind without stored text comes from Script As (CREATE). A fact whose
-catalog column is newer than the server is left out. While Ctrl (Cmd) is held over Object Explorer, rows that can peek show
-a zoom-in cursor, and pressing it with the pointer already on such a row peeks after 150 ms (a shortcut such as Ctrl+N
-reaches its second key first, so it peeks nothing); releasing it keeps an open card, so the pointer can move into it.
+catalog column is newer than the server is left out. While Peek on Hover's modifier (Ctrl, Cmd on macOS, unless remapped) is
+held, rows that can peek show a zoom-in cursor. Pressing it with the pointer already on such a row peeks after 150 ms (a
+shortcut such as Ctrl+N reaches its second key first, so it peeks nothing); a key typed since the pointer last moved means
+the pointer is only resting there, so the press peeks nothing until it moves. Releasing it keeps an open card, so the pointer
+can move into it.
 Esc, a click elsewhere or another peek closes the card, and
 cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.
 Properties sit beside the definition; a card or tab narrower than 560px (a slim popped-out Object Explorer) stacks them

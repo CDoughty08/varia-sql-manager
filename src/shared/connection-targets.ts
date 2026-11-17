@@ -66,7 +66,9 @@ export const persistedConnectionTargetSchema = z.object({
 export type PersistedConnectionTarget = z.infer<typeof persistedConnectionTargetSchema>
 
 export const connectionWorkspaceSchema = z.object({
-  version: z.literal(1), targets: z.array(persistedConnectionTargetSchema).max(connectionTargetLimits.targets).readonly()
+  version: z.literal(1), targets: z.array(persistedConnectionTargetSchema).max(connectionTargetLimits.targets).readonly(),
+  /** Written with Object Explorer's expansion: a target without `explorerExpanded` then had none to keep, not an older file. */
+  explorerExpansion: z.literal(true).optional()
 }).strict().refine(value => new Set(value.targets.map(target => target.id)).size === value.targets.length, 'Duplicate connection target IDs.').readonly()
 export type ConnectionWorkspace = z.infer<typeof connectionWorkspaceSchema>
 
@@ -91,7 +93,7 @@ export function withExplorerExpansion(workspace: ConnectionWorkspace, expansion:
     const { explorerExpanded: _old, ...rest } = target
     return keys === undefined ? rest : { ...rest, explorerExpanded: bounded(keys) }
   })
-  return connectionWorkspaceSchema.parse({ ...workspace, targets })
+  return connectionWorkspaceSchema.parse({ ...workspace, explorerExpansion: true, targets })
 }
 
 /** attachWanted distinguishes an attached query from a query deliberately disconnected while retaining its target. */

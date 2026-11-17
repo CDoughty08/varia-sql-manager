@@ -52,7 +52,6 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerLoading: boolean
   /** Group by Schema is on (`objectExplorer.groupBySchema`). */
   readonly explorerGroupBySchema: boolean
-  /** The selected server can move up or down among the servers (Move Up, Move Down). */
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
@@ -329,6 +328,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.rev++
     this.evictable = true
     this.abortWithin(new Set([node.id]), 'collapse')
+    // The user's collapse also ends a restore still expanding this server: its pending keys would never be met, yet be saved
+    // again at every close.
+    const root = this.rootOf(node)
+    if (root) this.endRestore(root.id)
     // A reveal walking through this node would expand it again when its next page lands: the user's collapse ends it.
     if (this.seekWalk().includes(node.id)) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     if (this.selected !== undefined && this.selected !== id && this.within(rowOwner(this.selected), id)) this.selected = id
@@ -352,6 +355,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A reveal past its server node walks through a node this collapses (see collapse).
     if (this.seekWalk().some(id => !roots.has(id))) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     this.abortWithin(undefined, 'collapse', task => !roots.has(task.nodeId))
+    // A root page still loading would otherwise restore below the servers again (see collapse).
+    for (const id of roots) this.endRestore(id)
     for (const node of this.nodes.values()) if (node.expanded && node.parent !== 0) { node.expanded = false; node.rev++ }
     this.stalled.clear()
     this.evictable = true
@@ -415,6 +420,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       node.rev++
     }
     this.stalled.clear()
+    // Stop ends every restore too: what it had yet to find is neither expanded later nor saved again.
+    for (const id of this.roots) this.endRestore(id)
     this.invalidate()
   }
   /** Enter on an error row: reloads the page that failed, or refreshes the parent of an object that no longer exists. */
@@ -832,8 +839,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   /**
    * Each server's expanded nodes by target id, for the workspace the session keeps (`withExplorerExpansion`): a connected
-   * server's as they show, a disconnected one's as it was left. Servers not connected this run are left out, so they keep
-   * the last close's.
+   * server's as they show, a disconnected one's as it was left, and one not connected this run what the start restored.
    */
   savedExpansion(): ReadonlyMap<string, readonly string[]> {
     const saved = new Map<string, readonly string[]>()
@@ -842,8 +848,18 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (!root || !targetId) continue
       if (!root.lost) saved.set(targetId, this.expandedKeys(root))
       else if (this.remembered.has(targetId)) saved.set(targetId, this.remembered.get(targetId)!)
+      else if (!this.consumed.has(targetId)) {
+        // Not connected this run: it keeps what the start restored for it (an older file's servers stay collapsed).
+        const kept = this.targets?.savedExplorerExpansion(targetId)
+        if (kept) saved.set(targetId, kept)
+      }
     }
     return saved
+  }
+  /** The user took over a server's expansion: its restore expands nothing more, and its pending keys are not saved. */
+  private endRestore(rootId: number): void {
+    if (!this.restoring.delete(rootId) && !this.restoreQueue.length) return
+    this.restoreQueue = this.restoreQueue.filter(node => this.rootOf(node)?.id !== rootId)
   }
   /** A row a page brought: the restore expands it after the page when the saved expansion names it. */
   private restoreChild(parent: TreeNode, node: TreeNode): void {
@@ -855,10 +871,40 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     }
   }
   private flushRestore(): void {
-    const queue = this.restoreQueue
-    if (!queue.length) return
-    this.restoreQueue = []
-    for (const node of queue) if (!node.expanded) this.expand(node.id, 'background')
+    while (this.restoreQueue.length) {
+      const queue = this.restoreQueue
+      this.restoreQueue = []
+      for (const node of queue) {
+        if (!node.expanded) this.expand(node.id, 'background')
+        // Rows it already held (no page to wait for) are matched now.
+        if (this.running.has(node.id) || !node.children) continue
+        for (const child of node.children) this.restoreChild(node, child)
+        this.restoreLoaded(node)
+      }
+    }
+  }
+  /**
+   * Forgets nodes a restore waits on that can no longer bring rows: gone from the tree (Group by Schema moved its folders, a
+   * refresh dropped it) or collapsed with nothing loading or queued. A restore left waiting on none of its nodes ends.
+   */
+  private pruneRestores(): void {
+    for (const [rootId, restoring] of this.restoring) {
+      for (const id of restoring.parents) {
+        const node = this.nodes.get(id)
+        if (!node || !this.attached(node) || (!node.expanded && !this.running.has(id) && !this.restoreQueue.includes(node))) restoring.parents.delete(id)
+      }
+      if (!restoring.parents.size) this.restoring.delete(rootId)
+    }
+  }
+  /**
+   * A node the restore expanded has all its rows (or failed): no key below it can still arrive. Once every such node has,
+   * the keys left name nodes that are gone (a dropped database, Group by Schema changed), so the restore ends without
+   * saving them again or expanding a same-named object a later refresh brings.
+   */
+  private restoreLoaded(node: TreeNode): void {
+    const root = this.rootOf(node), restoring = root && this.restoring.get(root.id)
+    if (!restoring || !restoring.parents.delete(node.id) || restoring.parents.size) return
+    this.restoring.delete(root.id)
   }
 
   /** Where a server row stands among the servers, and how many there are; undefined for any other row. */
@@ -1089,6 +1135,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private settled(nodeId: number, running: Running, outcome: LoadOutcome): void {
     if (this.running.get(nodeId) !== running) return
     this.running.delete(nodeId)
+    if (this.restoring.size) this.pruneRestores()
     const node = this.nodes.get(nodeId)
     if (!node || node.generation !== running.task.generation || !this.attached(node)) return
     this.stopLoadingRow(node)
@@ -1103,6 +1150,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
+    if (this.restoring.size && (!node.cursor || node.more !== 'auto')) this.restoreLoaded(node)
+    // The page may have detached nodes a restore waits on (a reconcile dropping rows, Group by Schema moving folders), whose
+    // aborted loads never settle.
+    if (this.restoring.size) this.pruneRestores()
     this.flushRestore()
     // Loads below a refreshed or filtered folder waited for its first page: gone with the old rows, or resumed now.
     if (running.mode !== 'more' && this.stalled.size) this.resumeStalled()

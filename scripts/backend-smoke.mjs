@@ -310,7 +310,7 @@ try {
   // Focus the box held moves to the tree rather than the page, so keys still reach Object Explorer.
   await expect(explorerTree(page)).toBeFocused()
   await explorerLabel(lostRow).click({ button: 'right' })
-  await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer'])
+  await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer', 'Move Up', 'Move Down'])
   await page.keyboard.press('Escape')
   await expect(openMenus(page)).toHaveCount(0)
   // Enter on the lost row reconnects it, as its button does: the Connect dialog opens filled in from it.
@@ -339,7 +339,7 @@ try {
   await explorerLabel(lostRow).click()
   await expect(lostRow).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Shift+F10')
-  await expect.poll(() => menuItemNames(explorerMenu)).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer'])
+  await expect.poll(() => menuItemNames(explorerMenu)).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer', 'Move Up', 'Move Down'])
   await page.keyboard.press('Escape')
   await expect(explorerMenu).toHaveCount(0)
   await size(1024, 700)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { explorerLimits } from '../../../shared/explorer/catalog.ts'
 import { ssisDefaultVerb, ssisVerbSpecs } from '../../../shared/ssis/catalog.ts'
@@ -6,7 +6,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { observeResize, requestFrame } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
-import { explorerDragType, explorerServerDragType, maxDropText } from './drop'
+import { explorerDragType, explorerServerDragType, maxDropText, serverDragOf } from './drop'
 import type { Announcement } from './ExplorerService'
 import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
@@ -64,7 +64,9 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   useEffect(() => {
     const apply = () => element.current?.toggleAttribute('data-peek-armed', peek.armed.getSnapshot())
     apply()
-    return peek.armed.subscribe(apply)
+    const unsubscribe = peek.armed.subscribe(apply)
+    // A row that unmounts gets no mouseleave: a pointer resting on the tree as it goes would stay Peek's pointer row.
+    return () => { unsubscribe(); peek.pointer(undefined) }
   }, [peek])
   // While type-ahead collects a name the tree carries data-type-ahead (explorerTypeAhead), so Space types a space rather
   // than running Peek's catalogue key, until the buffer would start over.
@@ -215,6 +217,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
     // carries only its own type, so dropping it anywhere but on another server does nothing.
     dragStart: (rowId, transfer) => {
+      // A server drag whose dragend never arrived (its row unmounted mid-drag) must not carry over into this one.
+      dragging.current = undefined
       if ((explorer.serverPlace(rowId)?.count ?? 0) > 1) {
         dragging.current = rowId
         peek.cancelHover()
@@ -241,14 +245,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (refocus) element.current?.focus({ preventScroll: true })
     },
     dragOver: (rowId, edge, event) => {
-      const from = dragging.current
+      const from = serverDragOf(event, dragging.current)
       if (from === undefined || !explorer.serverPlace(rowId)) { setDropMark(undefined); return }
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
       setDropMark(mark => mark?.rowId === rowId && mark.edge === edge ? mark : { rowId, edge })
     },
     drop: (rowId, event) => {
-      const from = dragging.current, mark = dropMark.current
+      const from = serverDragOf(event, dragging.current), mark = dropMark.current
       dragging.current = undefined
       setDropMark(undefined)
       if (from === undefined || mark?.rowId !== rowId) return
@@ -363,7 +367,10 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     }}>
     {pinned('top')}
     <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
-      aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
+      aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}
+      // A server drag over the tree's background (no row accepted it) or out of the tree leaves no drop line behind.
+      onDragOver={(event: DragEvent) => { if (!event.defaultPrevented && dropMark.current) setDropMark(undefined) }}
+      onDragLeave={(event: DragEvent) => { if (dropMark.current && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropMark(undefined) }}>
       <div className="explorer-spacer" style={{ height: layout.total }}>
         {indices.map(index => {
           const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]

@@ -6,7 +6,7 @@
 
 - **Arrange your servers:** Drag servers in Object Explorer to reorder them, or use Move Up and Move Down (Alt+Up and Alt+Down). The order is kept across restarts.
 - **Object Explorer opens as you left it:** Servers that reconnect at startup expand only the nodes you had open when you closed Varia, instead of every server expanding.
-- **Quicker Peek:** Holding Ctrl (Cmd on macOS) over Object Explorer shows a zoom cursor on rows you can peek, and pressing it with the pointer already on a row peeks straight away, without moving the mouse. Releasing it keeps the card open so you can move into it.
+- **Quicker Peek:** Holding Ctrl (Cmd on macOS) over Object Explorer shows a zoom cursor on rows you can peek, and pressing it with the pointer already resting on a row peeks it without moving the mouse. Releasing it keeps the card open so you can move into it.
 
 ## [0.9.0] - 2026-11-15
 

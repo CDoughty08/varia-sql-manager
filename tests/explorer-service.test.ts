@@ -2059,8 +2059,9 @@ describe('ExplorerService: saved server order and expansion', () => {
     ])
     // The collapsed server loads nothing.
     expect(f.backend.sent.filter(entry => entry.params.connectionId === b.id)).toEqual([])
-    // What is saved is what shows, outermost first, then the node that no longer exists, still waiting for a page.
-    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey, appDataKey, goneKey])
+    // What is saved is what shows, outermost first. Gone no longer exists: once Databases had its last page the restore
+    // ended, so its key is not kept for ever.
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey, appDataKey])
     expect(f.explorer.savedExpansion().get(b.targetId!)).toEqual([])
   })
   it('opens a server connected for the first time to its first level, and a reconnect to what it showed when it disconnected', async () => {
@@ -2085,13 +2086,86 @@ describe('ExplorerService: saved server order and expansion', () => {
     expect(f.labels().slice(0, 4)).toEqual(['server-a.example', '  Databases', '  Security', '    Logins'])
     expect(f.explorer.node(f.find('Databases'))!.expanded).toBe(false)
   })
-  it('leaves out servers it never connected this run, so the workspace keeps the last close\'s expansion for them', async () => {
+  it('ends a restore the user collapses, so keys it can no longer reach are neither expanded nor saved again', async () => {
     const f = workspaceFixture()
-    f.targets.savedExplorerExpansion.mockReturnValue([serverKey])
-    f.store.set([f.server('server-a', false)])
+    const a = f.server('server-a')
+    f.targets.savedExplorerExpansion.mockReturnValue([serverKey, databasesKey, appDataKey])
+    f.backend.hold(isFolder('databases'))
+    f.store.set([a])
+    for (let turn = 0; turn < 3; turn++) await settle()
+    // The restore has asked for Databases' page; AppData still waits for it.
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey, appDataKey])
+    f.explorer.collapse(f.find('Databases'))
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey])
+    f.backend.unhold()
+    f.backend.release()
+    for (let turn = 0; turn < 3; turn++) await settle()
+    expect(f.explorer.node(f.find('Databases'))!.expanded).toBe(false)
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey])
+  })
+  it('ends a restore on Stop, so a node the user expands later does not restore below it', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a')
+    f.targets.savedExplorerExpansion.mockReturnValue([serverKey, databasesKey, appDataKey])
+    f.backend.hold(isFolder('databases'))
+    f.store.set([a])
+    for (let turn = 0; turn < 3; turn++) await settle()
+    // Databases' page is still on its way when the user stops.
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey, appDataKey])
+    f.explorer.stop()
+    f.backend.unhold()
+    f.backend.release()
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey])
+    f.explorer.expand(f.find('Databases'))
+    for (let turn = 0; turn < 3; turn++) await settle()
+    expect(f.explorer.node(f.find('AppData'))!.expanded).toBe(false)
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey])
+  })
+  it('ends a restore whose awaited node a refresh drops, rather than saving its key at every close', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a')
+    f.store.set([a])
     await settle()
-    expect(f.explorer.savedExpansion().size).toBe(0)
-    expect(f.targets.savedExplorerExpansion).not.toHaveBeenCalled()
+    for (const label of ['Databases', 'AppData', 'Tables', 'dbo.T1', 'Columns']) { f.explorer.expand(f.find(label)); for (let turn = 0; turn < 2; turn++) await settle() }
+    const shown = f.explorer.savedExpansion().get(a.targetId!)!
+    expect(shown).toHaveLength(6)
+    // Lost, then back: the reconnect restores down to dbo.T1, whose page waits, so Columns' key is still to find.
+    f.store.set([{ ...a, lost: true }])
+    const isT1 = (params: ExplorerChildrenParams) => params.node.type === 'object' && params.node.object.kind === 'table' && params.node.object.name === 'T1'
+    f.backend.hold(isT1)
+    f.store.set([f.server('server-a', true, 2)])
+    for (let turn = 0; turn < 6; turn++) await settle()
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual(shown)
+    // dbo.T1 is dropped elsewhere; refreshing Tables removes its row, and its held load is aborted without settling.
+    f.backend.state.tables = ['dbo.T0', 'dbo.T2']
+    f.explorer.refresh(f.find('Tables'))
+    for (let turn = 0; turn < 3; turn++) await settle()
+    expect(f.labels()).not.toContain('        dbo.T1')
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual(shown.slice(0, 4))
+  })
+  it('ends every restore on Collapse All, even one whose server page is still loading', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a')
+    f.targets.savedExplorerExpansion.mockReturnValue([serverKey, databasesKey, appDataKey])
+    f.store.set([a])
+    // The server's page is asked for but has not arrived when the user collapses everything.
+    f.explorer.collapseAll()
+    for (let turn = 0; turn < 4; turn++) await settle()
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey])
+  })
+  it('keeps what the start restored for a server it never connected this run, an older file\'s collapse included', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a', false), b = f.server('server-b', false), c = f.server('server-c', false)
+    f.targets.savedExplorerExpansion.mockImplementation(id => id === a.targetId ? [serverKey] : id === b.targetId ? [] : undefined)
+    f.store.set([a, b, c])
+    await settle()
+    expect(f.explorer.savedExpansion()).toEqual(new Map([[a.targetId!, [serverKey]], [b.targetId!, []]]))
+    // Asking does not use it up: the server's first connect still restores it.
+    f.store.set([f.server('server-a', true, 2), b, c])
+    await settle()
+    expect(f.explorer.node(f.find('server-a.example'))!.expanded).toBe(true)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects', 'server-b.example', 'server-c.example'])
   })
   it('moves servers through the workspace order, says where, and offers Move Up and Move Down only where they apply', async () => {
     const f = workspaceFixture()
