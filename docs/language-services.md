@@ -11,8 +11,17 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 
 - **Completion.** **Ctrl+Space**, or a provider trigger character such as `.`. Suggestions use the query tab's
   connection and database; switching tabs does not change another editor's pending request.
+- **Exact matches first.** A name that matches the typed word exactly, ignoring case and brackets, is listed and selected
+  first, above names that merely start with it, fuzzy matches and system objects. Monaco's own scoring would otherwise
+  prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case system view above `Orders`).
+  Each list is re-ranked as the word grows: a complete answer is reused for identifier characters typed at the caret,
+  and a truncated one is requested again.
+- **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
+  the bare name still filters. Any other suggestion shows exactly the text it inserts, so a name that needs quoting
+  shows its brackets.
+- A table created after the query's metadata was loaded is not suggested until **Refresh Local Cache** (below).
 - **Columns** rank ahead of general suggestions of equal match quality. In supported SELECT scopes, unqualified column
-  suggestions carry their source qualifier (a self-join offers `t.high` and `b.high`; `hi` matches both). `t.` returns
+  suggestions carry their source qualifier (a self-join offers `t.[high]` and `b.[high]`; `hi` matches both). `t.` returns
   only that source's columns. Scope resolution uses a bounded parser and SQL Tools' binder per visible source (temporary
   probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
   incomplete expansion does not bring back ambiguous bare columns.

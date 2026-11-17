@@ -58,11 +58,11 @@ internal static class SqlCompletionChecks
             const string text = "SELECT hi FROM dbo.LeftFixture t JOIN dbo.RightFixture b ON t.id=b.id";
             var request = new LanguageRequest(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, 9));
             var result = await provider.CompleteAsync(request, default);
-            check(result.Items.Any(item => item is { Label: "t.high", FilterText: "high", InsertText: "t.high", TextEdit.NewText: "t.high" })
-                && result.Items.Any(item => item is { Label: "b.high", FilterText: "high", TextEdit.NewText: "b.high" })
-                && result.Items.Any(item => item.Label == "t.LeftOnly") && !result.Items.Any(item => item.Label == "b.LeftOnly")
-                && result.Items.Any(item => item.Label == "b.RightOnly") && !result.Items.Any(item => item.Label == "t.RightOnly")
-                && !result.Items.Any(item => item.Label == "high"),
+            check(result.Items.Any(item => item is { Label: "t.[high]", FilterText: "high", InsertText: "t.[high]", TextEdit.NewText: "t.[high]" })
+                && result.Items.Any(item => item is { Label: "b.[high]", FilterText: "high", TextEdit.NewText: "b.[high]" })
+                && result.Items.Any(item => item.Label == "t.[LeftOnly]") && !result.Items.Any(item => item.Label == "b.[LeftOnly]")
+                && result.Items.Any(item => item.Label == "b.[RightOnly]") && !result.Items.Any(item => item.Label == "t.[RightOnly]")
+                && !result.Items.Any(item => item.Label == "[high]"),
                 "distinct qualified suggestions use each alias's own semantic column result with a bare prefix filter");
             check(result.Items.Where(item => item.Kind == 5).All(item => item.TextEdit!.Range == new LanguageRange(new(0, 7), new(0, 9)))
                 && fake.Text == text && fake.Versions.SequenceEqual(fake.Versions.Order()) && fake.Versions.Distinct().Count() == fake.Versions.Count,
@@ -71,7 +71,7 @@ internal static class SqlCompletionChecks
             check(fake.Completions.Last() == text, "hover reparses restored SQL after contextual alias probes");
             var qualified = request with { Version = 2, Text = text.Replace("hi", "t.", StringComparison.Ordinal), Position = new(0, 9) };
             var single = await provider.CompleteAsync(qualified, default);
-            check(single.Items.Any(item => item.Label == "high" && item.TextEdit!.NewText == "high")
+            check(single.Items.Any(item => item.Label == "[high]" && item.TextEdit!.NewText == "[high]")
                 && single.Items.All(item => !item.Label.StartsWith("b.", StringComparison.Ordinal)),
                 "typed alias-dot returns only its native columns and does not duplicate its qualifier");
         }
@@ -93,7 +93,7 @@ internal static class SqlCompletionChecks
             const string text = "SELECT Zzz FROM dbo.T t JOIN dbo.B b ON 1=1";
             var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, 10)), default);
             check(result.IsIncomplete && result.Items.Count == SqlToolsLanguageService.MaxCompletionItems
-                && result.Items.Any(item => item.Label == "t.ZzzTail") && result.Items.Any(item => item.Label == "b.ZzzTail"),
+                && result.Items.Any(item => item.Label == "t.[ZzzTail]") && result.Items.Any(item => item.Label == "b.[ZzzTail]"),
                 "bounded semantic expansion retains both prefix matches beyond each alias's first 500 declarations");
         }
         var failed = new CompletionClient { FailProbeWrite = true };
@@ -112,8 +112,8 @@ internal static class SqlCompletionChecks
         {
             const string text = "SELECT t.LeftOnly + 1 AS ComputedOnly FROM dbo.LeftFixture t ORDER BY ";
             var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, text.Length)), default);
-            check(result.Items.Any(item => item.Label == "ComputedOnly") && !result.Items.Any(item => item.Label == "t.ComputedOnly")
-                && result.Items.Any(item => item.Label == "t.LeftOnly") && !result.Items.Any(item => item.Label == "LeftOnly"),
+            check(result.Items.Any(item => item.Label == "[ComputedOnly]") && !result.Items.Any(item => item.Label == "t.[ComputedOnly]")
+                && result.Items.Any(item => item.Label == "t.[LeftOnly]") && !result.Items.Any(item => item.Label == "[LeftOnly]"),
                 "semantic result aliases survive ORDER BY expansion while source columns remain qualified");
         }
         var collidingAlias = new CompletionClient();
@@ -121,17 +121,44 @@ internal static class SqlCompletionChecks
         {
             const string text = "SELECT t.LeftOnly + 1 AS high FROM dbo.LeftFixture t JOIN dbo.RightFixture b ON 1=1 ORDER BY ";
             var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, text.Length)), default);
-            check(result.Items.Any(item => item.Label == "high") && result.Items.Any(item => item.Label == "t.high")
-                && result.Items.Any(item => item.Label == "b.high") && !result.Items.Any(item => item.Label is "LeftOnly" or "RightOnly"),
+            check(result.Items.Any(item => item.Label == "[high]") && result.Items.Any(item => item.Label == "t.[high]")
+                && result.Items.Any(item => item.Label == "b.[high]") && !result.Items.Any(item => item.Label is "[LeftOnly]" or "[RightOnly]"),
                 "ORDER BY preserves a unique output alias that collides with source columns without restoring unrelated bare fields");
         }
+        var bracketedAlias = new CompletionClient();
+        using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => bracketedAlias))
+        {
+            const string text = "SELECT hi FROM dbo.LeftFixture AS [bob]";
+            var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, 9)), default);
+            check(result.Items.Any(item => item is { Label: "[bob].[high]", InsertText: "[bob].[high]", TextEdit.NewText: "[bob].[high]", FilterText: "high" })
+                && result.Items.Where(item => item.Kind == 5).All(item => item.Label == item.TextEdit!.NewText && item.Label == item.InsertText),
+                "a bracketed alias's columns insert the bracketed column name the list shows");
+            var typed = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, "SELECT [bob]. FROM dbo.LeftFixture AS [bob]", new("sqlserver"), new(0, 13)), default);
+            check(typed.Items.Any(item => item is { Label: "[high]", InsertText: "[high]", TextEdit.NewText: "[high]", FilterText: "high" }),
+                "a typed bracketed alias's columns show and insert the same bracketed name");
+        }
+        var normalized = SqlToolsLanguageService.ReadCompletions(SqlToolsLanguageService.NormalizeCompletions(Element(new object[]
+        {
+            new { label = "[columnName]", kind = 5, insertText = "columnName" }, new { label = "plain", kind = 5, insertText = "plain" },
+            new { label = "A]Key", kind = 5, insertText = "[A]]Key]" }, new { label = "Order Details", kind = 7, insertText = "[Order Details]" },
+            new { label = "SELECT", kind = 14, insertText = "SELECT" }, new { label = "Customer", kind = 7, insertText = "${1:Customer}", insertTextFormat = 2 }
+        })));
+        check(normalized.Items.Select(item => (item.Label, item.InsertText, item.FilterText)).SequenceEqual(new (string, string?, string?)[]
+        {
+            ("[columnName]", "[columnName]", "columnName"), ("[plain]", "[plain]", "plain"), ("[A]]Key]", "[A]]Key]", "A]Key"),
+            ("[Order Details]", "[Order Details]", "Order Details"), ("SELECT", "SELECT", null), ("Customer", "${1:Customer}", null)
+        }), "columns always insert their bracketed name, and every label shows the text it inserts");
+        const string exactText = "SELECT * FROM orders";
+        var exact = SqlToolsLanguageService.ReadCompletions(Element(Enumerable.Range(0, 600).Select(index => new { label = "orders_" + index, kind = 7 })
+            .Append(new { label = "sysorders", kind = 7 }).Append(new { label = "Orders", kind = 7 })), exactText, new(0, exactText.Length));
+        check(exact.Items[0].Label == "Orders" && exact.IsIncomplete, "a case-insensitive exact name match ranks first and survives the response cap");
         var duplicateAlias = new CompletionClient();
         using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => duplicateAlias))
         {
             const string text = "SELECT t.LeftOnly AS high, b.RightOnly AS high FROM dbo.LeftFixture t JOIN dbo.RightFixture b ON 1=1 ORDER BY ";
             var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, text.Length)), default);
-            check(!result.Items.Any(item => item.Label == "high") && result.Items.Any(item => item.Label == "t.high")
-                && result.Items.Any(item => item.Label == "b.high"),
+            check(!result.Items.Any(item => item.Label == "[high]") && result.Items.Any(item => item.Label == "t.[high]")
+                && result.Items.Any(item => item.Label == "b.[high]"),
                 "duplicate output aliases do not restore an ambiguous bare source column in ORDER BY");
         }
     }
@@ -184,7 +211,9 @@ internal static class SqlCompletionChecks
             var orderBy = Text.LastIndexOf("ORDER BY ", StringComparison.Ordinal);
             var start = orderBy < 0 ? 7 : orderBy + "ORDER BY ".Length;
             var before = Text[start..cursor];
-            var isLeft = before.StartsWith("t.", StringComparison.Ordinal);
+            // STS brackets a column's label, but not its insertion, when the token before the dot is a bracketed alias.
+            var quotedAlias = before.StartsWith("[bob].", StringComparison.Ordinal);
+            var isLeft = before.StartsWith("t.", StringComparison.Ordinal) || quotedAlias;
             var isRight = before.StartsWith("b.", StringComparison.Ordinal);
             if (isLeft && HoldProbe)
             {
@@ -193,8 +222,8 @@ internal static class SqlCompletionChecks
             }
             string[] columns = isLeft ? ["high", "LeftOnly"] : isRight ? ["high", "RightOnly"] : BaselineColumns;
             if (WideColumns) columns = Enumerable.Range(0, 600).Select(index => "Alpha" + index).Append("ZzzTail").ToArray();
-            var range = new LanguageRange(new(0, start + (isLeft || isRight ? 2 : 0)), new(0, cursor));
-            return Element(columns.Select(label => new { label, kind = 5, insertText = label, textEdit = new { range, newText = label } }));
+            var range = new LanguageRange(new(0, start + (isLeft || isRight ? before.IndexOf('.', StringComparison.Ordinal) + 1 : 0)), new(0, cursor));
+            return Element(columns.Select(name => new { label = quotedAlias ? "[" + name + "]" : name, kind = 5, insertText = name, textEdit = new { range, newText = name } }));
         }
         public void Dispose() { Disposed = true; lifetime.TrySetResult(); }
     }
