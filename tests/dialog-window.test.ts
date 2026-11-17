@@ -173,8 +173,11 @@ describe('DialogWindow', () => {
     const editor = document.createElement('textarea'), closing = document.createElement('form'), connect = document.createElement('section')
     closing.setAttribute('aria-modal', 'true')
     connect.setAttribute('aria-modal', 'true')
-    const server = document.createElement('input')
-    connect.append(server)
+    // Its heading's close button comes first, as in the real dialogs: focus goes to the field, not the button.
+    const heading = document.createElement('header'), dismiss = document.createElement('button'), server = document.createElement('input'), user = document.createElement('input')
+    heading.className = 'connection-heading'
+    heading.append(dismiss)
+    connect.append(heading, server, user)
     document.body.append(editor, closing)
     const otherwise = vi.fn()
     try {
@@ -184,6 +187,19 @@ describe('DialogWindow', () => {
       // Connect opened over the main window while Options was open: its first field takes focus, not the editor behind it.
       document.body.append(connect)
       returnFocusBeside(editor, closing, otherwise)
+      expect(document.activeElement).toBe(server)
+      // Where the user was in it, when they had moved on to another field.
+      user.focus()
+      editor.focus()
+      user.focus()
+      returnFocusBeside(editor, closing, otherwise)
+      expect(document.activeElement).toBe(user)
+      // From a popout's element: the main window's dialog holds the popout too.
+      const popout = document.implementation.createHTMLDocument(''), grid = popout.createElement('div')
+      grid.tabIndex = 0
+      popout.body.append(grid)
+      server.focus()
+      returnFocusBeside(grid, null, otherwise)
       expect(document.activeElement).toBe(server)
       returnFocusBeside(null, null, otherwise)
       expect(otherwise).not.toHaveBeenCalled()
