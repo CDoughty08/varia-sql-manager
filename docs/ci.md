@@ -105,8 +105,9 @@ the Measurements below with the new baseline.
   Release-backend vitest files as concurrent lanes: all at once with 8 or more CPUs, two chains side by side on CI's 3 and
   4 vCPU runners (all at once starved macOS until time-bounded tests failed). The electron-vite build runs after the
   .NET chain, not after vitest. tsc runs only on Linux (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS): it reads only
-  sources and installed types, and Linux's case-sensitive paths are the strictest. A check stopped by the step timeout
-  prints what its running lanes held.
+  sources and installed types, and Linux's case-sensitive paths are the strictest. In the two chains the Release .NET
+  build runs below normal priority (`backgroundLanes`): beside vitest's first minute it stalled whole Windows workers past
+  the 20 s test timeout. A check stopped by the step timeout prints what its running lanes held.
 - The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`) after the few that change or measure
   process-wide state run alone; each prints its time. `OfflineSuites` names any suite still running after 3 minutes and
   exits. The result suites run a second time with every result's pages packed (Program.cs `packedPass`), since only that

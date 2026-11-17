@@ -183,7 +183,7 @@ describe('the machine lock', () => {
     expect(vitestWorkers(2)).toEqual({ vitest: 1, 'vitest (Release backend)': 1 })
     const source = readFileSync('scripts/check.mjs', 'utf8')
     expect(source).toMatch(/laneEnv\[lane\] = \{ VITEST_MAX_WORKERS: String\(workers\) \}/)
-    expect(source).toMatch(/run\(node, steps\[node\], undefined, laneEnv\[node\]\)/)
+    expect(source).toMatch(/run\(node, steps\[node\], undefined, laneEnv\[node\], background\.has\(node\)\)/)
   })
 
   it('runs a command under the lock and passes on its exit code', () => {
