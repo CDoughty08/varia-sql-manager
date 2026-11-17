@@ -110,6 +110,9 @@ export function lexSql(text: string): SqlToken[] {
         end = runOf(at, /[0-9]/)
         if (text[end] === '.') end = runOf(end + 1, /[0-9]/)
         if ((text[end] === 'e' || text[end] === 'E') && /[0-9+-]/.test(text[end + 1] ?? '')) end = runOf(end + 2, /[0-9]/)
+        // A file size (SIZE = 8192KB, FILEGROWTH = 10%) is one value.
+        const unit = /^(KB|MB|GB|TB)/i.exec(text.slice(end, end + 2))
+        if (unit && !wordPart.test(text[end + 2] ?? ' ')) end += 2
       }
       push('number', end)
       continue
@@ -154,7 +157,7 @@ UNIQUE UNPIVOT UPDATE UPDATETEXT USE USER VALUES VARYING VIEW WAITFOR WHEN WHERE
 /**
  * Words that are not reserved but act as keywords wherever they appear in ordinary scripts, so Toggle Brackets neither
  * brackets them nor takes their brackets off: the batch separator, TRY/CATCH, APPLY, OUTPUT's pseudo-tables, paging and
- * window frames, table hints, and statement options.
+ * window frames, table hints, grouping sets, foreign key actions, temporal and computed column options, and statement options.
  */
 export const contextualKeywords: ReadonlySet<string> = new Set(`
 GO TRY CATCH THROW APPLY USING OUTPUT OUT READONLY INSERTED DELETED MATCHED OFFSET ROWS ROW NEXT ONLY TIES PARTITION RANGE
@@ -163,7 +166,17 @@ NATIVE_COMPILATION XMLNAMESPACES NOLOCK READUNCOMMITTED READCOMMITTED READCOMMIT
 TABLOCKX UPDLOCK XLOCK NOWAIT SERIALIZABLE REPEATABLEREAD FORCESEEK FORCESCAN NOEXPAND SETERROR MAXDOP NOCOUNT XACT_ABORT
 ANSI_NULLS QUOTED_IDENTIFIER ANSI_WARNINGS ANSI_PADDING ARITHABORT CONCAT_NULL_YIELDS_NULL NUMERIC_ROUNDABORT
 IMPLICIT_TRANSACTIONS DATEFIRST DATEFORMAT DEADLOCK_PRIORITY LOCK_TIMEOUT SHOWPLAN_XML SHOWPLAN_ALL SHOWPLAN_TEXT NOEXEC
-PARSEONLY FMTONLY SYSTEM_TIME BOTH LEADING TRAILING REBUILD REORGANIZE SWITCH MAX
+PARSEONLY FMTONLY SYSTEM_TIME BOTH LEADING TRAILING REBUILD REORGANIZE SWITCH MAX GROUPING SETS NO CONTAINED TEXTIMAGE_ON
+FILESTREAM_ON PERSISTED SPARSE HIDDEN MASKED GENERATED ALWAYS
+`.trim().split(/\s+/))
+
+/**
+ * Words that are keywords where they appear and rarely names (trigger timing, COMMIT WORK, EXEC … AT, CHANGETABLE's
+ * CHANGES, CONTAINS's LANGUAGE, column options, CHARACTER VARYING, FROM WINDOWS, DATABASE SCOPED CONFIGURATION): Toggle
+ * Brackets does not bracket them, but takes the brackets off a name spelled the same, since they are not reserved.
+ */
+export const keywordLikeWords: ReadonlySet<string> = new Set(`
+AFTER INSTEAD WORK AT CHANGES SPECIFICATION LANGUAGE FILESTREAM COLUMN_SET ALL_SPARSE_COLUMNS CHARACTER WINDOWS SCOPED CONFIGURATION
 `.trim().split(/\s+/))
 
 /** SQL Server's system type names, which Toggle Brackets leaves alone where a type is expected (after a variable, CAST's AS). */

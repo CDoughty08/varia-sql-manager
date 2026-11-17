@@ -88,6 +88,30 @@ describe('Peek anchored in a query editor', () => {
     expect(open).toHaveBeenCalledTimes(1)
     expect(service.getSnapshot().open?.rowId).toBe(2)
   })
+  it('tells a hover\'s lookup it is no longer wanted once the hover is cancelled', () => {
+    const { service, timers } = setup()
+    let wanted: (() => boolean) | undefined
+    service.hoverAt('a', check => { wanted = check })
+    timers.callback!()
+    expect(wanted!()).toBe(true)
+    service.hoverAt('b', () => {})
+    expect(wanted!()).toBe(false)
+  })
+  it('forgets a hover when the remapped modifier goes up, not Ctrl', () => {
+    const api = { explorerCancel: vi.fn(), cancelScripting: vi.fn() }
+    const timers: { callback?: () => void } = {}
+    const service = new PeekService({
+      api: api as never, connections: { getSnapshot: () => [], subscribe: () => () => {} },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      timers: { setTimeout: callback => { timers.callback = callback; return 1 }, clearTimeout: () => { timers.callback = undefined } },
+      newId: () => 'id', platform: 'win32', hoverModifier: key => key === 'Shift'
+    })
+    service.hoverAt('a', () => {})
+    service.keyUp('Control')
+    expect(timers.callback).toBeDefined()
+    service.keyUp('Shift')
+    expect(timers.callback).toBeUndefined()
+  })
 })
 
 describe('placePeekAt', () => {

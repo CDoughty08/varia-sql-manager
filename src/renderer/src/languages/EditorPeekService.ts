@@ -10,7 +10,7 @@ import type { SqlLanguageService } from './SqlLanguageService'
 
 /** A name in a SQL editor: the editor, its model and a position in the name. */
 export interface EditorPlace {
-  readonly editor: Pick<Monaco.editor.ICodeEditor, 'getDomNode' | 'getScrolledVisiblePosition' | 'getLayoutInfo' | 'onDidScrollChange' | 'onDidLayoutChange' | 'onDidChangeModelContent' | 'onDidChangeModel' | 'onDidDispose' | 'focus'>
+  readonly editor: Pick<Monaco.editor.ICodeEditor, 'getDomNode' | 'getScrolledVisiblePosition' | 'getLayoutInfo' | 'onDidScrollChange' | 'onDidLayoutChange' | 'onDidChangeModelContent' | 'onDidChangeModel' | 'onDidDispose' | 'focus' | 'getModel'>
   readonly model: Monaco.editor.ITextModel
   readonly position: Monaco.Position
 }
@@ -43,7 +43,7 @@ export function editorPeekAnchor({ editor, model, position }: EditorPlace): Peek
       const box = dom.getBoundingClientRect(), layout = editor.getLayoutInfo()
       const top = box.top + from.top, bottom = top + from.height
       // Scrolled out of the editor's text area: the card stays where it was.
-      if (bottom <= box.top || top >= box.bottom || from.left < layout.contentLeft || from.left > layout.width) return undefined
+      if (bottom <= box.top || top >= box.bottom || from.left < layout.contentLeft || from.left > layout.contentLeft + layout.contentWidth) return undefined
       return { left: box.left + from.left, top, right: box.left + (to?.left ?? from.left), bottom }
     },
     watch: (moved, gone) => {
@@ -61,38 +61,49 @@ export function editorPeekAnchor({ editor, model, position }: EditorPlace): Peek
  * from the keyboard and nothing at all from a hover, never an error banner.
  */
 export class EditorPeekService {
-  /** The name the card was last opened on by a hover, so resting on it again asks the backend nothing. */
-  private shown: string | undefined
+  /** The name a hover last opened the card on, and that card, so resting on it again asks the backend nothing. */
+  private shown: { readonly key: string; readonly id: number | undefined } | undefined
+  /** The name a hover's lookup is running for while it is still wanted, so the pointer moving within it starts no other. */
+  private pending: { readonly key: string; readonly wanted: () => boolean } | undefined
 
   constructor(private readonly options: EditorPeekOptions) {}
 
-  async run(mode: DefinitionMode, place: EditorPlace, source: PeekSource = 'keyboard'): Promise<void> {
+  /**
+   * `wanted` (a hover's) turns false once the hover is cancelled: the lookup's answer then opens nothing. Resolves to whether
+   * the card, tab or script opened.
+   */
+  async run(mode: DefinitionMode, place: EditorPlace, source: PeekSource = 'keyboard', wanted: () => boolean = () => true): Promise<boolean> {
     const { sqlLanguage, scripting, connections } = this.options
-    if (!sqlLanguage.definition || !scripting) return
+    if (!sqlLanguage.definition || !scripting) return false
     const quiet = source === 'hover'
     const inform = (text: string) => { if (!quiet) scripting.inform(text) }
-    const word = place.model.getWordAtPosition(place.position)?.word
+    const word = place.model.getWordAtPosition(place.position)?.word, version = place.model.getVersionId()
     let found
     try { found = await sqlLanguage.definition(place.model, place.position) }
-    catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return }
-    if (found === undefined) return
-    if (found === null || !connections.isLive(found.connectionId)) { inform(definitionMessages.notFound(word === undefined ? undefined : displayText(word))); return }
+    catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
+    if (found === undefined || !wanted()) return false
+    if (found === null || !connections.isLive(found.connectionId)) { inform(definitionMessages.notFound(word === undefined ? undefined : displayText(word))); return false }
     const node = definitionNode(found)
     if (mode === 'card') {
+      // The text changed, or the editor moved to another document, while the name was looked up: the card would point at the
+      // wrong place.
+      if (place.model.getVersionId() !== version || place.editor.getModel() !== place.model) return false
       const anchor = editorPeekAnchor(place)
-      if (!anchor || !this.options.peek?.peekAt(node, anchor, source)) inform(definitionMessages.notPeekable(definitionLabel(found)))
-      return
+      if (anchor && this.options.peek?.peekAt(node, anchor, source)) return true
+      inform(definitionMessages.notPeekable(definitionLabel(found)))
+      return false
     }
     if (mode === 'tab') {
-      if (!this.options.peekTabs?.open(node)) inform(definitionMessages.notPeekable(definitionLabel(found)))
-      return
+      if (this.options.peekTabs?.open(node)) return true
+      inform(definitionMessages.notPeekable(definitionLabel(found)))
+      return false
     }
     if (scriptMenuState({ kind: node.kind, ...node.subtype ? { subtype: node.subtype } : {} }).verbs.create !== 'enabled') {
       inform(definitionMessages.notScriptable(definitionLabel(found)))
-      return
+      return false
     }
-    try { await scripting.run('create', 'newQuery', node) }
-    catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)) }
+    try { await scripting.run('create', 'newQuery', node); return true }
+    catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
   }
 
   /**
@@ -107,12 +118,17 @@ export class EditorPeekService {
     if (!word || reservedKeywords.has(word.word.toUpperCase())) { peek.cancelHover(); return }
     const key = `${place.model.uri.toString()}\n${place.model.getVersionId()}\n${place.position.lineNumber}\n${word.startColumn}`
     const open = peek.getSnapshot().open
-    if (open?.anchor && this.shown === key) return
+    if ((open?.anchor && this.shown?.key === key && this.shown.id === open.id) || (this.pending?.key === key && this.pending.wanted())) return
     // A card the keyboard opened has focus: a pointer passing over names with the modifier held leaves it alone, as in Object Explorer.
     if (open && open.source !== 'hover') return
-    peek.hoverAt(key, () => { this.shown = key; void this.run('card', place, 'hover') })
+    peek.hoverAt(key, wanted => {
+      const pending = this.pending = { key, wanted }
+      void this.run('card', place, 'hover', wanted).then(opened => {
+        if (opened) this.shown = { key, id: peek.getSnapshot().open?.id }
+      }).finally(() => { if (this.pending === pending) this.pending = undefined })
+    })
   }
 
   /** The pointer left the name, moved without the modifier, or pressed: a card not yet open stays closed. */
-  cancelHover(): void { this.options.peek?.cancelHover() }
+  cancelHover(): void { this.pending = undefined; this.options.peek?.cancelHover() }
 }

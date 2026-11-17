@@ -147,6 +147,54 @@ describe('Go To Definition', () => {
     for (const each of [quiet, failed, refused]) expect(each.scripting.inform).not.toHaveBeenCalled()
   })
 
+  it('opens nothing when the hover is cancelled or the text changes while the name is looked up, and asks once per name', async () => {
+    let answer!: (found: FoundDefinition) => void
+    const f = fixture(() => new Promise(resolve => { answer = resolve }))
+    f.editorPeek.hover(f.place as never)
+    const open = f.peek.hoverAt.mock.calls[0]![1] as unknown as (wanted: () => boolean) => void
+    let wanted = true
+    open(() => wanted)
+    // The pointer moving within the name while it is looked up starts nothing more.
+    f.editorPeek.hover(f.place as never)
+    expect(f.peek.hoverAt).toHaveBeenCalledTimes(1)
+    expect(f.definition).toHaveBeenCalledTimes(1)
+    // The modifier went up (or the pointer left) before the answer came.
+    wanted = false
+    answer(customer)
+    // Once the lookup has finished, resting on the name waits again.
+    await vi.waitFor(() => { f.editorPeek.hover(f.place as never); expect(f.peek.hoverAt).toHaveBeenCalledTimes(2) })
+    expect(f.peek.peekAt).not.toHaveBeenCalled()
+    // Typing while Alt+F12 looks the name up: the name may have moved, so no card.
+    let version = 3
+    const typed = fixture(async () => { version = 4; return customer })
+    await typed.editorPeek.run('card', { ...typed.place, model: { ...typed.model, getVersionId: () => version } } as never)
+    expect(typed.peek.peekAt).not.toHaveBeenCalled()
+    expect(typed.scripting.inform).not.toHaveBeenCalled()
+    // Switching the editor to another tab while Alt+F12 looks the name up: no card in the other document.
+    const switched = fixture(async () => { switched.editor.getModel = () => ({}) as never; return customer })
+    await switched.editorPeek.run('card', switched.place as never)
+    expect(switched.peek.peekAt).not.toHaveBeenCalled()
+    expect(switched.scripting.inform).not.toHaveBeenCalled()
+  })
+
+  it('remembers a hovered name only once its card opens, so a name whose card did not open can be hovered again', async () => {
+    const f = fixture(async () => customer)
+    // Another name's card is open; this name's card is refused (or its hover cancelled).
+    f.peek.getSnapshot.mockReturnValue({ open: { id: 7, source: 'hover', anchor: {} } })
+    f.peek.peekAt.mockReturnValue(false)
+    f.editorPeek.hover(f.place as never)
+    const open = f.peek.hoverAt.mock.calls[0]![1] as unknown as (wanted: () => boolean) => void
+    open(() => true)
+    await vi.waitFor(() => expect(f.peek.peekAt).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => { f.editorPeek.hover(f.place as never); expect(f.peek.hoverAt).toHaveBeenCalledTimes(2) })
+    // Once it opens, resting on it asks nothing while that card is open.
+    f.peek.peekAt.mockReturnValue(true)
+    ;(f.peek.hoverAt.mock.calls[1]![1] as unknown as (wanted: () => boolean) => void)(() => true)
+    await vi.waitFor(() => expect((f.editorPeek as unknown as { shown?: unknown }).shown).toBeDefined())
+    f.editorPeek.hover(f.place as never)
+    expect(f.peek.hoverAt).toHaveBeenCalledTimes(2)
+  })
+
   it('anchors the card at the name while it is in view, follows it, and closes when the text changes', () => {
     const listeners: Record<string, () => void> = {}
     const on = (name: string) => (listener: () => void) => { listeners[name] = listener; return { dispose: () => { delete listeners[name] } } }

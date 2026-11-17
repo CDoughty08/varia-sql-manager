@@ -8,6 +8,7 @@ import { followEditorBridge, registerEditorBridge, type BridgeMonaco } from '../
 import { onUnexpectedError } from '../core/errors'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
 import { applyTextOp, caseEdits, checkSelectionSize, indentEdits, type TextSelection } from '../editor/text-ops'
+import { lexSql } from '../../../shared/sql/lexer.ts'
 import { moveCommaEdits, selectedRanges, sqlTransformMessages, sqlTransformOp, statementAt, toggleBracketEdits, transformText } from '../editor/sql-transforms'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
 
@@ -84,8 +85,9 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
   })
   const moveCommas = (position: 'front' | 'end') => withEditor((target, model) => {
     const text = transformText(model), current = selections(target), selected = selectedRanges(model, current)
-    const ranges = selected ?? current.map(selection => statementAt(text, model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn })))
-    const edits = moveCommaEdits(text, ranges, position)
+    const tokens = lexSql(text)
+    const ranges = selected ?? current.map(selection => statementAt(text, model.getOffsetAt({ lineNumber: selection.positionLineNumber, column: selection.positionColumn }), tokens))
+    const edits = moveCommaEdits(text, ranges, position, tokens)
     if (!edits.length) { commands.reportWarning(sqlTransformMessages.noCommas(position === 'front', !!selected)); return }
     applyTextOp(target, position === 'front' ? 'varia.commasToFront' : 'varia.commasToEnd', sqlTransformOp(model, text, edits, current))
   })

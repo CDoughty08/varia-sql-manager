@@ -99,6 +99,8 @@ export interface PeekServiceOptions {
   readonly newId?: () => string
   /** Ctrl+hover peeks; on macOS ⌘+hover, as ⌘ is macOS's Ctrl. */
   readonly platform?: string
+  /** Whether a key going up is a Peek on Hover modifier (the gestures, which can be remapped); defaults to Ctrl (⌘). */
+  readonly hoverModifier?: (key: string) => boolean
   /** The clock kept scripts expire by; defaults to `Date.now`. */
   readonly now?: () => number
 }
@@ -667,6 +669,8 @@ export class PeekService extends PeekView {
   private hoverRow: number | undefined
   /** The editor name `hoverAt` waits on; meaningful only while `hoverTimer` runs. */
   private hoverKey: string | undefined
+  /** Counts cancelled hovers, so an editor hover whose lookup is still running knows it is no longer wanted. */
+  private hoverEpoch = 0
   private readonly timers: NonNullable<PeekServiceOptions['timers']>
 
   constructor(private readonly options: PeekServiceOptions) {
@@ -710,13 +714,15 @@ export class PeekService extends PeekView {
 
   /**
    * A query editor's Peek on Hover rests on a name (`key` tells one from another): `open` runs after `peekLimits.hoverMs` on the
-   * row hover's timer, so whatever cancels that (the modifier released, another key, `cancelHover`) cancels this too.
+   * row hover's timer, so whatever cancels that (the modifier released, another key, `cancelHover`) cancels this too. `open`
+   * gets `wanted`, which turns false once the hover is cancelled, for the lookup it starts.
    */
-  hoverAt(key: string, open: () => void): void {
+  hoverAt(key: string, open: (wanted: () => boolean) => void): void {
     if (this.disposed || (this.hoverTimer !== undefined && this.hoverKey === key)) return
     this.cancelHover()
     this.hoverKey = key
-    this.hoverTimer = this.timers.setTimeout(() => { this.hoverTimer = undefined; this.hoverKey = undefined; open() }, peekLimits.hoverMs)
+    const epoch = this.hoverEpoch
+    this.hoverTimer = this.timers.setTimeout(() => { this.hoverTimer = undefined; this.hoverKey = undefined; open(() => !this.disposed && this.hoverEpoch === epoch) }, peekLimits.hoverMs)
   }
 
   /** A view of a promoted tab's own, sharing the card's script cache. */
@@ -739,11 +745,12 @@ export class PeekService extends PeekView {
     if (this.hoverTimer !== undefined) this.timers.clearTimeout(this.hoverTimer)
     this.hoverTimer = undefined
     this.hoverRow = undefined
+    this.hoverEpoch++
   }
 
   /** A key went up anywhere in the window: releasing the hover's modifier with the pointer still forgets the hover. */
   keyUp(key: string): void {
-    if (key === (this.options.platform === 'darwin' ? 'Meta' : 'Control')) this.cancelHover()
+    if (this.options.hoverModifier ? this.options.hoverModifier(key) : key === (this.options.platform === 'darwin' ? 'Meta' : 'Control')) this.cancelHover()
   }
 
   /**

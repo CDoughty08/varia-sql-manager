@@ -383,7 +383,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
-  const peek = new PeekService({ api, connections, scriptingOptions, platform, results })
+  // Releasing either Peek on Hover modifier (Object Explorer's or the query editor's, as remapped) forgets a pending hover.
+  const peek = new PeekService({ api, connections, scriptingOptions, platform, results,
+    hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const disconnectPrompts = new DisconnectPromptService()

@@ -107,6 +107,84 @@ describe('Toggle Brackets', () => {
     expect(toggle('SELECT a AT TIME ZONE \'UTC\' FROM t')).toBe('SELECT [a] AT TIME ZONE \'UTC\' FROM [t]')
     expect(toggle('SELECT a FROM t\nGO\n:setvar x y\nSELECT $(x)')).toBe('SELECT [a] FROM [t]\nGO\n:setvar x y\nSELECT $(x)')
   })
+  it('leaves clause words that a bracket would break: grouping sets, WAITFOR, foreign key actions, temporal and computed columns, join hints', () => {
+    expect(toggle('SELECT a FROM t GROUP BY GROUPING SETS ((a), ())')).toBe('SELECT [a] FROM [t] GROUP BY GROUPING SETS (([a]), ())')
+    expect(toggle("WAITFOR DELAY '00:00:01'; WAITFOR TIME '22:00'")).toBe("WAITFOR DELAY '00:00:01'; WAITFOR TIME '22:00'")
+    expect(toggle('ALTER TABLE c ADD CONSTRAINT fk FOREIGN KEY (pid) REFERENCES p (id) ON DELETE NO ACTION ON UPDATE SET NULL, x int'))
+      .toBe('ALTER TABLE [c] ADD CONSTRAINT [fk] FOREIGN KEY ([pid]) REFERENCES [p] ([id]) ON DELETE NO ACTION ON UPDATE SET NULL, [x] [int]')
+    expect(toggle('SELECT a FROM t FOR SYSTEM_TIME CONTAINED IN (@a, @b)')).toBe('SELECT [a] FROM [t] FOR SYSTEM_TIME CONTAINED IN (@a, @b)')
+    expect(toggle('CREATE TABLE t (a datetime2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL, b AS (a) PERSISTED, PERIOD FOR SYSTEM_TIME (a, b)) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]'))
+      .toBe('CREATE TABLE [t] ([a] [datetime2] GENERATED ALWAYS AS ROW START HIDDEN NOT NULL, [b] AS ([a]) PERSISTED, PERIOD FOR SYSTEM_TIME ([a], [b])) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]')
+    expect(toggle('SELECT a FROM t INNER LOOP JOIN u ON t.a = u.a LEFT OUTER HASH JOIN v ON 1 = 1')).toBe('SELECT [a] FROM [t] INNER LOOP JOIN [u] ON [t].[a] = [u].[a] LEFT OUTER HASH JOIN [v] ON 1 = 1')
+    // An alias just before a join is still a name.
+    expect(toggle('SELECT 1 FROM t loop JOIN u ON 1 = 1')).toBe('SELECT 1 FROM [t] [loop] JOIN [u] ON 1 = 1')
+    expect(toggle('ENABLE TRIGGER tr ON t; DISABLE TRIGGER ALL ON DATABASE')).toBe('ENABLE TRIGGER [tr] ON [t]; DISABLE TRIGGER ALL ON DATABASE')
+  })
+  it('brackets the names after an option and in an index\'s or a later CTE\'s column list', () => {
+    expect(toggle('ALTER TABLE c WITH CHECK ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p (b)'))
+      .toBe('ALTER TABLE [c] WITH CHECK ADD CONSTRAINT [fk] FOREIGN KEY ([a]) REFERENCES [p] ([b])')
+    expect(toggle('ALTER TABLE c WITH CHECK CHECK CONSTRAINT fk')).toBe('ALTER TABLE [c] WITH CHECK CHECK CONSTRAINT [fk]')
+    expect(toggle('CREATE UNIQUE NONCLUSTERED INDEX ix ON dbo.t (a) INCLUDE (b)')).toBe('CREATE UNIQUE NONCLUSTERED INDEX [ix] ON [dbo].[t] ([a]) INCLUDE ([b])')
+    expect(toggle('CREATE STATISTICS s ON t (a)')).toBe('CREATE STATISTICS [s] ON [t] ([a])')
+    expect(toggle('WITH a (x) AS (SELECT 1), b (y) AS (SELECT x FROM a) SELECT y FROM b'))
+      .toBe('WITH [a] ([x]) AS (SELECT 1), [b] ([y]) AS (SELECT [x] FROM [a]) SELECT [y] FROM [b]')
+    // A join's ON before a call stays a call.
+    expect(toggle('SELECT 1 FROM t JOIN u ON ISNULL(t.a, 0) = u.a')).toBe('SELECT 1 FROM [t] JOIN [u] ON ISNULL([t].[a], 0) = [u].[a]')
+  })
+  it('brackets only the names in statements about servers, databases and security, however they are scripted', () => {
+    const triggers = 'CREATE TRIGGER [dbo].[tr] ON [dbo].[t] AFTER INSERT AS SELECT 1; CREATE TRIGGER [tv] ON [v] INSTEAD OF DELETE AS SELECT 1'
+    expect(toggleBracketEdits(triggers).mode).toBe('remove')
+    expect(toggle('CREATE SEQUENCE dbo.s AS bigint START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE')).toBe('CREATE SEQUENCE [dbo].[s] AS bigint START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE')
+    expect(toggle('CREATE USER u FOR LOGIN l WITH DEFAULT_SCHEMA = dbo')).toBe('CREATE USER [u] FOR LOGIN [l] WITH DEFAULT_SCHEMA = dbo')
+    expect(toggle('ALTER ROLE db_owner ADD MEMBER u')).toBe('ALTER ROLE [db_owner] ADD MEMBER [u]')
+    expect(toggle('GRANT CONNECT TO u; GRANT VIEW DEFINITION ON SCHEMA::s TO u; GRANT SELECT, INSERT ON dbo.t TO r'))
+      .toBe('GRANT CONNECT TO [u]; GRANT VIEW DEFINITION ON SCHEMA::s TO [u]; GRANT SELECT, INSERT ON [dbo].[t] TO [r]')
+    expect(toggle('CREATE LOGIN l FROM WINDOWS; DROP USER IF EXISTS u')).toBe('CREATE LOGIN [l] FROM WINDOWS; DROP USER IF EXISTS [u]')
+    expect(toggle("CREATE DATABASE db CONTAINMENT = NONE ON PRIMARY (NAME = N'db', FILENAME = N'x.mdf', SIZE = 8192KB, MAXSIZE = UNLIMITED, FILEGROWTH = 65536KB)\n LOG ON (NAME = N'db_log', SIZE = 10MB)"))
+      .toBe("CREATE DATABASE [db] CONTAINMENT = NONE ON PRIMARY (NAME = N'db', FILENAME = N'x.mdf', SIZE = 8192KB, MAXSIZE = UNLIMITED, FILEGROWTH = 65536KB)\n LOG ON (NAME = N'db_log', SIZE = 10MB)")
+    expect(toggle('ALTER DATABASE db MODIFY FILE (NAME = x, SIZE = 10MB); ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 1'))
+      .toBe('ALTER DATABASE [db] MODIFY FILE (NAME = x, SIZE = 10MB); ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 1')
+    expect(toggle('ALTER INDEX ix ON dbo.t DISABLE; DBCC CHECKIDENT (\'t\', RESEED, 0)')).toBe('ALTER INDEX [ix] ON [dbo].[t] DISABLE; DBCC CHECKIDENT (\'t\', RESEED, 0)')
+    expect(toggle('CREATE EVENT SESSION s ON SERVER ADD EVENT sqlserver.rpc_completed ADD TARGET package0.ring_buffer'))
+      .toBe('CREATE EVENT SESSION [s] ON SERVER ADD EVENT sqlserver.rpc_completed ADD TARGET package0.ring_buffer')
+    expect(toggle('CREATE PARTITION SCHEME ps AS PARTITION pf ALL TO ([PRIMARY])')).toBe('CREATE PARTITION SCHEME [ps] AS PARTITION [pf] ALL TO ([PRIMARY])')
+    expect(toggle('BACKUP LOG db TO DISK = \'x\'')).toBe('BACKUP LOG [db] TO DISK = \'x\'')
+    expect(toggle('GRANT SELECT ON dbo.Url TO u')).toBe('GRANT SELECT ON [dbo].[Url] TO [u]')
+    expect(toggle("BACKUP DATABASE db TO URL = N'https://x/y.bak' WITH COMPRESSION")).toBe("BACKUP DATABASE [db] TO URL = N'https://x/y.bak' WITH COMPRESSION")
+    expect(toggle("ALTER DATABASE db ADD FILE (NAME = x, FILENAME = 'y') TO FILEGROUP fg; CREATE SERVER AUDIT a TO APPLICATION_LOG"))
+      .toBe("ALTER DATABASE [db] ADD FILE (NAME = x, FILENAME = 'y') TO FILEGROUP [fg]; CREATE SERVER AUDIT [a] TO APPLICATION_LOG")
+    expect(toggle('OPEN SYMMETRIC KEY k DECRYPTION BY CERTIFICATE c; CLOSE ALL SYMMETRIC KEYS; OPEN MASTER KEY DECRYPTION BY PASSWORD = \'x\''))
+      .toBe('OPEN SYMMETRIC KEY [k] DECRYPTION BY CERTIFICATE [c]; CLOSE ALL SYMMETRIC KEYS; OPEN MASTER KEY DECRYPTION BY PASSWORD = \'x\'')
+    expect(toggle("BEGIN DIALOG CONVERSATION @h FROM SERVICE s TO SERVICE 'x' ON CONTRACT c WITH ENCRYPTION = OFF; SEND ON CONVERSATION @h MESSAGE TYPE m (@b); END CONVERSATION @h"))
+      .toBe("BEGIN DIALOG CONVERSATION @h FROM SERVICE [s] TO SERVICE 'x' ON CONTRACT [c] WITH ENCRYPTION = OFF; SEND ON CONVERSATION @h MESSAGE TYPE m (@b); END CONVERSATION @h")
+    // A cursor stays a cursor, BEGIN TRAN is not a conversation.
+    expect(toggle('OPEN c; BEGIN TRAN; SELECT a FROM t')).toBe('OPEN [c]; BEGIN TRAN; SELECT [a] FROM [t]')
+    // A table statement after one of them is bracketed as usual, and so is an ALTER TABLE's DROP COLUMN.
+    expect(toggle('GRANT SELECT ON t TO u\nSELECT a FROM t')).toBe('GRANT SELECT ON [t] TO [u]\nSELECT [a] FROM [t]')
+    expect(toggle('ALTER TABLE t DROP COLUMN c')).toBe('ALTER TABLE [t] DROP COLUMN [c]')
+  })
+  it('skips option lists that wrap onto more lines, up to the next statement or clause', () => {
+    expect(toggle("BACKUP DATABASE db TO DISK = 'x'\n WITH COMPRESSION,\n INIT, STATS = 10\nSELECT a FROM t"))
+      .toBe("BACKUP DATABASE [db] TO DISK = 'x'\n WITH COMPRESSION,\n INIT, STATS = 10\nSELECT [a] FROM [t]")
+    expect(toggle('DECLARE c CURSOR\n LOCAL FAST_FORWARD\n FOR SELECT a FROM t')).toBe('DECLARE [c] CURSOR\n LOCAL FAST_FORWARD\n FOR SELECT [a] FROM [t]')
+    expect(toggle('ALTER DATABASE db SET\n RECOVERY FULL,\n PAGE_VERIFY CHECKSUM')).toBe('ALTER DATABASE [db] SET\n RECOVERY FULL,\n PAGE_VERIFY CHECKSUM')
+    expect(toggle('SET NOCOUNT ON SELECT a FROM t')).toBe('SET NOCOUNT ON SELECT [a] FROM [t]')
+    expect(toggle('SELECT a FROM t WITH NOLOCK WHERE b = 1')).toBe('SELECT [a] FROM [t] WITH NOLOCK WHERE [b] = 1')
+    expect(toggle('SET ANSI_NULLS ON\nGO\nmyproc 1')).toBe('SET ANSI_NULLS ON\nGO\n[myproc] 1')
+    expect(toggle('UPDATE t WITH (ROWLOCK) SET a = 1 FROM t')).toBe('UPDATE [t] WITH (ROWLOCK) SET [a] = 1 FROM [t]')
+  })
+  it('leaves keyword-like words, ODBC escapes and OPENROWSET BULK options', () => {
+    expect(toggle('COMMIT WORK; EXEC (\'SELECT 1\') AT srv')).toBe('COMMIT WORK; EXEC (\'SELECT 1\') AT [srv]')
+    expect(toggle('SELECT a FROM CHANGETABLE(CHANGES t, 0) AS c WHERE CONTAINS(b, \'x\', LANGUAGE 1033)'))
+      .toBe('SELECT [a] FROM CHANGETABLE(CHANGES [t], 0) AS [c] WHERE CONTAINS([b], \'x\', LANGUAGE 1033)')
+    expect(toggle("SELECT a FROM OPENROWSET(BULK 'x.txt', SINGLE_CLOB) AS f")).toBe("SELECT [a] FROM OPENROWSET(BULK 'x.txt', SINGLE_CLOB) AS [f]")
+    expect(toggle("SELECT {fn UCASE(a)}, {d '2024-01-01'} FROM t")).toBe("SELECT {fn UCASE([a])}, {d '2024-01-01'} FROM [t]")
+    expect(toggle('CREATE TABLE t (d varbinary(max) FILESTREAM, s xml COLUMN_SET FOR ALL_SPARSE_COLUMNS); DECLARE @x character varying(10)'))
+      .toBe('CREATE TABLE [t] ([d] varbinary(max) FILESTREAM, [s] [xml] COLUMN_SET FOR ALL_SPARSE_COLUMNS); DECLARE @x character varying(10)')
+  })
+  it('keeps adjacent names apart when it takes their brackets off', () => {
+    expect(toggle('SELECT [a][b] FROM [dbo].[t][x]')).toBe('SELECT a b FROM dbo.t x')
+  })
   it('changes only names wholly inside the selection', () => {
     const text = 'SELECT a, b FROM t'
     expect(toggle(text, [{ start: 7, end: 11 }])).toBe('SELECT [a], [b] FROM t')
@@ -162,6 +240,11 @@ describe('Commas to Front and Commas to End', () => {
   it('changes only commas inside the selection', () => {
     expect(commas('SELECT a,\n  b,\n«  c,\n»  d', 'front')).toBe('SELECT a,\n  b,\n  c\n ,d')
   })
+  it('reads a comma after a string that spans lines as mid-line, and round-trips a tab indent', () => {
+    expect(commas("SELECT a WHERE b IN ('a,\nb', 'c')", 'end')).toBe("SELECT a WHERE b IN ('a,\nb', 'c')")
+    const tabbed = 'SELECT [a],\n\t[b]'
+    expect(commas(commas(tabbed, 'front'), 'end')).toBe(tabbed)
+  })
   it('keeps CRLF line endings', () => {
     expect(commas('SELECT a,\r\n  b', 'front')).toBe('SELECT a\r\n ,b')
   })
@@ -176,6 +259,10 @@ describe('statementAt', () => {
     expect(at('SELECT a,\n  |b\n\nSELECT c')).toBe('SELECT a,\n  b\n')
     expect(at('SELECT a /* x\n\n y */,\n  |b')).toBe('SELECT a /* x\n\n y */,\n  b')
     expect(at("SELECT 'x;\n\n', |a")).toBe("SELECT 'x;\n\n', a")
+    // A caret on a separator is in the statement before it, never in both.
+    expect(at('SELECT a,\n b\nG|O\nSELECT c,\n d')).toBe('SELECT a,\n b\n')
+    expect(at('SELECT a,\n b\n  |  \nSELECT c')).toBe('SELECT a,\n b\n')
+    expect(at('SELECT a\n:setv|ar x 1\nSELECT c')).toBe('SELECT a\n')
   })
 })
 

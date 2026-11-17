@@ -55,8 +55,11 @@ names never changes. Each is one undo step, on the editor's context menu, **Edit
   wherever that is safe, keeping them on reserved keywords (`[Order]`), names that are not regular identifiers
   (`[Order Lines]`, `[1st]`) and `[GO]`. Keywords, built-in function names (a name a parenthesis follows, except a table a
   column list follows), date parts (`DATEADD(day, …)`), type names where a type is expected (`@x int`, `CAST(a AS date)`),
-  labels, `geography::Point`, and the options of `WITH (…)`, `OPTION (…)`, `FOR XML`/`FOR JSON`, `SET` statements and
-  cursor declarations are left alone.
+  labels, `geography::Point`, ODBC escapes (`{fn …}`), and the options of `WITH`, `OPTION (…)`, `FOR XML`/`FOR JSON`, `SET`
+  statements and cursor declarations, over as many lines as they take, are left alone. In statements about servers,
+  databases and security (`CREATE DATABASE`, `CREATE LOGIN`, `CREATE SEQUENCE`, `ALTER ROLE`, `GRANT`, `BACKUP` and the
+  like), which are mostly options, only the names are bracketed: `ALTER ROLE r ADD MEMBER u` becomes
+  `ALTER ROLE [r] ADD MEMBER [u]`.
 - **Move Commas to Front** moves each comma that ends a line to the start of the next item's line, into the last space of
   its indent as Select Top Rows writes columns (`      ,[b]`); **Move Commas to End** moves each comma that starts a line
   to the end of the item before it, ahead of a trailing comment. They act on the selection, or on the statement around the
