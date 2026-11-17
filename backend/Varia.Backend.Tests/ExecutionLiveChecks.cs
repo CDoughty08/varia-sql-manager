@@ -245,7 +245,7 @@ internal static class ExecutionLiveChecks
                 && ordered.Error is { Code: "SQL_ERROR", BatchNumber: 1 } && ordered.Error.Message.Contains("sev18") && ordered.Error.Message.Contains("sev17"),
                 "messages after a severity 17 or 18 error keep their order around it: " + string.Join(" | ", Texts(ordered)));
             // Before the batch's first result set SqlClient cannot do that: ExecuteReader reads the rest of the batch, discarding
-            // its result sets and delivering its messages, and only then raises the error (README, docs/ipc.md). SQL Server still
+            // its result sets and delivering its messages, and only then raises the error (docs/ipc.md). SQL Server still
             // ran the whole batch. This pins SqlClient 7.1's behaviour; a SqlClient that changes it fails here.
             var early = await Run("PRINT 'p1'; RAISERROR('sev18', 18, 1); PRINT 'p2'; SELECT 2 AS b; PRINT 'p3';\nGO\nPRINT 'next';");
             check(early.Status == "completedWithErrors" && early.CompletedBatches == 2 && early.ResultSets.Count == 0

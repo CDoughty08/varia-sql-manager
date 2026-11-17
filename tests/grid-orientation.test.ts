@@ -14,7 +14,7 @@ import { outputTarget } from '../src/renderer/src/menus/targets'
 import type { ResultHandle, RowWindow, WindowOptions, WindowShape } from '../src/renderer/src/results/ResultClient'
 import type { GridViewState } from '../src/renderer/src/results/ResultsService'
 
-// The transposed orientation (docs/grouped-results-implementation-plan.md, "Transposed orientation"): a result drawn with
+// The transposed orientation (docs/results-tools.md): a result drawn with
 // its columns as rows and its rows as columns, with nothing stored. GridView turns what it draws at its seams; its state,
 // its marks and everything it reports stay in the result's own rows and columns.
 

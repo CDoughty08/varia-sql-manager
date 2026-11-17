@@ -97,7 +97,7 @@ Successful IPC delivery is a receipt. It does not make that caller the owner of 
   keep existing presentation, or return to the picker. It cannot redirect document associations or dispose a shared
   handle. Registry coalescing moves exact target references; server-name matching is never a fallback.
 
-The two new main-only IPC methods, `acceptConnectionRequest` and `pruneConnectionTargets`, use trusted sender checks,
+The two main-only IPC methods, `acceptConnectionRequest` and `pruneConnectionTargets`, use trusted sender checks,
 strict UUID schemas, bounded arrays and dedicated preload methods. They do not expose generic backend access.
 
 Renderer association handoffs remain pending until the receipt's canonical target has been applied to its query tabs

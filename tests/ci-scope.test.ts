@@ -10,10 +10,18 @@ import { fullJobs, resultProblems } from '../scripts/ci-result.mjs'
 const base = 'a'.repeat(40), head = 'b'.repeat(40)
 describe('CI scope', () => {
   it('uses the documentation lane only for a nonempty change consisting entirely of known documentation paths', () => {
-    for (const file of ['README.md', 'CHANGELOG.md', 'AGENTS.md', 'CLAUDE.md', 'docs/ci.md', 'docs/themes/tokens.md']) expect(scopeForPaths([file]), file).toBe('docs')
-    for (const file of ['src/main/index.ts', 'backend/Service.cs', '.github/workflows/ci.yml', 'scripts/check.mjs', 'tests/example.test.ts', 'package.json', 'package-lock.json', 'global.json', 'build/README.md', 'release-notes/0.8.0.json', 'docs/themes/varia-theme.schema.json', 'docs/example.ts', 'unknown.txt']) expect(scopeForPaths(['README.md', file]), file).toBe('full')
+    for (const file of ['README.md', 'CHANGELOG.md', 'AGENTS.md', 'CLAUDE.md', 'docs/ci.md', 'docs/themes/tokens.md', 'docs/themes/varia-theme.schema.json', 'docs/images/results-tabs-dark.png', 'docs/mockups/connections-explorer.html', 'prototypes/results-pane/compare-diff-ux.html']) expect(scopeForPaths([file]), file).toBe('docs')
+    for (const file of ['src/main/index.ts', 'backend/Service.cs', '.github/workflows/ci.yml', 'scripts/check.mjs', 'tests/example.test.ts', 'package.json', 'package-lock.json', 'global.json', 'build/README.md', 'release-notes/0.8.0.json', 'docs', 'docs/', 'prototypes', 'src/docs/index.ts', 'unknown.txt']) expect(scopeForPaths(['README.md', file]), file).toBe('full')
     expect(scopeForPaths([])).toBe('full')
     expect(scopeForPaths([...Array.from({ length: 3500 }, (_, i) => `docs/${i}.md`), 'src/main/index.ts'])).toBe('full')
+  })
+  it('keeps the documentation folders out of every build, typecheck, test and package input', () => {
+    // The documentation lane skips builds and runtime checks, which is safe only while nothing compiles or ships these folders.
+    const inputs = ['tsconfig.json', 'vitest.config.ts', 'vitest.bench.config.ts', 'electron.vite.config.ts', 'electron-builder.yml']
+    for (const file of inputs) {
+      const code = readFileSync(resolve(file), 'utf8').split('\n').filter(line => !/^\s*(#|\/\/)/.test(line)).join('\n')
+      expect(code, file).not.toMatch(/\b(docs|prototypes)\//)
+    }
   })
   it('compares the whole PR against its base', () => {
     const pr = { pull_request: { base: { sha: base }, head: { sha: head } } }

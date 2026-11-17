@@ -1,175 +1,119 @@
 # Varia SQL Manager
 
-[Client Statistics](docs/client-statistics.md) compares per-execution SqlClient traffic, counters and reply-wait timings in its own output tab.
+A fast, cross-platform desktop workbench for Microsoft SQL Server: a T-SQL editor, query results, execution plans and
+database management tools in one app, with SSMS's features and keys and a modern look.
 
-[Retained Plans](docs/retained-plans.md) keeps bounded in-memory XML history with pinning, original execution/SQL context, reopening and explicit `.sqlplan`/XML saving. Open **Window › Execution Plan › Plan history**; snapshots survive re-execution, closed results/tabs and backend loss until this workbench window closes.
+[![CI](https://github.com/CDoughty08/varia-sql-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/CDoughty08/varia-sql-manager/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/CDoughty08/varia-sql-manager?include_prereleases)](https://github.com/CDoughty08/varia-sql-manager/releases)
 
-[Plan Comparison](docs/plan-comparison.md) pairs two retained snapshots or saved-plan documents, highlights structural/property changes and compares available counters, estimates, parameters, grants and warnings. Open **Plan history › Compare plans** for linked or independent side-by-side views; inputs are frozen until compared again.
+![The Varia workbench: Object Explorer, two query tabs and a results grid](docs/images/query-tabs-workbench.png)
 
-Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combines a SQL editor, query results, and database management tools in one application. It is under active development.
+> Varia is under active development. See the [changelog](CHANGELOG.md) for what is new.
 
-## Features
+## Highlights
 
-- Connect to multiple servers using SQL Server, Windows, or Microsoft Entra ID authentication.
-- Write and execute T-SQL in a Monaco-based editor, with separate connections and sessions for query tabs. `GO` batches and repetitions are supported.
-- Browse databases and server objects in Object Explorer, generate scripts, and perform supported object actions.
-- See what an object depends on, or what depends on it: **View Dependencies** on the Object Explorer menu of a table, view, procedure, function, trigger, synonym, sequence or type opens Object Dependencies, a tree that reads each level as you expand it (at most 500 objects a level, marked when there are more), marks a cycle instead of following it, and shows objects in another database or on a linked server as leaves. The selected node shows its name, type and dependency type; Enter or a double-click selects it in Object Explorer, and Peek opens it. Peek's Dependencies tab stays the quick, one-level look.
-- Search every object on a server by name or inside definitions, with Match Case, Whole Word, regular expressions and filters by object type.
-- View, copy, and export query results as CSV, tab-delimited text, or JSON. Save Results As suggests a file named after the query tab and the view (`SQLQuery1-Result2`, `SQLQuery1-Result2-Pivot`, `SQLQuery1-Differences1`, or a named result's name, `SQLQuery1-Open orders`). The results toolbar's **White space** shows spaces and tabs, or every white space character (line breaks, no-break and zero-width spaces), without changing what is copied or saved.
-- Sort a results grid in memory, without running the query again: a column header's sort button sorts ascending, then descending, then back to SQL Server's order, Shift+click adds further columns, and the grid's menu has Sort Ascending, Sort Descending, Then Sort and Clear Sort. Text sorts by the column's collation, NULL first, or, with the results toolbar's **Sort text by**, by length in characters or bytes. Copy and Save Results As follow the order shown.
-- Filter a results grid in memory from the grid's menu (Filter): to the selected cells' values, other values, the range from the lowest to the highest selected value, no NULLs in a column, or the rows that repeat in the selected columns or in every column. Values match as the column's collation says (case and trailing spaces ignored under a CI collation). **Keep Selected Rows** keeps exactly the rows the selection covers, whatever their values (up to 4,095 rows in 256 separate runs; more says so and changes nothing): its filter reads "12 selected rows", a grid has one, and keeping a new selection replaces it (after a duplicates filter that followed the old one, so the grid shows exactly the rows selected). Rows that arrive after it was applied to a running query are not kept. Filters stack with each other and with a sort; the result's caption counts the rows kept ("34 of 100 rows") and lists each filter with a Remove button, and Clear filters shows every row again. Search, the column profile, highlights, Copy and Save Results As follow the filtered rows. Each column header's funnel (or **Filter Column Values…**, Alt+Down in a grid) lists every distinct value of the column (a million or more, as the result's memory allows) with its count, most frequent first or by value, as a checklist with a search, Select all and Select none, and NULL as an entry; OK keeps the values ticked. It also filters by a custom condition (equals, does not equal, between, is NULL, is not NULL), and the funnel stays filled while its column has a filter.
-- Highlight rows of a results grid in yellow, green, blue, purple or red from the grid menu's **Highlight** submenu, or with Ctrl+Shift+H in the last colour picked. A highlight follows its row by a unique key column Varia finds in the results (or the whole row when there is none, compared by each column's collation) through sorting and through running the query again in the same tab. When a re-run no longer returns the key column (or returns several columns of that name, none where it was), the grid says so and **Clear All Highlights** starts again. Highlights are kept only while the tab is open.
-- Compare two results of one query: **Compare…** in a results grid's menu (or the results toolbar's **Compare**) opens a small popover beside it: pick another of the run's results that shares a column (with one there is nothing to pick), swap old and new, choose Exact text, and press Enter; it lists columns left out and warns of sorted or filtered inputs only when that applies, remembers your last choice, and closes once the comparison opens; **Compare with Previous Result** compares it at once with the one before it. Either adds a unified, git-style diff as a comparison after the results, which keeps its own copy and so outlives them; its strip links to the two results compared, or says one was closed. Pivots, comparisons and plan sets are never compared, and comparisons of different results run at the same time. The diff shows each changed row as its old row (−) and its new one (+) with the changed values marked, added and removed rows, and one unchanged row of context around each change, with each row's number in both results. Rows are matched by a key column unique in both (or by whole rows), and text compares by its collation, so values differing only in case or trailing spaces are underlined rather than changed; **Compare with Previous Result (Exact Text)** in the command palette compares every character. A column whose type or collation changed between the two results still compares (by the earlier result's rules); one that holds binary in one and text in the other is listed as not compared. When long values were compared by the part Varia keeps, the strip says so.
-- Search every results grid of a run from the results toolbar (Ctrl+F in a grid): the matching cells are found in memory, without running the query again, and marked, Enter and Shift+Enter (or F3 and Shift+F3 in a grid) step through them in the order each grid shows, and text compares by its column's collation. **Columns** searches column names instead, fading the columns that do not match.
-- Show a result transposed: the results toolbar's **Transposed** (or **Transpose › Transposed** on the grid's menu, or **Transpose Results** in the command palette) draws the focused grid with its columns as rows and its rows as columns, so a wide row reads top to bottom; the same command turns it back. Nothing is copied: it is the same result, so it follows the grid's sort and filters, keeps its selection and highlights, costs no result memory and works while rows are still arriving. Column names sit in a frozen first column with their sort and filter buttons. **Transpose › Selected Rows** first keeps only the selected rows (a Keep Selected Rows filter, shown as a chip beside the view tabs, or on the caption when stacked, and removable there), for a record view of one or a few rows. **Using Column as Headers** heads each drawn column with that column's value for the row instead of Row 1, Row 2…; **Headers** beside the toolbar button (or **Choose Headers…**) picks another column or goes back to row numbers. The first 4,095 rows are drawn as columns; with more, a strip under the grid says so, and Find Next onto a match in a later row says so instead of moving. Filter the rows to see others. A comparison cannot be shown transposed.
-- Pivot a result: the results toolbar's **Pivot** (or **Pivot Results…** on the grid's menu) opens a builder where you pick row groups, an optional column group and values (Count, Distinct Count, Sum, Average, Min or Max; Sum and Average for numeric columns only). **Build Pivot** groups the rows the result's grid shows, sorted and filtered, in the backend and shows the pivot directly under that result, with a column per column-group value and a Total, so it sorts, filters, copies and saves like any result. Each result has one Pivot, always read from the result itself: the builder follows the result whose grid you last used and names it as its source, opening it from the Pivot's own grid edits that Pivot from what it was built with, and building again replaces it once the new one is built (the old one stays until then, and a build that fails, is cancelled or does not fit leaves it as it was). When the result's filters change, its Pivot is marked out of date on its caption (in Tabs layout, a dot on its Pivot tab and the mark beside its name) and in its strip, and **Update** there (or **Update Pivot** on the grid's menu or in the command palette) builds it again from what it was built with over the result as it is filtered now; sorting the result does not mark it, nor does filtering it again by the same values (ticking them again in a column's filter, or selecting other cells that hold them). A Pivot you can see whose result stores at most 500,000 rows and whose last build took under 250 ms rebuilds by itself instead, a newer filter change replacing a rebuild still running; a hidden one (in Tabs layout another view selected, stacked its caption collapsed, or the Results panel hidden, as when Messages takes its place) keeps the mark and rebuilds when shown. Pivots of different results build at the same time, up to four at once together with comparisons. Closing a result closes its Pivot with it. Comparisons, SQL-returned plan sets and Peek's rows cannot be pivoted. Text groups by the column's collation and NULL is a group of its own; decimal sums keep all 38 digits; a pivot of more than 256 column groups, 100,000 row groups or 4,000,000 figures is refused with a message saying which, rather than shown in part.
-- Show results as tabs: the results toolbar's **Tabs** (or **Show Results as Tabs** in the command palette, Window › Results as Tabs, or Tools › Options › Query Results › SQL Server › Results to Grid › Show results) shows one result at a time under a row of tabs, one per result and comparison, with the selected result's **Table** and **Pivot** as view tabs beneath and one grid. Each result returns to the view it showed last, a Pivot you build shows at once, and switching keeps every grid's scroll, column widths, selection, sort and filters. Find Next onto a match in another result selects its tab. Each tab closes its view (a result's closes its Pivot too). Tabs is the default; turn it off for Stacked, every result one under another. When the tabs do not fit, a button at the end of the row counts those out of view and opens a list of every result, Pivot and comparison with a filter box (also **Go to Result…**, **Ctrl+Shift+O** / **⇧⌘O**, in the command palette and the Window menu). Results take a browser's tab keys while the focus is in the Results pane (or its list) and the query has two or more results: **Ctrl+Page Down** and **Ctrl+Page Up** step through them (Windows and Linux), **Ctrl+1** to **Ctrl+8** (⌘ on macOS) pick one and **Ctrl+9** the last; otherwise, Messages and the plan included, those keys pick query tabs. **Ctrl+Alt+Page Down** and **Ctrl+Alt+Page Up** (Next and Previous Result) step through the results from anywhere, Stacked included, which scrolls to the result; with **Shift** they switch a result between its Table and Pivot in Tabs, outside text. In a short results pane the rows of tabs fold into one row, then away, so the grid keeps its rows. In a narrow pane (docked beside the editor, popped out, or a small window) the results toolbar folds its tools away in turn, Tabs first, and its **⋯** (More results tools) holds every tool.
-- Name a result: a comment holding only `#Name="Open orders"` before a statement (`/* #Name="Open orders" */` or `-- #Name="Open orders"`) shows that name on the result's tab, its Stacked caption, Go to Result, the Compare popover, its Pivot and comparisons, Column Profile and its grid's accessible name, where an unnamed result says Result 2. Its number stays beside the name in lists and tooltips, so two results of one name are told apart, and a long name ends in an ellipsis with the whole name in the tooltip. The query a first launch opens names its result.
-- Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. Sorting a result that has finished loading (another column or direction, more columns, or Sort text by) keeps the profile as it is; it is computed again when the filters change, the result finishes loading or the query runs again. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
-- Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
-- Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
-- Remember each query's exact connection target and database across hot exit and reload. Disconnected queries keep their server and environment labels; reconnecting opens fresh SQL sessions and never runs their buffers. Closing keeps the tabs and server associations even while an automatic reconnect is in progress. See [connection restoration](docs/hot-exit.md#connections).
-- Query tabs show the filename above their environment and live session ID, leaving short names readable without widening the tab.
-- Customize themes and workspace layouts, and access commands through the command palette.
+- **Query editor**: Monaco-based T-SQL editor with IntelliSense, Go To Definition (F12) and Peek (Alt+F12), `GO`
+  batches, and a separate session per query tab.
+- **Results**: in-memory sort, filter, search, highlight, transpose, pivot, column profiles and result comparison, with
+  no re-query. Results show as tabs or stacked, can be [named](docs/named-result-sets-scope.md) from the query text, and
+  export to CSV, tab-delimited text or JSON.
+- **Execution plans**: estimated, actual and live plans on a GPU canvas, plan history and side-by-side comparison, plus
+  Client Statistics.
+- **Object Explorer**: browse servers and databases, Search Objects, View Dependencies, Script As, Table Designer,
+  object properties and actions, Restore Database.
+- **Monitoring**: Activity Monitor (sessions, blocking, expensive queries, waits, file I/O) and the Integration Services
+  Catalog, with live data that refreshes on its own.
+- **Workbench**: VS Code-style command palette (F1), editor groups, popout windows, hot exit that restores tabs and
+  connections, remappable keyboard shortcuts and mouse gestures, Dark, Light or System themes, customizable.
+- **Authentication**: SQL Server, Windows (Kerberos on Linux and macOS) and Microsoft Entra ID.
 
-Varia targets SQL Server 2016 through 2025 and runs on Windows, Linux, and macOS. Some features require specific server versions or permissions; see the [documentation](#documentation) for details.
+Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 
-## Getting started
+## Install
 
-See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
+Download a build from [GitHub Releases](https://github.com/CDoughty08/varia-sql-manager/releases). Builds include the
+.NET backend; no SDK is needed.
 
-Download a build from [GitHub Releases](https://github.com/CDoughty08/varia-sql-manager/releases): the Windows x64 Setup or Portable executable, Linux x64 AppImage, or macOS DMG or ZIP for Apple Silicon or Intel. These builds include the .NET backend and do not require the SDK. They are currently unsigned; macOS builds are also not notarized, so the operating system may warn or block them. On Linux, the AppImage requires FUSE and an available desktop/keyring for encrypted remembered passwords.
+| Platform | Packages |
+| --- | --- |
+| Windows x64 | Setup (per-user or all users; `--silent` for unattended installs) or Portable `.exe` |
+| Linux x64 | AppImage (needs FUSE, and a keyring to remember passwords) |
+| macOS (Apple Silicon, Intel) | DMG or ZIP |
 
-The Windows Setup opens a wizard where you choose installation for your account or all users and confirm the installation. For unattended deployment, run `Varia-SQL-Manager-<version>-Windows-x64-Setup.exe --silent` (the standard NSIS `/S` flag also works). Silent installations default to the current user for a fresh install; `/allusers` requests an all-users installation and may require elevation. The Portable executable runs without an installation; it extracts the application to a temporary directory and uses the normal user profile for settings and saved connections. The Linux AppImage and extracted macOS ZIP can likewise run without an installer.
+Builds are not yet code-signed, and macOS builds are not notarized, so your OS may warn before opening them. Varia
+checks GitHub for updates and installs them on restart (macOS opens the release page instead); see
+[updates](docs/updates.md) for proxy requirements and how to turn this off.
 
-Installed, portable and AppImage builds check GitHub for new releases, download them in the background with their progress in the status bar, verify each file's SHA-512, and install on **Restart to Update**. An installed Windows copy also unpacks the release beside itself while you work, so the restart only swaps it in. macOS builds are not code signed, so they tell you about a release and open the releases page instead of installing it. Behind a corporate proxy or filter, a failed check says why (proxy, certificate, DNS, blocked) and what to ask IT to allow: `github.com` and `release-assets.githubusercontent.com`. See [updates](docs/updates.md); **Tools › Options › Environment › Product Updates** turns automatic checks and downloads off.
+## Quick start
 
-To run from source:
+1. Click **Connect**, enter a server, and pick an authentication method.
+2. Open a new query (**Ctrl+N**), write T-SQL and press **F5**. If text is selected, only the selection runs.
+3. Explore results and messages below the editor, or browse and script objects in Object Explorer.
 
-Prerequisites: Node.js 24 or newer and the .NET 11 SDK. The SDK version is configured in `global.json`.
+Press **F1** for the command palette, and see **Help › Getting Started** for offline guides. The
+[command reference](docs/commands.md) lists every command and shortcut.
+
+Certificate validation is on by default; enable **Trust server certificate** only for a trusted server with a
+self-signed certificate. Windows authentication on Linux and macOS needs the system Kerberos library, a ticket from
+`kinit` and a server name or SPN registered for Kerberos; Entra Integrated authentication is Windows-only. Remembered passwords are encrypted with the OS credential store.
+
+## Not yet available
+
+SQLCMD mode, Results to Text and Results to File (grid results can be exported), IntelliSense for Entra connections,
+backup, SQL Server Agent job management, and database user and role dialogs (logins are supported).
+
+## Build from source
+
+Prerequisites: Node.js 24+ and the .NET 11 SDK (version pinned in `global.json`).
 
 ```sh
 npm ci
-npm run dev
+npm run dev        # build the backend and start Electron with hot reload
 ```
-
-The development command builds the backend and starts Electron with renderer hot reload. Restart it after changing C# code. To build and run the application without the development server:
 
 ```sh
-npm run build
-npm start
+npm run build && npm start   # production build, no dev server
 ```
 
-On Ubuntu 24.04 and later, AppArmor may block the unprivileged user namespaces needed by Electron's Chromium sandbox. Configure AppArmor to permit them if Electron cannot start.
+On Ubuntu 24.04+, AppArmor may block the user namespaces Electron's sandbox needs; allow them if Electron will not start.
 
-## Connecting and running queries
-
-1. Select **Connect**, enter a server and database, and choose an authentication method.
-2. Open a new query, write SQL, and select **Execute** or press **F5**. A selection runs instead of the full document.
-3. Inspect the results and messages, or browse and script objects in Object Explorer.
-
-A comment such as `/* #Name="Open orders" */` just before a statement names its result, which the results pane then
-shows instead of "Result 2"; see [Result grid tools](docs/results-tools.md) for where a name applies.
-
-The Execute button says **Execute selection** with its line range when text is selected. Click inside the selection
-to clear it and place the caret there. **Entire query** means the whole document will run.
-Hold **Ctrl** and scroll the mouse wheel over the editor to make the text larger or smaller in all editor tabs for this
-session. On macOS, **Cmd** and the wheel also work. Use the **View** menu's zoom commands to resize the whole workbench.
-Click the status bar's **Ln/Col** to go to a line, or **INS/OVR** to switch insert/overtype mode.
-Each editor group's **+**, or a double-click on empty tab-strip space, opens a query in that group. **Reopen Closed Query**
-(Ctrl+Shift+T; Cmd+Shift+T on macOS) restores a bounded, in-memory unsaved copy without its old connection or saved-file
-association; see [editor groups](docs/editor-groups.md).
-
-In Connect, single-click or Space selects a saved connection for editing; Enter or double-click connects. Object
-Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
-database starts with that database's visible, removable scope.
-
-Object Explorer retains disconnected servers as collapsed roots. Use **Reconnect…** to connect again, **Remove from
-Explorer** for an offline root, or **Disconnect and Remove from Explorer** for a connected one. Removing a root does
-not delete saved profiles or query text. Equivalent connections select the existing root; differing
-name, color, environment or startup reconnect details receive an explicit Current/Selected confirmation.
-Server shortcuts pinned above or below the tree, including their overflow entries, offer the same full context menu
-as the server row in the tree.
-Disconnect with attached queries offers Keep Tabs, Close Query Tabs and Cancel, with save and transaction choices
-resolved before tabs close. See [connection roots in Object Explorer](docs/connections-explorer.md).
-
-Database Properties, Table Designer, SSIS and other dependent documents retain their drafts when disconnected.
-They do not follow another login or connection settings merely because the server name matches. A legacy document
-without an exact target binding stays unavailable after its connection is replaced; reopen it explicitly and keep
-the old draft for reference.
-
-The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
-**Close Results** beside the results; each result's tab (or, stacked, its caption) has a button that closes that result and its Pivot. Located SQL errors offer **Go to line** while the source text is unchanged.
-
-Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
-
-Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palette. See the [command reference](docs/commands.md) for shortcuts and available commands.
-SSMS's default query shortcuts (Alt+F1 `sp_help`, Ctrl+1 `sp_who`, Ctrl+2 `sp_lock`) are palette commands instead:
-**New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock** open a new query on the connection
-and database New Query would use, holding the `EXEC` call, ready to run with **F5**. `sp_lock` is deprecated and does
-not exist in Azure SQL Database; query `sys.dm_tran_locks` there. The commands have no keys: Ctrl+1 to Ctrl+9 (⌘ on
-macOS) pick query tabs and results, and Alt+F1 opens the desktop menu on some Linux desktops.
-
-Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
-app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).
-
-**Help > Getting Started** opens searchable offline connection, query and results guides. References follow your
-applied shortcuts, mouse gestures and options; interactive examples use fictional data. See [Getting Started](docs/getting-started.md).
-
-**Help > Release Notes** opens curated, offline notes for the running version, with a picker for bundled release
-history. Update notifications request their exact advertised version; missing notes are reported clearly. **Release
-Downloads** remains a separate browser action. See [Release Notes](docs/release-notes.md).
-
-## Current limitations
-
-- Turn on **Include Live Execution Plan** in the query toolbar or Query menu before executing a query in Varia. The same **Execution Plan** output tab shows **Live** operator row counts and activity during execution, then switches to **Actual** captured data. Camera, statement and operator selection survive counter updates and matching actual plans. Completed statements and `GO` repetitions stay distinct; cancellation or a lost backend retains explicitly partial live data. Hidden views follow the live-data pause settings and are never polled by the renderer.
-  Live profiling uses a separate observer and requires SQL Server 2017 CU14 or later (or Azure SQL), lightweight profiling, and `VIEW SERVER STATE` through 2019 or `VIEW SERVER PERFORMANCE STATE` from 2022; Azure SQL requires database-state access or an administrator for its tier. Actual completion capture additionally needs the Extended Events permissions described below. Unsupported capture leaves query execution available. Live sampling is at most once a second, slows under load, and waits for renderer credit. Short statements can finish between samples. Live samples are limited to 1,048,576 XML characters, 2,000 operators and a 192 KiB payload; a run retains up to 512 statements, 10,000 operators and 4 MiB of parsed live data, with at most eight live snapshots retained per window. Completed actual plans use the existing larger limits. See [Live Plan implementation and validation](docs/live-plans.md).
-- **Display Estimated Execution Plan** in the Query menu or toolbar (**Ctrl+L**, **⌘L** on macOS) compiles the query or selection without execution and labels it **Estimated** in the existing plan viewer. Estimation uses an isolated connection with the selected database and Varia defaults; the query tab's existing temporary objects, SET options and uncommitted changes are unavailable. See [estimated plans](docs/estimated-plans.md) for GO/USE handling, limits and session behavior.
-- Turn on **Include Actual Execution Plan** in the query toolbar or Query menu before executing. The toggle applies to the current query tab. SQL Server's captured plans appear after execution in the **Execution Plan** output pane, with data grids in **Results**. Plans returned by manual `SET SHOWPLAN_XML` or `SET STATISTICS XML` and opened `.sqlplan` files use the same GPU canvas. Drag or scroll to pan, pinch or Ctrl-scroll to zoom, and use **Fit statement**, **Fit batch**, the searchable operator outline, and the properties inspector. The graph shows runtime statistics, operator warnings and missing-index notices when SQL Server supplies them, and labels estimated costs. **XML source** in a plan document opens the editable XML for saving and recovery.
-  Automatic capture uses lightweight Extended Events and requires permission to create, start, read and drop its event session. Varia runs the query normally and reports unavailable capture in **Messages**. Use the **XML source** picker in **Execution Plan** to open a captured document even if its graph is unavailable.
-  A later server-scoped capture also recovers abandoned collectors created by this version after application or backend failure, using ownership and physical-connection checks within the setup deadline. See [collector recovery and integration coverage](docs/plan-capture-hardening.md) for legacy/database-scoped limitations and verified server versions.
-- The plan viewer accepts at most 8,388,608 XML characters (2 MiB compressed), 10,000 operators, 512 statements and 256 XML levels. Open accepts `.sqlplan` and Showplan `.xml` files up to 16 MiB. Ordinary SQL files keep their 5 MB limit. The canvas graphs up to the first 64 plan documents within twice the per-document character budget. Further retained plans can be opened as XML. Shortened properties are reported. Query-returned plans keep the 2,097,152-character result-cell cap. Truncated plans can be opened as XML.
-- Plan properties expose structured predicates, output columns, parameters, memory grants, spills, warning details, missing-index columns and worker counters when supplied. The outline ranks available CPU, elapsed time and row-estimate discrepancy, including measured zeros. Costs remain estimates; unavailable counters stay unavailable. See [diagnostic scopes and limits](docs/plan-diagnostics.md).
-- SQL Server [IntelliSense](docs/language-services.md) includes a bundled language server for completion, hover and query diagnostics with SQL Login and Windows authentication. **F12** (Go To Definition) scripts the object under the caret as CREATE to a new query, **Alt+F12** opens it in Peek, and Ctrl+click follows F12; both work in Peek's editor too. **Ctrl+Shift+R** refreshes the current query's metadata cache after schema changes. Entra IntelliSense, SQLCMD mode, backup, security management, and job management remain future work. Restore Database restores from backups already taken.
-- Results are held in memory and subject to size limits (a result of 1 MB or more that no window has shown for 5 seconds, or that is shown but has not been read, copied or saved for 30 seconds while its grid is neither sorted nor filtered, is compressed in memory, which frees room, and a query that fills result memory waits briefly while other results are compressed to make room; nothing is written to disk); truncation is indicated in the application, and a query still running past a full result memory budget can be stopped from the grid's **Stop query**. With **Discard results after execution** on (Tools › Options › Query Results › SQL Server › Results to Grid), rows are read and none is kept: the status bar shows **Results discarded** while it is on, and the Results view says so in place of the grid, with **Turn off Discard results**. Results to Text and Results to File are not yet available, though grid results can be exported.
-- Review generated scripts before executing them. Some management and Integration Services operations are still limited; see the relevant documentation below.
-
-## Development and testing
+## Development
 
 ```sh
-npm run check          # Typecheck, backend and UI tests, production UI build
-npm run test:smoke     # Electron smoke tests; run check first
-npm run test:electron  # check followed by smoke tests
-npm run bench          # IPC benchmarks; run check first
+npm run check          # typecheck, .NET checks, vitest and production build
+npm run test:smoke     # Electron smoke suites (after check)
+npm run bench          # IPC benchmarks (after check)
 ```
 
-The default checks do not require a database. On headless Linux, run the smoke tests under a virtual display:
+The default checks need no database. Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set; use a disposable
+server. [docs/testing.md](docs/testing.md) lists the test variables, and [CLAUDE.md](CLAUDE.md) has the contributor and
+architecture rules.
 
-```sh
-xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
-```
+electron-vite bundles every npm package, so all of them are listed under devDependencies, but those devDependencies ship
+in the app (zod, React, Monaco with DOMPurify, Dockview, PixiJS): audit without `--omit=dev` and treat their advisories
+as production ones.
 
-To run optional live tests, set `VARIA_TEST_SQL_SERVER` and, for SQL authentication, `VARIA_TEST_SQL_USER` and `VARIA_TEST_SQL_PASSWORD`, then run `npm run backend:test`. The smoke tests also use these settings. Use a disposable development server: live tests can create and remove test objects, and `VARIA_TEST_SQL_SCRATCH=1` enables additional tests that create and drop databases and server objects. `VARIA_TEST_SSIS_CREATE=1` enables a destructive SSIS Catalog creation test; see the [Integration Services documentation](docs/integration-services.md) before using it.
-
-## Creating a release
-
-Release builds package and smoke-test every push to main, and pull requests that change packaging (docs/ci.md). To get installers without a release, run the **Release builds** Actions workflow manually: its installers are available as workflow artifacts for seven days. Prepare a release by updating `package.json` and `package-lock.json` together and recording the changes in [CHANGELOG.md](CHANGELOG.md). After merging those changes, push a matching tag (for example, `v0.7.0` for version `0.7.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifests (`varia-update-v2.json`, which installed copies check, and `varia-update.json` for copies up to 0.7.0) and GitHub-generated release notes. Prepend the changelog's release highlights to the published notes. A version with a prerelease suffix (such as `v0.7.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
+Releases are cut by pushing a `v<version>` tag after updating `package.json` and `package-lock.json` and adding the
+release record; see [cutting a release](docs/release-notes.md#cutting-a-release).
 
 ## Architecture
 
-The Electron application uses React, TypeScript, Monaco, and Dockview. electron-vite bundles every npm package into the app, so `package.json` lists them all under devDependencies and the package holds no `node_modules`, but those devDependencies ship: zod, React, Monaco (with its DOMPurify), Dockview, PixiJS and elkjs run in every copy, so audit dependencies without `--omit=dev` and treat their advisories as production ones. A .NET sidecar handles SQL connections and management through Microsoft.Data.SqlClient and SQL Management Objects (SMO). The processes communicate over a MessagePack-based protocol; see the [IPC reference](docs/ipc.md).
+An Electron + React + Monaco + Dockview front end talks to a .NET sidecar (Microsoft.Data.SqlClient and SMO) over a
+length-prefixed MessagePack protocol on stdio. The renderer is sandboxed and untrusted; it reaches the system only
+through a small preload API that main verifies, and query results stay in backend memory under a budget with explicit truncation, never on disk.
 
-The workbench page is treated as untrusted: it runs sandboxed with context isolation, no Node.js integration and a strict Content Security Policy, and reaches the system only through a small preload API whose every call main verifies. Built pages load from Varia's own `app://varia/` origin, never a `file:` URL, so page script cannot read local files. Packaged builds set Electron's fuses (`build/fuses.cjs`): `file:` pages get no extra privileges, the executable cannot run as Node.js or honour `NODE_OPTIONS` and `--inspect`, and the application loads only from its integrity-checked `app.asar`.
+- [Architecture invariants](docs/architecture.md)
+- [IPC protocol](docs/ipc.md)
+- [CI](docs/ci.md) and [testing](docs/testing.md)
 
 ## Documentation
 
-- [SQL language services and IntelliSense](docs/language-services.md)
-- [Commands and shortcuts](docs/commands.md)
-- [Mouse gestures](docs/gestures.md)
-- [Editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md) and [popout windows](docs/popout-windows.md)
-- [Object Explorer](docs/object-explorer.md), [object actions](docs/object-actions.md) and [Search Objects](docs/object-search.md)
-- [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)
-- [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), and [Integration Services](docs/integration-services.md)
-- [Settings](docs/settings.md) and [themes](docs/themes/README.md)
-- [Updates](docs/updates.md)
-- [IPC and benchmarks](docs/ipc.md)
+| Area | Docs |
+| --- | --- |
+| Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md) |
+| Results | [Result grid tools](docs/results-tools.md), [named results](docs/named-result-sets-scope.md), [execution plans](docs/execution-plans.md) |
+| Objects | [Object Explorer](docs/object-explorer.md), [connections](docs/connections-explorer.md), [object actions](docs/object-actions.md), [Search Objects](docs/object-search.md), [scripting](docs/scripting.md), [Table Designer](docs/table-designer.md) |
+| Monitoring | [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), [Integration Services](docs/integration-services.md) |
+| App | [Settings](docs/settings.md), [themes](docs/themes/README.md), [updates](docs/updates.md), [About](docs/about.md), [Getting Started](docs/getting-started.md), [release notes](docs/release-notes.md) |
+
+No license has been chosen yet.

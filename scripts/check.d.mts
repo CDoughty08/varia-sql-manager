@@ -12,4 +12,5 @@ export const skippable: Readonly<Record<string, string>>
 export function parseSkip(value?: string): string[]
 export function skippedNote(layout: CheckNode, skip: readonly string[]): string
 export function cpuBudget(env?: Record<string, string | undefined>, machine?: number): number
+export const checkStarted: number
 export function vitestWorkers(cpus: number): Record<'vitest' | 'vitest (Release backend)', number>
