@@ -782,8 +782,11 @@ export class PeekService extends PeekView {
    */
   keyDown(key: string, repeat = false): void {
     if (!this.isModifier(key)) {
-      // The query editor's own Peek on Hover modifier (when remapped apart) is held, not typed: its hover keeps running.
-      if (!this.isHoverModifier(key)) { this.cancelHover(); this.pointerRow = undefined }
+      // The query editor's own Peek on Hover modifier (when remapped apart) is held, not typed, while its hover waits; for a
+      // row's hover it is part of a chord (Ctrl+Shift+N), which cancels as any other key does. Either way the pointer row is
+      // forgotten: the editor's hover does not need it, and a chord must not leave a row for the next press to peek.
+      if (!(this.isHoverModifier(key) && this.hoverRow === undefined)) this.cancelHover()
+      this.pointerRow = undefined
       return
     }
     if (repeat && this.armedStore.getSnapshot()) return

@@ -40,7 +40,8 @@ Object Explorer row ([Peek](object-explorer.md#peek)):
 
 - **Ctrl+hover** (**⌘+hover** on macOS): rest the pointer on a name with Ctrl held and Peek's card opens below it (above
   it near the bottom of the window) without taking focus. A press outside the card, editing the query or another peek
-  closes it; it follows the name as the editor scrolls.
+  closes it; it follows the name as the editor scrolls. Unlike Object Explorer, the editor shows no peek cursor, and pressing
+  Ctrl with the pointer already resting on a name does nothing until the pointer moves.
 - **Alt+F12** (Peek Definition) opens the same card at the caret and moves focus into it; **Esc** returns to the editor.
 - **Ctrl+click** (**⌘-click**), **Open Definition in Peek Tab** on the editor's context menu, or **Ctrl+Enter** in the card
   opens the object in a Peek tab.

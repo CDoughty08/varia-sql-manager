@@ -292,6 +292,35 @@ describe('PeekService', () => {
     service.blur()
     expect(service.armed.getSnapshot()).toBe(false)
   })
+  it('cancels a row\'s press peek on a Ctrl+Shift chord even when the query editor\'s Peek on Hover is remapped to Shift', () => {
+    const { api } = setup()
+    let fire: (() => void) | undefined
+    const service = new PeekService({
+      timers: { setTimeout: callback => { fire = callback; return 1 }, clearTimeout: () => { fire = undefined } },
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} }, scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      gestures: { isModifierKey: (_id, key) => key === 'Control' }, hoverModifier: key => key === 'Control' || key === 'Shift'
+    })
+    service.pointer(() => node('table'), false)
+    service.keyDown('Control')
+    expect(fire).toBeDefined()
+    // Shift is the editor's modifier, but with a row's hover waiting it is part of a chord (Ctrl+Shift+N): no peek.
+    service.keyDown('Shift')
+    expect(fire).toBeUndefined()
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    service.dispose()
+    // Swapped (Object Explorer on Shift, the editor on Ctrl), nothing pending: Ctrl, the editor's, still forgets the parked
+    // row, so Ctrl+Shift+F typed in the editor never peeks it.
+    const swapped = new PeekService({
+      timers: { setTimeout: callback => { fire = callback; return 1 }, clearTimeout: () => { fire = undefined } },
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} }, scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      gestures: { isModifierKey: (_id, key) => key === 'Shift' }, hoverModifier: key => key === 'Control' || key === 'Shift'
+    })
+    swapped.pointer(() => node('table'), false)
+    swapped.keyDown('Control')
+    swapped.keyDown('Shift')
+    expect(fire).toBeUndefined()
+    swapped.dispose()
+  })
   it('follows Peek on Hover\'s remapped modifier, and a pointer event corrects a press the window did not see', () => {
     const { service, api } = setup()
     let fire: (() => void) | undefined
