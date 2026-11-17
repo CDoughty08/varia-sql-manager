@@ -339,8 +339,24 @@ try {
   await search().fill('execution plan')
   await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')
   await search().fill('')
-  // Tools › Options… again from the main window brings the open window forward, on the page asked for; the main window
+  // A text field in the dialog window has its menu, by mouse and by Shift+F10; Escape closes the menu, not the dialog.
+  const fieldMenu = options.getByRole('menu', { name: 'Text field', exact: true })
+  await search().click({ button: 'right' })
+  await expect(fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true })).toBeVisible()
+  await options.keyboard.press('Escape')
+  await expect(fieldMenu).toHaveCount(0)
+  await expect(search()).toBeFocused()
+  await options.keyboard.press('Shift+F10')
+  await expect(fieldMenu.getByRole('menuitem', { name: 'Undo', exact: true })).toBeFocused()
+  await options.keyboard.press('Escape')
+  await expect(search()).toBeFocused()
+  await expect(dialog()).toBeVisible()
+  // Tools › Options… again from the main window raises the open window rather than opening another; the main window
   // works beside it (the dialog is modeless), and keys in the dialog window stay the dialog's.
+  const windowCount = application.windows().length
+  await menu('preferences.options')
+  await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')
+  expect(application.windows().length).toBe(windowCount)
   const tabs = () => documentTabSlots(page).count(), before = await tabs(), newQuery = mac ? 'Meta+n' : 'Control+n'
   await search().focus()
   await options.keyboard.press(newQuery)

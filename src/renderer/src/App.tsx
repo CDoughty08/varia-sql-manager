@@ -85,7 +85,8 @@ export default function App() {
   const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
-  const [showAbout, setShowAbout] = useState(false)
+  // 0 while About is closed; each Help › About counts up, raising its window when it is already open.
+  const [showAbout, setShowAbout] = useState(0)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
@@ -201,7 +202,7 @@ export default function App() {
         setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true)
       }
       if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
-      if (event.type === 'help.aboutRequested') setShowAbout(true)
+      if (event.type === 'help.aboutRequested') setShowAbout(count => count + 1)
     })
     return () => subscription.dispose()
   }, [workbench, documents])
@@ -317,7 +318,7 @@ export default function App() {
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
-    {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+    {showAbout > 0 && <AboutDialog raise={showAbout} onClose={() => setShowAbout(0)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
     <MenuLayer />

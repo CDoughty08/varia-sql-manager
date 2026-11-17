@@ -29,7 +29,8 @@ export const rowHint = (row: SettingRow): string => [row.def.type === 'integer' 
  */
 function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
   const { def } = row, id = controlId(row.key), hint = rowHint(row)
-  const common = { id, disabled: row.disabled, 'data-setting': row.key, 'aria-description': def.description, onFocus }
+  // The hint after the field (its unit, what 0 means) is read with the description, as it is seen beside the field.
+  const common = { id, disabled: row.disabled, 'data-setting': row.key, 'aria-description': [def.description, hint].filter(Boolean).join(' ') || undefined, onFocus }
   let control: ReactNode
   if (def.type === 'boolean') control = <label className="options-check"><input {...common} type="checkbox" checked={row.value === 'true'} onChange={event => onChange(String(event.target.checked))} /><span>{label}</span></label>
   else if (def.type === 'integer') {

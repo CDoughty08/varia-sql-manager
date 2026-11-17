@@ -8,8 +8,8 @@ import { preparePopoutDocument } from './popout-document'
 
 /**
  * Dialogs in OS windows of their own (docs/popout-windows.md, "Dialog windows"). Each is the page's same-origin
- * `about:blank` child, as a popout is: main allows only the names `varia-dialog-<kind>-<uuid>`, gives the window the main
- * window's hidden title bar and keeps it above the main window. The dialog's React tree renders into it through a portal,
+ * `about:blank` child, as a popout is: main allows only the names `varia-dialog-<kind>-<uuid>`, opens it frameless (macOS:
+ * its traffic lights) for the page to draw the title bar, and keeps it above the main window. The dialog's React tree renders into it through a portal,
  * so it keeps the page's services and has no IPC of its own. Where the window cannot open (main refused it, or the page
  * runs without windows, as in unit tests) the dialog shows over the main window as before.
  */
@@ -84,7 +84,13 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
     if (!opened) return
     const { child } = opened
     let closing = false, timer: ReturnType<typeof setTimeout> | undefined
-    const closed = () => { if (!closing) closeRef.current() }
+    const closed = () => {
+      if (closing) return
+      closeRef.current()
+      // A dialog that stays open (Options while OK saves) shows over the main window from here; one that closed is gone
+      // in the same render.
+      setHost(current => current === opened ? null : current)
+    }
     const resized = () => {
       clearTimeout(timer)
       timer = setTimeout(() => { if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight }) }, 300)
@@ -112,8 +118,8 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
 }
 
 /**
- * A dialog's heading: in a dialog window, its title bar (dragged to move the window; the system's own buttons close it,
- * drawn in the overlay or as macOS's traffic lights); over the main window, the heading with its close button.
+ * A dialog's heading: in a dialog window, its title bar (dragged to move the window), with its close button or, on macOS,
+ * beside the traffic lights; over the main window, the heading with its close button.
  */
 export function DialogHeading({ id, title, closeLabel, disabled, onClose }: { readonly id: string; readonly title: string; readonly closeLabel: string; readonly disabled?: boolean; readonly onClose: () => void }) {
   const { inWindow, platform } = useDialogWindow()

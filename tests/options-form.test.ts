@@ -101,6 +101,18 @@ describe('Options pages', () => {
     expect(pageForm('environment.general', draft, 'darwin', defs).groups.flatMap(group => group.rows.map(item => item.key))).toEqual(['environment.everywhere', 'environment.mac'])
     expect(pageForm('textEditor.transactSql.tabs', draft, 'win32').groups.map(group => group.label)).toEqual(['Tab'])
   })
+  it('lays a sectioned page out in its sections\' order, whatever the catalogue\'s, and leaves out sections with no rows', () => {
+    const page = 'queryResults.sqlServer.grid'
+    const defs = [fixture({ key: 'queryResults.plan', page, group: 'Execution plan' }), fixture({ key: 'queryResults.display', page, group: 'Grid display' }), fixture({ key: 'queryResults.display2', page, group: 'Grid display' })]
+    const groups = pageForm(page, draft, 'win32', defs).groups
+    expect(groups.map(group => group.label)).toEqual(['Grid display', 'Execution plan'])
+    expect(groups.map(group => group.rows.map(row => row.key))).toEqual([['queryResults.display', 'queryResults.display2'], ['queryResults.plan']])
+    expect(groups[0].description).toBe('How results look in the grid.')
+  })
+  it('finds settings by their section and by their full name outside it', () => {
+    expect(searchPages('limits and memory', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
+    expect(searchPages('show execution plan outline', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
+  })
   it('sets values only from a row\'s own choices, and keeps an integer field\'s text until OK checks it', () => {
     expect(set(draft, 'textEditor.sql.wordWrap', 'true')['textEditor.sql.wordWrap']).toBe(true)
     for (const [key, text] of [['textEditor.sql.wordWrap', 'True'], ['textEditor.sql.tabs', 'both'], ['textEditor.unknown', 'true']] as const) expect(set(draft, key, text), `${key} ${text}`).toBe(draft)

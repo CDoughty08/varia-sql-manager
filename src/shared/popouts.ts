@@ -18,7 +18,8 @@ export const popoutLimits = {
 /**
  * Dialog windows: a dialog shown in an OS window of its own (Tools › Options, Help › About) rather than over the main
  * window. The page opens each as a same-origin `about:blank` child named `varia-dialog-<kind>-<uuid>`, as it opens popouts,
- * and main gives it a themed title bar and keeps it above the main window (`src/main/popout-windows.ts`).
+ * and main opens it frameless (macOS: its traffic lights) for the page's themed title bar and keeps it above the main
+ * window (`src/main/popout-windows.ts`).
  */
 export const dialogWindowKinds = {
   options: { title: 'Options', width: 940, height: 680, minWidth: 640, minHeight: 440, resizable: true },

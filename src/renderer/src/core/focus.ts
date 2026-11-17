@@ -1,5 +1,5 @@
 import type { DocumentService } from '../services/documents'
-import { modalOpen, transientSurfaces as transient } from './modal'
+import { modalOpen, openModal, transientSurfaces as transient } from './modal'
 import { mainDocument, windows } from './windows'
 
 /** Where focus was before a menu or the quick input took it, and how to return there; the DOM version is `domFocusAdapter`. */
@@ -20,7 +20,7 @@ export function domFocusAdapter(documents: Pick<DocumentService, 'getSnapshot' |
     },
     restore: target => {
       if (isElement(target) && target !== target.ownerDocument.body && target.isConnected) {
-        const modal = target.closest('[aria-modal="true"]'), open = [...document.querySelectorAll('[aria-modal="true"]')].at(-1)
+        const modal = target.closest('[aria-modal="true"]'), open = openModal()
         if (modal ? modal === open : !open) {
           target.focus({ preventScroll: true })
           if (target.ownerDocument.activeElement === target) return

@@ -515,7 +515,6 @@ const menuBridge = new NativeMenuBridge({
   build: () => Menu.buildFromTemplate(applicationMenuTemplate({
     theme: appearance.state, title: menuTitle, recentFiles: recentFilesMenuModel(recent.list(settings.current()['environment.recentFiles.count']), process.platform), rules: shortcutRules()
   }, menuActions, process.platform)),
-  // Never while a child window is closing: Electron can crash setting the menu on a window it is tearing down.
   install: menu => Menu.setApplicationMenu(menu)
 })
 

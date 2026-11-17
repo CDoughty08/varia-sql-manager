@@ -300,6 +300,14 @@ describe('dialog windows', () => {
     expect(dialogLimits.maxWindows).toBe(Object.keys(dialogWindowKinds).length * 2)
     expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
   })
+  it('count dialog windows still being created against the limit, and apart from the popouts\'', () => {
+    const popouts = registry().popouts
+    // A page that asks again and again before any window arrives gets no more than the limit.
+    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog(), base))
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    // Popouts still have every slot of their own.
+    allowed(popouts.open(request(), base))
+  })
   it('are wired in main: the page\'s window-open handler and the main window as parent', () => {
     expect(source).toContain("contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))")
     expect(source).toContain('parent: () => mainWindow ?? undefined')

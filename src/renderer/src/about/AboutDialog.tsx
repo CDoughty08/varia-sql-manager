@@ -11,7 +11,8 @@ import { copyStatus, copyText, type CopyRecord } from '../kit/format'
 import { trapFocus } from '../trap-focus'
 import { aboutUpdate, platformName, versionDetails, type AboutUpdateCommand } from './about'
 
-export default function AboutDialog({ onClose }: { readonly onClose: () => void }) {
+/** `raise` changes when Help › About is chosen again while it is open: its window comes forward. */
+export default function AboutDialog({ onClose, raise }: { readonly onClose: () => void; readonly raise?: unknown }) {
   const { commands, documents, platform, updates } = useWorkbench()
   const state = useServiceSnapshot(updates), update = aboutUpdate(state, platform), details = versionDetails(state, platform)
   const [returnFocus] = useState(focusToReturn)
@@ -40,7 +41,7 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
   }
-  return <DialogWindow kind="about" onClose={close}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
+  return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
     <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
     <div className="connection-scroll">
       <div className="about-identity"><div className="about-brand"><Icon name="varia" /></div><div><h3>{productName}</h3><p>{productDescription}</p></div></div>

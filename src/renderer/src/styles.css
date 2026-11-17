@@ -150,8 +150,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A popout window (Move into New Window): its panels' tabs over the selected panel; the OS draws the title bar. */
 .popout-body { height: 100vh; overflow: hidden; background: var(--varia-dock-background); }
 .popout-root, .popout-window { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-/* A dialog window (popouts/DialogWindow.tsx): the dialog fills it, under a title bar as tall as the main window's, whose
-   colour the window-controls overlay matches (nativeOverlay). macOS's traffic lights sit at its start. */
+/* A dialog window (popouts/DialogWindow.tsx): the dialog fills it, under the page's title bar, as tall as the main window's
+   and coloured like it, with its own close button; macOS's traffic lights sit at its start. */
 .popout-body.dialog-window-body { background: var(--varia-editorWidget-background); }
 .dialog-window-root { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .dialog-window-root > .connection-modal[role="dialog"] { flex: 1; width: 100%; height: auto; max-height: none; min-height: 0; border: 0; border-radius: 0; box-shadow: none; animation: none; }

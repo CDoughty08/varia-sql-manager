@@ -97,6 +97,13 @@ describe('DialogWindow', () => {
     expect(again.onClose).not.toHaveBeenCalled()
     expect(JSON.parse(localStorage.getItem('varia.dialogWindow.options') ?? '{}')).toEqual({ width: 1111, height: 700 })
   })
+  it('shows a dialog that stays open after its window was closed (Options while OK saves) over the main window', async () => {
+    const view = await mount()
+    await act(async () => { view.fake.emit('pagehide') })
+    expect(view.onClose).toHaveBeenCalledTimes(1)
+    expect(view.host.querySelector('.modal-backdrop [role="dialog"]')).not.toBeNull()
+    expect(view.host.querySelector('[aria-label="Close options"]')).not.toBeNull()
+  })
   it('shows over the main window, with its close button, where the window cannot open', async () => {
     for (const options of [{ refuse: true }, { dialogWindows: false }]) {
       const view = await mount(options)
