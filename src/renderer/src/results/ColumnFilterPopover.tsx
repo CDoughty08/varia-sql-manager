@@ -1,10 +1,11 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import { scrollCap } from '../grid/scroll'
 import { trapFocus } from '../trap-focus'
-import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, maxListSpace, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -29,16 +30,39 @@ const overscan = 8
 const maxBlocks = 32
 /** The list's row height before the theme's `--varia-row` is read. */
 const fallbackRow = 22
+/** The list's top padding, which the rows start below. */
+const padOf = (element: HTMLElement) => parseFloat((element.ownerDocument.defaultView ?? window).getComputedStyle(element).paddingTop) || 0
 const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.text
 const message = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message : fallback
 
-/** One checklist entry, placed at its row; a tick re-renders only the entries it changes. */
-const Item = memo(function Item({ value, top, height, checked, disabled, onToggle }: { value: DistinctValue; top: number; height: number; checked: boolean; disabled: boolean; onToggle(value: DistinctValue): void }) {
-  return <label className={'column-filter-item' + (value.text === '' ? ' empty' : '')} style={{ top, height }}>
-    <input type="checkbox" disabled={disabled} checked={checked} onChange={() => onToggle(value)} aria-label={`${shown(value)} (${formatCount(value.count)})`} />
+/** What a row of the checklist's listbox needs to be one of its options: its id (the listbox's active descendant), its
+ *  place among all the rows (the list draws only some), and whether it is the active row. */
+interface RowPlace { readonly id: string; readonly row: number; readonly rows: number; readonly active: boolean; readonly top: number; readonly height: number }
+/** A press on a row makes it the active one and keeps the focus on the listbox (the box drawn inside a row takes none). */
+type RowPick = (row: number) => void
+
+/** One checklist row: an option of the listbox at its place, its tick as `aria-checked`. A click ticks it, as Space does
+ *  the active row; the box inside is drawn only. */
+function Row({ place, label, checked, disabled, className, onToggle, onPick, children }: {
+  place: RowPlace; label: string; checked: boolean; disabled: boolean; className: string; onToggle(): void; onPick: RowPick; children: ReactNode
+}) {
+  return <div id={place.id} role="option" aria-checked={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
+    className={'column-filter-item ' + className + (place.active ? ' active' : '')} style={{ top: place.top, height: place.height }}
+    onMouseDown={event => { event.preventDefault(); onPick(place.row) }} onClick={() => { if (!disabled) onToggle() }}>
+    <input type="checkbox" tabIndex={-1} aria-hidden="true" disabled={disabled} checked={checked} readOnly />
+    {children}
+  </div>
+}
+
+/** Two places of a row are the same place (a new object each render). */
+const samePlace = (a: RowPlace, b: RowPlace) => a.id === b.id && a.row === b.row && a.rows === b.rows && a.active === b.active && a.top === b.top && a.height === b.height
+
+/** One value of the checklist; a tick or a move of the active row re-renders only the entries it changes. */
+const Item = memo(function Item({ value, place, checked, disabled, onToggle, onPick }: { value: DistinctValue; place: RowPlace; checked: boolean; disabled: boolean; onToggle(value: DistinctValue): void; onPick: RowPick }) {
+  return <Row place={place} label={`${shown(value)} (${formatCount(value.count)})`} checked={checked} disabled={disabled} className={value.text === '' ? 'empty' : ''} onToggle={() => onToggle(value)} onPick={onPick}>
     <bdi className="column-filter-text" title={value.text}>{shown(value)}</bdi><span className="column-filter-count" aria-hidden="true">{formatCount(value.count)}</span>
-  </label>
-})
+  </Row>
+}, (a, b) => a.value === b.value && a.checked === b.checked && a.disabled === b.disabled && a.onToggle === b.onToggle && a.onPick === b.onPick && samePlace(a.place, b.place))
 
 /**
  * What a funnel's popover filters: a column's distinct values as a snapshot (`DistinctList`), and the grid's filter it
@@ -86,7 +110,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   grid: HTMLElement
   onClose(refocus?: boolean): void
 }) {
-  const nullText = source.nullText ?? 'NULL', titleId = useId()
+  const nullText = source.nullText ?? 'NULL', titleId = useId(), rowId = useId()
   const offered = (source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions).map(([value, label]) => [value, source.conditionLabels?.[value] ?? label] as const)
   const { column, anchor } = target
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
@@ -111,14 +135,6 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   /** A tick failed: the ticks shown are a guess until the snapshot's own are read again. */
   const ticksStale = useRef(false)
-  /** Focus is on a row of the list: a row scrolled out of the drawn window unmounts, and focus would fall to the page, out
-   *  of reach of Escape and the focus trap, so the list itself takes it. Only a move to another element ends it, since a
-   *  removed element's blur (where a browser fires one) names none. */
-  const listFocus = useRef(false)
-  useLayoutEffect(() => {
-    const element = viewport.current, doc = element?.ownerDocument
-    if (listFocus.current && element && doc && (doc.activeElement === doc.body || doc.activeElement === null)) element.focus({ preventScroll: true })
-  })
   const list = load.status === 'ready' ? load.list : undefined
   const summary = list?.summary
 
@@ -157,7 +173,12 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const [readError, setReadError] = useState<string | undefined>()
   const [scrollTop, setScrollTop] = useState(0)
   const [viewHeight, setViewHeight] = useState(0)
+  const [listPad, setListPad] = useState(0)
+  const [maxSpace, setMaxSpace] = useState(maxListSpace)
   const [rowHeight, setRowHeight] = useState(fallbackRow)
+  /** The listbox's active row (NULL's first when it is listed): the arrow keys move it and Space ticks it. Focus stays
+   *  on the listbox (`aria-activedescendant`), so a row scrolled out of the rows drawn takes no focus with it. */
+  const [active, setActive] = useState(0)
   const keyAbort = useRef<AbortController | undefined>(undefined)
   useLayoutEffect(() => {
     keyAbort.current?.abort()
@@ -168,6 +189,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     setTotal(needle ? undefined : summary?.distinct)
     setReadError(undefined)
     setScrollTop(0)
+    setActive(0)
+    keepTop.current = undefined
     if (viewport.current) viewport.current.scrollTop = 0
     setVersion(value => value + 1)
   }, [list, summary, order, needle])
@@ -180,22 +203,53 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     const view = element.ownerDocument.defaultView ?? window
     const row = parseFloat(view.getComputedStyle(element).getPropertyValue('--varia-row'))
     if (row > 0) setRowHeight(row)
-    const measure = () => setViewHeight(element.clientHeight)
+    const measure = () => { setViewHeight(element.clientHeight); setListPad(padOf(element)) }
     measure()
     const observer = new view.ResizeObserver(measure)
     observer.observe(element)
-    return () => observer.disconnect()
+    // Chromium clamps layout near 33.5 million device pixels, so the space a list may lay out shrinks as the pixel ratio
+    // (display scaling and zoom) grows; the grid's cap, watched as the grid watches it. A new cap changes what a scroll
+    // position shows, so the row at the top stays there (the layout effect on maxSpace below).
+    let media: MediaQueryList | undefined
+    const cap = () => Math.min(maxListSpace, scrollCap(view.devicePixelRatio))
+    const watchRatio = () => {
+      media = view.matchMedia?.(`(resolution: ${view.devicePixelRatio}dppx)`)
+      media?.addEventListener('change', onRatio, { once: true })
+    }
+    const onRatio = () => {
+      // The scroll position drawn at the old cap, not the element's: at the new ratio Chromium may already have clamped it.
+      const next = cap(), now = geometry.current
+      if (next !== now.maxSpace && now.rows * now.rowHeight > Math.min(next, now.maxSpace)) keepTop.current = rowAtTop(now)
+      setMaxSpace(next)
+      watchRatio()
+    }
+    setMaxSpace(cap())
+    watchRatio()
+    return () => { observer.disconnect(); media?.removeEventListener('change', onRatio) }
   }, [])
 
   const showNull = !!summary && summary.nulls > 0 && (!needle || nullText.toLowerCase().includes(needle.toLowerCase()))
   const nullRows = showNull ? 1 : 0
   const valueRows = total ?? 0
-  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan })
+  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan, pad: listPad, maxSpace })
   const firstRow = win.first, lastRow = win.last
   const firstBlock = Math.floor(Math.max(0, firstRow - nullRows) / blockSize)
   const lastBlock = Math.floor(Math.max(0, lastRow - nullRows - 1) / blockSize)
   const inView = useRef({ firstBlock, lastBlock })
   inView.current = { firstBlock, lastBlock }
+  /** The list's geometry as last drawn, and the row a new scroll cap keeps at the top. */
+  const geometry = useRef({ rows: 0, rowHeight, viewHeight, pad: listPad, maxSpace, scrollTop })
+  geometry.current = { rows: nullRows + valueRows, rowHeight, viewHeight, pad: listPad, maxSpace, scrollTop }
+  /** The fractional row at the view's top to keep there across a new scroll cap (only a mapped list's rows move). */
+  const keepTop = useRef<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    const element = viewport.current, row = keepTop.current
+    keepTop.current = undefined
+    if (!element || row === undefined) return
+    const now = geometry.current
+    element.scrollTop = scrollForRowAtTop({ ...now, row, maxSpace })
+    setScrollTop(element.scrollTop)
+  }, [maxSpace])
 
   // Reads the blocks in view that it lacks, and gives up those scrolled away from, so a fast scroll never queues reads of
   // rows no longer shown ahead of those in view; an answer read while a tick was on its way is read again after it.
@@ -295,7 +349,14 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     return () => doc.removeEventListener('pointerdown', press, true)
   }, [grid, onClose])
 
+  /** OK is on its way (waiting for the ticks before it): Enter held down or OK pressed again applies nothing more. */
+  const applying = useRef(false)
   const apply = async () => {
+    if (applying.current) return
+    applying.current = true
+    try { await applyNow() } finally { applying.current = false }
+  }
+  const applyNow = async () => {
     let chosen: ColumnCondition | undefined
     if (condition === 'list') {
       if (!list || !summary) return
@@ -364,6 +425,49 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     : needle && total !== undefined ? `${formatCount(total)} of ${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} match. ${formatCount(ticks.checked)} ticked.`
       : `${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} in ${formatCount(summary.rows)} ${plural(summary.rows, 'row')}. ${formatCount(ticks.checked)} ticked.`
   const empty = !!summary && total === 0 && !showNull
+  const listRows = nullRows + valueRows
+
+  /** Makes `row` the active row and scrolls the list by the least that shows it. */
+  const moveTo = (row: number) => {
+    const element = viewport.current
+    if (listRows === 0) return
+    const next = Math.max(0, Math.min(listRows - 1, row))
+    setActive(next)
+    if (!element) return
+    const scroll = scrollToShow({ row: next, rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element), maxSpace })
+    if (scroll === undefined) return
+    element.scrollTop = scroll
+    setScrollTop(element.scrollTop)
+  }
+  /** Focus entering the list (Down from the search, Tab) with its active row scrolled out of view makes the first row in
+   *  view the active one, so a screen reader has an option to announce. */
+  const listFocused = () => {
+    const element = viewport.current
+    if (!element || listRows === 0 || !summary) return
+    const inView = rowsInView({ rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element), maxSpace })
+    if (active < inView.first || active > inView.last) setActive(inView.first)
+  }
+  /** Ticks or unticks the active row, as a click on it does, scrolling it into view first (the wheel may have moved it
+   *  out); a row still being read has nothing to tick yet. */
+  const toggleActive = () => {
+    if (!listing || !summary) return
+    moveTo(active)
+    if (active < nullRows) return toggleNull()
+    const at = active - nullRows, value = blocks.current.get(Math.floor(at / blockSize))?.[at % blockSize]
+    if (value) toggle(value)
+  }
+  /** The listbox's keys: the arrows, Page Up and Down, Home and End move the active row; Space ticks it; Enter is OK. */
+  const listKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return
+    const page = Math.max(1, Math.floor((viewport.current?.clientHeight || viewHeight) / rowHeight) - 1)
+    const moves: Partial<Record<string, number>> = { ArrowDown: active + 1, ArrowUp: active - 1, PageDown: active + page, PageUp: active - page, Home: 0, End: listRows - 1 }
+    const target = moves[event.key]
+    if (target !== undefined) { event.preventDefault(); moveTo(target) }
+    else if (event.key === ' ') { event.preventDefault(); toggleActive() }
+    else if (event.key === 'Enter') { event.preventDefault(); void apply() }
+  }
+  // Focus first: focusing the list from elsewhere runs listFocused, which may pick the first row in view; the clicked row wins.
+  const pick = useCallback<RowPick>(row => { viewport.current?.focus({ preventScroll: true }); setActive(row) }, [])
 
   return createPortal(<form ref={card} className="column-filter" role="dialog" aria-labelledby={titleId} style={place}
     onKeyDown={keyDown} onSubmit={event => { event.preventDefault(); void apply() }}>
@@ -378,27 +482,36 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     <div className="column-filter-search">
       <span className={codiconClass('search')} aria-hidden="true" />
       <input ref={searchBox} type="search" aria-label="Search values" placeholder="Search values" value={search} maxLength={wire.search.maxText} disabled={condition === 'null' || condition === 'notNull'}
-        onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} />
+        onChange={event => setSearch(event.target.value)} onKeyDown={event => {
+          if (event.key === 'Enter') event.preventDefault()
+          // Down from the search goes to the list, as in Excel's filter list.
+          else if (event.key === 'ArrowDown' && summary && listRows > 0) { event.preventDefault(); viewport.current?.focus({ preventScroll: true }) }
+        }} />
     </div>
     <div className="column-filter-bulk">
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(true)}>Select all</button>
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(false)}>Select none</button>
     </div>
-    <div ref={viewport} className="column-filter-list" role="group" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)} tabIndex={-1}
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onFocus={() => { listFocus.current = true }}
-      onBlur={event => { const next = event.relatedTarget as Node | null; if (next && !event.currentTarget.contains(next)) listFocus.current = false }}>
-      {load.status === 'loading' && <p className="column-filter-note" role="status">Listing values…</p>}
-      {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
-      {readError && <p className="column-filter-note error" role="alert">{readError}</p>}
-      {empty && <p className="column-filter-note">No values match.</p>}
-      {summary && <div className="column-filter-space" style={{ height: win.space }}>
-        {rows.map(({ index: row, value }) => row < nullRows
-          ? <label key="null" className="column-filter-item null" style={{ top: win.offset(0), height: rowHeight }}>
-            <input type="checkbox" disabled={!listing} checked={ticks.nullChecked} onChange={toggleNull} aria-label={`${nullText} (${formatCount(summary.nulls)})`} />
-            <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
-          </label>
-          : value ? <Item key={value.group} value={value} top={win.offset(row)} height={rowHeight} checked={value.checked} disabled={!listing} onToggle={toggle} />
-            : <div key={'row' + row} className="column-filter-item pending" style={{ top: win.offset(row), height: rowHeight }} aria-hidden="true" />)}
+    {load.status === 'loading' && <p className="column-filter-note" role="status">Listing values…</p>}
+    {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
+    {readError && <p className="column-filter-note error" role="alert">{readError}</p>}
+    {empty && <p className="column-filter-note">No values match.</p>}
+    {/* One Tab stop: the arrows move the active row inside it (aria-activedescendant), so focus never sits on a row the
+        list may stop drawing. */}
+    <div ref={viewport} className="column-filter-list" role="listbox" aria-multiselectable="true" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
+      tabIndex={summary && listRows > 0 ? 0 : -1} aria-activedescendant={summary && active >= firstRow && active < lastRow ? `${rowId}-${active}` : undefined}
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onKeyDown={listKeyDown} onFocus={event => { if (event.target === event.currentTarget) listFocused() }}>
+      {summary && <div className="column-filter-space" role="presentation" style={{ height: win.space }}>
+        {rows.map(({ index: row, value }) => {
+          const spot: RowPlace = { id: `${rowId}-${row}`, row, rows: listRows, active: row === active, top: win.offset(row), height: rowHeight }
+          return row < nullRows
+            ? <Row key="null" place={spot} label={`${nullText} (${formatCount(summary.nulls)})`} checked={ticks.nullChecked} disabled={!listing} className="null" onToggle={toggleNull} onPick={pick}>
+              <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
+            </Row>
+            : value ? <Item key={value.group} value={value} place={spot} checked={value.checked} disabled={!listing} onToggle={toggle} onPick={pick} />
+              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
+                className={'column-filter-item pending' + (spot.active ? ' active' : '')} style={{ top: spot.top, height: rowHeight }} />
+        })}
       </div>}
     </div>
     {note && <p className="column-filter-note">{note}{!summary?.complete ? ' Values in rows still arriving will be shown.' : ''}{summary?.approximate ? ' Long values were compared by their first characters.' : ''}{sourceNote ? ' ' + sourceNote : ''}</p>}

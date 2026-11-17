@@ -559,9 +559,6 @@ internal sealed partial class ResultStore
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
-        // A shown result that was packed before its grid was sorted or filtered is unpacked again for the view's screens
-        // (ResultPacker).
-        if (set.HasPacked) Settle();
         return view;
     }
 
@@ -579,8 +576,9 @@ internal sealed partial class ResultStore
 
     public int ViewCount { get { lock (gate) return views.Count; } }
 
-    /// <summary>Whether a view of the set is open (a sorted or filtered grid): stage 2 leaves a shown result raw while it has
-    /// one, since each screen of a view reads hundreds of its pages (<see cref="ResultPacker"/>).</summary>
+    /// <summary>Whether a view of the set is open (a sorted or filtered grid): stage 2 does not pack a shown result while it
+    /// has one, since each screen of a view reads hundreds of its pages (<see cref="ResultPacker"/>). Opening one never
+    /// unpacks a result already packed.</summary>
     public bool HasViews(ResultSetBuffer set)
     {
         lock (gate) return views.Values.Any(view => view.Set == set);

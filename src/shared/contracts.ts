@@ -595,7 +595,8 @@ export interface ResultMemoryMethods {
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
 export interface DebugMethods {
-  'debug.results.synthesize': { params: { shape: SyntheticShape; rows: number }; result: BackendResultDescriptor }
+  /** `pack` packs the stored pages before it answers, as the idle policy would (the packed-sort benchmark). */
+  'debug.results.synthesize': { params: { shape: SyntheticShape; rows: number; pack?: boolean }; result: BackendResultDescriptor }
 }
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
