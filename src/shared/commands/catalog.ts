@@ -1025,7 +1025,7 @@ export const commandCatalog = {
     title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
   },
-  // Filtering a grid (results.view, results PR 4): by the selected cells of one column (their values, other values, or the
+  // Filtering a grid (results.view, results PR 4): by the selected cells, one filter a column they cover (their values, other values, or the
   // range from their lowest to their highest, equal as the column's collation says), without NULL in the active cell's
   // column, or to the rows that repeat in the selected columns or in every column. Filters show in the result's caption,
   // where each comes off on its own; Clear Filters takes them all off.

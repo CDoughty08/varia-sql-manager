@@ -1100,23 +1100,26 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /**
-   * Filters a grid by its selection, which must lie in one column: rows with a selected value (`in`), without one
-   * (`notIn`), from the lowest selected value to the highest (`between`), or, for the active cell's column, without NULL
-   * (`notNull`). Values are equal as the column's collation and type say. A filter of the same kind on the column replaces
-   * the one it has. False when the selection does not fit the filter.
+   * Filters a grid by its selection: rows with a selected value (`in`), without one (`notIn`), from the lowest selected
+   * value to the highest (`between`), or, for the active cell's column, without NULL (`notNull`). A selection across
+   * columns, contiguous or not, filters each column by the cells selected in it, and a row must pass every column's
+   * filter. Values are equal as the column's collation and type say. A filter of the same kind on a column replaces the
+   * one it has. False when the selection does not fit the filter.
    */
   filterSelection(tabId: string, key: EntryKey, kind: SelectionFilter): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.filterTarget(tabId, key, kind)
     if (!run || !set || !target || this.heldOff(tabId, set.key)) return false
     const index = set.key
-    const { column } = target
-    const filter: ViewFilter = kind === 'notNull' ? { op: 'notIn', column, rows: [], nulls: true }
-      : { op: kind, column, cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
-    const name = columnName(set.descriptor.columns, column)
-    const item: GridFilter = kind === 'notNull' ? { filter, label: `${name} is not NULL`, named: true } : { filter, label: `${name}: filtering…` }
+    const items = target.columns.map(({ column, ranges }): GridFilter => {
+      const filter: ViewFilter = kind === 'notNull' ? { op: 'notIn', column, rows: [], nulls: true }
+        : { op: kind, column, cells: { ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
+      const name = columnName(set.descriptor.columns, column)
+      return kind === 'notNull' ? { filter, label: `${name} is not NULL`, named: true } : { filter, label: `${name}: filtering…` }
+    })
     // Exclude NULLs is a notIn of its own: it and Exclude Selected Values on a column each replace only their own kind.
-    const same = (other: GridFilter) => other.filter.op === filter.op && 'column' in other.filter && other.filter.column === column && isNotNull(other.filter) === (kind === 'notNull')
-    return this.addFilter(tabId, run, index, (run.sorts.get(index)?.filters ?? []).filter(other => !same(other)), item)
+    const same = (other: GridFilter) => items.some(({ filter }) => other.filter.op === filter.op && 'column' in other.filter && 'column' in filter
+      && other.filter.column === filter.column && isNotNull(other.filter) === (kind === 'notNull'))
+    return this.addFilter(tabId, run, index, (run.sorts.get(index)?.filters ?? []).filter(other => !same(other)), items)
   }
 
   /** Whether `filterSelection` can filter the grid's selection that way. */
@@ -1166,12 +1169,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */
-  private addFilter(tabId: string, run: Run, index: EntryKey, others: readonly GridFilter[], item: GridFilter, at = others.length, built?: () => void): boolean {
-    if (others.length >= wire.views.maxFilters) {
-      this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
+  private addFilter(tabId: string, run: Run, index: EntryKey, others: readonly GridFilter[], item: GridFilter | readonly GridFilter[], at = others.length, built?: () => void): boolean {
+    const items = Array.isArray(item) ? item as readonly GridFilter[] : [item as GridFilter]
+    if (others.length + items.length > wire.views.maxFilters) {
+      this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove ${others.length + items.length - wire.views.maxFilters === 1 ? 'one' : 'some'} first.`)
       return false
     }
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), item, ...others.slice(at)], 'filter', built)
+    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), ...items, ...others.slice(at)], 'filter', built)
     return true
   }
 
@@ -1689,19 +1693,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The column and cells a selection filter takes, or undefined when the selection does not fit it. */
-  private filterTarget(tabId: string, key: EntryKey, kind: SelectionFilter): { column: number; ranges: [number, number][]; viewId?: number } | undefined {
+  /**
+   * The columns a selection filter acts on, each with the merged runs of view positions selected in it: one column per
+   * column the selection's blocks cover (a non-contiguous selection's blocks may cover different rows in each), or the
+   * active cell's column for `notNull`. Undefined when a column has more separate runs than a filter takes, `between`
+   * has a column with fewer than two cells selected, or the columns are more than a view takes filters.
+   */
+  private filterTarget(tabId: string, key: EntryKey, kind: SelectionFilter): { columns: { column: number; ranges: [number, number][] }[]; viewId?: number } | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
     if (!run || !set || !selection || !this.filterable(set)) return undefined
     const shown = run.held.get(set.key)?.shown as ResultView | undefined
-    const rows = (shown ?? set.handle).getSnapshot().rowsAvailable, columns = set.descriptor.columns.length
-    if (kind === 'notNull') return selection.active.column < columns ? { column: selection.active.column, ranges: [] } : undefined
-    const blocks = resolveBlocks(selection, rows, columns)
-    const column = blocks[0]?.left
-    if (column === undefined || blocks.some(block => block.left !== column || block.right !== column)) return undefined
-    const ranges = mergeRanges(blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1]))
+    const rows = (shown ?? set.handle).getSnapshot().rowsAvailable, names = set.descriptor.columns, count = names.length
+    if (kind === 'notNull') return selection.active.column < count ? { columns: [{ column: selection.active.column, ranges: [] }] } : undefined
+    const byColumn = new Map<number, [number, number][]>()
+    for (const block of resolveBlocks(selection, rows, count))
+      for (let column = block.left; column <= block.right; column++) {
+        // A diff's hidden tone column (its last) is not one of the rows' values.
+        if (names[column]?.role === 'tone') continue
+        const runs = byColumn.get(column) ?? []
+        runs.push([block.top, block.bottom - block.top + 1])
+        byColumn.set(column, runs)
+      }
+    if (byColumn.size === 0 || byColumn.size > wire.views.maxFilters) return undefined
+    const columns = [...byColumn].sort(([a], [b]) => a - b).map(([column, runs]) => ({ column, ranges: mergeRanges(runs) }))
     // More separate runs of rows than a filter takes cannot filter by them all.
-    if (ranges.length > wire.views.maxFilterRanges || (kind === 'between' && ranges.reduce((sum, [, count]) => sum + count, 0) < 2)) return undefined
-    return { column, ranges, ...shown ? { viewId: shown.viewId } : {} }
+    if (columns.some(({ ranges }) => ranges.length > wire.views.maxFilterRanges || (kind === 'between' && ranges.reduce((sum, [, cells]) => sum + cells, 0) < 2))) return undefined
+    return { columns, ...shown ? { viewId: shown.viewId } : {} }
   }
 
   /** The rows a grid's selection covers, as merged ranges of positions in the view the grid shows, and how many they are. */
