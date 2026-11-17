@@ -45,7 +45,7 @@ type RowPick = (row: number) => void
 function Row({ place, label, checked, disabled, className, onToggle, onPick, children }: {
   place: RowPlace; label: string; checked: boolean; disabled: boolean; className: string; onToggle(): void; onPick: RowPick; children: ReactNode
 }) {
-  return <div id={place.id} role="option" aria-checked={checked} aria-selected={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
+  return <div id={place.id} role="option" aria-checked={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
     className={'column-filter-item ' + className + (place.active ? ' active' : '')} style={{ top: place.top, height: place.height }}
     onMouseDown={event => { event.preventDefault(); onPick(place.row) }} onClick={() => { if (!disabled) onToggle() }}>
     <input type="checkbox" tabIndex={-1} aria-hidden="true" disabled={disabled} checked={checked} readOnly />
@@ -474,7 +474,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
               <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
             </Row>
             : value ? <Item key={value.group} value={value} place={spot} checked={value.checked} disabled={!listing} onToggle={toggle} onPick={pick} />
-              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-selected={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
+              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
                 className={'column-filter-item pending' + (spot.active ? ' active' : '')} style={{ top: spot.top, height: rowHeight }} />
         })}
       </div>}

@@ -68,6 +68,17 @@ describe('column filter', () => {
     // At the mapped scroll range's end the last row, ending in the bottom padding, still counts as in view.
     const rows = 2_000_000, maxSpace = 1_000_000
     expect(rowsInView({ rows, rowHeight: 22, viewHeight: 220, scrollTop: maxSpace - 220, pad: 2, maxSpace }).last).toBe(rows - 1)
+    // A view height that isn't a whole number of rows over the real space's scroll positions: rounding near 3e7 px keeps the
+    // last row in view, and every row scrollToShow lands is counted in view.
+    for (const [count, viewHeight] of [[1_500_000, 256], [1_500_007, 237], [2_000_003, 56]] as const) {
+      const end = maxListSpace - viewHeight
+      expect(rowsInView({ rows: count, rowHeight: 22, viewHeight, scrollTop: end, pad: 2 }).last).toBe(count - 1)
+      for (const row of [3, 777_777, count - 2, count - 1]) {
+        const at = scrollToShow({ row, rows: count, rowHeight: 22, viewHeight, scrollTop: row < 10 ? end : 0, pad: 2 }) ?? 0
+        const seen = rowsInView({ rows: count, rowHeight: 22, viewHeight, scrollTop: at, pad: 2 })
+        expect(row >= seen.first && row <= seen.last).toBe(true)
+      }
+    }
   })
 
   it('gives each row its own pixels within the space a browser lays out, and maps the scroll bar past it so every row stays reachable', () => {

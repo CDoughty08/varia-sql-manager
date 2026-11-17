@@ -94,6 +94,9 @@ export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight
   }
 }
 
+/** Pixels of rounding `scrollToShow` and `rowsInView` allow (see scrollToShow). */
+const slack = 1e-6
+
 /**
  * The scroll position that shows `row` of a virtual list (`listWindow`'s rows, below the list's top padding `pad`, which
  * scrolls with them) by the least move: aligned to the top when it is above the view, to the bottom when below; undefined
@@ -103,9 +106,10 @@ export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight
 export function scrollToShow(o: { row: number; rows: number; rowHeight: number; viewHeight: number; scrollTop: number; pad?: number; maxSpace?: number }): number | undefined {
   const { row, rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
   const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace })
+  // A hair of slack: mapped, offset() adds a scroll position near 3e7 that is taken off again, which leaves rounding.
   const position = at.offset(row) + pad - scrollTop
-  if (position >= 0 && position + rowHeight <= viewHeight) return undefined
-  const above = position < 0
+  if (position >= -slack && position + rowHeight <= viewHeight + slack) return undefined
+  const above = position < -slack
   if (rows * rowHeight <= maxSpace) return Math.max(0, above ? (row === 0 ? 0 : row * rowHeight + pad) : (row + 1) * rowHeight + pad - viewHeight)
   // Mapped: listWindow puts the row `top` rows down at scrollTop / (space - view) × (rows - view / rowHeight); the row
   // wanted at the top, or the one whose bottom meets the view's bottom (less the padding above the rows), solves for it.
@@ -121,10 +125,10 @@ export function rowsInView(o: { rows: number; rowHeight: number; viewHeight: num
   const { rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0
   const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace: o.maxSpace })
   let first = at.first
-  while (first < rows - 1 && at.offset(first) + pad - scrollTop < 0) first++
+  while (first < rows - 1 && at.offset(first) + pad - scrollTop < -slack) first++
   let last = first
   // The last row may end in the bottom padding: the mapped scroll range's end leaves it there (scrollToShow).
-  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight + (last + 2 === rows ? pad : 0)) last++
+  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight + (last + 2 === rows ? pad : 0) + slack) last++
   return { first, last }
 }
 

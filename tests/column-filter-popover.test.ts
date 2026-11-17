@@ -160,7 +160,8 @@ describe('column filter popover', () => {
     act(() => { (view.dialog().querySelector('input[type="search"]') as HTMLInputElement).focus() })
     act(() => view.valueList().focus())
     expect(view.activeRow()?.getAttribute('aria-label')).toBe('v05000 (1)')
-    expect(view.activeRow()?.getAttribute('aria-selected')).toBe('true')
+    // The tick is aria-checked alone: a multiselectable listbox carries one of aria-checked and aria-selected, not both.
+    expect(view.activeRow()?.hasAttribute('aria-selected')).toBe(false)
     view.unmount()
   })
 
