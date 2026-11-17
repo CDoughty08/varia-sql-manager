@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BackendHealth, BackendState, ConnectionOptions } from '../../shared/contracts'
-import type { ConnectionDetails } from '../../shared/connection-targets'
+import type { ConnectionDetailField, ConnectionDetails } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { isLiveConnection } from './services/connection-availability'
@@ -208,7 +208,7 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, detailsEdited = false) {
+  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[] = []) {
     let adopted = false
     const opened = await acceptConnectionReceipt({ api: window.varia, connections: workbench.connections, info, options: chosen, details: detailsOf(chosen, preference), attempt, requestId,
       current: () => !signal.aborted && (adopted || !documents.getSnapshot().busy), explicitlyCancelled: () => signal.aborted, signal,
@@ -218,9 +218,15 @@ export default function App() {
     if (signal.aborted) { opened.association?.abandon(true); return }
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
-    // Details the user edited in Connect are their choice already; only labels that came from a History entry ask.
-    if (!detailsEdited && needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
-    await finishConnected(opened, detailsEdited ? 'selected' : 'current')
+    // Labels the user changed in Connect are their choice already, and only those reach a reused connection: its other
+    // labels (a connection-only environment, say) stay. Without such a change, labels that differ still ask.
+    if (changedDetails.length) {
+      const selected = opened.reused ? { ...opened.current, ...Object.fromEntries(changedDetails.map(field => [field, opened.selected[field]])) } : opened.selected
+      await finishConnected({ ...opened, selected }, 'selected')
+      return
+    }
+    if (needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
+    await finishConnected(opened, 'current')
   }
   async function finishConnected(opened: OpenedConnection, choice: 'selected' | 'current' | 'cancel') {
     setDetailsReview(undefined)

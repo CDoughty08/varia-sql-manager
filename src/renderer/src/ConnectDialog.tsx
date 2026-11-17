@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { flushSync } from 'react-dom'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
-import type { ConnectionDetails } from '../../shared/connection-targets'
+import { changedConnectionDetails, type ConnectionDetailField, type ConnectionDetails } from '../../shared/connection-targets'
 import { detailsOf, type ConnectionAttempt } from './services/connections'
 import { liveGeneration } from './services/backend'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type ConnectionProfileInput, type SecretStorageState } from '../../shared/connections'
@@ -28,12 +28,18 @@ function labels(from: ConnectionOptions, autoReconnect: ConnectionDetails['autoR
   const environment = parseEnvironment(from.environment)
   return JSON.stringify([from.displayName ?? '', from.color ?? '', environment.ok ? environment.environment ?? '' : from.environment, autoReconnect])
 }
+/** The details a form would give a connection, with the environment as stored. */
+function detailsFrom(from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']): ConnectionDetails {
+  const environment = parseEnvironment(from.environment)
+  return detailsOf({ ...from, environment: environment.ok ? environment.environment : from.environment }, autoReconnect)
+}
+const historyNotSaved = 'Connected, but the changed name, color or environment could not be saved to History.'
 const shape = (from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) => JSON.stringify([entryKey(from) ?? null, labels(from, autoReconnect)])
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
 // Profiles store the preset's value, which the theme maps to its own color for that preset.
 const palette: readonly (readonly [string, string])[] = [['Default', ''], ...connectionPresets.map(preset => [preset.label, preset.stored] as const)]
-interface Props { initial: ConnectionOptions; initialTargetId?: string; reviewOpen?: boolean; initialAutoReconnect?: ConnectionDetails['autoReconnect']; onConnected(info: ConnectionInfo, options: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, detailsEdited: boolean): Promise<void>; onClose(): void }
+interface Props { initial: ConnectionOptions; initialTargetId?: string; reviewOpen?: boolean; initialAutoReconnect?: ConnectionDetails['autoReconnect']; onConnected(info: ConnectionInfo, options: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[]): Promise<void>; onClose(): void }
 type Field = { key: keyof AdvancedConnectionOptions; label: string; choices?: readonly string[]; min?: number; max?: number; boolean?: boolean; maxLength?: number }
 const sections: { title: string; fields: Field[] }[] = [
   { title: 'Common', fields: [{ key: 'commandTimeout', label: 'Command timeout (seconds)', min: 0, max: 86400 }, { key: 'connectTimeout', label: 'Connect timeout (seconds)', min: 0, max: 3600 }] },
@@ -377,16 +383,18 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** After Connect: the edited Name, Color, Environment and Reconnect on startup in History (main's reuse of a live
    *  connection records none), and on that entry's other Explorer connections. A failure leaves the connection alone. */
-  async function recordDetails(labelled: ConnectionOptions, id: string | undefined) {
+  async function recordDetails(labelled: ConnectionOptions, id: string | undefined): Promise<boolean> {
     try {
       const { value } = await persist({ id, options: { ...labelled, password: '' }, autoReconnect }, labelled)
       if (alive.current) { showLibrary(value); startAfresh() }
-    } catch { if (alive.current) setNotice('Connected, but the changed name, color or environment could not be saved to History.') }
+      return true
+    } catch { return false }
   }
   /** The saved entry this form edits when the user changed it and has not saved since: the one Cancel asks about. */
   function unsaved(): ConnectionProfile | undefined {
     // An alias found by its labels is no longer found once they change: the entry the edits began on still owns them.
-    const target = selected ?? entry ?? baseEntry()
+    // Edits that began on a saved entry concern only it (the chosen one, or the starting one while its settings stand).
+    const target = selected ?? (editBase.current ? baseEntry() : entry)
     if (!edited.current || !target || !baseline.current) return undefined
     const form = shape(options, autoReconnect)
     // Only what the user changed counts (a password, or a form that began unlike the entry, is not an edit of it).
@@ -440,9 +448,12 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       // Main says which label the entry kept when the form had none (the history had not loaded yet).
       // Main's reuse of a live connection records no labels in History: details edited here are saved by id, keeping recency.
       // Labels typed back to where they began are not a choice to replace the connection's own.
-      const detailsChanged = detailsEdited.current && !!baseline.current && labels(labelled, autoReconnect) !== labels(baseline.current.options, baseline.current.autoReconnect)
-      if (result.ok && detailsChanged) await recordDetails({ ...labelled, environment: ownsEnvironment() ? labelled.environment : labelled.environment ?? result.value.environment }, selectedId ?? baseEntry(labelled)?.id ?? selectedProfileId)
-      if (result.ok) { const { environment: kept, ...info } = result.value; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, detailsChanged); targetAttempt.current = undefined }
+      const changedDetails = detailsEdited.current && baseline.current ? changedConnectionDetails(detailsFrom(baseline.current.options, baseline.current.autoReconnect), detailsFrom(labelled, autoReconnect)) : []
+      // The entry main recorded this connect in: the chosen or starting one only while it still has these settings.
+      const owner = [selected, baseEntry(labelled)].find(profile => profile && entryKey(profile.options) === entryKey(labelled))
+      const recorded = !result.ok || !changedDetails.length || await recordDetails({ ...labelled, environment: ownsEnvironment() ? labelled.environment : labelled.environment ?? result.value.environment }, owner?.id)
+      // The dialog closes once connected, so a failed History save is reported where Connect reports history warnings.
+      if (result.ok) { const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, changedDetails); targetAttempt.current = undefined }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {

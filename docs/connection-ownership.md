@@ -36,8 +36,8 @@ Saved profiles keep optional `autoReconnect` metadata outside transport options 
 successful Connect records the selected preference; omitted metadata preserves the profile's current value. Reused
 manual Connect changes only the exact selected profile's policy without repeating recency or transport settlement.
 Background reconnect never edits profile policy. The details confirmation separately controls the open target's policy;
-Connect skips it and applies the form's details when the user edited them in the dialog, and the renderer then saves
-those details to the selected History entry (without recency), since main's reuse path records only the policy.
+Connect skips it and applies only the labels the user changed in the dialog, and the renderer first saves
+those labels to the History entry main recorded (without recency), since main's reuse path records only the policy.
 
 A rejected saved revision remains quarantined until fresh authentication proves the exact secret and principal again.
 A typed retry of that rejected secret cannot establish current validity by reusing an existing SQL session. Main may

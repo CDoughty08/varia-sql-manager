@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use details you just edited\.
+- **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
 - **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
 
 ## [0.9.0] - 2026-11-15

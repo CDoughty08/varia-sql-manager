@@ -200,7 +200,7 @@ describe('saved profile startup reconnect preference', () => {
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), autoReconnect: 'off', registered: true }))
     await act(async () => view.button('Connect').click())
     expect(view.api.connect).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mode: 'interactive', autoReconnect: 'off' }))
-    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal), false)
+    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal), [])
   })
 
   it('keeps a matching profile policy on ordinary live reuse while Keep Current preserves the target policy', async () => {
@@ -408,7 +408,7 @@ describe('saving connection details', () => {
     await pick(view, '#connect-name', 'Edited')
     await pick(view, '#connect-server', 'server-2')
     await act(async () => view.button('Connect').click())
-    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+    expect(view.onConnected.mock.calls[0]?.[6]).toEqual([])
     await act(async () => view.button('Cancel').click())
     expect(prompt()).toBeNull()
   })
@@ -419,7 +419,7 @@ describe('saving connection details', () => {
     await pick(view, '#connect-name', 'Edited')
     await pick(view, '#connect-name', 'Off profile')
     await act(async () => view.button('Connect').click())
-    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+    expect(view.onConnected.mock.calls[0]?.[6]).toEqual([])
   })
 
   it('tracks the alias when Reconnect on startup is the first edit, and Connect saves to that alias', async () => {
@@ -450,16 +450,43 @@ describe('saving connection details', () => {
     expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Renamed', environment: 'Staging' })
   })
 
+  it('saves labels from Connect to the entry main recorded, not a chosen entry whose settings changed', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-database', 'OtherDb')
+    await pick(view, '#connect-name', 'Other database')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[6]).toEqual(['displayName'])
+    expect(view.saveConnectionProfile.mock.calls.at(-1)?.[0]).toMatchObject({ id: undefined, options: expect.objectContaining({ database: 'OtherDb', displayName: 'Other database' }) })
+  })
+
+  it('reports a failed History save after Connect where Connect reports history warnings', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    view.saveConnectionProfile.mockResolvedValueOnce({ ok: false, error: 'The settings file is locked.' })
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[0]).toMatchObject({ historyWarning: 'Connected, but the changed name, color or environment could not be saved to History.' })
+  })
+
+  it('does not offer to save edits onto another entry the changed settings now match', async () => {
+    const first = profile('First', 1, 'off'), other = { ...profile('Other', 2, 'off'), options: { ...first.options, database: 'OtherDb', displayName: 'Other' } }
+    const view = await mount(undefined, { profiles: [first, other], initial: first.options })
+    await pick(view, '#connect-database', 'OtherDb')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+  })
+
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
     const view = await mount()
     await view.choose('Off profile')
     await act(async () => view.button('Connect').click())
-    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+    expect(view.onConnected.mock.calls[0]?.[6]).toEqual([])
     expect(view.saveConnectionProfile).not.toHaveBeenCalled()
     await view.choose('On profile')
     await pick(view, 'input[type="color"]', '#e51400')
     await act(async () => view.button('Connect').click())
-    expect(view.onConnected.mock.calls[1]?.[6]).toBe(true)
+    expect(view.onConnected.mock.calls[1]?.[6]).toEqual(['color'])
     // Main records no labels when it reuses a live connection: the dialog saves them to that History entry itself.
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), options: expect.objectContaining({ color: '#e51400' }), autoReconnect: 'on' }))
   })
