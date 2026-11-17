@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
+
 ### Fixes
 
 - **IntelliSense ranks exact matches first and brackets columns consistently:** A name you type exactly, in any case, is now first in the completion list instead of below names that only start with it, fuzzy matches or system objects, and it is no longer missing from the visible list. Every column suggestion shows and inserts its bracketed name, so a column of the alias `[bob]` inserts `[bob].[columnName]` just as the list shows.

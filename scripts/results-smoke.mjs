@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -650,9 +650,8 @@ try {
   await expect(planViewer(page).getByRole('treeitem').filter({ hasText: 'Index Scan' })).toHaveAttribute('aria-selected', 'true')
   await planViewer(page).getByRole('button', { name: 'Open plan document', exact: true }).click()
   await expect(activeDocument(page)).toContainText('ExecutionPlan1.sqlplan')
-  // The enlarged output leaves only a few editor lines on a 1024×768 display. Give the plan
-  // document the editor's space through the normal toggle before interacting with its outline.
-  await page.keyboard.press('Control+R')
+  // A plan document is not a query: the docked output gives it the whole document area, so the enlarged output does not
+  // leave it only a few lines on a 1024×768 display.
   await expect(outputPanel(page, 'plan')).toBeHidden()
   await expect(planCanvas(page)).toBeFocused()
   await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
@@ -688,7 +687,7 @@ try {
   await expect.poll(planParseCalls).toBe(parsesBeforePlan + 3)
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  await page.keyboard.press('Control+R')
+  // Back on the query, the output returns on the view it showed.
   await expect(outputTab(/^Execution plan/)).toHaveAttribute('aria-selected', 'true')
   await page.screenshot({ path: resolve('artifacts', 'results-head.png') })
   console.log('Results checks: one run summary, captions that collapse and close their results, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
@@ -1196,6 +1195,11 @@ try {
   // A value has no server and never executes: it has no query bar.
   await expect(queryBar(page)).toHaveCount(0)
   await expect(server()).toHaveCount(0)
+  // Nor any output: the Results panel docked below the editor gives the value the whole document area.
+  await expect(pane(page, 'results')).toBeHidden()
+  // Toggle Results Pane shows it on request, saying why it is empty; focus stays in the value.
+  await page.keyboard.press('Control+R')
+  await expect(textbox()).toBeFocused()
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
   // Varia's own table icon, as in Object Explorer.

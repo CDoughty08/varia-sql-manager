@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { activeDocumentName, backendReady, caretStatus, documentTab, editorDiagnosticMarks, editorGroupForDocument, editorGroups, editorHover, editorSurface, editorText, editorTextbox, queryDatabase, queryServer, sqlQueryIssues, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 // Rendered Monaco squiggles, their hover and keyboard navigation through the real preload/main boundary. --live
 // substitutes the bundled SQL Tools binder and reads system metadata; neither mode executes the editor's SQL.
@@ -19,7 +20,7 @@ const failures = []
 let application, page
 const started = Date.now()
 const watchdog = setTimeout(() => { console.error('SQL diagnostics UI suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, live ? 240000 : 120000)
-const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
 const analyses = async () => (await calls()).filter(call => call.method === 'language.diagnostics')
 const text = scope => editorText(scope).then(value => value.replaceAll('\u00a0', ' '))
 

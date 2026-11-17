@@ -531,6 +531,15 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
   keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
+- **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
+  the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its
+  space to the editor) with Dockview's group visibility, which keeps its size for when a query is active again; moved,
+  floating and popped-out output panels are never touched, and a query shown in another editor group keeps them. The
+  saved layout always shows that group (`withGroupShown`), so yielding writes nothing and a restart or saved layout never
+  loses the output; any change to the docked arrangement while it hides (a panel moved into it, a docked group added or
+  removed) shows it again (`check`). It re-decides only when the active document changes between a query and another
+  kind or a query appears or goes in another editor group, so a panel revealed over such a document stays until then
+  (`tests/output-yield.test.ts`).
 - **Gestures** are declared only in `src/shared/commands/gestures.ts`; handlers read pointer modifiers only through
   `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`). Every pointer command has a
   keyboard path, and tooltips naming a gesture take its words from the service.

@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import { liveProbes } from '../src/shared/live/catalog.ts'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import { activeDocumentName, backendBanner, backendReady, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-profile-'))
@@ -29,7 +30,7 @@ page.on('pageerror', error => failures.push(error.message))
 const live = (method, ...args) => page.evaluate(([name, values]) => window.__variaLive[name](...values), [method, args])
 const frames = id => live('frames', id)
 const snapshot = id => live('snapshot', id)
-const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
 const liveCalls = async method => (await calls()).filter(call => call.method === method)
 /** The synthetic views' subscriptions: every connection also asks for Object Explorer's status (refused until the last step). */
 const syntheticSubscribes = async () => (await liveCalls('live.subscribe')).filter(call => call.params.source === 'debug.synthetic')

@@ -113,11 +113,32 @@ internal static class IdentityChecks
         set.TryUnpackAll();
         var pages = set.SealedSnapshot();
         RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var built = RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var (built, allocated, runs) = LeastAllocated(() => RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None));
         var reserved = RowIdentity.WorkingBytes(rows) + 8L * rows;
-        check(built.Column == -1 && allocated <= reserved, "Auto's candidates and whole-row fallback allocate within what results.identify reserves (" + allocated + " of " + reserved + " bytes)");
+        check(built.Column == -1 && allocated <= reserved, "Auto's candidates and whole-row fallback allocate within what results.identify reserves (" + allocated + " of " + reserved + " bytes; "
+            + string.Join(", ", runs) + " run by run)");
+    }
+
+    /// <summary>The least <paramref name="run"/> allocates on this thread over a few runs, stopping once that least has been
+    /// seen twice. A build allocates the same each run, but while other suites' threads allocate the thread's counter can read
+    /// up to an allocation quantum (about 8 KB) more than it allocated, more often across a collection; it never reads less, so
+    /// an allocation the reservation misses is in every run and still fails.</summary>
+    internal static (T Result, long Allocated, List<long> Runs) LeastAllocated<T>(Func<T> run, int tries = 16)
+    {
+        var runs = new List<long>();
+        T result = default!;
+        var least = long.MaxValue;
+        for (var attempt = 0; attempt < tries && runs.Count(value => value == least) < 2; attempt++)
+        {
+            // A collection first, so the run's own large arrays rarely start one inside the window.
+            GC.Collect();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var value = run();
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            runs.Add(allocated);
+            if (allocated < least) (least, result) = (allocated, value);
+        }
+        return (result, least, runs);
     }
 
     /// <summary>Values SQL Server compares equal hash alike; others apart.</summary>

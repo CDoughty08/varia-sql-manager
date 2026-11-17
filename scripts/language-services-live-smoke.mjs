@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -206,7 +206,7 @@ try {
   await hover(page, editorGroupForDocument(page, second.tab), 'SELECT j.job'.length, 'job_id', 'uniqueidentifier')
   console.log('Live language UI: focus returning from the Results OS popout keeps both main-window editors on their own database metadata.')
 
-  await popoutDockButton(popout).click()
+  await dockPopoutBack(popout)
   await expect.poll(() => popout.isClosed()).toBe(true)
   await page.bringToFront()
   await expect(editorGroups(page)).toHaveCount(2)
