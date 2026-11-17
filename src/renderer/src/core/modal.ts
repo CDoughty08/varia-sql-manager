@@ -12,13 +12,12 @@ export const modalOpen = (): boolean => {
   return !!active && active !== document && !!active.querySelector('[aria-modal="true"]')
 }
 
-/** The modal dialog that holds the keyboard (`modalOpen`): the top one over the main window, else the dialog window's the user is in. */
+/** The modal dialog the user is in: a dialog window's while the user is in it (one may be open over the main window too), else the top one over the main window. */
 export function openModal(): Element | undefined {
   if (typeof document === 'undefined') return undefined
-  const main = [...document.querySelectorAll('[aria-modal="true"]')].at(-1)
-  if (main) return main
   const active = windows.activeDocument()
-  return active && active !== document ? [...active.querySelectorAll('[aria-modal="true"]')].at(-1) : undefined
+  const inWindow = active && active !== document ? [...active.querySelectorAll('[aria-modal="true"]')].at(-1) : undefined
+  return inWindow ?? [...document.querySelectorAll('[aria-modal="true"]')].at(-1)
 }
 
 /** Transient surfaces that take focus only while open (the quick input and the menus): closing them gives focus back. */

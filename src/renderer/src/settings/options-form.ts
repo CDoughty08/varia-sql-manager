@@ -132,6 +132,18 @@ export function rowNotes(def: SettingDef): string[] {
   return [def.applies === 'nextExecution' ? 'Applies to the next execution.' : def.applies === 'newConnections' ? 'Applies to new connections.' : '', def.varia ? 'Not in SSMS.' : ''].filter(Boolean)
 }
 export const draftFrom = (values: SettingsValues): OptionsDraft => ({ ...defaultSettings, ...values })
+/**
+ * The draft once the stored settings change from `base` to `values` while Options is open (it is modeless: Alt+Z, the
+ * grid's toolbar and the plan's panes change settings in the main window): the rows the user has not touched follow the
+ * store, so OK does not put the old values back; the rows the user changed keep the user's value.
+ */
+export function followValues(draft: OptionsDraft, base: OptionsDraft, values: OptionsDraft): OptionsDraft {
+  let next: Record<string, boolean | number | string> | undefined
+  for (const key of Object.keys(values) as SettingKey[]) {
+    if (draft[key] === base[key] && draft[key] !== values[key]) (next ??= { ...draft })[key] = values[key]
+  }
+  return next ? next as OptionsDraft : draft
+}
 
 /** What OK writes to, in order: settings first, then shortcuts (`SettingsService.update`, `ShortcutsService.save`). */
 export interface OptionsTargets {

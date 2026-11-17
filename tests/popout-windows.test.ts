@@ -294,8 +294,9 @@ describe('dialog windows', () => {
   it('are bounded: one may open while the last of its kind is still closing, but no more than the limit', () => {
     const popouts = registry().popouts
     for (let id = 0; id < dialogLimits.maxWindows; id++) {
-      allowed(popouts.open(dialog(), base))
-      popouts.adopt(fakeWindow(40 + id).window, dialogName())
+      const kind = id % 2 ? 'about' : 'options'
+      allowed(popouts.open(dialog({ frameName: dialogName(kind) }), base))
+      popouts.adopt(fakeWindow(40 + id).window, dialogName(kind))
     }
     expect(dialogLimits.maxWindows).toBe(Object.keys(dialogWindowKinds).length * 2)
     expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
@@ -303,10 +304,22 @@ describe('dialog windows', () => {
   it('count dialog windows still being created against the limit, and apart from the popouts\'', () => {
     const popouts = registry().popouts
     // A page that asks again and again before any window arrives gets no more than the limit.
-    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog(), base))
+    for (let id = 0; id < dialogLimits.maxWindows; id++) allowed(popouts.open(dialog({ frameName: dialogName(id % 2 ? 'about' : 'options') }), base))
     expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
     // Popouts still have every slot of their own.
     allowed(popouts.open(request(), base))
+  })
+  it('allow two of a kind at once, one opening while the last closes', () => {
+    const popouts = registry().popouts
+    allowed(popouts.open(dialog(), base))
+    allowed(popouts.open(dialog(), base))
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    // About has its own two.
+    allowed(popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), base))
+    // Adopting an Options window takes an Options request off the pending list, not About's.
+    popouts.adopt(fakeWindow(70).window, dialogName())
+    expect(popouts.open(dialog(), base)).toEqual({ action: 'deny' })
+    allowed(popouts.open(dialog({ frameName: dialogName('about'), features: 'left=0,top=0,width=520,height=460' }), base))
   })
   it('are wired in main: the page\'s window-open handler and the main window as parent', () => {
     expect(source).toContain("contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))")

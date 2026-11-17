@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import DialogWindow, { centredBounds, DialogHeading, dialogWindowSize, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import { modalOpen } from '../src/renderer/src/core/modal'
+import { modalOpen, openModal } from '../src/renderer/src/core/modal'
 import { windows } from '../src/renderer/src/core/windows'
 import { dialogWindowKinds, dialogWindowName } from '../src/shared/popouts'
 
@@ -17,22 +17,22 @@ const screen = { width: 1920, height: 1040 }
 /** A dialog window as the page sees it: its own document, events, size, and whether it was closed. */
 function fakeChild() {
   const doc = document.implementation.createHTMLDocument('')
-  const listeners = new Map<string, (() => void)[]>()
+  const listeners = new Map<string, ((event?: Event) => void)[]>()
   const child = {
     document: doc, closed: false, innerWidth: 1000, innerHeight: 700,
-    addEventListener: (event: string, listener: () => void) => { listeners.set(event, [...listeners.get(event) ?? [], listener]) },
-    removeEventListener: (event: string, listener: () => void) => { listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener)) },
+    addEventListener: (event: string, listener: (event?: Event) => void) => { listeners.set(event, [...listeners.get(event) ?? [], listener]) },
+    removeEventListener: (event: string, listener: (event?: Event) => void) => { listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener)) },
     close: vi.fn(() => { child.closed = true }), focus: vi.fn()
   }
-  return { child, emit: (event: string) => { for (const listener of listeners.get(event) ?? []) listener() } }
+  return { child, emit: (event: string, value?: Event) => { for (const listener of listeners.get(event) ?? []) listener(value) } }
 }
 
-async function mount(options: { dialogWindows?: boolean; refuse?: boolean } = {}) {
+async function mount(options: { dialogWindows?: boolean; refuse?: boolean; platform?: string } = {}) {
   const host = document.createElement('div')
   document.body.append(host)
   const fake = fakeChild(), attached = { dispose: vi.fn() }, attachWindow = vi.fn(() => attached)
   const open = vi.spyOn(window, 'open').mockImplementation(() => options.refuse ? null : fake.child as unknown as Window)
-  const workbench = { platform: 'win32', attachWindow, ...options.dialogWindows === false ? {} : { dialogWindows: true } } as unknown as Workbench
+  const workbench = { platform: options.platform ?? 'win32', attachWindow, ...options.dialogWindows === false ? {} : { dialogWindows: true } } as unknown as Workbench
   const onClose = vi.fn()
   const root = createRoot(host)
   const render = (shown: boolean) => act(async () => {
@@ -87,7 +87,7 @@ describe('DialogWindow', () => {
   })
   it('treats the window closed by the user as the dialog\'s Cancel, and closes the window and remembers its size when the dialog goes', async () => {
     const view = await mount()
-    view.fake.emit('pagehide')
+    await act(async () => { view.fake.emit('pagehide') })
     expect(view.onClose).toHaveBeenCalledTimes(1)
     const again = await mount()
     again.fake.child.innerWidth = 1111
@@ -96,6 +96,17 @@ describe('DialogWindow', () => {
     expect(again.attached.dispose).toHaveBeenCalled()
     expect(again.onClose).not.toHaveBeenCalled()
     expect(JSON.parse(localStorage.getItem('varia.dialogWindow.options') ?? '{}')).toEqual({ width: 1111, height: 700 })
+  })
+  it('takes ⌘W in its window as the dialog\'s Cancel on macOS only', async () => {
+    const press = (view: Awaited<ReturnType<typeof mount>>, init: KeyboardEventInit) => act(async () => { view.fake.emit('keydown', new KeyboardEvent('keydown', { key: 'w', cancelable: true, ...init })) })
+    const mac = await mount({ platform: 'darwin' })
+    await press(mac, { metaKey: true, shiftKey: true })
+    expect(mac.onClose).not.toHaveBeenCalled()
+    await press(mac, { metaKey: true })
+    expect(mac.onClose).toHaveBeenCalledTimes(1)
+    const windows = await mount()
+    await press(windows, { metaKey: true })
+    expect(windows.onClose).not.toHaveBeenCalled()
   })
   it('shows a dialog that stays open after its window was closed (Options while OK saves) over the main window', async () => {
     const view = await mount()
@@ -120,5 +131,14 @@ describe('DialogWindow', () => {
     expect(modalOpen()).toBe(false)
     vi.spyOn(windows, 'activeDocument').mockReturnValue(doc)
     expect(modalOpen()).toBe(true)
+    // With a dialog over the main window too, the dialog window the user is in is the one their menus and focus act in.
+    const other = document.createElement('div')
+    other.setAttribute('aria-modal', 'true')
+    document.body.append(other)
+    try {
+      expect(openModal()).toBe(doc.querySelector('[aria-modal="true"]'))
+      vi.spyOn(windows, 'activeDocument').mockReturnValue(document)
+      expect(openModal()).toBe(other)
+    } finally { other.remove() }
   })
 })

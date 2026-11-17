@@ -79,9 +79,15 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   useLayoutEffect(() => {
+    // A microtask later, so React's development double run (StrictMode) cancels the first before it opens a window.
+    let cancelled = false, cleanup: (() => void) | undefined
+    queueMicrotask(() => { if (!cancelled) cleanup = open() })
+    return () => { cancelled = true; cleanup?.() }
+  }, [kind, workbench])
+  function open(): (() => void) | undefined {
     const opened = workbench.dialogWindows ? openHost(kind, target => workbench.attachWindow(target)) : undefined
     setHost(opened ?? null)
-    if (!opened) return
+    if (!opened) return undefined
     const { child } = opened
     let closing = false, timer: ReturnType<typeof setTimeout> | undefined
     const closed = () => {
@@ -95,20 +101,28 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
       clearTimeout(timer)
       timer = setTimeout(() => { if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight }) }, 300)
     }
+    // ⌘W closes a window on macOS; Electron's menu has no Close role for it, so the dialog takes it as its Cancel.
+    const keyDown = (event: KeyboardEvent) => {
+      if (workbench.platform !== 'darwin' || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'w') return
+      event.preventDefault(); event.stopPropagation()
+      closeRef.current()
+    }
     child.addEventListener('pagehide', closed)
     child.addEventListener('resize', resized)
+    child.addEventListener('keydown', keyDown, true)
     return () => {
       closing = true
       clearTimeout(timer)
       if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight })
       child.removeEventListener('pagehide', closed)
       child.removeEventListener('resize', resized)
+      child.removeEventListener('keydown', keyDown, true)
       opened.dispose()
       if (!child.closed) child.close()
       // The main window takes the keyboard back for the focus the dialog returns.
       window.focus()
     }
-  }, [kind, workbench])
+  }
   useEffect(() => { if (raise !== undefined && host && !host.child.closed) host.child.focus() }, [raise, host])
   if (host === undefined) return null
   const state = { inWindow: !!host, platform: workbench.platform }

@@ -5,7 +5,7 @@ import Icon from '../Icon'
 import DialogWindow, { DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, commitOptions, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
+  ancestorIds, commitOptions, draftFrom, followValues, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
@@ -62,6 +62,14 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const { settings, platform, keybindings, documents } = useWorkbench()
   const { values } = useServiceSnapshot(settings)
   const [draft, setDraft] = useState<OptionsDraft>(() => draftFrom(values))
+  // The stored values the draft follows: a setting changed in the main window while Options is open shows here, unless
+  // the user has changed it in the draft (followValues).
+  const base = useRef(draft)
+  useEffect(() => {
+    const next = draftFrom(values), previous = base.current
+    base.current = next
+    setDraft(current => followValues(current, previous, next))
+  }, [values])
   // The Shortcuts page's edits: a second draft, saved after the settings by OK.
   const shortcuts = useShortcuts()
   const shortcutsState = useShortcutsSnapshot()

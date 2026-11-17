@@ -106,7 +106,7 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
   /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
   private pending: number[] = []
   /** Dialog windows allowed and not yet adopted, counted against the dialog limit as `pending` is against the popouts'. */
-  private dialogPending: number[] = []
+  private dialogPending: { readonly at: number; readonly kind: DialogWindowKind }[] = []
   /** Until when a child window that closed may still be torn down natively, and the work held until then (`settled`). */
   private quietUntil = 0
   private held?: () => void
@@ -157,9 +157,10 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
     const bounds = scaleBounds(requested, zoomFactor(this.options.zoomLevel())), limits = dialogWindowKinds[kind], controls = windowControls()
     const open = [...this.windows.values()].filter(item => item.dialog && !item.window.isDestroyed())
     const now = this.now()
-    this.dialogPending = this.dialogPending.filter(at => now - at < pendingMs)
-    if (open.length + this.dialogPending.length >= dialogLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
-    this.dialogPending.push(now)
+    this.dialogPending = this.dialogPending.filter(item => now - item.at < pendingMs)
+    const ofKind = open.filter(item => item.dialog === kind).length + this.dialogPending.filter(item => item.kind === kind).length
+    if (ofKind >= dialogLimits.perKind || open.length + this.dialogPending.length >= dialogLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    this.dialogPending.push({ at: now, kind })
     return { action: 'allow', overrideBrowserWindowOptions: {
       ...bounds, useContentSize: true, minWidth: limits.minWidth, minHeight: limits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
       title: limits.title, resizable: limits.resizable, minimizable: false, maximizable: false, fullscreenable: false, autoHideMenuBar: false,
@@ -173,7 +174,10 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
   adopt(window: W, name?: string): void {
     const activation = new UserActivation()
     const dialog = name === undefined ? undefined : dialogWindowKind(name)
-    if (dialog) this.dialogPending.shift(); else this.pending.shift()
+    if (dialog) {
+      const index = this.dialogPending.findIndex(item => item.kind === dialog)
+      if (index >= 0) this.dialogPending.splice(index, 1)
+    } else this.pending.shift()
     this.windows.set(window.id, { window, activation, ...name !== undefined && (popoutWindowName.test(name) || dialog) ? { name } : {}, ...dialog ? { dialog } : {} })
     if (dialog) { const parent = this.options.parent?.(); if (parent && !parent.isDestroyed()) window.setParentWindow?.(parent) }
     const contents = window.webContents
