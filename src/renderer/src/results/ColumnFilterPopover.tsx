@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import { scrollCap } from '../grid/scroll'
 import { trapFocus } from '../trap-focus'
-import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, rowsInView, scrollToShow, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, maxListSpace, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -173,6 +174,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const [scrollTop, setScrollTop] = useState(0)
   const [viewHeight, setViewHeight] = useState(0)
   const [listPad, setListPad] = useState(0)
+  const [maxSpace, setMaxSpace] = useState(maxListSpace)
   const [rowHeight, setRowHeight] = useState(fallbackRow)
   /** The listbox's active row (NULL's first when it is listed): the arrow keys move it and Space ticks it. Focus stays
    *  on the listbox (`aria-activedescendant`), so a row scrolled out of the rows drawn takes no focus with it. */
@@ -188,6 +190,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     setReadError(undefined)
     setScrollTop(0)
     setActive(0)
+    keepTop.current = undefined
     if (viewport.current) viewport.current.scrollTop = 0
     setVersion(value => value + 1)
   }, [list, summary, order, needle])
@@ -204,18 +207,49 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     measure()
     const observer = new view.ResizeObserver(measure)
     observer.observe(element)
-    return () => observer.disconnect()
+    // Chromium clamps layout near 33.5 million device pixels, so the space a list may lay out shrinks as the pixel ratio
+    // (display scaling and zoom) grows; the grid's cap, watched as the grid watches it. A new cap changes what a scroll
+    // position shows, so the row at the top stays there (the layout effect on maxSpace below).
+    let media: MediaQueryList | undefined
+    const cap = () => Math.min(maxListSpace, scrollCap(view.devicePixelRatio))
+    const watchRatio = () => {
+      media = view.matchMedia?.(`(resolution: ${view.devicePixelRatio}dppx)`)
+      media?.addEventListener('change', onRatio, { once: true })
+    }
+    const onRatio = () => {
+      // The scroll position drawn at the old cap, not the element's: at the new ratio Chromium may already have clamped it.
+      const next = cap(), now = geometry.current
+      if (next !== now.maxSpace && now.rows * now.rowHeight > Math.min(next, now.maxSpace)) keepTop.current = rowAtTop(now)
+      setMaxSpace(next)
+      watchRatio()
+    }
+    setMaxSpace(cap())
+    watchRatio()
+    return () => { observer.disconnect(); media?.removeEventListener('change', onRatio) }
   }, [])
 
   const showNull = !!summary && summary.nulls > 0 && (!needle || nullText.toLowerCase().includes(needle.toLowerCase()))
   const nullRows = showNull ? 1 : 0
   const valueRows = total ?? 0
-  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan, pad: listPad })
+  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan, pad: listPad, maxSpace })
   const firstRow = win.first, lastRow = win.last
   const firstBlock = Math.floor(Math.max(0, firstRow - nullRows) / blockSize)
   const lastBlock = Math.floor(Math.max(0, lastRow - nullRows - 1) / blockSize)
   const inView = useRef({ firstBlock, lastBlock })
   inView.current = { firstBlock, lastBlock }
+  /** The list's geometry as last drawn, and the row a new scroll cap keeps at the top. */
+  const geometry = useRef({ rows: 0, rowHeight, viewHeight, pad: listPad, maxSpace, scrollTop })
+  geometry.current = { rows: nullRows + valueRows, rowHeight, viewHeight, pad: listPad, maxSpace, scrollTop }
+  /** The fractional row at the view's top to keep there across a new scroll cap (only a mapped list's rows move). */
+  const keepTop = useRef<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    const element = viewport.current, row = keepTop.current
+    keepTop.current = undefined
+    if (!element || row === undefined) return
+    const now = geometry.current
+    element.scrollTop = scrollForRowAtTop({ ...now, row, maxSpace })
+    setScrollTop(element.scrollTop)
+  }, [maxSpace])
 
   // Reads the blocks in view that it lacks, and gives up those scrolled away from, so a fast scroll never queues reads of
   // rows no longer shown ahead of those in view; an answer read while a tick was on its way is read again after it.
@@ -400,7 +434,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     const next = Math.max(0, Math.min(listRows - 1, row))
     setActive(next)
     if (!element) return
-    const scroll = scrollToShow({ row: next, rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element) })
+    const scroll = scrollToShow({ row: next, rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element), maxSpace })
     if (scroll === undefined) return
     element.scrollTop = scroll
     setScrollTop(element.scrollTop)
@@ -410,7 +444,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const listFocused = () => {
     const element = viewport.current
     if (!element || listRows === 0 || !summary) return
-    const inView = rowsInView({ rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element) })
+    const inView = rowsInView({ rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element), maxSpace })
     if (active < inView.first || active > inView.last) setActive(inView.first)
   }
   /** Ticks or unticks the active row, as a click on it does, scrolling it into view first (the wheel may have moved it

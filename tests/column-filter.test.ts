@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, rowsInView, sameFilterFamily, scrollToShow } from '../src/renderer/src/results/column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -62,6 +62,21 @@ describe('column filter', () => {
     }
     const last = listWindow({ scrollTop: end, viewHeight: 220, rowHeight: 22, rows, overscan: 0, maxSpace, pad: 2 })
     expect(last.offset(rows - 1) + 2 - end + 22).toBeCloseTo(220 - 2, 6)
+  })
+
+  it('finds the fractional row at the top of the view and the scroll position that puts it back, within the space and past it', () => {
+    for (const maxSpace of [100_000_000, 1_000_000]) {
+      const geometry = { rows: 2_000_000, rowHeight: 22, viewHeight: 237, pad: 2, maxSpace }
+      for (const scrollTop of [0, 11, 22 * 5000 + 13, 777_777, 999_000]) {
+        const row = rowAtTop({ ...geometry, scrollTop })
+        expect(scrollForRowAtTop({ ...geometry, row })).toBeCloseTo(scrollTop, 6)
+      }
+    }
+    // The same row keeps its place across a change of cap: halfway through row 5000 stays halfway through it.
+    const unmapped = { rows: 10_000, rowHeight: 22, viewHeight: 200, pad: 2, maxSpace: 1_000_000 }, mapped = { ...unmapped, maxSpace: 30_000 }
+    const row = rowAtTop({ ...unmapped, scrollTop: 22 * 5000 + 2 + 11 })
+    expect(row).toBeCloseTo(5000.5, 9)
+    expect(rowAtTop({ ...mapped, scrollTop: scrollForRowAtTop({ ...mapped, row }) })).toBeCloseTo(5000.5, 9)
   })
 
   it('names the rows wholly in view, below the top padding', () => {

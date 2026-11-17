@@ -11,6 +11,8 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { ColumnFilterPopover, resultsFilterSource } from '../src/renderer/src/results/ColumnFilterPopover'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
+import { scrollCap } from '../src/renderer/src/grid/scroll'
+import { rowAtTop } from '../src/renderer/src/results/column-filter'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -163,6 +165,68 @@ describe('column filter popover', () => {
     // The tick is aria-checked alone: a multiselectable listbox carries one of aria-checked and aria-selected, not both.
     expect(view.activeRow()?.hasAttribute('aria-selected')).toBe(false)
     view.unmount()
+  })
+
+  it('lays out no more scroll space than Chromium allows at the pixel ratio of the window, mapping the rows past it', async () => {
+    // At a pixel ratio of 1000 the grid's cap is 30,000 px, less than the 220,000 px the 10,000 values would take.
+    const ratio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1000 })
+    try {
+      const view = fixture()
+      await view.settle()
+      const space = view.valueList().querySelector('.column-filter-space') as HTMLElement
+      expect(space.style.height).toBe(scrollCap(1000) + 'px')
+      // End still reaches the last value: it is the active row, drawn, so a screen reader announces it.
+      act(() => view.valueList().focus())
+      view.key(view.valueList(), 'End')
+      await view.settle()
+      expect(view.activeRow()?.getAttribute('aria-label')).toBe('v09999 (1)')
+      expect(view.valueList().getAttribute('aria-activedescendant')).toBe(view.activeRow()?.id)
+      view.unmount()
+    } finally {
+      if (ratio) Object.defineProperty(window, 'devicePixelRatio', ratio)
+      else delete (window as { devicePixelRatio?: number }).devicePixelRatio
+    }
+  })
+
+  it('follows a change of pixel ratio, keeping the row at the top of the list there, and stops watching when closed', async () => {
+    const ratio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio'), match = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const queries: { media: string; listeners: Set<() => void> }[] = []
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, writable: true, value: 1 })
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: (media: string) => {
+      const query = { media, listeners: new Set<() => void>() }
+      queries.push(query)
+      return { media, matches: true, addEventListener: (_: string, listener: () => void) => query.listeners.add(listener), removeEventListener: (_: string, listener: () => void) => query.listeners.delete(listener) }
+    } })
+    try {
+      const view = fixture()
+      await view.settle()
+      const space = () => (view.valueList().querySelector('.column-filter-space') as HTMLElement).style.height
+      expect(space()).toBe(distinct * 22 + 'px')
+      // Halfway through row 5000.
+      view.scrollTo(22 * 5000 + 11)
+      await view.settle()
+      // Zoom takes the ratio to 1000: the cap falls to 30,000 px, the list maps its rows, and row 5000 stays at the top, as
+      // far through it as before.
+      ;(window as { devicePixelRatio: number }).devicePixelRatio = 1000
+      const armed = queries.at(-1)!
+      expect(armed.media).toBe('(resolution: 1dppx)')
+      act(() => { for (const listener of [...armed.listeners]) { armed.listeners.delete(listener); listener() } })
+      await view.settle()
+      expect(space()).toBe(scrollCap(1000) + 'px')
+      expect(rowAtTop({ rows: distinct, rowHeight: 22, viewHeight: 0, scrollTop: view.valueList().scrollTop, maxSpace: scrollCap(1000) })).toBeCloseTo(5000.5, 6)
+      expect(view.checkboxes().some(option => option.getAttribute('aria-label') === 'v05000 (1)')).toBe(true)
+      // The watch moves on to the new ratio, and closing the popover drops it.
+      const next = queries.at(-1)!
+      expect([next.media, next.listeners.size]).toEqual(['(resolution: 1000dppx)', 1])
+      view.unmount()
+      expect(next.listeners.size).toBe(0)
+    } finally {
+      if (ratio) Object.defineProperty(window, 'devicePixelRatio', ratio)
+      else delete (window as { devicePixelRatio?: number }).devicePixelRatio
+      if (match) Object.defineProperty(window, 'matchMedia', match)
+      else delete (window as { matchMedia?: unknown }).matchMedia
+    }
   })
 
   it('makes a clicked row the active one when the click brings focus to the list', async () => {

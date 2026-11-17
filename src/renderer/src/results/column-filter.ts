@@ -71,8 +71,9 @@ export function checklistCondition(o: { list: DistinctList; checked: number; dis
   return { condition: { kind: 'list', list: o.list } }
 }
 
-/** The checklist's tallest scroll space in px: Chromium clamps layout sizes near 33.5 million px, so a longer list maps its
- *  scroll bar onto its rows instead of giving each row its own pixels. */
+/** The checklist's tallest scroll space in px at a pixel ratio of 1: Chromium clamps layout sizes near 33.5 million device
+ *  px, so a longer list maps its scroll bar onto its rows instead of giving each row its own pixels. The popover passes the
+ *  grid's `scrollCap` for the window's pixel ratio as `maxSpace`, which is lower. */
 export const maxListSpace = 30_000_000
 
 /** The rows of a virtual list of fixed-height rows drawn for a scroll position (with `overscan` rows past each edge), its
@@ -113,14 +114,44 @@ export function scrollToShow(o: { row: number; rows: number; rowHeight: number; 
   const position = at.offset(row) + pad - scrollTop
   if (position >= -slack && position + rowHeight <= viewHeight + slack) return undefined
   const above = position < -slack
-  if (rows * rowHeight <= maxSpace) return Math.max(0, above ? (row === 0 ? 0 : row * rowHeight + pad) : (row + 1) * rowHeight + pad - viewHeight)
-  // Mapped: listWindow puts the row `top` rows down at scrollTop / range × span; the row wanted at the top, or the one
-  // whose bottom meets the view's bottom (less the padding above the rows), solves for it.
+  if (above) return scrollToTop({ row, rows, rowHeight, viewHeight, pad, maxSpace })
+  if (rows * rowHeight <= maxSpace) return Math.max(0, (row + 1) * rowHeight + pad - viewHeight)
+  // Mapped: listWindow puts the row `top` rows down at scrollTop / range × span; the row whose bottom meets the view's
+  // bottom (less the padding above the rows) solves for it.
   const range = Math.max(1, at.space + 2 * pad - viewHeight), span = Math.max(1, rows - (viewHeight - 2 * pad) / rowHeight)
-  const top = above ? row : row + 1 - (viewHeight - pad) / rowHeight
-  // Whole pixels: down for a row above (it starts at or below the top), up for one below (it ends at or above the bottom).
-  const exact = Math.max(0, top) / span * range
-  return Math.min(range, Math.max(0, above ? Math.floor(exact) : Math.ceil(exact)))
+  // Whole pixels, up: the row ends at or above the bottom.
+  const exact = Math.max(0, row + 1 - (viewHeight - pad) / rowHeight) / span * range
+  return Math.min(range, Math.max(0, Math.ceil(exact)))
+}
+
+/** The scroll position that puts `row` at the top of the view, below the top padding (the padding too for the first row):
+ *  within the space its pixels, past it its share of the mapped range, rounded down so it starts at or below the top. */
+export function scrollToTop(o: { row: number; rows: number; rowHeight: number; viewHeight: number; pad?: number; maxSpace?: number }): number {
+  const { row, rows, rowHeight, viewHeight } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
+  if (row <= 0) return 0
+  if (rows * rowHeight <= maxSpace) return row * rowHeight + pad
+  const space = Math.min(rows * rowHeight, maxSpace)
+  const range = Math.max(1, space + 2 * pad - viewHeight), span = Math.max(1, rows - (viewHeight - 2 * pad) / rowHeight)
+  return Math.min(range, Math.max(0, Math.floor(row / span * range)))
+}
+
+/** The list's geometry for `rowAtTop` and `scrollForRowAtTop`. */
+export interface ListGeometry { rows: number; rowHeight: number; viewHeight: number; pad?: number; maxSpace?: number }
+
+/** The row, fractional, at the top edge of the view at a scroll position (`listWindow`'s placement, padding included). */
+export function rowAtTop(o: ListGeometry & { scrollTop: number }): number {
+  const { rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
+  if (rows * rowHeight <= maxSpace) return (scrollTop - pad) / rowHeight
+  const range = Math.max(1, Math.min(rows * rowHeight, maxSpace) + 2 * pad - viewHeight), span = Math.max(0, rows - (viewHeight - 2 * pad) / rowHeight)
+  return Math.min(1, Math.max(0, scrollTop / range)) * span - pad / rowHeight
+}
+
+/** The scroll position that puts the fractional row `row` at the top edge of the view: `rowAtTop`'s inverse. */
+export function scrollForRowAtTop(o: ListGeometry & { row: number }): number {
+  const { rows, rowHeight, viewHeight, row } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
+  if (rows * rowHeight <= maxSpace) return Math.max(0, row * rowHeight + pad)
+  const range = Math.max(1, Math.min(rows * rowHeight, maxSpace) + 2 * pad - viewHeight), span = Math.max(1, rows - (viewHeight - 2 * pad) / rowHeight)
+  return Math.min(range, Math.max(0, (row + pad / rowHeight) / span * range))
 }
 
 /** The rows of the list fully in view at a scroll position (with its top padding): the first and the last. */
