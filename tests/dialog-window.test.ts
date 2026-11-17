@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import DialogWindow, { centredBounds, DialogHeading, dialogWindowSize, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
+import DialogWindow, { centredBounds, closesDialogWindow, DialogHeading, dialogWindowSize, rememberDialogWindowSize } from '../src/renderer/src/popouts/DialogWindow'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { modalOpen, openModal } from '../src/renderer/src/core/modal'
@@ -97,16 +97,43 @@ describe('DialogWindow', () => {
     expect(again.onClose).not.toHaveBeenCalled()
     expect(JSON.parse(localStorage.getItem('varia.dialogWindow.options') ?? '{}')).toEqual({ width: 1111, height: 700 })
   })
-  it('takes ⌘W in its window as the dialog\'s Cancel on macOS only', async () => {
-    const press = (view: Awaited<ReturnType<typeof mount>>, init: KeyboardEventInit) => act(async () => { view.fake.emit('keydown', new KeyboardEvent('keydown', { key: 'w', cancelable: true, ...init })) })
-    const mac = await mount({ platform: 'darwin' })
-    await press(mac, { metaKey: true, shiftKey: true })
-    expect(mac.onClose).not.toHaveBeenCalled()
-    await press(mac, { metaKey: true })
-    expect(mac.onClose).toHaveBeenCalledTimes(1)
-    const windows = await mount()
-    await press(windows, { metaKey: true })
-    expect(windows.onClose).not.toHaveBeenCalled()
+  it('takes ⌘W in its window as the dialog\'s Cancel on macOS only, unless something took it first', () => {
+    const child = document.implementation.createHTMLDocument('')
+    const key = (init: Partial<{ metaKey: boolean; shiftKey: boolean; defaultPrevented: boolean; doc: Document }> = {}) =>
+      ({ key: 'w', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, defaultPrevented: false, currentTarget: { ownerDocument: init.doc ?? child }, ...init })
+    expect(closesDialogWindow(key(), 'darwin')).toBe(true)
+    expect(closesDialogWindow(key(), 'win32')).toBe(false)
+    expect(closesDialogWindow(key({ shiftKey: true }), 'darwin')).toBe(false)
+    // A shortcut being recorded takes ⌘W first (KeybindingService prevents its default): the dialog stays open.
+    expect(closesDialogWindow(key({ defaultPrevented: true }), 'darwin')).toBe(false)
+    // Over the main window ⌘W stays the workbench's.
+    expect(closesDialogWindow(key({ doc: document }), 'darwin')).toBe(false)
+  })
+  it('opens one window under StrictMode, whose development double run would otherwise open and close one', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const fake = fakeChild(), open = vi.spyOn(window, 'open').mockImplementation(() => fake.child as unknown as Window)
+    const workbench = { platform: 'win32', attachWindow: () => ({ dispose: vi.fn() }), dialogWindows: true } as unknown as Workbench
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(StrictMode, null, createElement(WorkbenchProvider, { workbench, children: createElement(DialogWindow, { kind: 'options', onClose: vi.fn(), children: createElement('form', { role: 'dialog' }) }) })))
+    })
+    cleanups.push(() => { act(() => { root.unmount() }); host.remove() })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(fake.child.close).not.toHaveBeenCalled()
+  })
+  it('gives the keyboard back to the main window only when the dialog opened from it', async () => {
+    const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
+    vi.spyOn(windows, 'active').mockReturnValue(window)
+    const fromMain = await mount()
+    await fromMain.hide()
+    expect(focus).toHaveBeenCalledTimes(1)
+    // From a popout, the dialog's own focus return raises the popout: the main window stays behind.
+    const popout = {} as Window
+    vi.spyOn(windows, 'active').mockReturnValue(popout)
+    const fromPopout = await mount()
+    await fromPopout.hide()
+    expect(focus).toHaveBeenCalledTimes(1)
   })
   it('shows a dialog that stays open after its window was closed (Options while OK saves) over the main window', async () => {
     const view = await mount()

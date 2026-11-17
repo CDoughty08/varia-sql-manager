@@ -5,6 +5,7 @@ import type { Platform } from '../../../shared/commands/keybindings'
 import { useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { preparePopoutDocument } from './popout-document'
+import { windows } from '../core/windows'
 
 /**
  * Dialogs in OS windows of their own (docs/popout-windows.md, "Dialog windows"). Each is the page's same-origin
@@ -14,6 +15,13 @@ import { preparePopoutDocument } from './popout-document'
  * runs without windows, as in unit tests) the dialog shows over the main window as before.
  */
 export interface DialogWindowState { readonly inWindow: boolean; readonly platform: Platform }
+/**
+ * ⌘W in a dialog window on macOS, which closes a window there: Electron's menu has no Close role for it, so the dialog's
+ * own key handler takes it as its Cancel (the workbench's keys stay in its dispatcher, tests/keyboard-lint.test.ts), unless
+ * something took it first: a shortcut being recorded.
+ */
+export const closesDialogWindow = (event: { readonly defaultPrevented: boolean; readonly key: string; readonly metaKey: boolean; readonly ctrlKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean; readonly currentTarget: { readonly ownerDocument: Document } }, platform: Platform): boolean =>
+  platform === 'darwin' && !event.defaultPrevented && event.currentTarget.ownerDocument !== document && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'w'
 const DialogWindowContext = createContext<DialogWindowState>({ inWindow: false, platform: 'win32' })
 export const useDialogWindow = (): DialogWindowState => useContext(DialogWindowContext)
 
@@ -85,6 +93,8 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
     return () => { cancelled = true; cleanup?.() }
   }, [kind, workbench])
   function open(): (() => void) | undefined {
+    // The window the user opened the dialog from: a popout gets its own focus back (the dialog's focus return raises it).
+    const opener = windows.active()
     const opened = workbench.dialogWindows ? openHost(kind, target => workbench.attachWindow(target)) : undefined
     setHost(opened ?? null)
     if (!opened) return undefined
@@ -101,26 +111,18 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
       clearTimeout(timer)
       timer = setTimeout(() => { if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight }) }, 300)
     }
-    // ⌘W closes a window on macOS; Electron's menu has no Close role for it, so the dialog takes it as its Cancel.
-    const keyDown = (event: KeyboardEvent) => {
-      if (workbench.platform !== 'darwin' || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'w') return
-      event.preventDefault(); event.stopPropagation()
-      closeRef.current()
-    }
     child.addEventListener('pagehide', closed)
     child.addEventListener('resize', resized)
-    child.addEventListener('keydown', keyDown, true)
     return () => {
       closing = true
       clearTimeout(timer)
       if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight })
       child.removeEventListener('pagehide', closed)
       child.removeEventListener('resize', resized)
-      child.removeEventListener('keydown', keyDown, true)
       opened.dispose()
       if (!child.closed) child.close()
-      // The main window takes the keyboard back for the focus the dialog returns.
-      window.focus()
+      // The main window takes the keyboard back for the focus the dialog returns, when the dialog opened from it.
+      if (!opener || opener === window) window.focus()
     }
   }
   useEffect(() => { if (raise !== undefined && host && !host.child.closed) host.child.focus() }, [raise, host])

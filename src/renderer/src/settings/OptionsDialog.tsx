@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { pageById, pagePath, type SettingKey } from '../../../shared/settings/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import DialogWindow, { DialogHeading } from '../popouts/DialogWindow'
+import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
   ancestorIds, commitOptions, draftFrom, followValues, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
@@ -210,6 +210,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     const target = event.target
+    if (closesDialogWindow(event, platform)) { event.preventDefault(); event.stopPropagation(); close(); return }
     if (event.key === 'Escape') {
       event.preventDefault(); event.stopPropagation()
       // As in Visual Studio, Escape in a search box with text clears the search first.

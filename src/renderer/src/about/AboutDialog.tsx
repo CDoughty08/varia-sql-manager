@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import { focusToReturn, returnFocusTo } from '../core/focus'
 import Icon from '../Icon'
-import DialogWindow, { DialogHeading } from '../popouts/DialogWindow'
+import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import InlineError from '../kit/InlineError'
 import { copyStatus, copyText, type CopyRecord } from '../kit/format'
 import { trapFocus } from '../trap-focus'
@@ -39,7 +39,7 @@ export default function AboutDialog({ onClose, raise }: { readonly onClose: () =
   }
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     trapFocus(event)
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
+    if (event.key === 'Escape' || closesDialogWindow(event, platform)) { event.preventDefault(); event.stopPropagation(); close() }
   }
   return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
     <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
