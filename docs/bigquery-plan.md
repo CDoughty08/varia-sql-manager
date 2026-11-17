@@ -797,7 +797,8 @@ history.
     `errorResult` (reason `stopped` for cancelled), derived by the backend.
   - Job id, type (query, load, extract, copy), and statement type (SELECT, INSERT, MERGE, CREATE_TABLE_AS_SELECT,
     SCRIPT, …).
-  - User (all users only), created, duration, bytes processed, bytes billed, slot time, cache hit.
+  - User (all users only), created, duration, bytes processed, bytes billed, Cost (on demand, from bytes billed),
+    slot time, cache hit.
   - Location, destination table, error reason, SQL preview.
   - A "Varia" marker for jobs with the `varia_client` label.
 
@@ -857,11 +858,16 @@ history.
 Varia follows BigQuery Studio: the estimate is always visible, and nothing blocks by default (decision 22).
 
 - Every summary reports bytes processed, bytes billed, cache hit, slot time and the job id, in Messages, and the bytes
-  processed in the status bar beside the row count. Units are binary (KiB, MiB, GiB, TiB), as Google bills: on demand,
-  per TiB, with a 10 MiB minimum per table referenced. The price is labelled an on-demand estimate, because projects
-  with capacity (reservations) do not pay per byte.
-- **Before execute:** a dry run (free) gives the estimate, shown in the status bar and Messages. Varia asks only in two
-  cases:
+  processed in the Results status beside the row count. Units are binary (KiB, MiB, GiB, TiB), as Google bills: on
+  demand, per TiB, with a 10 MiB minimum per table referenced. The price is labelled an on-demand estimate, because
+  projects with capacity (reservations) do not pay per byte.
+- **Dollars beside bytes:** wherever Varia shows bytes processed or billed (the estimate chip, the Results status,
+  Messages, Job History's Cost column and the prompts), it shows the on-demand cost beside them ("< $0.01" below a cent),
+  so the user never converts bytes to money. Job History's Cost uses bytes billed.
+- **Before execute:** a dry run (free) gives the estimate, shown in a chip beside Execute and in Messages. The chip
+  reads "≈ 1.24 GiB · < $0.01": neutral under the cost-prompt threshold, amber above it (Execute will ask), and after a
+  run it shows what the job processed and cost. Its tooltip says the estimate is free and on demand. Varia asks only in
+  two cases:
   - **Above the threshold** (default 10 GiB): "This query will process 1.4 TiB (about $8.75 on demand). Run it?", with
     Run, Cancel, "Don't ask again for this connection" and a **Cost settings…** link.
   - **The estimate is incomplete**, the first time: a script stops the dry run at its first DDL or control statement,
@@ -1100,8 +1106,8 @@ Search Objects enhancements this needs (in BQ-6a, with the index's limits mirror
   and it needs the index's planned column-type metadata (stage 1 of that direction: **Shared** with the editor work).
 - Hover: a table's schema summary (columns, types, partitioning, row count, size) and a column's type and description.
 - Diagnostics (BQ-7, through `language.diagnostics` routed to the GoogleSQL provider): a dry run after an editing pause (1 s, one in flight per document, latest wins) gives the
-  syntax and binding error with its `[line:column]`, mapped to a marker, and the estimate in the status bar ("This query
-  will process 1.2 GiB"), as BigQuery Studio does. A dry run sends the editor text to Google, so it runs only on a
+  syntax and binding error with its `[line:column]`, mapped to a marker, and the estimate in the chip beside Execute
+  ([Cost](#cost)), as BigQuery Studio shows it ("This query will process 1.2 GiB"). A dry run sends the editor text to Google, so it runs only on a
   connected BigQuery tab and a setting turns it off; docs/architecture.md records this as the one path that automatically, without a user action, sends
   unexecuted text off the machine. Text that uses the session's temp tables is dry-run through the session's queue, or gets no estimate if BigQuery
   refuses session dry runs ([Sessions](#sessions)).
@@ -1213,8 +1219,8 @@ a shell's environment, which docs/bigquery.md explains. gRPC through an HTTP pro
 
 - `ConnectionService` and the target registry carry the provider. `connection-open.ts` resolves credentials per
   provider (main reads key and config files for BigQuery).
-- Query tabs: the database dropdown becomes a dataset dropdown for BigQuery. The status bar shows the principal and
-  project instead of `login (spid)`, plus bytes processed.
+- Query tabs: the database dropdown becomes a dataset dropdown for BigQuery, and the estimate chip sits beside Execute.
+  The status bar shows the principal and project instead of `login (spid)`.
 - **Hidden or disabled for BigQuery** (through `providers`, not ad hoc checks): Activity Monitor; SSIS; SQL Server
   Agent (**Shared**); Table Designer; object actions; actual, estimated and live plans; client statistics;
   `sp_help`/`sp_who`/`sp_lock` templates; ScriptDom Go To Definition; named result set markers (`#Name=`); Registered
@@ -1260,7 +1266,7 @@ error codes in their enums; tab, AutoRecover and target records; method `provide
 | **BQ-3a-2** Scripts, sessions, Stop | Child jobs with incremental polling and `[l:c]`; tab sessions, expiry, location prompt; Stop; the `query.job` event, its essential classification and `queryEventSchema` entry; transaction tracking, `query.session.state`'s `transactionCount` and `checked` for BigQuery, `SessionTab.provider` in the strict `tabSchema` and `prepareSessions`' mapping (BQ-3d adds `job`), the `query.job` event's transaction state, Commit and Roll Back on close with the provider's "not checked" note and a refused commit on an unchecked session falling through to the abort (not at quit, through `abortOnRefusedCommit`), the close result's `note` (a `Contracts.cs` record; `commitNotApplied`, `committedBeforeCancel`, `outcomeUnknown`, `abortFailed`, `sessionExpired`) and how it is shown on every close path, `closeQuerySession`'s options object in `VariaApi` and the preload, `JOB_RUNNING` for a commit or rollback close on a session holding or still cancelling a job, the commit close's internal budgets, a commit whose insert never reached BigQuery kept as a retryable refusal, the `switchLocation` session action, a commit with an unknown outcome (`outcomeUnknown`, the session aborted only after the `COMMIT` is DONE), an expired session closing at once (ok with a note; `SESSION_LOST` only for a commit), the provider's `lost` notice text, `QueryService.addSessionMessage` for notes on tabs that stay, the 30 s deadline for every non-commit close (decision 54) | M | BQ-3a, BQ-2 (the location prompt sits on its dataset dropdown) | ipc.md (`query.session.close`'s deadlines, `abortOnRefusedCommit` and the result's `note`; `tests/validation.test.ts`'s deadline check changes with them) |
 | **BQ-3d** Re-attaching to jobs | Job keys (tabs, `query.execute` and `results.remoteQuery` params, session and AutoRecover records); job records in `WorkbenchSession/jobs.json`; references kept on `BACKEND_LOST`; `query.attach` (running, finished, scripts, sessions, `adoptSession`, expired, superseded, detached); identity check; records without a tab after every restore; `bigquery.cancelJobs` (main-only) and `session.cancelRestoredJobs`; quit with kept and unkept tabs; the prompt across every session action, mixed boxes, contract and setting; Close Results while running; Leave running; the Reload prompt wording and `lossDetails`; idle sessions ending with their tab (`connections.disconnect`, `bigquery.endIdleSessions` before every backend stop, their `failedAborts` results, `keepJobKeys`, the failed-abort notice and its retry once the handle next reaches BigQuery); `cancelJob` (waiting for DONE; `committedBeforeCancel`, `outcomeUnknown`), `keepJob` (`JOB_FINISHED`), `holdsJob` (falling back to the tab's own job when a state read fails), `query.session.state`'s `job`, and `query.cancel`'s `detach`; the server Disconnect row; the location switch's three choices for a session holding a job; `holdsJob` for unattached references; `adoptSession` for tab-less jobs, an adopted session's transaction state from its record (decision 54), and `bigquery.cancelJobs` ending their sessions; the supervisor's session map, result stamping, `index.ts` plumbing and `ResultsPort` ownership for `query.attach`; C# refusing `detach`, `keepJob` and `cancelJob` for SQL Server; deleting a profile with job records | M | BQ-3a-2, BQ-3c-1 (finished results may be windowed), BQ-7 (the dialog shows the estimate; the setting sits on its pages) | README, ipc.md, hot-exit.md, settings regenerated |
 | **BQ-3b** Storage Read in memory | Storage Read (Arrow), stream order by the backend scanner, REST fallback and messages, the REST/Arrow golden test, pricing check, proxy check, offline throughput benchmark | M | BQ-3a | testing.md |
-| **BQ-7** Dry run and cost | `bigquery.dryRun`; the estimate before execute, both prompts and opt-outs; status bar estimate; diagnostics markers; Cost and Sessions settings pages | M | BQ-3a, BQ-4 | settings regenerated, architecture.md (dry runs send text) |
+| **BQ-7** Dry run and cost | `bigquery.dryRun`; the estimate before execute, both prompts and opt-outs; the estimate chip beside Execute and dollars beside bytes; diagnostics markers; Cost and Sessions settings pages | M | BQ-3a, BQ-4 | settings regenerated, architecture.md (dry runs send text) |
 | **BQ-3c-1** Remote results | Residence decision and setting; remote result; byte-sized block cache, read-ahead per viewer, fetch lane; `results.read` waits; `revision` and the residence event; row cap; Memory panel; invariant change and page-access and working-memory lints; misestimate switch; `results.remoteQuery` (all five places, kinds enum, events, cancel path, the supervisor stamping its summary's descriptors and budget with the backend generation as for `query.execute`, `resultSet.residence` essential with its schema entry and generation stamp, `index.ts`'s per-request plumbing and `ResultsPort` ownership for it (a derived result read in a test), the source result's ownership and generation checked before sending, ipc.md entry) with the `load` kind | L | BQ-3b | architecture.md, ipc.md |
 | **BQ-3c-2** Remote views | Derived remote results for sort and filter; value lists; filter mapping and refusals; fallback to the original query; view estimates through `bigquery.dryRun`; the `view` and `distinct` kinds; disabled features and tooltips | M | BQ-3c-1, BQ-7 | |
 | **BQ-3c-3** Copy, Save and loading | Copy limits; streaming Save; Load into memory UI; Load sample and Re-run (the `sample` and `rerun` kinds); `REMOTE_EXPIRED` UI | M | BQ-3c-1, BQ-7 (sample and Re-run are billed) | README |
@@ -1427,3 +1433,12 @@ Rows to tables.
 The Job history group shows BQ-9 and BQ-3d: opening Job History (Explorer menu and palette), my jobs with a script
 expanded, a running job's details, the row menu, All users with details hidden by BigQuery, All users refused, the cancel
 prompt, the prompt when closing a tab with a running job, and a tab re-attached after a restart.
+
+The Sessions & transactions group shows decision 54 and the session prompts: closing an idle tab with an open
+transaction (the Uncommitted transactions box), the notes after a commit that did not happen (`commitNotApplied`,
+outcome unknown), jobs from the last session with no tab, and switching a tab to a dataset in another location.
+
+Across the mocks, the estimate is a chip beside Execute with its dollars, every byte figure has its on-demand cost
+beside it, a query tab shows the Results pane's empty state until it runs, and Properties and Job History own the
+whole document area with no Results pane under them. That last behaviour is planned for every non-query document in
+Varia (Activity Monitor too) as its own change, outside the BigQuery lanes; the BigQuery documents follow it.
