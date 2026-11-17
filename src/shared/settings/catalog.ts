@@ -76,6 +76,8 @@ export function pagePath(pageId: string): readonly SettingPage[] {
   for (let page = pageById(pageId); page; page = page.parent ? pageById(page.parent) : undefined) path.unshift(page)
   return path
 }
+/** A setting named outside its section (a salvage warning, a help guide): its `title`, else its label. */
+export const settingTitle = (key: SettingKey): string => { const def = settingDef(key); return def.title ?? def.label }
 /** The settings Options shows on `platform`: not hidden, and not limited to other platforms. */
 export const visibleSettings = (platform: Platform, defs: readonly SettingDef[] = settingDefs): readonly SettingDef[] =>
   defs.filter(def => !def.hidden && (!def.platforms || def.platforms.includes(platform)))

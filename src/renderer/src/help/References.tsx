@@ -2,7 +2,7 @@ import { commandDescriptor, type CommandId } from '../../../shared/commands/cata
 import { gestureAvailable, gestureDescriptor, type GestureId } from '../../../shared/commands/gestures'
 import type { LessonContext } from '../../../shared/help/catalog'
 import { lessonCommand, lessonContexts, lessonShortcut, settingValueLabel } from '../../../shared/help/references'
-import { pagePath, settingDef, type SettingKey } from '../../../shared/settings/catalog'
+import { pagePath, settingDef, settingTitle, type SettingKey } from '../../../shared/settings/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useKeybindingsRevision } from '../core/useCommand'
 
@@ -20,10 +20,10 @@ export function CommandRef({ id, context }: { readonly id: CommandId; readonly c
 
 export function SettingRef({ id }: { readonly id: SettingKey }) {
   const { settings, commands } = useWorkbench(), { values } = useServiceSnapshot(settings), def = settingDef(id)
-  return <span className="help-reference" data-help-setting={id}><strong>{def.label}: {settingValueLabel(id, values)}</strong>{' '}
+  return <span className="help-reference" data-help-setting={id}><strong>{settingTitle(id)}: {settingValueLabel(id, values)}</strong>{' '}
     <span className="help-muted">{pagePath(def.page).map(page => page.title).join(' › ')}</span>{' '}
     {/* Named by its setting too: a guide section can show several of these, and each must be told apart by ear. */}
-    <button type="button" aria-label={`Open this Options page for ${def.label}`} onClick={() => { void commands.execute('preferences.options', { settingsPage: def.page }, 'toolbar') }}>Open this Options page</button>
+    <button type="button" aria-label={`Open this Options page for ${settingTitle(id)}`} onClick={() => { void commands.execute('preferences.options', { settingsPage: def.page }, 'toolbar') }}>Open this Options page</button>
   </span>
 }
 

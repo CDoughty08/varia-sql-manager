@@ -90,6 +90,8 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use |
 | --- | --- | --- |
 | `--varia-resultTab` | 240 | A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound. |
+| `--varia-optionsLabel` | 240 | The label column of a Tools › Options form page, where longer labels wrap; checkboxes span it and the control column. |
+| `--varia-optionsControl` | 180 | The control column of an Options form page: every number field and list is this wide, so they line up. |
 
 ## Bars and rows
 

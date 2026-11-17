@@ -21,7 +21,7 @@ export interface SettingRow {
   readonly changed: boolean
   readonly disabled: boolean
 }
-export interface RowGroup { readonly label?: string; readonly rows: readonly SettingRow[] }
+export interface RowGroup { readonly label?: string; readonly description?: string; readonly rows: readonly SettingRow[] }
 /** A page as it shows: the provider's rows first (Environment › General's theme note), then its settings by group. */
 export interface PageForm { readonly page: SettingPage; readonly provider?: 'theme'; readonly groups: readonly RowGroup[] }
 
@@ -75,14 +75,19 @@ export const settingGridRow = (row: SettingRow): GridRow => ({
   key: row.key, label: row.def.label, description: row.def.description, control: row.def.type === 'integer' ? 'integer' : 'choice', value: row.value,
   ...row.choices ? { choices: row.choices } : {}, ...row.def.type === 'integer' ? { min: row.def.min, max: row.def.max } : {}, changed: row.changed, disabled: row.disabled
 })
-/** The page's rows on `platform`, grouped in catalogue order; hidden settings and other platforms' are left out. */
+/**
+ * The page's rows on `platform`, grouped: in the page's `sections` order with their descriptions when it declares them,
+ * else in catalogue order. Rows keep catalogue order inside a group; hidden settings, other platforms' and sections left
+ * with no rows are left out.
+ */
 export function pageForm(pageId: string, draft: OptionsDraft, platform: Platform, defs: readonly SettingDef[] = settingDefs): PageForm {
-  const page = pageById(pageId) ?? pageById('environment.general')!, groups: { label?: string; rows: SettingRow[] }[] = []
+  const page = pageById(pageId) ?? pageById('environment.general')!, groups: { label?: string; description?: string; rows: SettingRow[] }[] = []
+  for (const section of page.sections ?? []) groups.push({ label: section.label, ...section.description ? { description: section.description } : {}, rows: [] })
   for (const def of visibleSettings(platform, defs).filter(item => item.page === page.id)) {
     const group = groups.find(item => item.label === def.group) ?? groups[groups.push({ ...def.group ? { label: def.group } : {}, rows: [] }) - 1]
     group.rows.push(settingRow(def, draft))
   }
-  return { page, ...page.provider ? { provider: page.provider } : {}, groups }
+  return { page, ...page.provider ? { provider: page.provider } : {}, groups: groups.filter(group => group.rows.length) }
 }
 
 /** The draft with `key` set from its control's text: a boolean's 'true' or 'false', an enum's value, an integer's text. */

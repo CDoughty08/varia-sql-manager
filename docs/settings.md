@@ -68,21 +68,25 @@ Copies of queries with unsaved changes, offered after Varia SQL Manager closes u
 
 ### Environment › Documents
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query's database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept. |
-| `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
-| `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
-| `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
-| `environment.documents.saveEncoding` | Save encoding | One of `utf8bom` (Unicode (UTF-8 with signature)), `utf8` (Unicode (UTF-8 without signature)), `utf16le` (Unicode), `utf16be` (Unicode (Big-Endian)) | Unicode (UTF-8 with signature) |  | All | At once | The encoding every file is saved in while Save files with a specific encoding is True. Unicode is UTF-16 little-endian. Greyed while `environment.documents.saveWithSpecificEncoding` is False. |
+Sections: **Startup**, **Files changed outside Varia**, **Saving**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Startup | `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query's database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept. |
+| Files changed outside Varia | `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
+| Files changed outside Varia | `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
+| Saving | `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
+| Saving | `environment.documents.saveEncoding` | Save encoding | One of `utf8bom` (Unicode (UTF-8 with signature)), `utf8` (Unicode (UTF-8 without signature)), `utf16le` (Unicode), `utf16be` (Unicode (Big-Endian)) | Unicode (UTF-8 with signature) |  | All | At once | The encoding every file is saved in while Save files with a specific encoding is True. Unicode is UTF-16 little-endian. Greyed while `environment.documents.saveWithSpecificEncoding` is False. |
 
 ### Environment › Fonts and Colors
 
 Colors come from the color theme (View › Theme).
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 13 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
+Sections: **Text Editor**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Text Editor | `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 13 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
 
 ### Environment › Shortcuts
 
@@ -103,13 +107,15 @@ How Varia SQL Manager finds, downloads and installs new releases.
 
 Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `liveData.pauseWhenHidden` | Pause live views that are hidden | Boolean | True |  | All | At once | Stops a live view's queries on the server while its tab is not the one showing, or the window is minimized or hidden, and starts them again as soon as it shows. Charts show the gap. While it is False, hidden views keep querying at their usual intervals. Not in SSMS. |
-| `liveData.pauseAfterSeconds` | Pause after hidden for | Integer 1–60 seconds | 2 seconds |  | All | At once | How long a live view stays hidden before its queries stop, so switching tabs for a moment loses no samples. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
-| `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
-| `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
-| `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
+Sections: **Hidden views** (Live views in tabs that are not shown, or in a minimized window), **Object Explorer**, **Charts**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Hidden views | `liveData.pauseWhenHidden` | Pause live views that are hidden | Boolean | True |  | All | At once | Stops a live view's queries on the server while its tab is not the one showing, or the window is minimized or hidden, and starts them again as soon as it shows. Charts show the gap. While it is False, hidden views keep querying at their usual intervals. Not in SSMS. |
+| Hidden views | `liveData.pauseAfterSeconds` | Pause after hidden for | Integer 1–60 seconds | 2 seconds |  | All | At once | How long a live view stays hidden before its queries stop, so switching tabs for a moment loses no samples. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| Hidden views | `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| Object Explorer | `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
+| Charts | `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
 
 ### Environment › Object Explorer
 
@@ -129,12 +135,14 @@ How remembered connection targets reconnect when the workspace opens. Not in SSM
 
 ### Text Editor › General
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS). |
-| `textEditor.multiCursorModifier` | Add a cursor with | One of `alt` (Alt+Click (Option on macOS)), `ctrlCmd` (Ctrl+Click (Command on macOS)) | Alt+Click (Option on macOS) |  | All | At once | The modifier that adds another cursor where you click in the query editor. The mouse gestures list shows it too. Not in SSMS. |
-| `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
-| `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
+Sections: **Settings**, **Display**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Settings | `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS). |
+| Settings | `textEditor.multiCursorModifier` | Add a cursor with | One of `alt` (Alt+Click (Option on macOS)), `ctrlCmd` (Ctrl+Click (Command on macOS)) | Alt+Click (Option on macOS) |  | All | At once | The modifier that adds another cursor where you click in the query editor. The mouse gestures list shows it too. Not in SSMS. |
+| Settings | `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
+| Display | `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
 
 ### Text Editor › Editor Tab and Status Bar
 
@@ -152,25 +160,31 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 
 ### Text Editor › Transact-SQL › General
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux). |
-| `textEditor.sql.viewWhiteSpace` | View white space | Boolean | False |  | All | At once | Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it. Not shown in Options. |
-| `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
+Sections: **Settings**, **Display**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Settings | `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux). |
+| Display | `textEditor.sql.viewWhiteSpace` | View white space | Boolean | False |  | All | At once | Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it. Not shown in Options. |
+| Display | `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
 
 ### Text Editor › Transact-SQL › IntelliSense
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.errorChecking` | Enable error checking | Boolean | True |  | All | At once | Checks query syntax and database object references while editing. Red underlines mark errors and yellow underlines mark warnings. Analysis does not execute the query. |
+Sections: **IntelliSense**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| IntelliSense | `textEditor.sql.errorChecking` | Enable error checking | Boolean | True |  | All | At once | Checks query syntax and database object references while editing. Red underlines mark errors and yellow underlines mark warnings. Analysis does not execute the query. |
 
 ### Text Editor › Transact-SQL › Tabs
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.sql.tabSize` | Tab size | Integer 1–60 | 4 |  | All | At once | The number of columns a tab character takes. |
-| `textEditor.sql.indentSize` | Indent size | Integer 1–60 | 4 |  | All | At once | The number of columns Tab and automatic indentation indent by. |
-| `textEditor.sql.tabs` | Tab characters | One of `spaces` (Insert spaces), `tabs` (Keep tabs) | Keep tabs |  | All | At once | Whether Tab and indentation insert spaces or tab characters, as SSMS's Insert spaces and Keep tabs. The indentation already in a query is not detected. |
+Sections: **Tab**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Tab | `textEditor.sql.tabSize` | Tab size | Integer 1–60 | 4 |  | All | At once | The number of columns a tab character takes. |
+| Tab | `textEditor.sql.indentSize` | Indent size | Integer 1–60 | 4 |  | All | At once | The number of columns Tab and automatic indentation indent by. |
+| Tab | `textEditor.sql.tabs` | Tab characters | One of `spaces` (Insert spaces), `tabs` (Keep tabs) | Keep tabs |  | All | At once | Whether Tab and indentation insert spaces or tab characters, as SSMS's Insert spaces and Keep tabs. The indentation already in a query is not detected. |
 
 ### Query Execution › SQL Server › General
 
@@ -186,25 +200,27 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 
 ### Query Results › SQL Server › Results to Grid
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `queryResults.plan.outline` | Show execution plan outline | Boolean | True |  | All | At once | Show the searchable, keyboard accessible operator outline. Not in SSMS. |
-| `queryResults.plan.properties` | Show execution plan properties | Boolean | True |  | All | At once | Show properties for the selected statement or operator. Not in SSMS. |
-| `queryResults.plan.minimap` | Show execution plan minimap | Boolean | True |  | All | At once | Show a bounded overview of the plan and its viewport. Not in SSMS. |
-| `queryResults.plan.rowFlow` | Show execution plan row flow | Boolean | True |  | All | At once | Label edges with actual, estimated, unavailable or partial live rows. Not in SSMS. |
-| `queryResults.plan.outlineWidth` | Execution plan outline width | Integer 120–600 | 220 |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Not in SSMS. |
-| `queryResults.plan.propertiesWidth` | Execution plan properties width | Integer 140–600 | 260 |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Not in SSMS. |
-| `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
-| `queryResults.grid.discardResults` | Discard results after execution | Boolean | False |  | All | Next execution | Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results. |
-| `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
-| `queryResults.grid.maxRows` | Maximum rows kept per execution (0: no limit) | Integer 0–2,147,483,647 | 0 |  | All | Next execution | Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row. Not in SSMS. |
-| `queryResults.grid.memoryLimitGiB` | Result memory limit in GiB (0: automatic) | Integer 0–1,024 | 0 |  | All | At once | How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer's memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer's memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them. Closing results may keep the memory they used for new results instead of giving it back to the computer: Varia gives memory back after a close, once more than 64 MiB has been closed, or the last results are, and what remains is no more than has been closed since it last gave memory back, and no more than 8 GiB unless memory runs short, because giving memory back pauses Varia while it moves what stays, about a second for every 8 GiB that stays; with a limit over 8 GiB, results that stay stored past 8 GiB can keep the memory of closed results until enough of them are closed. Not in SSMS. |
-| `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
-| `queryResults.grid.whitespace` | Show white space in results | One of `none` (Off), `spaces` (Spaces and tabs), `all` (All white space) | Off |  | All | At once | Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too. Not in SSMS. |
-| `queryResults.grid.sortText` | Sort text columns by | One of `value` (Value), `chars` (Length in characters), `bytes` (Length in bytes) | Value |  | All | At once | How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column's collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again. Not in SSMS. |
-| `queryResults.grid.layout` | Show results | One of `stacked` (Stacked), `tabs` (As tabs) | As tabs |  | All | At once | Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs, the default, shows one at a time: a row of tabs for the results and comparisons, the selected result's Table and Pivot as view tabs beneath, and one grid; when the tabs do not fit, a button at the end of the row opens a list of every result, view and comparison (Go to Result…). Switching keeps each grid's scroll, column widths, selection, sort and filters. The results toolbar changes this too. Not in SSMS. |
-| `queryResults.grid.rowSize` | Show row size behind row numbers | Boolean | True |  | All | At once | A bar behind each row number shows the row's size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too. Not in SSMS. |
-| `queryResults.grid.columnProfile` | Show the column profile panel | Boolean | False |  | All | At once | A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too. Not in SSMS. |
+Sections: **Grid display** (How results look in the grid), **Copy and save**, **Limits and memory** (Rows past a limit are still read and counted, but not kept), **Execution plan** (The panes beside a graphical execution plan).
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Grid display | `queryResults.grid.layout` | Show results | One of `stacked` (Stacked), `tabs` (As tabs) | As tabs |  | All | At once | Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs, the default, shows one at a time: a row of tabs for the results and comparisons, the selected result's Table and Pivot as view tabs beneath, and one grid; when the tabs do not fit, a button at the end of the row opens a list of every result, view and comparison (Go to Result…). Switching keeps each grid's scroll, column widths, selection, sort and filters. The results toolbar changes this too. Not in SSMS. |
+| Grid display | `queryResults.grid.sortText` | Sort text columns by | One of `value` (Value), `chars` (Length in characters), `bytes` (Length in bytes) | Value |  | All | At once | How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column's collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again. Not in SSMS. |
+| Grid display | `queryResults.grid.whitespace` | Show white space in results | One of `none` (Off), `spaces` (Spaces and tabs), `all` (All white space) | Off |  | All | At once | Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too. Not in SSMS. |
+| Grid display | `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
+| Grid display | `queryResults.grid.rowSize` | Show row size behind row numbers | Boolean | True |  | All | At once | A bar behind each row number shows the row's size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too. Not in SSMS. |
+| Grid display | `queryResults.grid.columnProfile` | Show the column profile panel | Boolean | False |  | All | At once | A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too. Not in SSMS. |
+| Copy and save | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
+| Limits and memory | `queryResults.grid.discardResults` | Discard results after execution | Boolean | False |  | All | Next execution | Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results. |
+| Limits and memory | `queryResults.grid.maxResultSets` | Result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Named "Maximum result sets kept per execution" outside its section. Not in SSMS. |
+| Limits and memory | `queryResults.grid.maxRows` | Rows kept per execution | Integer 0–2,147,483,647 | 0 |  | All | Next execution | Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row. Shown after the field: 0 = no limit. Named "Maximum rows kept per execution" outside its section. Not in SSMS. |
+| Limits and memory | `queryResults.grid.memoryLimitGiB` | Result memory limit | Integer 0–1,024 GiB | 0 GiB |  | All | At once | How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer's memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer's memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them. Closing results may keep the memory they used for new results instead of giving it back to the computer: Varia gives memory back after a close, once more than 64 MiB has been closed, or the last results are, and what remains is no more than has been closed since it last gave memory back, and no more than 8 GiB unless memory runs short, because giving memory back pauses Varia while it moves what stays, about a second for every 8 GiB that stays; with a limit over 8 GiB, results that stay stored past 8 GiB can keep the memory of closed results until enough of them are closed. Shown after the field: 0 = automatic. Not in SSMS. |
+| Execution plan | `queryResults.plan.outline` | Show outline | Boolean | True |  | All | At once | Show the searchable, keyboard accessible operator outline. Named "Show execution plan outline" outside its section. Not in SSMS. |
+| Execution plan | `queryResults.plan.properties` | Show properties | Boolean | True |  | All | At once | Show properties for the selected statement or operator. Named "Show execution plan properties" outside its section. Not in SSMS. |
+| Execution plan | `queryResults.plan.minimap` | Show minimap | Boolean | True |  | All | At once | Show a bounded overview of the plan and its viewport. Named "Show execution plan minimap" outside its section. Not in SSMS. |
+| Execution plan | `queryResults.plan.rowFlow` | Show row flow | Boolean | True |  | All | At once | Label edges with actual, estimated, unavailable or partial live rows. Named "Show execution plan row flow" outside its section. Not in SSMS. |
+| Execution plan | `queryResults.plan.outlineWidth` | Outline width | Integer 120–600 px | 220 px |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Named "Execution plan outline width" outside its section. Not in SSMS. |
+| Execution plan | `queryResults.plan.propertiesWidth` | Properties width | Integer 140–600 px | 260 px |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Named "Execution plan properties width" outside its section. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -264,31 +280,35 @@ A property grid: True/False lists, values that differ from their default in bold
 
 What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `activityMonitor.refreshIntervalSeconds` | Refresh interval | One of `1` (1 second), `2` (2 seconds), `3` (3 seconds), `5` (5 seconds), `10` (10 seconds), `15` (15 seconds), `30` (30 seconds), `60` (60 seconds) | 2 seconds |  | All | At once | How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor's interval. Not in SSMS. |
-| `activityMonitor.queriesIntervalSeconds` | Query statistics interval | Integer 15–60 seconds | 30 seconds |  | All | At once | How often a new Activity Monitor reads the plan cache for Recent Expensive Queries, and the window its rates span. Reading the plan cache costs more than the other samples, so it has its own, longer interval; it runs only while that pane is shown. Not in SSMS. |
-| `activityMonitor.chartWindowMinutes` | Chart window | One of `1` (1 minute), `5` (5 minutes), `15` (15 minutes), `60` (60 minutes) | 15 minutes |  | All | At once | How much time a new Activity Monitor's tiles and charts show. Charts reach back only as far as Environment › Live Data keeps history. Not in SSMS. |
-| `activityMonitor.primaryPane` | First pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries) | Sessions |  | All | At once | The pane a new Activity Monitor shows first (on the left, or on top in a narrow window). Not in SSMS. |
-| `activityMonitor.secondaryPane` | Second pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries), `none` (None (no split view)) | Resource Waits |  | All | At once | The pane a new Activity Monitor shows beside the first in split view. None opens it with one pane; Split View shows a second one again. Not in SSMS. |
-| `activityMonitor.cpuWarningPercent` | Processor time warning | Integer 50–100 percent | 80 percent |  | All | At once | The % Processor Time tile is outlined as a warning from this much SQL Server CPU, and as an error from 95 %. Not in SSMS. |
-| `activityMonitor.blockedWarningSeconds` | Blocking warning after | Integer 1–3,600 seconds | 5 seconds |  | All | At once | The Blocked Sessions tile is outlined as a warning once a session has waited on another this long. Not in SSMS. |
-| `activityMonitor.blockedErrorSeconds` | Blocking error after | Integer 1–3,600 seconds | 30 seconds |  | All | At once | The Blocked Sessions tile is outlined as an error once a session has waited on another this long. Not in SSMS. |
-| `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning, and Data File I/O tones a file as a warning, when reads or writes take this long on average over the interval. Not in SSMS. |
-| `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error, and Data File I/O tones a file as an error, when reads or writes take this long on average over the interval. Below the warning threshold it acts as the warning one. Not in SSMS. |
+Sections: **New monitors** (What a new Activity Monitor starts with), **Thresholds** (When the overview tiles warn).
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| New monitors | `activityMonitor.refreshIntervalSeconds` | Refresh interval | One of `1` (1 second), `2` (2 seconds), `3` (3 seconds), `5` (5 seconds), `10` (10 seconds), `15` (15 seconds), `30` (30 seconds), `60` (60 seconds) | 2 seconds |  | All | At once | How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor's interval. Not in SSMS. |
+| New monitors | `activityMonitor.queriesIntervalSeconds` | Query statistics interval | Integer 15–60 seconds | 30 seconds |  | All | At once | How often a new Activity Monitor reads the plan cache for Recent Expensive Queries, and the window its rates span. Reading the plan cache costs more than the other samples, so it has its own, longer interval; it runs only while that pane is shown. Not in SSMS. |
+| New monitors | `activityMonitor.chartWindowMinutes` | Chart window | One of `1` (1 minute), `5` (5 minutes), `15` (15 minutes), `60` (60 minutes) | 15 minutes |  | All | At once | How much time a new Activity Monitor's tiles and charts show. Charts reach back only as far as Environment › Live Data keeps history. Not in SSMS. |
+| New monitors | `activityMonitor.primaryPane` | First pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries) | Sessions |  | All | At once | The pane a new Activity Monitor shows first (on the left, or on top in a narrow window). Not in SSMS. |
+| New monitors | `activityMonitor.secondaryPane` | Second pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries), `none` (None (no split view)) | Resource Waits |  | All | At once | The pane a new Activity Monitor shows beside the first in split view. None opens it with one pane; Split View shows a second one again. Not in SSMS. |
+| Thresholds | `activityMonitor.cpuWarningPercent` | Processor time warning | Integer 50–100 percent | 80 percent |  | All | At once | The % Processor Time tile is outlined as a warning from this much SQL Server CPU, and as an error from 95 %. Not in SSMS. |
+| Thresholds | `activityMonitor.blockedWarningSeconds` | Blocking warning after | Integer 1–3,600 seconds | 5 seconds |  | All | At once | The Blocked Sessions tile is outlined as a warning once a session has waited on another this long. Not in SSMS. |
+| Thresholds | `activityMonitor.blockedErrorSeconds` | Blocking error after | Integer 1–3,600 seconds | 30 seconds |  | All | At once | The Blocked Sessions tile is outlined as an error once a session has waited on another this long. Not in SSMS. |
+| Thresholds | `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning, and Data File I/O tones a file as a warning, when reads or writes take this long on average over the interval. Not in SSMS. |
+| Thresholds | `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error, and Data File I/O tones a file as an error, when reads or writes take this long on average over the interval. Below the warning threshold it acts as the warning one. Not in SSMS. |
 
 ### SQL Server Integration Services
 
 How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 
-| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `integrationServices.treeLive` | Update the SSIS Catalog in Object Explorer as it changes | Boolean | True |  | All | At once | While a connection's SSISDB node is open in Object Explorer, Varia checks the catalog for changes made elsewhere, such as a deployment or a new folder, project or environment, and updates only the folders that changed, keeping what is expanded and selected. The check is one small query that pauses while Object Explorer is hidden. While it is False, the tree changes only on Refresh (F5) and after Varia's own changes. Not in SSMS. |
-| `integrationServices.treeRefreshSeconds` | Check the catalog for changes every | Integer 10–300 seconds | 30 seconds |  | All | At once | How often an open SSISDB node checks the catalog for changes. Each check reads every catalog folder, project, package, environment, variable, reference and parameter the login may see, so a large catalog on a busy server may want a longer interval. Not in SSMS. Greyed while `integrationServices.treeLive` is False. |
-| `integrationServices.operationsRefreshSeconds` | Update Operations every | Integer 1–60 seconds | 2 seconds |  | All | At once | How often an open Integration Services Operations document reads the catalog for new operations and the open ones' status. It pauses while the document is hidden. A busy catalog on a busy server may want a longer interval. Not in SSMS. |
-| `integrationServices.operationsWindowHours` | Show operations created in the last | Integer 1–8,760 hours | 24 hours |  | All | At once | The window a new Operations document opens on. Its Window filter changes it for that document only. The catalog keeps operations for its own retention period (365 days by default), so a longer window shows nothing older than that. Not in SSMS. |
-| `integrationServices.operationsLimit` | Show at most | Integer 100–10,000 operations | 1,000 operations |  | All | At once | The most operations an Operations document holds: the newest ones of its window that pass its filters, open ones first. Open documents read their window again with the new limit. The tiles count every operation the login may see, whatever this limit and the filters are. Not in SSMS. |
-| `integrationServices.confirmStop` | Ask before Stop Operation | Boolean | True |  | All | At once | Asks before Stop Operation ends a running package or validation. The package stops after its current work; the catalog then lists it as Stopping, and Canceled once it has ended. While it is False, Stop Operation stops at once. Not in SSMS. |
+Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS Catalog).
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Object Explorer | `integrationServices.treeLive` | Update the SSIS Catalog in Object Explorer as it changes | Boolean | True |  | All | At once | While a connection's SSISDB node is open in Object Explorer, Varia checks the catalog for changes made elsewhere, such as a deployment or a new folder, project or environment, and updates only the folders that changed, keeping what is expanded and selected. The check is one small query that pauses while Object Explorer is hidden. While it is False, the tree changes only on Refresh (F5) and after Varia's own changes. Not in SSMS. |
+| Object Explorer | `integrationServices.treeRefreshSeconds` | Check the catalog for changes every | Integer 10–300 seconds | 30 seconds |  | All | At once | How often an open SSISDB node checks the catalog for changes. Each check reads every catalog folder, project, package, environment, variable, reference and parameter the login may see, so a large catalog on a busy server may want a longer interval. Not in SSMS. Greyed while `integrationServices.treeLive` is False. |
+| Operations | `integrationServices.operationsRefreshSeconds` | Update Operations every | Integer 1–60 seconds | 2 seconds |  | All | At once | How often an open Integration Services Operations document reads the catalog for new operations and the open ones' status. It pauses while the document is hidden. A busy catalog on a busy server may want a longer interval. Not in SSMS. |
+| Operations | `integrationServices.operationsWindowHours` | Show operations created in the last | Integer 1–8,760 hours | 24 hours |  | All | At once | The window a new Operations document opens on. Its Window filter changes it for that document only. The catalog keeps operations for its own retention period (365 days by default), so a longer window shows nothing older than that. Not in SSMS. |
+| Operations | `integrationServices.operationsLimit` | Show at most | Integer 100–10,000 operations | 1,000 operations |  | All | At once | The most operations an Operations document holds: the newest ones of its window that pass its filters, open ones first. Open documents read their window again with the new limit. The tiles count every operation the login may see, whatever this limit and the filters are. Not in SSMS. |
+| Operations | `integrationServices.confirmStop` | Ask before Stop Operation | Boolean | True |  | All | At once | Asks before Stop Operation ends a running package or validation. The package stops after its current work; the catalog then lists it as Stopping, and Canceled once it has ended. While it is False, Stop Operation stops at once. Not in SSMS. |
 
 ## Storage
 

@@ -20,27 +20,33 @@ const shortcutsPage = 'environment.shortcuts'
 const groupHeading = (pageId: string, label: string) => pageId === 'environment.fontsAndColors' ? `Show settings for: ${label}` : label
 
 interface RowProps { row: SettingRow; error?: string; focused: boolean; label: ReactNode; onFocus(): void; onChange(text: string): void }
-/** A form row: a checkbox with its label, a number field with its unit, a list, or radio buttons. */
+/** What follows a control in the hint column: an integer's unit, then the setting's hint ("GiB · 0 = automatic"). */
+export const rowHint = (row: SettingRow): string => [row.def.type === 'integer' ? row.def.unit : undefined, row.def.hint].filter(Boolean).join(' · ')
+/**
+ * A form row on the page's grid (label, control, hint columns): a checkbox with its label across the first two, a number
+ * field or a list after its label, or radio buttons after theirs.
+ */
 function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
-  const { def } = row, id = controlId(row.key)
+  const { def } = row, id = controlId(row.key), hint = rowHint(row)
   const common = { id, disabled: row.disabled, 'data-setting': row.key, 'aria-description': def.description, onFocus }
   let control: ReactNode
-  if (def.type === 'boolean') control = <label className="options-check"><input {...common} type="checkbox" checked={row.value === 'true'} onChange={event => onChange(String(event.target.checked))} />{label}</label>
+  if (def.type === 'boolean') control = <label className="options-check"><input {...common} type="checkbox" checked={row.value === 'true'} onChange={event => onChange(String(event.target.checked))} /><span>{label}</span></label>
   else if (def.type === 'integer') {
-    control = <><label htmlFor={id}>{label}</label><span className="options-number">
-      <input {...common} type="number" step={1} min={def.min} max={def.max} value={row.value} aria-invalid={error ? true : undefined} aria-errormessage={error ? id + '-error' : undefined}
-        onChange={event => onChange(event.target.value)} />{def.unit && <span>{def.unit}</span>}</span></>
+    control = <><label className="options-label" htmlFor={id}>{label}</label>
+      <input {...common} className="options-control" type="number" step={1} min={def.min} max={def.max} value={row.value} aria-invalid={error ? true : undefined} aria-errormessage={error ? id + '-error' : undefined}
+        onChange={event => onChange(event.target.value)} /></>
   } else if (def.presentation === 'radio') {
-    control = <fieldset className="options-radios" disabled={row.disabled}><legend>{label}</legend>
-      {def.values.map((choice, index) => <label key={choice.value}><input type="radio" name={id} value={choice.value} checked={row.value === choice.value} onFocus={onFocus}
+    control = <><span className="options-label" id={id + '-label'}>{label}</span><div className="options-radios" role="radiogroup" aria-labelledby={id + '-label'} aria-disabled={row.disabled || undefined}>
+      {def.values.map((choice, index) => <label key={choice.value}><input type="radio" name={id} value={choice.value} checked={row.value === choice.value} disabled={row.disabled} onFocus={onFocus}
         {...index === 0 ? { id, 'data-setting': row.key } : {}} onChange={() => onChange(choice.value)} />{choice.label}</label>)}
-    </fieldset>
+    </div></>
   } else {
-    control = <><label htmlFor={id}>{label}</label><select {...common} value={row.value} onChange={event => onChange(event.target.value)}>
+    control = <><label className="options-label" htmlFor={id}>{label}</label><select {...common} className="options-control" value={row.value} onChange={event => onChange(event.target.value)}>
       {def.values.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></>
   }
   return <div className="options-form-row" data-focused={focused || undefined} data-disabled={row.disabled || undefined} onPointerDown={onFocus}>
     {control}
+    {hint && !(def.type === 'enum' && def.presentation === 'radio') && <span className="options-hint">{hint}</span>}
     {error && <span className="options-field-error" id={id + '-error'}>{error}</span>}
   </div>
 }
@@ -195,10 +201,15 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const highlight = (label: string): ReactNode => found ? highlightParts(label, query).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text) : label
   const focusedRow = shownRows.find(row => row.key === focused)
   const described = focusedRow ? { title: focusedRow.def.label, text: focusedRow.def.description, notes: rowNotes(focusedRow.def) } : { title: form.page.title, text: form.page.description ?? '', notes: [] }
-  const groups = (list: readonly RowGroup[]) => list.map((group, index) => <div key={group.label ?? index} className="options-group" role="group" aria-label={group.label}>
-    {group.label && <div className="options-category">{groupHeading(form.page.id, group.label)}</div>}
-    {group.rows.map(row => <FormRow key={row.key} row={row} error={errors.get(row.key)} focused={row.key === focused} label={highlight(row.def.label)} onFocus={() => setFocused(row.key)} onChange={text => change(row.key, text)} />)}
-  </div>)
+  // A section: its heading and one-line description above the rows, which share the page's label, control and hint columns.
+  const groups = (list: readonly RowGroup[]) => list.map((group, index) => <section key={group.label ?? index} className="options-group" role="group" aria-label={group.label} aria-description={group.description}>
+    {group.label && <div className="options-section-head"><h4 className="options-category">{highlight(groupHeading(form.page.id, group.label))}</h4>{group.description && <p className="options-section-description">{group.description}</p>}</div>}
+    <div className="options-grid">
+      {group.rows.map(row => <FormRow key={row.key} row={row} error={errors.get(row.key)} focused={row.key === focused} label={highlight(row.def.label)} onFocus={() => setFocused(row.key)} onChange={text => change(row.key, text)} />)}
+    </div>
+  </section>)
+  // The page's ancestors on a line above its title; the separator after them is read with the heading, so its text stays the whole path.
+  const path = pagePath(form.page.id), ancestors = path.slice(0, -1).map(node => node.title).join(' › ')
 
   // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
   return <div className="modal-backdrop"><form className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
@@ -219,7 +230,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           </ul>}
       </div>
       <div className="options-page">
-        <h3 className="options-heading">{pagePath(form.page.id).map(node => node.title).join(' › ')}</h3>
+        <h3 className="options-heading">{ancestors && <span className="options-crumb">{ancestors}<span className="visually-hidden"> › </span></span>}<span className="options-title">{form.page.title}</span></h3>
         {form.provider === 'theme' && <p className="options-note">{highlight('Color theme')}: View › Theme</p>}
         {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
         {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}

@@ -12,7 +12,7 @@ export const shortcutsSearchTerms: readonly string[] = ['Keyboard and mouse shor
 const layoutTerms: Readonly<Record<string, readonly string[]>> = { shortcuts: shortcutsSearchTerms }
 
 export const settingMatches = (def: SettingDef, query: string): boolean =>
-  [def.label, def.description, ...def.keywords ?? []].some(text => has(text, query))
+  [def.label, def.title ?? '', def.description, def.group ?? '', ...def.keywords ?? []].some(text => has(text, query))
 function pageMatches(page: SettingPage, query: string, defs: readonly SettingDef[]): boolean {
   const terms = [pagePath(page.id).map(node => node.title).join(' › '), page.description ?? '', ...page.provider ? providerTerms[page.provider] : [], ...page.layout ? layoutTerms[page.layout] ?? [] : []]
   return terms.some(text => has(text, query)) || defs.some(def => def.page === page.id && settingMatches(def, query))
