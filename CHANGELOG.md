@@ -13,6 +13,8 @@
 
 ### Fixes
 
+- **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
+- **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
 - **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.
 - **IntelliSense ranks exact matches first and brackets columns consistently:** A name you type exactly, in any case, is now first in the completion list instead of below names that only start with it, fuzzy matches or system objects, and it is no longer missing from the visible list. Every column suggestion shows and inserts its bracketed name, so a column of the alias `[bob]` inserts `[bob].[columnName]` just as the list shows.
 
