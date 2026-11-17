@@ -19,7 +19,7 @@
 //   node scripts/check.mjs --build  npm run build:smoke: the Release backend and electron-vite build, side by side
 import { spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
-import { availableParallelism, constants, setPriority } from 'node:os'
+import { availableParallelism } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { acquire, lockEnabled, sharedSlots } from './machine-lock.mjs'
 // The vitest files that start backend/Varia.Backend/bin/Release: tests/backend-sidecar.test.ts, and the live files when
@@ -69,21 +69,8 @@ export function vitestWorkers(cpus) {
   return { vitest: Math.max(1, cpus - 3), 'vitest (Release backend)': Math.min(2, Math.max(1, cpus - 1)) }
 }
 
-/**
- * The lanes that run below normal priority. On CI's 4 vCPUs the Release .NET build (MSBuild nodes and the compiler server
- * it starts, which inherit the priority) ran beside vitest's first minute, when every worker is importing and the big files
- * start, and stalled whole vitest workers: tests of under 100 ms locally took 15 to 21 s and some passed the 20 s timeout.
- * Below normal, the build takes the CPU vitest leaves; its chain still ends well before vitest's. The offline .NET checks
- * keep normal priority: their timing checks need it.
- */
-export function backgroundLanes({ cpus, build = false }) {
-  return cpus >= 8 || build ? [] : ['Release build (.NET)']
-}
-
 /** Each lane's extra environment: set in the main block when the machine lock applies. */
 const laneEnv = {}
-/** The lanes backgroundLanes chose: set in the main block. */
-const background = new Set()
 
 /** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
 export const skippable = { typecheck: 'Type check' }
@@ -119,11 +106,9 @@ export const running = new Set()
 export const checkStarted = Number(process.env.VARIA_CHECK_STARTED) || Date.now()
 const sinceCheck = () => ((Date.now() - checkStarted) / 1000).toFixed(1)
 
-export const run = (name, command, write = text => process.stdout.write(text), env = {}, background = false) => new Promise(resolve => {
+export const run = (name, command, write = text => process.stdout.write(text), env = {}) => new Promise(resolve => {
   const started = performance.now(), output = [], from = sinceCheck()
   const child = spawn(command, { shell: true, env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1', VARIA_CHECK_STARTED: String(checkStarted), ...env } })
-  // Set on the shell before it starts the command, so every process the lane starts inherits it.
-  if (background && child.pid) try { setPriority(child.pid, constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* runs at normal priority */ }
   const lane = { name, started, output, child }
   running.add(lane)
   child.stdout.on('data', chunk => output.push(chunk))
@@ -147,7 +132,7 @@ export function flushRunning(write = text => process.stdout.write(text)) {
 }
 
 const execute = node => {
-  if (typeof node === 'string') return run(node, steps[node], undefined, laneEnv[node], background.has(node)).then(result => [result])
+  if (typeof node === 'string') return run(node, steps[node], undefined, laneEnv[node]).then(result => [result])
   if (node.all) return Promise.all(node.all.map(execute)).then(results => results.flat())
   if (node.chain) return (async () => { const results = []; for (const item of node.chain) results.push(...await execute(item)); return results })()
   return execute(node.gate).then(async results => results.some(result => result.code) ? results : [...results, ...await execute(node.then)])
@@ -170,7 +155,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   })
   const started = performance.now()
   const layout = plan({ cpus, build, skip })
-  for (const lane of backgroundLanes({ cpus, build })) background.add(lane)
   const results = await execute(layout)
   const failed = results.filter(result => result.code)
   const skipped = build ? '' : skippedNote(layout, skip)

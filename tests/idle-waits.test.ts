@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { constants, getPriority } from 'node:os'
 
 // Time CI spent waiting rather than working (docs/ci.md): timers that outlived the app they raced, offline checks that
 // waited out a refused connection, and check lanes that waited for a build they did not need.
@@ -199,19 +198,6 @@ describe('idle waits', () => {
     // Two chains: the build moved behind the .NET lanes balances them (vitest is the longest lane).
     expect(plan({ cpus: 4 })).toEqual({ all: [{ chain: ['Type check', 'vitest'] }, { chain: [{ gate: 'Release build (.NET)', then: { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }, 'electron-vite build'] }] })
     expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Release backend', 'electron-vite build'])
-  })
-  // On a 4-vCPU runner the Release .NET build beside vitest's first minute stalled whole workers past the 20 s timeout.
-  it('run the Release .NET build below normal priority in the two-chain layout, and what it starts with it', async () => {
-    const { backgroundLanes, run } = await import('../scripts/check.mjs')
-    expect(backgroundLanes({ cpus: 4 })).toEqual(['Release build (.NET)'])
-    expect(backgroundLanes({ cpus: 24 })).toEqual([])
-    expect(backgroundLanes({ cpus: 4, build: true })).toEqual([])
-    const read = `node -e "process.stdout.write('priority=' + require('node:os').getPriority())"`
-    let low = '', normal = ''
-    await run('low', read, text => { low += text }, {}, true)
-    await run('normal', read, text => { normal += text })
-    expect(low).toContain(`priority=${constants.priority.PRIORITY_BELOW_NORMAL}`)
-    expect(normal).toContain(`priority=${getPriority()}`)
   })
   // VARIA_CHECK_SKIP=tsc used to skip nothing while the summary reported it skipped.
   it('refuse an unknown VARIA_CHECK_SKIP name and report only the lanes left out', async () => {
