@@ -14,6 +14,9 @@ import type { QueryEditorInstance } from '../src/renderer/src/editor/create-edit
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks() })
+// The work these waits watch is promise chains through mocks: no wall-clock bound means anything, and a starved CI worker
+// has run them past vi.waitFor's default second.
+const landed = (check: () => void) => vi.waitFor(check, { timeout: 15_000 })
 const position = { lineNumber: 1, column: 4 } as Monaco.Position
 const configured: LanguageStatus = { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }] }
 const completions: LanguageCompletions = { items: [{ label: 'Customer', kind: 7 }], isIncomplete: false }
@@ -207,14 +210,14 @@ describe('SQL language editor integration', () => {
     const answer = deferred<ApiResult<{ refreshed: boolean }>>()
     f.api.languageRefresh.mockReturnValueOnce(answer.promise)
     const refresh = f.service.refreshCache(a.id, cancel.token)
-    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    await landed(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
     if (change === 'context') f.documents.update(a.id, { database: 'other' })
     if (change === 'close') await f.documents.close(a.id)
     if (change === 'cancel') cancel.cancel()
     expect(await refresh).toBe(false)
     changed.mockClear()
     answer.resolve({ ok: true, value: { refreshed: true } })
-    await vi.waitFor(() => expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before))
+    await landed(() => expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before))
     expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
     expect(changed).toHaveBeenCalled()
   })
@@ -225,7 +228,7 @@ describe('SQL language editor integration', () => {
     const answer = deferred<ApiResult<{ refreshed: boolean }>>()
     f.api.languageRefresh.mockReturnValueOnce(answer.promise)
     const refresh = f.service.refreshCache(a.id)
-    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    await landed(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
     if (change === 'backend') f.backend!.receive({ status: 'unresponsive', generation: 1, silentMs: 1 })
     else f.service.dispose()
     expect(await refresh).toBe(false)
@@ -240,20 +243,20 @@ describe('SQL language editor integration', () => {
     const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
     f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
     const pending = f.service.diagnostics(f.model(tab.id), token())
-    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    await landed(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
     expect(f.api.languageDiagnostics.mock.calls[0][0]).toEqual({ documentId: tab.id, version: 1, text: 'SELECT Missing', context: { providerId: 'sqlserver', database: 'master' } })
     await f.documents.close(tab.id)
     expect(f.api.languageClose).toHaveBeenCalledWith(tab.id)
     answer.resolve({ ok: true, value: { version: 1, items: [], isIncomplete: false } })
     expect(await pending).toBeUndefined()
-    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
+    await landed(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
   })
   it('waits for the old diagnostic context cleanup before analyzing the same model in another database', async () => {
     const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'first')
     const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
     f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
     const first = f.service.diagnostics(f.model(tab.id), token())
-    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    await landed(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
     f.documents.update(tab.id, { database: 'second' })
     const second = f.service.diagnostics(f.model(tab.id), token())
     await Promise.resolve()
@@ -353,7 +356,7 @@ describe('SQL language editor integration', () => {
     f.api.languageDefinition.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ok: true, value: found })
     const at = { lineNumber: 1, column: 20 } as Monaco.Position
     const slow = f.service.definition(f.model(tab.id), at)
-    await vi.waitFor(() => expect(f.api.languageDefinition).toHaveBeenCalledTimes(1))
+    await landed(() => expect(f.api.languageDefinition).toHaveBeenCalledTimes(1))
     // A second press is not dropped: it waits for the first request to settle, then asks again; the first answers nothing.
     const fresh = f.service.definition(f.model(tab.id), at)
     first.resolve({ ok: true, value: found })
@@ -489,7 +492,7 @@ describe('SQL language editor integration', () => {
     expect(latestSettled).toBe(false)
     oldAnswer.resolve({ ok: true, value: { items: [{ label: 'Old suggestion' }], isIncomplete: false } })
     expect((await old).suggestions).toEqual([])
-    await vi.waitFor(() => expect(f.api.languageComplete).toHaveBeenCalledTimes(2))
+    await landed(() => expect(f.api.languageComplete).toHaveBeenCalledTimes(2))
     expect(f.api.languageComplete.mock.calls[1][0].position).toEqual({ line: 0, character: 6 })
     // The older finally must not release the newer request's slot while its own backend reply is pending.
     expect(await f.complete(tab.id)).toEqual({ suggestions: [], incomplete: true })
@@ -564,7 +567,7 @@ describe('SQL language editor integration', () => {
     f.service.dispose(); f.service.dispose()
     answer.resolve({ ok: true, value: { contents: 'late' } })
     expect(await result).toBeNull()
-    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([a.id, b.id, b.id]))
+    await landed(() => expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([a.id, b.id, b.id]))
     expect(f.unregisterCompletion).toHaveBeenCalledTimes(1)
     expect(f.unregisterHover).toHaveBeenCalledTimes(1)
     expect(f.unregisterDefinition).toHaveBeenCalledTimes(1)
@@ -589,7 +592,7 @@ describe('SQL language editor integration', () => {
       : feature === 'hover' ? f.getHover(tab.id).then(result => { expect(result).toBeNull() })
       : f.service.refreshCache(tab.id).then(result => { expect(result).toBe(false) })
     const apiRequest = feature === 'completion' ? f.api.languageComplete : feature === 'hover' ? f.api.languageHover : f.api.languageRefresh
-    await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(1))
+    await landed(() => expect(apiRequest).toHaveBeenCalledTimes(1))
     if (change === 'close') await f.documents.close(tab.id)
     else f.service.dispose()
     // The control-lane close runs immediately, before the queued request has created any backend state.
@@ -597,7 +600,7 @@ describe('SQL language editor integration', () => {
     expect(backendDocumentOpen).toBe(false)
     dispatch.resolve()
     await request
-    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
+    await landed(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
     expect(backendDocumentOpen).toBe(false)
   })
 
@@ -651,7 +654,7 @@ describe('SQL language editor integration', () => {
     expect(acceptedCloses).toHaveLength(4)
     releaseCloses = true
     acceptedCloses.forEach(finish => finish())
-    await vi.waitFor(() => expect(backendDocuments.size).toBe(0))
+    await landed(() => expect(backendDocuments.size).toBe(0))
     expect(f.api.languageClose).toHaveBeenCalledTimes(40)
     expect(peakPending - ipcLimits.pending.requests).toBe(4)
     expect(f.service.getSnapshot().cleanupError).toBeUndefined()
@@ -668,10 +671,10 @@ describe('SQL language editor integration', () => {
     const cached = f.documents.create('cached.sql', 'Customer', 'master')
     await f.complete(cached.id)
     f.service.dispose()
-    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledWith(cached.id))
+    await landed(() => expect(f.api.languageClose).toHaveBeenCalledWith(cached.id))
     dispatch.resolve()
     await Promise.all(requests)
-    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(9))
+    await landed(() => expect(f.api.languageClose).toHaveBeenCalledTimes(9))
   })
 
   it('retries explicit predispatch refusals before allowing a new context to bind', async () => {
@@ -900,7 +903,7 @@ describe('SQL language editor integration', () => {
     const answer = deferred<ApiResult<{ refreshed: boolean }>>()
     f.api.languageRefresh.mockReturnValueOnce(answer.promise)
     const refresh = f.service.refreshCache(a.id)
-    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
+    await landed(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
     expect(f.api.languageRefresh).toHaveBeenCalledWith({ documentId: a.id, version: 1, text: 'SELECT a', context: { providerId: 'sqlserver', connectionId: 'a', database: 'catalog-a' } })
     expect(f.service.availability(a.id).label).toBe('IntelliSense refreshing')
     expect(f.service.availability(b.id).label).toBe('IntelliSense')
@@ -921,7 +924,7 @@ describe('SQL language editor integration', () => {
     f.api.languageComplete.mockReturnValueOnce(oldAnswer.promise)
     f.api.languageRefresh.mockReturnValueOnce(refreshed.promise)
     const old = f.complete(tab.id), refresh = f.service.refreshCache(tab.id)
-    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
+    await landed(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
     oldAnswer.resolve({ ok: true, value: { items: [{ label: 'Old schema' }], isIncomplete: false } })
     expect((await old).suggestions).toEqual([])
     const latest = f.complete(tab.id)
@@ -954,7 +957,7 @@ describe('SQL language editor integration', () => {
     const answer = deferred<ApiResult<{ refreshed: boolean }>>()
     f.api.languageRefresh.mockReturnValueOnce(answer.promise)
     const result = f.service.refreshCache(tab.id, cancel.token)
-    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
+    await landed(() => expect(f.api.languageRefresh).toHaveBeenCalledTimes(1))
     if (change === 'edit') f.models.get(`varia-sql://query/${tab.id}`)!.edit('Changed')
     if (change === 'context') f.documents.update(tab.id, { database: 'other' })
     if (change === 'close') await f.documents.close(tab.id)
@@ -1135,14 +1138,14 @@ describe('SQL language features in Peek', () => {
       await Promise.resolve()
       cancel.cancel()
     }
-    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek))
+    await landed(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek))
     // Peek's own cap holds: the rest never reached the backend.
     expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek)
     // A query tab still gets completion and hover.
     const tab = f.documents.create('query.sql', 'SELECT Cus', 'master')
     expect((await f.complete(tab.id)).suggestions.map(item => item.label)).toEqual(['Customer'])
     const queryHover = f.getHover(tab.id)
-    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 1))
+    await landed(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 1))
     replies.at(-1)!.resolve({ ok: true, value: { contents: 'Customer table' } })
     expect(await queryHover).toMatchObject({ contents: [{ value: 'Customer table' }] })
     // Once Peek's requests settle, a new Peek model is served again.
@@ -1150,7 +1153,7 @@ describe('SQL language features in Peek', () => {
     await Promise.all(hovers)
     const next = peek.show('next', 'CREATE VIEW dbo.Next AS SELECT 1 AS N')
     const nextHover = f.hover.provideHover(next, position, token())
-    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 2))
+    await landed(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 2))
     replies.at(-1)!.resolve({ ok: true, value: { contents: 'Next' } })
     expect(await nextHover).toMatchObject({ contents: [{ value: 'Next' }] })
   })
@@ -1165,13 +1168,13 @@ describe('SQL language features in Peek', () => {
     const reply = deferred<Awaited<ReturnType<VariaApi['languageHover']>>>()
     f.api.languageHover.mockReturnValueOnce(reply.promise)
     const hover = f.hover.provideHover(first, position, token())
-    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledOnce())
+    await landed(() => expect(f.api.languageHover).toHaveBeenCalledOnce())
     peek.show('2', 'CREATE VIEW dbo.W AS SELECT 2 AS Two')
     expect(f.api.languageClose).toHaveBeenCalledWith(id)
     reply.resolve({ ok: true, value: { contents: 'stale' } })
     expect(await hover).toBeNull()
     // The close raced the request, so it goes again once the request is done, as for a closed query.
-    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
+    await landed(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
     for (const map of Object.values(bookkeeping(f.service))) expect(map.has(id)).toBe(false)
   })
 
@@ -1195,7 +1198,7 @@ describe('SQL language features in Peek', () => {
     expect(bookkeeping(f.service).contexts.has(id)).toBe(true)
     // Disposing it afterwards closes the reopened document too.
     peek.editor.keep(undefined)
-    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
+    await landed(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
     for (const map of Object.values(bookkeeping(f.service))) expect(map.has(id)).toBe(false)
   })
 

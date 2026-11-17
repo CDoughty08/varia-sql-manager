@@ -1,7 +1,8 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 // Real Monaco suggestion/hover widgets through preload, main validation and the fake backend. SQL Tools Service's
 // process/protocol/provider lifecycle is tested separately; this suite needs neither that executable nor a database.
@@ -12,7 +13,7 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 let application, page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Language-service suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 180000)
-const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
 const languageCalls = async method => (await calls()).filter(call => call.method === method)
 const text = scope => editorText(scope).then(value => value.replaceAll('\u00a0', ' '))
 async function launch() {
@@ -348,7 +349,7 @@ try {
   await hover(page, editorGroupForDocument(page, tabB), 'language-server-b/master')
   console.log('Language checks: returning from the Results OS popout preserves suggestion and hover context in both main-window editors.')
 
-  await popoutDockButton(popout).click()
+  await dockPopoutBack(popout)
   await expect.poll(() => popout.isClosed()).toBe(true)
   await page.bringToFront()
   await expect(editorGroups(page)).toHaveCount(2)

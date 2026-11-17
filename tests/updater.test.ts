@@ -295,7 +295,9 @@ describe('Updater', () => {
     const first = updater({ manifest: [json(manifest())] })
     expect(await first.instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
     expect(first.requests).toHaveLength(1)
-    await expect.poll(() => readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+    // The sweep runs after the check answers: wait for it, not for a bound a loaded runner can outlast.
+    await first.instance.whenSwept()
+    expect(await readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
     await writeFile(join(dir, 'updates', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'), 'not the installer')
     const second = updater({ manifest: [json(manifest())], asset: [file(payload)] })
     expect(await second.instance.check(false)).toMatchObject({ status: 'ready' })
@@ -310,7 +312,8 @@ describe('Updater', () => {
     const { instance } = updater({ manifest: [json(manifest())], asset: [file(payload)] }, { kind: 'portable', downloadDir: shared, privateDir: false })
     expect(await instance.check(false)).toMatchObject({ status: 'ready' })
     expect(instance.readyFile?.file).toBe(join(shared, '.Varia-SQL-Manager-1.1.0-Windows-x64-Portable.exe.update'))
-    await expect.poll(async () => (await readdir(shared)).sort()).toEqual(['.Varia-SQL-Manager-1.1.0-Windows-x64-Portable.exe.update', 'Varia-SQL-Manager-1.0.0-Windows-x64-Portable.exe', 'notes.txt'])
+    await instance.whenSwept()
+    expect((await readdir(shared)).sort()).toEqual(['.Varia-SQL-Manager-1.1.0-Windows-x64-Portable.exe.update', 'Varia-SQL-Manager-1.0.0-Windows-x64-Portable.exe', 'notes.txt'])
   })
   it('makes the downloaded AppImage executable', async () => {
     const { instance } = updater({ manifest: [json(manifest())], asset: [file(payload)] }, { kind: 'appimage' })
@@ -516,7 +519,8 @@ describe('Updater, staging the release beside the installation', () => {
     expect([...new Set(states.map(item => item.status))]).toEqual(['checking', 'downloading', 'preparing', 'ready'])
     expect(calls).toEqual(['stage Varia-SQL-Manager-1.1.0-win-x64.zip'])
     expect(instance.readyFile).toMatchObject({ version: '1.1.0', staged: true, sha512: sha512(archive) })
-    await expect.poll(() => readdir(join(dir, 'updates'))).toEqual([])
+    await instance.whenSwept()
+    expect(await readdir(join(dir, 'updates'))).toEqual([])
     expect(await instance.arm()).toBe(true)
     expect(instance.takeArmed()).toMatchObject({ version: '1.1.0', staged: true })
   })
@@ -543,7 +547,8 @@ describe('Updater, staging the release beside the installation', () => {
     // Recorded as already said: it fell back by itself, and the next run has nothing to report.
     expect(held.failure).toEqual({ version: '1.1.0', reported: true })
     expect(instance.readyFile).toMatchObject({ staged: false, file: join(dir, 'updates', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe') })
-    await expect.poll(() => readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+    await instance.whenSwept()
+    expect(await readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
   })
   // Otherwise every check would download the archive, fail to unpack it, and download the installer.
   it('does not stage a release again once it could not be unpacked, in this run or the next', async () => {
@@ -632,7 +637,8 @@ describe('Updater, staging the release beside the installation', () => {
     // Nothing that helper is writing is removed, and the next run may find its release staged.
     expect(calls).toEqual([])
     expect(held.failure).toBeUndefined()
-    await expect.poll(() => readdir(join(dir, 'updates')), { timeout: 5000 }).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+    await instance.whenSwept()
+    expect(await readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
   })
   // The helper put the old version back (a file was in use) and started it: this run says so, and installs with the installer.
   it('says that the last restart could not swap the release in, and installs it with the installer instead', async () => {
