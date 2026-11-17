@@ -11,7 +11,7 @@ import { electron, expect, within } from './smoke.mjs'
 import { actionsStubData, installActionsStub } from './actions-stub.mjs'
 import { expandExplorerPath, explorerRow, revealExplorerRow } from './explorer-tree.mjs'
 import { anyResultGrid, backendReady, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
-import { parseCalls } from './call-log.mjs'
+import { completeLines, parseCalls } from './call-log.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -169,7 +169,7 @@ export async function dialogLifecycle(launchOptions) {
     await connect(page)
     // A double-click on Restart (or the command twice) asks once and starts one backend; the count is taken when the
     // prompt's turn comes.
-    const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').length
+    const spawns = async () => completeLines(await readFile(join(control, 'spawns.jsonl'), 'utf8')).filter(Boolean).length
     const executions = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8')).filter(call => call.method === 'query.execute').length
     const before = await spawns()
     const queriesBeforeRestart = await executions()

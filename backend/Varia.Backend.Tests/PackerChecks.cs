@@ -429,6 +429,9 @@ internal static class PackerChecks
                 if (compressing) opened = GC.GetAllocatedBytesForCurrentThread();
                 else allocated.Add(GC.GetAllocatedBytesForCurrentThread() - opened);
             }
+            // A throw on this thread would end the whole test process unreported; it is carried back and rethrown here, so the
+            // suite fails as it did when this ran on the suite's own thread.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? failed = null;
             var thread = new System.Threading.Thread(() =>
             {
                 try
@@ -438,10 +441,12 @@ internal static class PackerChecks
                     samePage = first is not null && second is not null && first.AsSpan().SequenceEqual(second) && PageCodec.Unpack(second, page.Length).AsSpan().SequenceEqual(page);
                     allRead = sizes.All(sample => PageCodec.Pack(sample, Window) is { } packedSample && PageCodec.Unpack(packedSample, sample.Length).AsSpan().SequenceEqual(sample));
                 }
+                catch (Exception error) { failed = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
                 finally { PageCodec.ReleaseQuietEncoder(); }
             });
             thread.Start();
             thread.Join();
+            failed?.Throw();
             tries.Add(allocated);
         }
         var quiet = tries[^1] is [0, 0, 0, 0, 0];

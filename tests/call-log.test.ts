@@ -31,8 +31,13 @@ describe('the smoke suites\' call log reader', () => {
 
   // ssis-operations-smoke and options-smoke split calls.jsonl themselves and failed the same way.
   it('is how every smoke suite and fixture parses a log split into lines', () => {
+    // A split on '\n' or /\n/ followed, within the same statement (across lines too), by a JSON.parse.
+    const splitsAndParses = (text: string) => /split\((?:(['"])\\n\1|\/\\n\/)\)[^;]{0,200}?JSON\.parse/.test(text)
+    expect(splitsAndParses("const calls = async () => (await readFile(log, 'utf8')).split('\\n').filter(Boolean).map(line => JSON.parse(line))")).toBe(true)
+    expect(splitsAndParses('const calls = text.split(/\\n/)\n  .filter(Boolean)\n  .map(line => JSON.parse(line))')).toBe(true)
+    expect(splitsAndParses("const calls = parseCalls(await readFile(log, 'utf8'))")).toBe(false)
     const offenders = ['scripts', 'scripts/fixtures'].flatMap(folder => readdirSync(folder).filter(name => name.endsWith('.mjs')).map(name => `${folder}/${name}`))
-      .filter(path => /split\((['"])\\n\1\)[^\n]*JSON\.parse/.test(readFileSync(path, 'utf8')))
+      .filter(path => path !== 'scripts/fixtures/call-log.mjs' && splitsAndParses(readFileSync(path, 'utf8')))
     expect(offenders).toEqual([])
   })
 })
