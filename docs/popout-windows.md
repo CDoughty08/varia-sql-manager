@@ -59,8 +59,9 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
   popout takes focus within 2 s (`restoreFocusMs`), since macOS activates it only after its animation. Search Objects'
   Reveal uses it so a popped-out Object Explorer comes forward while focus stays in the hits (`window.focus()` would take
   focus).
-- A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
-  focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
+- A dialog over the main window opened from a popout brings the main window to the front (`watchModals`); closing it
+  gives focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
+  Dialog windows (below) open in a window of their own instead.
 
 ## Dialog windows
 
@@ -81,12 +82,14 @@ can move off the main window, onto another display.
   has closed in the last half second (`PopoutWindows.settled`, `settledNativeTheme`); popouts benefit too.
 - **Modeless.** The workbench keeps working in the main window while a dialog window is open. Keys pressed in the
   dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
-  window. Tools › Options… while Options is open brings its window forward on the page asked for.
+  window. Tools › Options… while Options is open brings its window forward on the page asked for. Surfaces that close
+  for a dialog over the main window, such as the memory indicator's pinned breakdown, stay open beside one.
 - **Size.** Options opens at 940 × 680, at least 640 × 440, and can be resized; the size it was left at is kept in
   `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
   screen. About has a fixed size. A window opens centred on the main window.
 - **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel; closing the dialog closes its window
-  and gives focus back to where it was in the main window.
+  and gives focus back to where it was, in the main window or the popout it opened from. A window torn down without its
+  `pagehide` (by the OS, or a crash) is noticed within a second, as a popout's is.
 - **Their own document.** Code inside a dialog reads its element's `ownerDocument` (or `windows.activeDocument()`), never
   the global `document`, and tests elements with `isElement` and `tagName` (`core/focus.ts`): `instanceof HTMLElement`
   is false for another window's elements, as in popouts.

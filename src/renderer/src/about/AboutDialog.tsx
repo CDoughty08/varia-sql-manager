@@ -41,7 +41,7 @@ export default function AboutDialog({ onClose, raise }: { readonly onClose: () =
     trapFocus(event)
     if (event.key === 'Escape' || closesDialogWindow(event, platform)) { event.preventDefault(); event.stopPropagation(); close() }
   }
-  return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
+  return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" tabIndex={-1} onKeyDown={keyDown}>
     <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
     <div className="connection-scroll">
       <div className="about-identity"><div className="about-brand"><Icon name="varia" /></div><div><h3>{productName}</h3><p>{productDescription}</p></div></div>

@@ -84,6 +84,8 @@ try {
   const optionsWindow = await dialogWindow(application, 'Options')
   const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
   await expect(options).toBeVisible()
+  // Options is modeless in its own window: the pinned memory breakdown stays open beside it.
+  await expect(memoryBreakdown(page)).toBeVisible()
   await options.getByRole('button', { name: 'Cancel', exact: true }).click()
   await dialogClosed(optionsWindow, 'Options')
   await expect.poll(optionsOpen).toBe(false)

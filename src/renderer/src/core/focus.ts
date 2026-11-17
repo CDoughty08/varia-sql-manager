@@ -41,7 +41,7 @@ export function isElement(value: unknown): value is HTMLElement {
 }
 
 /** What a dialog gives focus back to when it closes: the focused element of the window the user is in, a popout's when
- *  the dialog opened from one (dialogs render in the main window). */
+ *  the dialog opened from one (whether it shows over the main window or in a dialog window of its own). */
 export function focusToReturn(registry: Pick<typeof windows, 'activeElement'> = windows): HTMLElement | null {
   const active = registry.activeElement()
   return isElement(active) ? active : null

@@ -135,6 +135,17 @@ describe('DialogWindow', () => {
     await fromPopout.hide()
     expect(focus).toHaveBeenCalledTimes(1)
   })
+  it('notices within a second a window torn down without its pagehide', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = await mount()
+      view.fake.child.closed = true
+      await act(async () => { vi.advanceTimersByTime(1000) })
+      expect(view.onClose).toHaveBeenCalledTimes(1)
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(view.onClose).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
   it('shows a dialog that stays open after its window was closed (Options while OK saves) over the main window', async () => {
     const view = await mount()
     await act(async () => { view.fake.emit('pagehide') })

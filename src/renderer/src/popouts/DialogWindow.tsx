@@ -113,8 +113,11 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
     }
     child.addEventListener('pagehide', closed)
     child.addEventListener('resize', resized)
+    // A window torn down without its pagehide (by the OS, or a crash), which popouts watch for the same way.
+    const poll = setInterval(() => { if (child.closed) { clearInterval(poll); closed() } }, 1000)
     return () => {
       closing = true
+      clearInterval(poll)
       clearTimeout(timer)
       if (!child.closed) rememberDialogWindowSize(kind, { width: child.innerWidth, height: child.innerHeight })
       child.removeEventListener('pagehide', closed)

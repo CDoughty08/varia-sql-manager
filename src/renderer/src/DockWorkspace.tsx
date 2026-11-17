@@ -554,7 +554,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       places.keep(new Set(popoutsRef.current.map(record => record.id)))
       if (moved) changed()
     }, 1000)
-    // Dialogs open in the main window: one opened from a popout brings the main window to the front, or the popout would
+    // Dialogs over the main window (not dialog windows): one opened from a popout brings the main window to the front, or the popout would
     // look frozen behind it while the dialog holds the keyboard.
     const raise = watchModals(document, () => { if (windows.active() !== window) window.focus() })
     return () => { clearInterval(poll); raise.dispose() }
