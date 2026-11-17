@@ -172,6 +172,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const [readError, setReadError] = useState<string | undefined>()
   const [scrollTop, setScrollTop] = useState(0)
   const [viewHeight, setViewHeight] = useState(0)
+  const [listPad, setListPad] = useState(0)
   const [rowHeight, setRowHeight] = useState(fallbackRow)
   /** The listbox's active row (NULL's first when it is listed): the arrow keys move it and Space ticks it. Focus stays
    *  on the listbox (`aria-activedescendant`), so a row scrolled out of the rows drawn takes no focus with it. */
@@ -199,7 +200,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     const view = element.ownerDocument.defaultView ?? window
     const row = parseFloat(view.getComputedStyle(element).getPropertyValue('--varia-row'))
     if (row > 0) setRowHeight(row)
-    const measure = () => setViewHeight(element.clientHeight)
+    const measure = () => { setViewHeight(element.clientHeight); setListPad(padOf(element)) }
     measure()
     const observer = new view.ResizeObserver(measure)
     observer.observe(element)
@@ -209,7 +210,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const showNull = !!summary && summary.nulls > 0 && (!needle || nullText.toLowerCase().includes(needle.toLowerCase()))
   const nullRows = showNull ? 1 : 0
   const valueRows = total ?? 0
-  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan })
+  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan, pad: listPad })
   const firstRow = win.first, lastRow = win.last
   const firstBlock = Math.floor(Math.max(0, firstRow - nullRows) / blockSize)
   const lastBlock = Math.floor(Math.max(0, lastRow - nullRows - 1) / blockSize)

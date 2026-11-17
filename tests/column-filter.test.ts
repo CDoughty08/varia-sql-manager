@@ -47,34 +47,42 @@ describe('column filter', () => {
     expect(scrollToShow({ ...base, rows: 1000, row: 9, scrollTop: 0 })).toBe(10 * 22 + 2 - 220)
     expect(scrollToShow({ ...base, rows: 1000, row: 50, scrollTop: 22 * 60 })).toBe(50 * 22 + 2)
     expect(scrollToShow({ ...base, rows: 1000, row: 0, scrollTop: 500 })).toBe(0)
-    // Past the space (mapped): the row lands wholly inside the view. At the scroll range's end the mapping leaves the last
-    // rows' bottoms up to the padding lower, as the list draws them.
-    const rows = 2_000_000, maxSpace = 1_000_000
+    // Past the space (mapped): the row lands wholly inside the view, the last row too, which at the scroll range's end (the
+    // space and both paddings, less the view) ends at the bottom padding, inside the space that clips the rows.
+    const rows = 2_000_000, maxSpace = 1_000_000, end = maxSpace + 4 - 220
     for (const row of [10, 777_777, 1_234_567, rows - 1]) {
-      for (const from of [0, maxSpace - 220]) {
-        const scrollTop = scrollToShow({ ...base, rows, row, scrollTop: from, maxSpace })
-        const at = listWindow({ scrollTop: scrollTop ?? from, viewHeight: 220, rowHeight: 22, rows, overscan: 0, maxSpace })
-        const position = at.offset(row) + 2 - (scrollTop ?? from)
+      for (const from of [0, end]) {
+        const scrollTop = scrollToShow({ ...base, rows, row, scrollTop: from, maxSpace }) ?? from
+        const at = listWindow({ scrollTop, viewHeight: 220, rowHeight: 22, rows, overscan: 0, maxSpace, pad: 2 })
+        const position = at.offset(row) + 2 - scrollTop
         expect(position).toBeGreaterThanOrEqual(-1e-6)
-        expect(position + 22).toBeLessThanOrEqual(220 + (scrollTop === maxSpace - 220 ? 2 : 0) + 1e-6)
+        expect(position + 22).toBeLessThanOrEqual(220 + 1e-6)
+        expect(at.offset(row) + 22).toBeLessThanOrEqual(maxSpace + 1e-6)
       }
     }
+    const last = listWindow({ scrollTop: end, viewHeight: 220, rowHeight: 22, rows, overscan: 0, maxSpace, pad: 2 })
+    expect(last.offset(rows - 1) + 2 - end + 22).toBeCloseTo(220 - 2, 6)
   })
 
   it('names the rows wholly in view, below the top padding', () => {
     expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 0, pad: 2 })).toEqual({ first: 0, last: 8 })
     expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 30, pad: 2 })).toEqual({ first: 2, last: 10 })
     expect(rowsInView({ rows: 3, rowHeight: 22, viewHeight: 220, scrollTop: 0 })).toEqual({ first: 0, last: 2 })
-    // At the mapped scroll range's end the last row, ending in the bottom padding, still counts as in view.
+    // At the mapped scroll range's end the last row is in view.
     const rows = 2_000_000, maxSpace = 1_000_000
-    expect(rowsInView({ rows, rowHeight: 22, viewHeight: 220, scrollTop: maxSpace - 220, pad: 2, maxSpace }).last).toBe(rows - 1)
+    expect(rowsInView({ rows, rowHeight: 22, viewHeight: 220, scrollTop: maxSpace + 4 - 220, pad: 2, maxSpace }).last).toBe(rows - 1)
+    // Chromium snaps scrollTop to device pixels: at 125% scaling the 222 asked to put row 10 at the top reads back 222.4,
+    // and row 10 still counts as in view (focus coming back to the list keeps it active).
+    expect(scrollToShow({ row: 10, rows: 100, rowHeight: 22, viewHeight: 260, scrollTop: 300, pad: 2 })).toBe(222)
+    expect(rowsInView({ rows: 100, rowHeight: 22, viewHeight: 260, scrollTop: 222.4, pad: 2 }).first).toBe(10)
+    expect(scrollToShow({ row: 10, rows: 100, rowHeight: 22, viewHeight: 260, scrollTop: 222.4, pad: 2 })).toBeUndefined()
     // A view height that isn't a whole number of rows over the real space's scroll positions: rounding near 3e7 px keeps the
     // last row in view, and every row scrollToShow lands is counted in view.
     for (const [count, viewHeight] of [[1_500_000, 256], [1_500_007, 237], [2_000_003, 56]] as const) {
-      const end = maxListSpace - viewHeight
+      const end = maxListSpace + 4 - viewHeight
       expect(rowsInView({ rows: count, rowHeight: 22, viewHeight, scrollTop: end, pad: 2 }).last).toBe(count - 1)
       for (const row of [3, 777_777, count - 2, count - 1]) {
-        const at = scrollToShow({ row, rows: count, rowHeight: 22, viewHeight, scrollTop: row < 10 ? end : 0, pad: 2 }) ?? 0
+        const at = scrollToShow({ row, rows: count, rowHeight: 22, viewHeight, scrollTop: row < 10 ? end : 0, pad: 2 }) ?? (row < 10 ? end : 0)
         const seen = rowsInView({ rows: count, rowHeight: 22, viewHeight, scrollTop: at, pad: 2 })
         expect(row >= seen.first && row <= seen.last).toBe(true)
       }

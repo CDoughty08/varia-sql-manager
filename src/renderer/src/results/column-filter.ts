@@ -77,12 +77,15 @@ export const maxListSpace = 30_000_000
 
 /** The rows of a virtual list of fixed-height rows drawn for a scroll position (with `overscan` rows past each edge), its
  *  scroll space, and each row's place in it. Within `maxListSpace` a row sits at `row × rowHeight`; past it the scroll bar's
- *  range spans the rows, and the rows in view are placed around the scroll position, so every row stays reachable. */
-export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight: number; rows: number; overscan: number; maxSpace?: number }): { space: number; first: number; last: number; offset(row: number): number } {
-  const { scrollTop, viewHeight, rowHeight, rows, overscan } = o, maxSpace = o.maxSpace ?? maxListSpace
+ *  range spans the rows, and the rows in view are placed around the scroll position, so every row stays reachable.
+ *  `viewHeight` is the list's client height, padding included; `pad` is the padding above and below the rows. */
+export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight: number; rows: number; overscan: number; maxSpace?: number; pad?: number }): { space: number; first: number; last: number; offset(row: number): number } {
+  const { scrollTop, viewHeight, rowHeight, rows, overscan } = o, maxSpace = o.maxSpace ?? maxListSpace, pad = o.pad ?? 0
   const full = rows * rowHeight, space = Math.min(full, maxSpace), visible = Math.max(viewHeight, rowHeight) / rowHeight
+  // Mapped, the scroll range (the space and both paddings, less the view) spans the rows but those the end shows whole
+  // between the paddings, so the last row ends at the bottom padding.
   const top = full <= maxSpace ? scrollTop / rowHeight
-    : Math.min(1, Math.max(0, scrollTop / Math.max(1, space - viewHeight))) * Math.max(0, rows - viewHeight / rowHeight)
+    : Math.min(1, Math.max(0, scrollTop / Math.max(1, space + 2 * pad - viewHeight))) * Math.max(0, rows - (viewHeight - 2 * pad) / rowHeight)
   // Mapped, the rows past the view's bottom stop at the space's end: each starts inside it, and the space clips the part of
   // the last that would hang past it (overflow: hidden), so no row grows the scroll range.
   const fits = full <= maxSpace ? rows : Math.ceil(top + (space - scrollTop) / rowHeight - 1e-6)
@@ -94,8 +97,9 @@ export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight
   }
 }
 
-/** Pixels of rounding `scrollToShow` and `rowsInView` allow (see scrollToShow). */
-const slack = 1e-6
+/** Pixels of slack `scrollToShow` and `rowsInView` allow: Chromium snaps scrollTop to device pixels (1102 reads back
+ *  1102.4 at 125% scaling), and mapped, offset() adds a scroll position near 3e7 that is taken off again. */
+const slack = 1
 
 /**
  * The scroll position that shows `row` of a virtual list (`listWindow`'s rows, below the list's top padding `pad`, which
@@ -105,15 +109,14 @@ const slack = 1e-6
  */
 export function scrollToShow(o: { row: number; rows: number; rowHeight: number; viewHeight: number; scrollTop: number; pad?: number; maxSpace?: number }): number | undefined {
   const { row, rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
-  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace })
-  // A hair of slack: mapped, offset() adds a scroll position near 3e7 that is taken off again, which leaves rounding.
+  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace, pad })
   const position = at.offset(row) + pad - scrollTop
   if (position >= -slack && position + rowHeight <= viewHeight + slack) return undefined
   const above = position < -slack
   if (rows * rowHeight <= maxSpace) return Math.max(0, above ? (row === 0 ? 0 : row * rowHeight + pad) : (row + 1) * rowHeight + pad - viewHeight)
-  // Mapped: listWindow puts the row `top` rows down at scrollTop / (space - view) × (rows - view / rowHeight); the row
-  // wanted at the top, or the one whose bottom meets the view's bottom (less the padding above the rows), solves for it.
-  const range = Math.max(1, at.space - viewHeight), span = Math.max(1, rows - viewHeight / rowHeight)
+  // Mapped: listWindow puts the row `top` rows down at scrollTop / range × span; the row wanted at the top, or the one
+  // whose bottom meets the view's bottom (less the padding above the rows), solves for it.
+  const range = Math.max(1, at.space + 2 * pad - viewHeight), span = Math.max(1, rows - (viewHeight - 2 * pad) / rowHeight)
   const top = above ? row : row + 1 - (viewHeight - pad) / rowHeight
   // Whole pixels: down for a row above (it starts at or below the top), up for one below (it ends at or above the bottom).
   const exact = Math.max(0, top) / span * range
@@ -123,12 +126,11 @@ export function scrollToShow(o: { row: number; rows: number; rowHeight: number; 
 /** The rows of the list fully in view at a scroll position (with its top padding): the first and the last. */
 export function rowsInView(o: { rows: number; rowHeight: number; viewHeight: number; scrollTop: number; pad?: number; maxSpace?: number }): { first: number; last: number } {
   const { rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0
-  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace: o.maxSpace })
+  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace: o.maxSpace, pad })
   let first = at.first
   while (first < rows - 1 && at.offset(first) + pad - scrollTop < -slack) first++
   let last = first
-  // The last row may end in the bottom padding: the mapped scroll range's end leaves it there (scrollToShow).
-  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight + (last + 2 === rows ? pad : 0) + slack) last++
+  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight + slack) last++
   return { first, last }
 }
 
