@@ -76,7 +76,7 @@ export type ConnectionWorkspace = z.infer<typeof connectionWorkspaceSchema>
  * The workspace with Object Explorer's expanded nodes for the servers `expansion` names; the others keep what they had (a
  * server not connected this run). Keys past the per-key, per-server or total bounds are left out, outermost kept first.
  */
-export function withExplorerExpansion(workspace: ConnectionWorkspace, expansion: ReadonlyMap<string, readonly string[]>): ConnectionWorkspace {
+export function withExplorerExpansion(workspace: ConnectionWorkspace, expansion: ReadonlyMap<string, readonly string[] | null>): ConnectionWorkspace {
   let budget: number = connectionTargetLimits.explorerExpandedChars
   const bounded = (keys: readonly string[]) => {
     const kept: string[] = []
@@ -89,7 +89,8 @@ export function withExplorerExpansion(workspace: ConnectionWorkspace, expansion:
     return kept
   }
   const targets = workspace.targets.map(target => {
-    const keys = expansion.get(target.id) ?? target.explorerExpanded
+    // null: the tree dropped what it had for this server; absent: keep the last close's.
+    const given = expansion.get(target.id), keys = given === null ? undefined : given ?? target.explorerExpanded
     const { explorerExpanded: _old, ...rest } = target
     return keys === undefined ? rest : { ...rest, explorerExpanded: bounded(keys) }
   })

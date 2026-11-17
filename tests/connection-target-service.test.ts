@@ -291,6 +291,8 @@ describe('Object Explorer order and expansion in the connection workspace', () =
     const many = Array.from({ length: connectionTargetLimits.explorerExpanded + 5 }, (_, at) => `key-${at}`)
     const next = withExplorerExpansion(workspace, new Map([[id(1), ['a', tooLong, 'b']], [id(3), many]]))
     expect(next.targets.map(target => target.explorerExpanded)).toEqual([['a', 'b'], ['kept'], many.slice(0, connectionTargetLimits.explorerExpanded)])
+    // null drops what a server had (removed from Explorer this run).
+    expect(withExplorerExpansion(workspace, new Map([[id(2), null]])).targets[1]).not.toHaveProperty('explorerExpanded')
     // The total across servers is bounded too, outermost keys first.
     const big = 'x'.repeat(connectionTargetLimits.explorerKeyChars)
     const servers = Array.from({ length: 4 }, (_, at) => ({ ...record(10 + at) }))

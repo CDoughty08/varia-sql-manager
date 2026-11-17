@@ -276,6 +276,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly restoring = new Map<number, Restoring>()
   /** Rows a page brought that the restore expands once the page is in. */
   private restoreQueue: TreeNode[] = []
+  /** Targets whose server was removed from Explorer this run (bounded by the workspace's targets). */
+  private readonly removedTargets = new Set<string>()
   /** Targets whose saved expansion was taken this run: a later connect follows `remembered`, or opens to the first level. */
   private readonly consumed = new Set<string>()
   /** A server's expanded nodes when it disconnected, for its reconnect. */
@@ -841,11 +843,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * Each server's expanded nodes by target id, for the workspace the session keeps (`withExplorerExpansion`): a connected
    * server's as they show, a disconnected one's as it was left, and one not connected this run what the start restored.
    */
-  savedExpansion(): ReadonlyMap<string, readonly string[]> {
-    const saved = new Map<string, readonly string[]>()
+  savedExpansion(): ReadonlyMap<string, readonly string[] | null> {
+    const saved = new Map<string, readonly string[] | null>()
+    // Removed from Explorer and not back: nothing is kept (null), so a later return opens it as a new connection does.
+    for (const targetId of this.removedTargets) saved.set(targetId, null)
     for (const id of this.roots) {
       const root = this.nodes.get(id), targetId = root?.targetId
       if (!root || !targetId) continue
+      saved.delete(targetId)
       if (!root.lost) saved.set(targetId, this.expandedKeys(root))
       else if (this.remembered.has(targetId)) saved.set(targetId, this.remembered.get(targetId)!)
       else if (!this.consumed.has(targetId)) {
@@ -923,6 +928,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const ids = order.map(id => this.nodes.get(id)?.targetId)
     if (ids.some(id => !id) || !this.targets!.reorder(ids as string[])) return false
     this.announce(`Moved ${node.label} to position ${at + 1} of ${place.count}`)
+    // Alt+Up/Down can carry the selected server past the rows on screen: the tree scrolls it back into view.
+    if (this.selected === rowId) this.reveals++
     this.invalidate()
     return true
   }
@@ -953,7 +960,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.abortWhere(task => task.connectionId === connectionId)
     this.restoring.delete(rootId)
     const targetId = this.nodes.get(rootId)?.targetId
-    if (targetId) this.remembered.delete(targetId)
+    if (targetId) { this.remembered.delete(targetId); this.removedTargets.add(targetId) }
     const filters = this.filters.get(connectionId)
     if (filters) { this.filterCount -= filters.size; this.filters.delete(connectionId) }
     this.rootByConnection.delete(connectionId)

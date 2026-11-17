@@ -36,7 +36,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
   { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, explorerExpansion, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
     /** Object Explorer's expanded nodes per target (`ExplorerService.savedExpansion`), kept with the workspace for the next start. */
-    explorerExpansion?: () => ReadonlyMap<string, readonly string[]>
+    explorerExpansion?: () => ReadonlyMap<string, readonly string[] | null>
     assertConnectionsReady?: () => void
   } = {}): KeptSession {
   assertConnectionsReady?.()

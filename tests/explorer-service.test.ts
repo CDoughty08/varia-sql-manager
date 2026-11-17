@@ -2143,6 +2143,19 @@ describe('ExplorerService: saved server order and expansion', () => {
     expect(f.labels()).not.toContain('        dbo.T1')
     expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual(shown.slice(0, 4))
   })
+  it('forgets the saved expansion of a server removed from Explorer, so adding it back later opens it afresh', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a'), b = f.server('server-b')
+    f.targets.savedExplorerExpansion.mockReturnValue([serverKey])
+    f.store.set([a, b])
+    await settle()
+    f.store.set([b])
+    expect(f.explorer.savedExpansion()).toEqual(new Map([[a.targetId!, null], [b.targetId!, [serverKey]]]))
+    // Back this run: it is shown again, so what shows is kept.
+    f.store.set([b, f.server('server-a', true, 2)])
+    await settle()
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey])
+  })
   it('ends every restore on Collapse All, even one whose server page is still loading', async () => {
     const f = workspaceFixture()
     const a = f.server('server-a')
@@ -2176,7 +2189,10 @@ describe('ExplorerService: saved server order and expansion', () => {
     for (const name of ['server-a', 'server-b', 'server-c']) f.explorer.collapse(rowOf(name))
     expect(f.explorer.serverPlace(rowOf('server-b'))).toEqual({ index: 1, count: 3 })
     f.explorer.select(rowOf('server-a'))
+    const revealBefore = f.explorer.getSnapshot().reveal ?? 0
     expect(f.explorer.moveServer(rowOf('server-a'), 2)).toBe(true)
+    // The moved server is selected, so the tree scrolls it into view (it may have left the rows on screen).
+    expect(f.explorer.getSnapshot().reveal).toBe(revealBefore + 1)
     expect(f.reorder).toHaveBeenLastCalledWith([b.targetId, c.targetId, a.targetId])
     expect(f.labels()).toEqual(['server-b.example', 'server-c.example', 'server-a.example'])
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Moved server-a.example to position 3 of 3')
