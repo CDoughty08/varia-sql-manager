@@ -260,13 +260,13 @@ try {
   // only the windows it shows, so opening, scrolling, searching and Select all/none keep the UI free of long tasks.
   await segment('a million distinct values')
   const funnel = page.getByRole('dialog', { name: 'Filter name', exact: true })
-  const values = funnel.getByRole('group', { name: 'Values', exact: true })
+  const values = funnel.getByRole('listbox', { name: 'Values', exact: true })
   await jump(0)
   await cell(0, 1).click()
   const opening = performance.now()
   await page.keyboard.press('Alt+ArrowDown')
   await expect(funnel).toContainText('1,000,000 values in 1,000,000 rows.', { timeout: 60000 })
-  await expect(values.getByRole('checkbox').first()).toBeVisible()
+  await expect(values.getByRole('option').first()).toBeVisible()
   record('grid.funnel.openMs', performance.now() - opening, 'ms', 'Alt+Down → the first values of 1,000,000 listed')
   /** Moves the checklist's scroll bar to a fraction of its range and resolves, in ms, once no row in view is still read. */
   const scrollValues = top => values.evaluate(async (list, top) => {

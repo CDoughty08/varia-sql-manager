@@ -354,6 +354,14 @@ internal static class FilterChecks
         check(filtered.GetProperty("rows").GetInt64() == 10 && filtered.GetProperty("complete").GetBoolean() && echoed.GetProperty("op").GetString() == "between"
             && echoed.GetProperty("column").GetInt32() == 0 && echoed.GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual([990, 999]) && !echoed.TryGetProperty("cells", out _),
             "results.view filters a result with no sort keys, by cells of another view, and answers the filter resolved to base rows");
+        // Filter for Selected Values across columns: one cells filter a column, each naming positions of the same shown view
+        // (ids 999 to 990 in column 0, ids 994 to 985 in column 1's names), and a row must pass both: ids 994 to 990.
+        var across = Ask(31, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] {
+            new { op = "in", column = 0, cells = new { viewId = sortedId, ranges = new[] { new long[] { 0, 10 } } } },
+            new { op = "in", column = 1, cells = new { viewId = sortedId, ranges = new[] { new long[] { 5, 10 } } } } } }).GetProperty("result");
+        var acrossRows = across.GetProperty("filters").EnumerateArray().Select(item => item.GetProperty("rows").GetArrayLength()).ToArray();
+        check(across.GetProperty("rows").GetInt64() == 5 && acrossRows.SequenceEqual([10, 10]),
+            "cells filters on two columns each resolve against the view they name, not the rows the filter before kept, and a row passes both: " + across.GetProperty("rows").GetInt64() + " rows");
         var dups = Ask(4, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "duplicates", columns = new[] { 0 } } } });
         check(dups.GetProperty("result").GetProperty("rows").GetInt64() == 0, "duplicates in a unique column keep no rows");
         check(Code(Ask(5, new { resultId = id, sort = Array.Empty<object>() })) == "INVALID_PARAMS", "a view with neither sort keys nor filters is refused");

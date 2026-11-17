@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl+click, and Filter for Selected Values (and Exclude Selected Values or Filter Between Lowest and Highest Selected) adds one filter per column from the cells selected in it, and a row must pass every column's filter.
+- **A keyboard-driven column filter list:** In the list Alt+Down opens, Down moves from the search into the values, the arrow keys, Page Up, Page Down, Home and End move through them, Space ticks or unticks one and Enter filters. Screen readers hear it as a list of checkable options.
+
 ### Changes to everyday use
 
 - **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
@@ -10,6 +15,8 @@
 
 - **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
 - **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
+- **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.
+- **IntelliSense ranks exact matches first and brackets columns consistently:** A name you type exactly, in any case, is now first in the completion list instead of below names that only start with it, fuzzy matches or system objects, and it is no longer missing from the visible list. Every column suggestion shows and inserts its bracketed name, so a column of the alias `[bob]` inserts `[bob].[columnName]` just as the list shows.
 
 ## [0.9.0] - 2026-11-15
 

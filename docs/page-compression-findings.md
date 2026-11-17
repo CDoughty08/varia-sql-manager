@@ -53,12 +53,14 @@ minute. Hidden results keep 5 s.
   packed: the result shows as `partial` in the Memory panel and falls due again 30 s later. Plain reads never unpack a
   result whole. Each operation that unpacks it whole (see [Operations that unpack first](#operations-that-unpack-first))
   doubles the wait, up to eight times as long (`MaxBackoff` = 3 doublings, 4 minutes).
-- **A sorted or filtered grid stays raw.** A view's screen reads its rows' pages in the view's order, a page or so a
-  row: 30 to 55 ms a 256-row screen packed against 1.2 ms raw on 16 workers (p99 about 145 ms against 21 ms), enough
-  to show while scrolling. A shown result with an open view is not packed (a hidden one is). One already packed when its
-  grid is sorted or filtered, or shown again with a view open, is unpacked on the workers' gate when the budget has room
-  for it twice over and no query waits. That unpack is not a use, but a hidden result with a view waits longer each time
-  it was so unpacked. Closing its last view wakes the policy.
+- **A sorted or filtered grid is not packed while shown, and never unpacked for its view.** A view's screen reads its
+  rows' pages in the view's order, a page or so a row: about 4.5 ms a 256-row screen packed against 0.9 ms raw on 16
+  workers (p99 25 ms against 7 ms). So a shown result with an open view is not packed while idle (a hidden one is), but
+  one already packed when its grid is sorted or filtered, or shown again with a view open, stays packed: the sort reads
+  it fused and its screens read the packed pages. Unpacking it whole for its view would give the budget back the raw
+  bytes (131 MiB for a 256 MiB `orders` result) for screens a few milliseconds faster. Closing its last view wakes the
+  policy. `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a
+  packed shown result grows the budget by more than its view's order.
 - **Value lists do not keep a result raw.** A distinct snapshot keeps its result's pages, not their bytes, so its later
   reads go through packed pages.
 - **Candidates are asked again** before a pass starts and before each page: one the user began to work with meanwhile
@@ -225,7 +227,8 @@ The policy, with the real `ResultPacker` (`--policy`: one 1 GiB result; `--stage
 | Three pages at random positions, raw → packed, cold cache | 1 µs → 0.63 to 0.70 ms | 1 µs → 0.62 ms |
 | 1,000-row read while scrolling, raw → packed (median, p99) | 0.8 µs → 0.20 ms (0.7 to 5 ms) | 1.2 µs → 0.77 ms (1.4 ms) |
 | 1,000-row read at a random row, raw → packed | 1 µs → 0.42 ms (p99 0.9 to 4 ms) | 0.9 µs → 0.96 ms (p99 3.3 ms) |
-| Sorted view's 256-row screen, raw → packed | 1.2 ms → 31 to 55 ms (3 workers: 1.0 → 22 ms) | 0.41 ms → 5.0 ms |
+| Sorted view's 256-row screen, raw → packed | 0.9 ms → 4.2 to 5.7 ms (p99 25 to 28 ms; 3 workers: 1.0 → 22 ms) | 0.41 ms → 5.0 ms |
+| The policy's next look once the packed shown result is sorted | adds 0 MiB (it stays packed) | |
 | First sort after idle, raw → packed (fused) | 0.36 to 0.49 s → 0.26 to 0.37 s | 0.13 s → 0.28 s |
 | An operation's whole unpack, 16 workers (1 GiB) | 0.07 to 0.16 s | 0.06 s |
 | A second query's fill alone → beside packing | 0.89 to 1.21 s → 0.80 to 1.09 s | 0.80 to 0.85 s → 0.77 to 0.78 s |

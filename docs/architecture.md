@@ -275,10 +275,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). A shown result with an open view stays raw; one packed before its view, or shown
-    again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
-    (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
-    delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+    saving under a tenth stays raw). A shown result with an open view is not packed while idle; one packed before its
+    view, or shown again with one, stays packed (its sort and screens read the packed pages; a view never unpacks a
+    result whole, `node.packedSort.budgetGrowthMb`), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
