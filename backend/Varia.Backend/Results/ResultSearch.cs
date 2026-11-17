@@ -72,14 +72,15 @@ internal static class ResultSearcher
         // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
         // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
         using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
+        // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
+        // reads base order or a view near it). Through a view far from its packed pages' order (a sort, not Local) it is read
+        // in page order instead, each row placed at its view position (ByPages), so it is never unpacked whole.
+        if (view is not null && !(local ?? Local(pages, view.Order, token)))
+            return ByPages(set, pages, view, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads);
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
-        // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
-        // reads base order or a view near it). Through a view far from its pages' order (Local) SqlService unpacks the result
-        // first (and passes what it found as local); a caller that did not reads its pages through the set's accessor and its
-        // cache, as before fused reads.
-        using var rooms = view is not null && !(local ?? Local(pages, view.Order, token)) ? null : PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
+        using var rooms = PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
         if (rooms is not null) slots = Math.Min(slots, PackedSlots);
         void Read(int run)
@@ -175,6 +176,134 @@ internal static class ResultSearcher
                 part.Start = part.RowStarts[part.Head];
                 if (part.Start > 4096 && part.Start > part.Rows.Count / 2) Compact(part.Rows, part.Columns, part.RowStarts, ref part.Head, ref part.Start);
             }
+        }
+    }
+
+    /// <summary>Searches a view far from its packed pages' order (a sort) by reading the result in page order, fused, each
+    /// row placed at its view position through an inverse of the view's order (4 bytes a base row, reserved from the
+    /// result's budget while it runs; TOO_LARGE without room). Each run keeps only the rows the outcome may take (the first
+    /// from FromRow, or the last before it, in whole rows to MaxMatches, by view position), so the outcome is the one a pass
+    /// in view order gives, with each packed page unpacked once a run instead of once a row.</summary>
+    private static SearchOutcome? ByPages(ResultSetBuffer set, StoredPage[] pages, ResultView view, Matcher?[] matchers, long baseRows, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, ViewSorter.WorkerGate.Lease threads)
+    {
+        var order = view.Order;
+        var bytes = 4L * baseRows;
+        if (baseRows > Array.MaxLength || !set.TryReserveWork(bytes)) throw new RequestException("TOO_LARGE", TooLarge);
+        try
+        {
+            var at = GC.AllocateUninitializedArray<int>((int)baseRows);
+            Array.Fill(at, -1);
+            for (var position = 0; position < order.Length; position++)
+            {
+                if ((position & 0xFFFF) == 0) token.ThrowIfCancellationRequested();
+                // A view naming a row past the pages: only a release that emptied them can cause it.
+                if (order[position] >= baseRows) return null;
+                at[order[position]] = position;
+            }
+            var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(baseRows, int.MaxValue)));
+            var parts = new Kept[runs];
+            long From(int run) => baseRows * run / runs;
+            using var rooms = PageRooms.Over(pages, matchers.Length, () => new RequestException("TOO_LARGE", TooLarge));
+            void Read(int run)
+            {
+                var part = parts[run] = new Kept(backward, maxMatches);
+                using var source = new Source(pages, matchers.Length, PackedSlots, rooms);
+                ScanPages(part, source, at, matchers, From(run), From(run + 1), textLength, fromRow, token, stopped);
+            }
+            threads.For(runs, Read);
+            long total = 0, before = 0;
+            var approximate = false;
+            List<(long Position, int[] Columns)> rows = [];
+            foreach (var part in parts)
+            {
+                if (part.Stopped) return null;
+                total += part.Total;
+                before += part.Before;
+                approximate |= part.Approximate;
+                rows.AddRange(part.Rows);
+            }
+            rows.Sort((a, b) => a.Position.CompareTo(b.Position));
+            // Forward the first rows from FromRow until they hold maxMatches; backward the last before it, the oldest going
+            // while the rows after them still hold maxMatches.
+            var take = 0;
+            var count = 0;
+            if (!backward) for (; take < rows.Count && count < maxMatches; take++) count += rows[take].Columns.Length;
+            else for (; take < rows.Count && count < maxMatches; take++) count += rows[rows.Count - 1 - take].Columns.Length;
+            var chosen = backward ? rows.GetRange(rows.Count - take, take) : rows.GetRange(0, take);
+            var keptRows = new long[count];
+            var keptColumns = new int[count];
+            var k = 0;
+            foreach (var (position, columns) in chosen)
+                foreach (var column in columns) { keptRows[k] = position; keptColumns[k++] = column; }
+            var first = backward ? before - count : count == 0 ? total : before;
+            return new SearchOutcome(order.Length, total, first, keptRows, keptColumns, approximate);
+        }
+        finally { set.ReturnWork(bytes); }
+    }
+
+    /// <summary>What one run of a page-order search found: its matches, and the rows the outcome may take, by view position
+    /// (a heap whose top is the row to give up first: the last forward, the first backward).</summary>
+    private sealed class Kept(bool backward, int maxMatches)
+    {
+        public long Total, Before;
+        public bool Approximate, Stopped;
+        public bool Backward => backward;
+        private readonly PriorityQueue<(long Position, int[] Columns), long> heap = new();
+        private int count;
+        public IEnumerable<(long Position, int[] Columns)> Rows => heap.UnorderedItems.Select(item => item.Element);
+
+        /// <summary>Whether a row at this position would be given up at once, so it need not be kept.</summary>
+        public bool Beyond(long position) =>
+            count >= maxMatches && heap.TryPeek(out var top, out _) && (backward ? position < top.Position : position > top.Position);
+
+        public void Add(long position, List<int> found)
+        {
+            heap.Enqueue((position, [.. found]), backward ? position : -position);
+            count += found.Count;
+            while (heap.Count > 1 && heap.TryPeek(out var top, out _) && count - top.Columns.Length >= maxMatches)
+            {
+                heap.Dequeue();
+                count -= top.Columns.Length;
+            }
+        }
+    }
+
+    private static void ScanPages(Kept part, Source source, int[] at, Matcher?[] matchers, long from, long to, int textLength, long fromRow, CancellationToken token, Func<bool>? stopped)
+    {
+        var columns = matchers.Length;
+        var found = new List<int>(16);
+        var scratch = new Scratch();
+        long work = 0;
+        var cellWork = CellWork + textLength;
+        for (var row = from; row < to; row++)
+        {
+            if (work <= 0)
+            {
+                token.ThrowIfCancellationRequested();
+                if (stopped?.Invoke() == true) { part.Stopped = true; return; }
+                work = CheckEvery;
+            }
+            // A row the view leaves out (filtered) is not searched.
+            work -= 1;
+            var position = at[row];
+            if (position < 0) continue;
+            var page = source.ViewOf(row, out var local);
+            found.Clear();
+            work -= CellWork;
+            for (var c = 0; c < columns; c++)
+            {
+                if (matchers[c] is not { } matcher || page.IsNull(c, local)) continue;
+                var truncated = page.IsTruncated(c, local);
+                var cell = page.Span(c, local);
+                work -= cellWork + cell.Length;
+                if (matcher.Matches(cell, scratch)) found.Add(c);
+                else if (truncated) part.Approximate = true;
+            }
+            if (found.Count == 0) continue;
+            part.Total += found.Count;
+            if (position < fromRow) part.Before += found.Count;
+            if (part.Backward ? position >= fromRow : position < fromRow) continue;
+            if (!part.Beyond(position)) part.Add(position, found);
         }
     }
 

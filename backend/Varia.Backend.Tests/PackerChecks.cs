@@ -283,15 +283,20 @@ internal static class PackerChecks
         rig.Packer.PackDue();
         rig.Clock += ResultPacker.DelayMs;
         rig.Packer.PackDue();
-        // A search through a view far from the result's pages' order (sorted by amount) unpacks a packed result first (a sort,
-        // filter, profile, pivot, diff, distinct list or search in its own order reads it fused and leaves it packed:
-        // FusedReadChecks).
+        // A search through a view far from the result's pages' order (sorted by amount) reads it in page order and leaves it
+        // packed, as a sort, filter, profile, pivot, diff, distinct list or search in its own order does (FusedReadChecks).
         var byAmount = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         var packedUse = rig.Store.UsedBytes;
-        var pokes = rig.Pokes;
         var search = (ResultsSearchResult)service.DispatchAsync("results.search", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "no such text", fromRow = 0, maxMatches = 10 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
-        check(search.Rows == set.RowsAvailable && !set.HasPacked && set.NeedsPacking && rig.Pokes > pokes && rig.Store.UsedBytes > packedUse,
-            "a search of a packed hidden result unpacks it first, charging its raw size, and its end wakes the policy");
+        check(search.Rows == set.RowsAvailable && AllPacked(set) && set.Unpacks == 0 && rig.Store.UsedBytes == packedUse,
+            "a search of a packed hidden result through a sorted view leaves it packed and holds nothing afterwards");
+        // An operation that unpacks it whole (a comparison reading it far from the other result's order) charges its raw
+        // size, and its end wakes the policy.
+        var pokes = rig.Pokes;
+        bool unpackedWhole;
+        using (set.Pin()) unpackedWhole = set.TryUnpackAll();
+        check(unpackedWhole && !set.HasPacked && set.NeedsPacking && rig.Pokes > pokes && rig.Store.UsedBytes > packedUse,
+            "an operation that unpacks a packed hidden result whole charges its raw size, and its end wakes the policy");
         // The operation counts as a use: packed again only once the result has gone unused for the delay, so a search or
         // comparison that reads a hidden result run after run does not unpack and pack it each time.
         var again = rig.Packer.PackDue();

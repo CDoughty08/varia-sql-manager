@@ -63,6 +63,10 @@ minute. Hidden results keep 5 s.
   give the budget back the raw bytes (131 MiB for a 256 MiB `orders` result) for tiles a few milliseconds faster.
   `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a packed shown
   result grows the budget by more than its view's order.
+- **Find through a sorted grid reads in page order.** A search through a view far from its packed pages' order reads
+  the result in page order, fused, each row placed at its view position through the view's inverse (4 bytes a row, for
+  the search's length), keeping per run only the rows its answer may take. It never unpacks the result: a sorted
+  1,000,000-row view of a packed W1 result searched whole in about 33 ms, the budget as before (`node.packedSearch.*`).
 - **Value lists do not keep a result raw.** A distinct snapshot keeps its result's pages, not their bytes, so its later
   reads go through packed pages.
 - **Candidates are asked again** before a pass starts and before each page: one the user began to work with meanwhile
@@ -162,7 +166,6 @@ working memory, so the operation holds about a page a worker and the result stay
 These revisit pages at random, so they unpack the result whole ("rehydrate": every page unpacked on the workers into
 raw pages after reserving raw less packed; 0.15 s per GiB on 16 workers, 0.36 s on 3):
 
-- a search through a view far from its pages' order;
 - a diff whose first result is read far from its pages' order, after counting the unpacks its order would cost
   (`ResultDiffer.Local`: past four a page). It holds what unpacking that result adds (562 MiB at 1 GiB) instead of both
   results' growth (1,060 MiB), and the second result stays packed;

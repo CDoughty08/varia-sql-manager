@@ -199,8 +199,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   Options limit changes, as each generation becomes ready and after each successful settings read,
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
-  its working memory before it builds (search reserves only its rooms for a packed result, or what unpacking takes
-  through a sorted view); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
+  of one the view's inverse, 4 bytes a row); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
@@ -309,7 +309,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     eighth) unpack ahead in two batches of rooms. A diff keeps `ResultDiffer.LeftSlots`/`RightSlots` and past
     `UnpacksPerPage` (counted by `ResultDiffer.Local`) unpacks the first result in place (`TryUnpackAll`). A distinct
     snapshot keeps pages, not bytes (`KeptPages`), reading in row order through one `ReadRoom`. A search through a far
-    (sorted) view (`ResultSearcher.Local`) unpacks in place first (`SqlService.Unpack`: `UnpackNeed`, then `UnpackAll`).
+    (sorted) view (`ResultSearcher.Local`) reads in page order instead, each row placed at its view position through the
+    view's inverse, and keeps per run only the rows the answer may take (`ResultSearcher.ByPages`); it never unpacks.
   - A transposed Copy or Save holds the pages its rows lie on (`BodiesTogether`, `TOO_LARGE` when refused); a plain one
     reads through one `ReadRoom` (refused, through the accessor and cache).
   - The Memory panel's state is `partial` while some pages are packed and no whole pass has ended since the last unpack

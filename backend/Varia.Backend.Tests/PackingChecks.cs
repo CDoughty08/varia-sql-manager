@@ -291,15 +291,17 @@ internal static class PackingChecks
         set.Pack();
         var packed = store.UsedBytes;
         // A search in the result's own order reads it fused and leaves it packed (FusedReadChecks); through a view far from
-        // its pages' order (sorted by amount) it unpacks the result first and its pages are charged.
+        // its pages' order (sorted by amount) it reads it in page order, and leaves it packed too.
         Call<object>("results.search", new { resultId = set.ResultId, text = "59999", fromRow = 0, maxMatches = 1 });
         check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed,
             "a search of a packed result in its own order reads it fused and leaves it packed");
         var byAmount = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } });
         packed = store.UsedBytes;
         Call<object>("results.search", new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "59999", fromRow = 0, maxMatches = 1 });
-        check(!set.HasPacked && set.SealedSnapshot().All(page => page.Stored is byte[]) && store.UsedBytes > packed,
-            "a search through a sorted view of a packed result unpacks it first, so the pages it keeps are charged");
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed && set.Unpacks == 0,
+            "a search through a sorted view of a packed result reads it in page order, leaves it packed and holds nothing afterwards");
+        // Unpacked, for the transposed Copy's raw estimate below.
+        using (set.Pin()) check(set.TryUnpackAll() && !set.HasPacked, "the fixture: the result unpacked");
         // A transposed Copy keeps the pages its rows lie on: it unpacks only those, as working memory returned when it ends.
         CopyPartArgs[] scattered = [new([[0, 0], [8000, 8000], [16000, 16000], [24000, 24000], [32000, 32000], [40000, 40000], [48000, 48000], [56000, 56000]], [[0, 1]])];
         var rawTurned = ResultJobs.EstimateCopy(set, scattered, true, false, transposed: true);

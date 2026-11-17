@@ -9,11 +9,13 @@
 
 ### Changes to everyday use
 
-- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll. Find in such a grid first decompresses the whole result, as a search through any compressed sorted grid does, which needs room in result memory for its full size.
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll. Find searches it as it is.
 
 - **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
 
 ### Fixes
+
+- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
 
 - **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.
 

@@ -1324,7 +1324,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   `maxMatches` by at most its last row's columns (main accepts up to `maxMatches` + `page.maxColumns`). `matchRows[k]`/`matchColumns[k]` are
   cells in row, column order; `first` counts matches before the run (or before `fromRow` when empty). `complete`: the rows searched were
   every row of a finished set; `approximate`: a truncated prefix did not match. It reserves no budget (at most 1 MiB of page layouts), except one- or two-page rooms to
-  read a packed result (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
+  read a packed result and, through a view far from a packed result's pages (a sort), the view's inverse, 4 bytes a row,
+  as it reads that result in page order instead of unpacking it (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
   close (`VIEW_NOT_FOUND`) stop it at the next checkpoint.
 - **Matching.** A cell matches when its grid text contains the text; NULL, unreadable and hidden columns never match.
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only

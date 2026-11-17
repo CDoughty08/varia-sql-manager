@@ -390,8 +390,8 @@ internal static partial class FusedReadChecks
                 "row identities by " + by + (column >= 0 ? " " + column : "") + " of a packed result are those of it unpacked, read page by page, and leave it packed: " + unpacked + " pages unpacked");
         }
 
-        string Found(ResultSetBuffer set, ResultView? view, string text, long from, bool backward) =>
-            ResultSearcher.Search(set, set.SealedSnapshot(), view, text, from, backward, 50, CancellationToken.None) is { } found
+        string Found(ResultSetBuffer set, ResultView? view, string text, long from, bool backward, int max = 50) =>
+            ResultSearcher.Search(set, set.SealedSnapshot(), view, text, from, backward, max, CancellationToken.None) is { } found
                 ? $"{found.Searched}|{found.Total}|{found.First}|{found.Approximate}|{string.Join(",", found.Rows)}|{string.Join(",", found.Columns)}" : "stopped";
         ResultView FilteredView(ResultStore owner, ResultSetBuffer set) =>
             owner.AddView(set, ViewSorter.Build(set, set.SealedSnapshot(), [], [new ViewFilter(FilterOp.In, 1, GroupRows(2), false, null, [])], CancellationToken.None).Order, [], false, true, 0, null);
@@ -414,17 +414,38 @@ internal static partial class FusedReadChecks
             check(ResultSearcher.Local(pages, packedView.Order) && ResultSearcher.Local(pages, [.. Enumerable.Range(0, Rows)]) && !ResultSearcher.Local(pages, sorted),
                 "a search takes base order and a filtered view as near the pages and a sorted view as far from them");
         }
-        // Through a sorted view, called without SqlService's unpack first, it reads the pages through the set's accessor:
-        // what it finds unpacked, and the result still packed.
-        ResultView SortedView(ResultStore owner, ResultSetBuffer set) =>
-            owner.AddView(set, ViewSorter.Build(set, set.SealedSnapshot(), [new ViewKey(3, false, SortMode.Value)], [], CancellationToken.None).Order, [], false, true, 0, null);
-        var rawSorted = SortedView(rawStore, raw);
-        var packedSorted = SortedView(store, packed);
-        var sortedBefore = store.PackingSnapshot().PagesUnpacked;
-        var sortedFound = Found(packed, packedSorted, "word12", 500, false);
-        check(sortedFound == Found(raw, rawSorted, "word12", 500, false) && packed.HasPacked,
-            "a search through a sorted view of a packed result, unpacked by nobody first, finds what it finds unpacked and leaves it packed: "
-            + (store.PackingSnapshot().PagesUnpacked - sortedBefore) + " pages unpacked");
+        // Through a sorted view, and one sorted and filtered (rows left out), it reads the result in page order, each row placed
+        // at its view position: what a pass in view order finds unpacked, forward and backward, from any row and to a few
+        // matches or many (whole rows), each packed page unpacked a bounded number of times, the result left packed and the
+        // budget as it was.
+        ResultView SortedView(ResultStore owner, ResultSetBuffer set, bool filtered) =>
+            owner.AddView(set, ViewSorter.Build(set, set.SealedSnapshot(), [new ViewKey(3, false, SortMode.Value)], filtered ? [new ViewFilter(FilterOp.NotIn, 1, GroupRows(2), false, null, [])] : [], CancellationToken.None).Order, [], false, true, 0, null);
+        foreach (var filtered in new[] { false, true })
+        {
+            var rawSorted = SortedView(rawStore, raw, filtered);
+            var packedSorted = SortedView(store, packed, filtered);
+            used = store.UsedBytes;
+            using (packed.Pin()) check(!ResultSearcher.Local(packed.SealedSnapshot(), packedSorted.Order), "the fixture: a sorted view far from the packed pages' order");
+            foreach (var (text, from, backward, max) in new[] { ("word12", 500L, false, 50), ("word1", 0L, false, 3), ("open", 20_000L, true, 50), ("o", 30_000L, true, 7), ("REFERENCE-00042", 0L, false, 10_000), ("no such text", 100L, true, 10) })
+            {
+                var unpackedBefore = store.PackingSnapshot().PagesUnpacked;
+                var viewed = Found(packed, packedSorted, text, from, backward, max);
+                var unpacked = store.PackingSnapshot().PagesUnpacked - unpackedBefore;
+                var expected = Found(raw, rawSorted, text, from, backward, max);
+                check(viewed == expected && Kept() && unpacked <= 2L * PageCount(packed),
+                    "a search for '" + text + "' " + (backward ? "back" : "on") + " from " + from + " to " + max + " through a sorted" + (filtered ? " and filtered" : "") + " view of a packed result reads it in page order, finds what it finds unpacked and leaves it packed: " + unpacked + " pages unpacked; " + (viewed == expected ? "same" : viewed + " against " + expected));
+            }
+        }
+        // Without room for the view's inverse (4 bytes a row), the search is refused with its sentence and holds nothing.
+        var noRoomView = SortedView(store, packed, false);
+        var filler = store.BeginQuery("filler");
+        store.TryReserve(filler, store.GlobalBytes - store.UsedBytes - 4L * Rows / 2, false, out _);
+        var noRoomUsed = store.UsedBytes;
+        string? noRoom = null;
+        try { ResultSearcher.Search(packed, packed.SealedSnapshot(), noRoomView, "word1", 0, false, 10, CancellationToken.None); }
+        catch (RequestException error) { noRoom = error.Code + ": " + error.Message; }
+        check(noRoom == "TOO_LARGE: " + ResultSearcher.TooLarge && packed.HasPacked && store.UsedBytes == noRoomUsed,
+            "a search through a sorted view of a packed result without room for the view's inverse is refused with its sentence and holds nothing: " + noRoom);
     }
 
 
@@ -492,10 +513,12 @@ internal static partial class FusedReadChecks
         var searched = Call<ResultsSearchResult>(service, "results.search", new { resultId = pair.Left.ResultId, text = "word7", fromRow = 0, maxMatches = 10 });
         var before = pair.Store.UsedBytes;
         check(searched.Total > 0 && pair.Left.HasPacked && pair.Store.UsedBytes == before, "results.search of a packed result in its own order reads it fused and leaves it packed");
-        // Through a sorted view, its rows far from their pages' order, the search unpacks the result first.
+        // Through a sorted view, its rows far from their pages' order, the search reads it in page order and leaves it packed.
         var view = Call<ResultsViewResult>(service, "results.view", new { resultId = pair.Left.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } });
+        var viewed = pair.Store.UsedBytes;
         var sortedSearch = Call<ResultsSearchResult>(service, "results.search", new { resultId = pair.Left.ResultId, viewId = view.ViewId, text = "word7", fromRow = 0, maxMatches = 10 });
-        check(sortedSearch.Total == searched.Total && !pair.Left.HasPacked, "results.search through a sorted view of a packed result unpacks it first, and finds as many matches");
+        check(sortedSearch.Total == searched.Total && pair.Left.HasPacked && pair.Left.Unpacks == 0 && pair.Store.UsedBytes == viewed,
+            "results.search through a sorted view of a packed result leaves it packed, holds nothing afterwards and finds as many matches");
     }
 
     private static void CancelledWhole(Action<bool, string> check)

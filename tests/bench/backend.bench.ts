@@ -83,6 +83,31 @@ it('sorts a packed shown result without unpacking it', async () => {
   }
 })
 
+// Find through a sorted grid of a packed result reads it in page order, each row placed at its view position, so it never
+// unpacks the result whole: the whole view searched for a text no row has, and the budget afterwards against before.
+it('searches a sorted view of a packed result without unpacking it', async () => {
+  const used = async () => (await supervisor.request('results.close', { resultIds: [2 ** 32 - 1] })).usedBytes
+  const descriptor = await supervisor.request('debug.results.synthesize', { shape: 'W1', rows: 1_000_000, pack: true }) as ResultDescriptor
+  try {
+    const view = await supervisor.request('results.view', { resultId: descriptor.resultId, sort: [{ column: 3, descending: true, mode: 'value' }] })
+    const before = await used()
+    const times: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now()
+      const found = await supervisor.request('results.search', { resultId: descriptor.resultId, viewId: view.viewId, text: 'no such text', fromRow: 0, maxMatches: 100 })
+      times.push(performance.now() - started)
+      expect(found.total).toBe(0)
+    }
+    const grown = await used() - before
+    record(
+      { id: 'node.packedSearch.ms', value: median(times), unit: 'ms', detail: `a search of every row of a sorted 1,000,000-row W1 view of a packed result, median of 3: ${times.map(time => time.toFixed(0)).join(', ')} ms` },
+      { id: 'node.packedSearch.budgetGrowthMb', value: grown / 1e6, unit: 'MB', detail: `budget after three searches less before; unpacking would add the result's raw size less its packed size (${(descriptor.bytesStored / 1e6).toFixed(0)} MB raw)` }
+    )
+  } finally {
+    await supervisor.request('results.close', { resultIds: [descriptor.resultId] })
+  }
+})
+
 // What a sorted grid pays for a read when its result is packed: the grid reads 128-row tiles (gridLimits.tileRows), and a
 // sorted view's tile takes its rows from pages all over the result, so packed each read decompresses a page or so a row.
 // Measured through main's supervisor, the backend's view read and the stream, at random tiles of a 1,000,000-row view.
