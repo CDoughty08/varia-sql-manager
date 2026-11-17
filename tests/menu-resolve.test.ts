@@ -35,12 +35,12 @@ describe('menu resolution', () => {
     const edit = resolveMenu('edit', options())
     expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find and Replace', '&Go To Line…', '-', 'Ad&vanced', 'Boo&kmarks', '&IntelliSense'])
     // Separator keys count through the submenus, which are resolved first.
-    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:9', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:10', 'edit.findReplace', 'edit.goToLine', 'sep:11',
+    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:10', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:11', 'edit.findReplace', 'edit.goToLine', 'sep:12',
       'edit.advanced', 'edit.bookmarks', 'edit.intellisense'])
     const submenu = (key: string) => { const item = edit.find(entry => entry.key === key); return item?.kind === 'submenu' ? item.items : [] }
     expect(marked(submenu('edit.findReplace'))).toEqual(['&Quick Find', 'Quick &Replace', '-', 'Find &Next', 'Find &Previous'])
     expect(marked(submenu('edit.advanced'))).toEqual(['Make &Uppercase', 'Make &Lowercase', '-', 'View W&hite Space', '&Word Wrap', '-', 'Co&mment Selection', 'U&ncomment Selection', '&Toggle Line Comment', '-',
-      '&Increase Line Indent', '&Decrease Line Indent'])
+      '&Increase Line Indent', '&Decrease Line Indent', '-', 'Toggle &Brackets', 'Move Commas to &Front', 'Move Commas to &End'])
     expect(marked(submenu('edit.bookmarks'))).toEqual(['&Toggle Bookmark', '-', '&Previous Bookmark', '&Next Bookmark', '-', '&Clear Bookmarks', '-', 'P&revious Bookmark In Document', 'Ne&xt Bookmark In Document'])
     // Varia's bridge chords are labelled like Monaco's.
     expect(submenu('edit.bookmarks')[0]).toMatchObject({ icon: 'bookmark', keybinding: { text: 'Ctrl+K Ctrl+K' } })

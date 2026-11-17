@@ -451,7 +451,7 @@ describe('context menus', () => {
     doc.activeElement = line
     expect(menus.openForElement(line.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
-    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Go To Definition', 'Peek Definition', '-', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
+    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Go To Definition', 'Peek Definition', 'Open Definition in Peek Tab', '-', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', '-', 'Cut', 'Copy', 'Paste', '-', 'Toggle Brackets', 'Move Commas to Front', 'Move Commas to End', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
   it('opens a menu button\'s menu below it as a pointer menu from a click, and names what the open menu is for', () => {

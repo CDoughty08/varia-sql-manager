@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (23)
+## Gestures (24)
 
 ### Global
 
@@ -21,7 +21,8 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Zoom Editor Text | `editor.wheelZoom` | Scroll up to enlarge editor text or down to shrink it for this session. | Fixed | Ctrl+Wheel editor text | Ctrl+Wheel editor text | ⌃ Wheel editor text | Locked: Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work. | — |
-| Go To Definition | `editor.goToDefinition` | Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does. | Command | Ctrl+Click an object name | Ctrl+Click an object name | ⌘ Click an object name | Choose: Ctrl / ⌘, Alt / ⌥ | Go To Definition (`edit.goToDefinition`) |
+| Peek Definition on Hover | `editor.peekHover` | Peeks the object whose name the pointer rests on (a table, view, procedure, function and so on) in a card beside it. | Modifier | Ctrl+Hover an object name | Ctrl+Hover an object name | ⌘ Hover an object name | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek Definition (`edit.peekDefinition`) |
+| Open Definition in Peek Tab | `editor.goToDefinition` | Opens Peek on the object whose name is clicked (a table, view, procedure, function and so on) in a document tab. | Command | Ctrl+Click an object name | Ctrl+Click an object name | ⌘ Click an object name | Choose: Ctrl / ⌘, Alt / ⌥ | Open Definition in Peek Tab (`edit.openPeekTab`) |
 
 ### Results Grid
 

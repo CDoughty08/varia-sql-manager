@@ -767,9 +767,10 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
   },
-  // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens it in a Peek tab. Peek's own read-only
-  // editor takes both through its own focus key (peekEditorFocus), so neither needs a query-tab key there. Ctrl+click is
-  // gestures.ts's editor.goToDefinition.
+  // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens Peek's card at the caret, as SSMS's
+  // inline Peek Definition does. Peek's own read-only editor takes both through its own focus key (peekEditorFocus), so
+  // neither needs a query-tab key there. With the pointer, Ctrl+hover (gestures.ts editor.peekHover) opens the card as Object
+  // Explorer's does, and Ctrl+click (editor.goToDefinition) opens a Peek tab (edit.openPeekTab).
   'edit.goToDefinition': {
     title: 'Go To Definition', category: 'Edit', icon: 'go-to-file', keywords: ['goto', 'script', 'create', 'navigate', 'object'],
     precondition: 'backendReady', unavailableHint: definitionHint,
@@ -781,6 +782,30 @@ export const commandCatalog = {
     precondition: 'backendReady', unavailableHint: definitionHint,
     keybindings: [{ key: 'alt+f12', when: 'editorTextFocus || peekEditorFocus' }],
     menus: [{ menu: 'editor.context', group: '2_definition', order: 2, mnemonic: 'k' }]
+  },
+  'edit.openPeekTab': {
+    title: 'Open Definition in Peek Tab', category: 'Edit', icon: 'link-external', keywords: ['peek', 'properties', 'preview', 'object', 'document', 'tab'],
+    precondition: 'backendReady', unavailableHint: definitionHint,
+    menus: [{ menu: 'editor.context', group: '2_definition', order: 3, mnemonic: 'f' }]
+  },
+  // SQL Server text commands that read the query's tokens, so strings, comments and variables never change
+  // (src/renderer/src/editor/sql-transforms.ts). Ctrl+[ is free in the query editor: Monaco's indent and outdent lines
+  // actions are not loaded, and Tab and Shift+Tab indent.
+  'edit.toggleBrackets': {
+    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+[', when: 'editorTextFocus' }],
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
+  },
+  'edit.commasToFront': {
+    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
+  },
+  'edit.commasToEnd': {
+    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {
     title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,

@@ -18,6 +18,8 @@ export interface SubDialogProps {
   readonly status?: ReactNode
   /** A destructive OK (Kill Process): Cancel takes focus as the dialog opens, so a stray Enter cancels, and OK is drawn as danger. */
   readonly destructive?: boolean
+  /** A third choice between OK and Cancel (Don't Save in Save / Don't Save / Cancel). */
+  readonly alternative?: { readonly label: string; run(): void }
   readonly children: ReactNode
 }
 
@@ -26,7 +28,7 @@ export interface SubDialogProps {
  * OK and Cancel. Tab stays inside it, and Escape and Enter are handled here, so only this dialog closes; focus returns
  * to where it was.
  */
-export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, children }: SubDialogProps) {
+export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, children }: SubDialogProps) {
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
@@ -64,6 +66,7 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     <div className="connection-footer">
       <span className="sub-dialog-status">{status}</span>
       <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
+      {alternative && <button type="button" onClick={alternative.run}>{alternative.label}</button>}
       <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
     </div>
   </form></div>, document.body)

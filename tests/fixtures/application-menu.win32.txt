@@ -47,6 +47,10 @@
     {"type":"separator"}
     {"id":"edit.increaseIndent","label":"Increase Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.increaseIndent"]]}
     {"id":"edit.decreaseIndent","label":"Decrease Line Indent","registerAccelerator":false,"type":"normal","click":[["command","edit.decreaseIndent"]]}
+    {"type":"separator"}
+    {"accelerator":"Ctrl+[","id":"edit.toggleBrackets","label":"Toggle Brackets","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleBrackets"]]}
+    {"id":"edit.commasToFront","label":"Move Commas to Front","registerAccelerator":false,"type":"normal","click":[["command","edit.commasToFront"]]}
+    {"id":"edit.commasToEnd","label":"Move Commas to End","registerAccelerator":false,"type":"normal","click":[["command","edit.commasToEnd"]]}
   {"id":"edit.bookmarks","label":"Bookmarks"}
     {"id":"edit.toggleBookmark","label":"Toggle Bookmark","registerAccelerator":false,"type":"normal","click":[["command","edit.toggleBookmark"]]}
     {"type":"separator"}
