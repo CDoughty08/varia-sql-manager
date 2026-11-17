@@ -484,6 +484,9 @@ export class Updater {
     }
   }
 
+  /** Settles when every sweep started so far has finished, so a caller can read the folder as the last sweep left it. */
+  whenSwept(): Promise<void> { return this.sweeping }
+
   /** Removes earlier releases' files: the whole private folder but `keep`, or only Varia's own hidden files elsewhere. */
   private sweep(keep: UpdateAsset | undefined): Promise<void> {
     const run = this.sweeping.then(() => this.sweepNow(keep))

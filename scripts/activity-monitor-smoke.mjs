@@ -14,6 +14,7 @@ import {
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'activity-profile-'))
@@ -47,7 +48,7 @@ const live = (method, ...args) => page.evaluate(([name, values]) => window.__var
 const handles = async () => (await live('snapshot')).handles.filter(handle => handle.source === 'activity')
 const frames = id => live('frames', id)
 const viewOf = id => live('snapshot', id)
-const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method)
+const calls = async method => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method)
 const backendState = () => app.evaluate(() => globalThis.__variaTest.state())
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -320,7 +321,15 @@ try {
   await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"column":"database","values":["BillingDb"]'))).toBe(true)
   // Alt+Down (output.filterColumnValues) opens the active column's funnel, as in a results grid; Escape closes it and gives
   // the grid the focus back.
-  await sessionsGrid.getByRole('gridcell', { name: 'BillingDb', exact: true }).click()
+  // A rare Windows CI timeout here found the only BillingDb cell drawn but never visible: on failure, say what the grid drew.
+  await sessionsGrid.getByRole('gridcell', { name: 'BillingDb', exact: true }).click().catch(async error => {
+    const drawn = await sessionsGrid.evaluate((grid, { row, cell }) => ({
+      scroll: [grid.scrollLeft, grid.scrollTop], rows: grid.getAttribute('aria-rowcount'),
+      drawn: [...grid.querySelectorAll(row)].map(item => ({ index: item.getAttribute('aria-rowindex'), shown: item.getClientRects().length > 0, cells: [...item.querySelectorAll(cell)].map(node => `${node.getAttribute('aria-colindex')}${node.getClientRects().length > 0 ? '' : '(hidden)'}:${node.textContent}`) }))
+    }), { row: gridPart.row, cell: gridPart.cell }).catch(reason => String(reason))
+    console.error('Sessions grid when BillingDb could not be clicked:', JSON.stringify(drawn))
+    throw error
+  })
   await page.keyboard.press('Alt+ArrowDown')
   await expect(funnel.getByRole('checkbox', { name: 'BillingDb (1)', exact: true })).toBeChecked()
   await page.keyboard.press('Escape')
