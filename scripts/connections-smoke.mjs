@@ -1325,6 +1325,8 @@ async function environmentLabels() {
   await dialog.getByLabel('Environment', { exact: true }).selectOption('Test')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click()
   await relabelled('TEST', 'neutral')
+  // Saving disables Save for a moment; focus comes back to it, so Escape and Tab still reach the dialog.
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused()
   await expect.poll(saved).toBe('Test')
   // A further edit is not dropped silently: Cancel asks, and Cancel there keeps editing.
   await dialog.getByLabel('Environment', { exact: true }).selectOption('Staging')

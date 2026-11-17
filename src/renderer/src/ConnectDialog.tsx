@@ -375,6 +375,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile): Promise<boolean> {
     const labelled = profile ? profile.options : labelledOptions()
     if (!labelled) return false
+    // Saving disables the button pressed, which drops focus to the page, where Escape and Tab no longer reach the dialog.
+    const returnTo = document.activeElement instanceof HTMLElement && dialog.current?.contains(document.activeElement) ? document.activeElement : undefined
     setSaving(true); setError(''); setNotice('')
     try {
       const { value, savedId } = await persist({ id: profile?.id ?? editedEntry(labelled)?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect }, labelled, profile?.id)
@@ -383,7 +385,12 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       if (!profile) { setSelectedId(savedId); startAfresh() }
       return true
     } catch (reason) { if (alive.current) setError(message(reason)); return false }
-    finally { if (alive.current) setSaving(false) }
+    finally {
+      if (alive.current) {
+        setSaving(false)
+        setTimeout(() => { const active = document.activeElement; if (returnTo?.isConnected && (!active || active === document.body)) returnTo.focus() }, 0)
+      }
+    }
   }
   /** After Connect: the edited Name, Color, Environment and Reconnect on startup in History (main's reuse of a live
    *  connection records none), and on that entry's other Explorer connections. A failure leaves the connection alone. */
@@ -465,10 +472,11 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       const pick = <K extends 'displayName' | 'color' | 'environment'>(field: K, value: ConnectionOptions[K]) => owner && !changedDetails.includes(field) ? owner.options[field] : value
       const environment = ownsEnvironment() ? labelled.environment : labelled.environment ?? (result.ok ? result.value.environment : undefined)
       // After Stop, nothing of this connect is kept: History and Explorer keep their labels.
-      const recorded = !result.ok || !changedDetails.length || controller.signal.aborted || await recordDetails({ ...labelled, displayName: pick('displayName', labelled.displayName), color: pick('color', labelled.color), environment: pick('environment', environment) },
-        owner && !changedDetails.includes('autoReconnect') ? owner.autoReconnect ?? 'inherit' : autoReconnect, owner?.id)
+      const record = changedDetails.length ? { ...labelled, displayName: pick('displayName', labelled.displayName), color: pick('color', labelled.color), environment: pick('environment', environment) } : undefined
+      const recordReconnect = owner && changedDetails.length && !changedDetails.includes('autoReconnect') ? owner.autoReconnect ?? 'inherit' : autoReconnect
+      const recorded = !result.ok || !record || controller.signal.aborted || await recordDetails(record, recordReconnect, owner?.id)
       // The dialog closes once connected, so a failed History save is reported where Connect reports history warnings.
-      if (result.ok) { const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, changedDetails); targetAttempt.current = undefined }
+      if (result.ok) { const { environment: kept, ...connected } = result.value, info = recorded ? connected : { ...connected, historyWarning: connected.historyWarning ?? historyNotSaved }; await onConnected(info, record ? { ...record, password: '' } : { ...labelled, password: '', environment: labelled.environment ?? kept }, record ? recordReconnect : autoReconnect, attempt, requestId, controller.signal, changedDetails); targetAttempt.current = undefined }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {

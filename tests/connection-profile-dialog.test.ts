@@ -534,6 +534,34 @@ describe('saving connection details', () => {
     expect(view.saveConnectionProfile).not.toHaveBeenCalled()
   })
 
+  it('holds Stop and Escape while Connect writes the changed labels to History', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    const write = deferred<Awaited<ReturnType<VariaApi['saveConnectionProfile']>>>()
+    view.saveConnectionProfile.mockImplementationOnce(() => write.promise)
+    await act(async () => { view.button('Connect').click() })
+    expect(view.saveConnectionProfile).toHaveBeenCalledOnce()
+    expect(view.button('Stop').disabled).toBe(true)
+    const cancels = view.api.cancelConnectionRequests.mock.calls.length
+    await act(async () => view.host.querySelector('form')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(view.api.cancelConnectionRequests.mock.calls.length).toBe(cancels)
+    await act(async () => write.resolve({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [] } }))
+    expect(view.onConnected).toHaveBeenCalledOnce()
+  })
+
+  it('gives a new connection the same labels Connect records in History', async () => {
+    const chosen = profile('Chosen', 1, 'on'), reporting = { ...profile('Reporting', 2, 'off'), options: { ...chosen.options, database: 'OtherDb', displayName: 'Reporting', color: '#00aa00' } }
+    const view = await mount(undefined, { profiles: [chosen, reporting] })
+    await view.choose('Chosen')
+    await pick(view, '#connect-database', 'OtherDb')
+    await pick(view, 'input[type="color"]', '#e51400')
+    await act(async () => view.button('Connect').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: reporting.id, options: expect.objectContaining({ displayName: 'Reporting', color: '#e51400' }), autoReconnect: 'off' }))
+    expect(view.onConnected.mock.calls[0]?.[1]).toMatchObject({ displayName: 'Reporting', color: '#e51400' })
+    expect(view.onConnected.mock.calls[0]?.[2]).toBe('off')
+  })
+
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
     const view = await mount()
     await view.choose('Off profile')
