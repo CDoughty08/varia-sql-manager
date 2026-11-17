@@ -90,6 +90,51 @@ describe('output yield', () => {
     expect(yielding.restore(api)).toBe(false)
   })
 
+  it('shows a hidden group again when a command moves another panel into it', () => {
+    const api = workbench(), yielding = new OutputYield(column(api))
+    const group = yielding.yieldSpace(api)!
+    // Only output panels: nothing to do.
+    expect(yielding.check(api)).toBe(false)
+    expect(group.api.isVisible).toBe(false)
+    // Tab with Results moves the query editor into the hidden group, which would hide every document with it.
+    api.getPanel('editor')!.api.moveTo({ group })
+    expect(yielding.check(api)).toBe(true)
+    expect(api.getPanel('editor')!.group.api.isVisible).toBe(true)
+    expect(yielding.groupId).toBeUndefined()
+  })
+
+  it('leaves an output group with another group below it, which would take its space instead of the editor', () => {
+    const api = workbench()
+    // [editor, output, Object Explorer] in one column: the boxes Dockview would lay out.
+    const stacked: Measure = element => {
+      const editor = api.getPanel('editor')!.group
+      if (element === editor.element) return { left: 0, right: 1200, top: 0, bottom: 400 }
+      if (element === results(api).element) return { left: 0, right: 1200, top: 400, bottom: 600 }
+      return { left: 0, right: 1200, top: 600, bottom: 800 }
+    }
+    expect(yieldingGroup(api, stacked)).toBeUndefined()
+    expect(yieldingGroup(api, column(api))?.id).toBe(results(api).id)
+  })
+
+  it('takes the shown size back from the sibling Dockview gave it to', () => {
+    // A column of three: editor, output, and Object Explorer below them. Hiding the output gives its space to the last
+    // visible sibling, Object Explorer, and the saved layout must take it back from there.
+    const element = document.createElement('div')
+    document.body.append(element)
+    const api = createDockview(element, { createComponent: (): IContentRenderer => ({ element: document.createElement('div'), init() {} }) })
+    cleanups.push(() => { api.dispose(); element.remove() })
+    api.layout(1200, 800)
+    api.addPanel({ id: 'editor', title: 'Query editor', component: 'workbench' })
+    api.addPanel({ id: 'results', title: 'Results', component: 'workbench', position: { referencePanel: 'editor', direction: 'below' } })
+    api.addPanel({ id: 'explorer', title: 'Object Explorer', component: 'workbench', position: { referencePanel: 'results', direction: 'below' } })
+    api.layout(1200, 800)
+    // The editor stays the largest, so taking the space from the largest sibling would be wrong.
+    api.getPanel('editor')!.group.api.setSize({ height: 500 })
+    const before = parseWorkspaceLayout(api.toJSON() as WorkspaceLayout), group = results(api)
+    group.api.setVisible(false)
+    expect(withGroupShown(parseWorkspaceLayout(api.toJSON() as WorkspaceLayout), group.id)).toEqual(before)
+  })
+
   it('shows only the named group', () => {
     const layout = { grid: { root: { type: 'branch', data: [{ type: 'leaf', data: { id: '1', views: ['editor'] }, size: 500 }, { type: 'leaf', data: { id: '2', views: ['results'] }, size: 300, visible: false }, { type: 'leaf', data: { id: '3', views: ['explorer'] }, size: 300, visible: false }] }, width: 800, height: 800, orientation: 'VERTICAL' }, panels: {} } as unknown as WorkspaceLayout
     const nodes = (withGroupShown(layout, '2').grid.root as unknown as { data: { visible?: boolean }[] }).data

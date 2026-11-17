@@ -621,7 +621,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (loaded.state.current) { try { apply(loaded.state.current) } catch (error) { setError('Could not restore the saved workspace layout: ' + message(error)) } }
       if (loaded.warning) setError(loaded.warning)
       ready.current = true
-      const layout = api.onDidLayoutChange(() => { syncHeaders(api); changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
+      const layout = api.onDidLayoutChange(() => { outputYield.check(api); syncHeaders(api); changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
       const panels = [api.onDidAddPanel(() => syncHeaders(api)), api.onDidRemovePanel(() => syncHeaders(api)), api.onDidAddGroup(() => syncHeaders(api))]
       subscription.current = { dispose: () => { layout.dispose(); maximized.dispose(); panels.forEach(item => item.dispose()) } }
       syncHeaders(api)

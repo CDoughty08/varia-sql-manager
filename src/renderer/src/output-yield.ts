@@ -8,18 +8,22 @@ const measureElement: Measure = element => element.getBoundingClientRect()
 const gap = 8
 
 /**
- * The group whose space a document that is not a query takes: docked in the grid directly below the query editor and
- * holding only output panels, as the default layout's Results, Messages and Execution plan do. Output panels the user moved
- * elsewhere, floated or popped out keep their place. None while a group is maximized.
+ * The group whose space a document that is not a query takes: docked in the grid directly below the query editor, at the
+ * bottom of the dock, and holding only output panels, as the default layout's Results, Messages and Execution plan do.
+ * At the bottom, Dockview gives its space to the editor above it (a hidden view's space goes to its last visible
+ * sibling); a group with another one below it would give its space to that one. Output panels the user moved elsewhere,
+ * floated or popped out keep their place. None while a group is maximized.
  */
 export function yieldingGroup(api: DockviewApi, measure: Measure = measureElement): DockviewGroupPanel | undefined {
   const editor = api.getPanel('editor')
   if (!editor || editor.api.location.type !== 'grid' || api.hasMaximizedGroup()) return undefined
   const above = measure(editor.group.element)
-  return api.groups.find(group => {
-    if (group === editor.group || group.api.location.type !== 'grid' || !group.api.isVisible || !group.panels.length || !group.panels.every(panel => isOutputPane(panel.id))) return false
+  const docked = api.groups.filter(group => group.api.location.type === 'grid' && group.api.isVisible)
+  const bottom = Math.max(...docked.map(group => measure(group.element).bottom))
+  return docked.find(group => {
+    if (group === editor.group || !group.panels.length || !group.panels.every(panel => isOutputPane(panel.id))) return false
     const box = measure(group.element)
-    return Math.abs(box.top - above.bottom) <= gap && box.left < above.right - gap && box.right > above.left + gap
+    return Math.abs(box.top - above.bottom) <= gap && box.bottom >= bottom - gap && box.left < above.right - gap && box.right > above.left + gap
   })
 }
 
@@ -54,6 +58,16 @@ export class OutputYield {
     if (!group || group.api.isVisible) return false
     group.api.setVisible(true)
     return true
+  }
+
+  /**
+   * Shows the hidden group again once it holds a panel that is not an output panel: a command moved one there (Tab with
+   * Results), and it would otherwise vanish with it. Returns whether it did.
+   */
+  check(api: DockviewApi): boolean {
+    const group = this.hidden === undefined ? undefined : api.groups.find(item => item.id === this.hidden)
+    if (!group || group.panels.every(panel => isOutputPane(panel.id))) return false
+    return this.restore(api)
   }
 
   /** The user showed a panel of `groupId` (Window › Results, Ctrl+R): it stays shown, no longer this one's to restore or hide. */
