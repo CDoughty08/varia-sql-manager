@@ -5,8 +5,11 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 export const documentationPaths = ['README.md', 'CHANGELOG.md', 'AGENTS.md', 'CLAUDE.md']
+// Nothing builds, typechecks or packages these folders; the docs lane's source-only vitest still checks the generated
+// files in them (theme schema and tokens, metrics, commands and the other catalogue pages).
+export const documentationFolders = ['docs/', 'prototypes/']
 export function scopeForPaths(paths) {
-  return paths.length > 0 && paths.every(path => documentationPaths.includes(path) || /^docs\/.+\.md$/.test(path)) ? 'docs' : 'full'
+  return paths.length > 0 && paths.every(path => documentationPaths.includes(path) || documentationFolders.some(folder => path.startsWith(folder) && path.length > folder.length)) ? 'docs' : 'full'
 }
 
 export function changeRange(eventName, event) {

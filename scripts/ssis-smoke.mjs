@@ -2,7 +2,9 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
@@ -14,7 +16,7 @@ const profile = await mkdtemp(resolve('artifacts', 'ssis-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'ssis-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'ssis'))
-const lines = async name => (await readFile(join(control, name), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const lines = async name => parseCalls(await readFile(join(control, name), 'utf8').catch(() => ''))
 const describes = async () => (await lines('calls.jsonl')).filter(call => call.method === 'ssis.describe').map(call => call.params)
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -72,6 +74,9 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toHaveText('Ready', { timeout: 30000 })
+  // A short window, as properties documents take the whole document area: Project Properties' sections then overflow
+  // their column, so choosing one scrolls to it.
+  await resizeContent(application, page, 1440, 700)
   await connect('server-a')
   await expandExplorerPath(page, ...finance, 'Projects', 'Loads', 'Packages')
   await expandExplorerPath(page, ...finance, 'Environments')
