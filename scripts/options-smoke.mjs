@@ -3,10 +3,11 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, popoutDockButton, popoutTabs, resultGrid,
+  backendReady, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
   shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 // Tools › Options over the fake backend (tests/fixtures/backend.mjs, workbench mode), which records each request in
 // calls.jsonl: the page tree, search, form and property-grid pages, what OK saves to settings.json and what the
@@ -48,7 +49,7 @@ const field = label => dialog().getByLabel(label, { exact: true })
 const heading = () => optionsHeading(dialog())
 const search = () => dialog().getByRole('searchbox', { name: 'Search Options', exact: true })
 const warningBanner = () => warningBannerOf(page)
-const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method).map(call => call.params)
+const calls = async method => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
 const nbsp = String.fromCharCode(160)
 const editorText = async () => (await editorTextOf(page)).replaceAll(nbsp, ' ')
 async function menu(id) {
@@ -251,6 +252,9 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
+  // Connect closes before it binds the query to the new connection (App's finishConnected), and F5 on a query with none
+  // asks to connect instead of running: wait for the query's server.
+  await expect(queryServer(page)).not.toHaveValue('')
   await textbox().focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('SELECT 1')
@@ -452,7 +456,7 @@ try {
     results.on('pageerror', error => failures.push(error.message))
     await expect(popoutTabs(results)).toBeVisible()
     await opens(results, () => resultGrid(results).click(), 'Shift+F9', 1)
-    await popoutDockButton(results).click()
+    await dockPopoutBack(results)
     await expect(pane(page, 'results')).toBeVisible()
 
     // Import refuses a file that is not a shortcuts file, and says nothing changed.

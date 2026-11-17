@@ -584,6 +584,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   })
   const window = mainWindow, contents = window.webContents
   if (place.maximized) window.maximize()
+  // Smoke runs on a virtual display show the window, inactive: Linux sometimes ran no animation frames in a never-shown one
+  // (scripts/fixtures/xvfb.mjs).
+  if (testSeams && process.env.VARIA_TEST_SHOW_WINDOW === '1') window.showInactive()
   if (process.platform !== 'darwin') {
     // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)

@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { loadReleaseArchive } from './release-notes.mjs'
 import { gettingStartedSmoke } from './fixtures/help.mjs'
-import { pressToClose, aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, popoutDockButton, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
+import { pressToClose, aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, dockPopoutBack, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'updates-profile-'))
@@ -161,7 +161,7 @@ try {
   await quickInputBox(popout).fill('> Getting Started')
   await popout.keyboard.press('Enter')
   await expect(page.getByRole('searchbox', { name: 'Find a guide', exact: true })).toBeFocused()
-  await popoutDockButton(popout).click()
+  await dockPopoutBack(popout)
   await page.keyboard.press('F1')
   await quickInputBox(page).fill('> About Varia')
   await page.keyboard.press('Enter')

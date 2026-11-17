@@ -403,11 +403,18 @@ export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).g
  * and size. Plain data, for a failure message.
  */
 export function workbenchPanes(page) {
-  return page.evaluate(({ pane, slot }) => {
+  return page.evaluate(async ({ pane, slot }) => {
     const box = element => { const { x, y, width, height } = element.getBoundingClientRect(); return [x, y, width, height].map(Math.round).join(',') }
     const style = element => { const computed = getComputedStyle(element); return `${computed.display}/${computed.visibility}` }
+    // Dockview places an always-rendered panel's overlay from an animation frame: an overlay with a size but no left/top
+    // never had that frame, so say whether the page runs frames at all.
+    const frame = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve('none within 2 s'), 2000)
+      requestAnimationFrame(() => { clearTimeout(timer); resolve('ran') })
+    })
     return {
-      visibilityState: document.visibilityState, hasFocus: document.hasFocus(), viewport: `${innerWidth}x${innerHeight}`,
+      visibilityState: document.visibilityState, hasFocus: document.hasFocus(), viewport: `${innerWidth}x${innerHeight}`, animationFrame: frame,
+      docks: document.querySelectorAll('.dv-dockview').length, overlays: document.querySelectorAll('.dv-render-overlay').length,
       panes: [...document.querySelectorAll(pane)].map(host => {
         const placed = host.parentElement?.matches(slot) ? host.parentElement : null
         // Dockview renders always-rendered panels in an overlay layer positioned over their group.
@@ -598,6 +605,15 @@ export const popoutTabs = page => page.getByRole('tablist', { name: /^Panels in 
 /** A panel's tab in a popout window, which drags back onto the main window. */
 export const popoutTab = (page, id) => popoutTabs(page).locator(`[data-popout-tab="${id}"]`)
 export const popoutDockButton = page => page.getByRole('button', { name: 'Move back into main window', exact: true })
+/** Docks a popout's panels back and waits for its window to close. The button closes its own window, which can go
+ *  before Playwright's click returns ("Target page, context or browser has been closed"): that is the click working. */
+export async function dockPopoutBack(page) {
+  const closed = page.isClosed() ? Promise.resolve() : page.waitForEvent('close', { timeout: 30000 })
+  try { await popoutDockButton(page).click() } catch (error) {
+    if (!page.isClosed() && !/has been closed/.test(String(error?.message))) { closed.catch(() => {}); throw error }
+  }
+  await closed
+}
 
 // Query output
 
