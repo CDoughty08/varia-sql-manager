@@ -601,6 +601,8 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
             var range = ReadRange(Property(edit, "range")) ?? ReadRange(Property(edit, "replace"));
             if (text is not null && range is not null && (!PositionInText(text, range.Start) || !PositionInText(text, range.End))) continue;
             var newText = String(edit, "newText");
+            if (text is not null && range is not null && newText is { } bracketed && bracketed.EndsWith(']') && ClosesTypedBracket(text, range))
+                range = range with { End = range.End with { Character = range.End.Character + 1 } };
             // Truncating insertion text would silently alter the SQL the user accepts.
             if (insertText is { Length: > 16_384 } || newText is { Length: > 16_384 }) { incomplete = true; continue; }
             // Commands, workspace edits, additionalTextEdits and arbitrary data are deliberately not forwarded.
@@ -614,6 +616,21 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
             items.Add(completion);
         }
         return new(items, incomplete);
+    }
+
+    /// <summary>
+    /// Monaco auto-closes a typed <c>[</c>, so <c>[Fir|]</c> has a closing bracket just past STS's replacement range.
+    /// A bracketed insertion must replace it rather than leave <c>[FirstOnly]]</c>.
+    /// </summary>
+    internal static bool ClosesTypedBracket(string text, LanguageRange range)
+    {
+        if (range.Start.Line != range.End.Line) return false;
+        var start = CompletionOffset(text, range.Start);
+        var end = CompletionOffset(text, range.End);
+        if (start < 0 || end < start || end >= text.Length || text[end] != ']') return false;
+        var replaced = text[start..end];
+        var open = replaced.LastIndexOf('[');
+        return open >= 0 && !replaced[open..].Contains(']', StringComparison.Ordinal);
     }
 
     private static string CompletionPrefix(JsonElement array, string text, LanguagePosition position)

@@ -152,6 +152,23 @@ internal static class SqlCompletionChecks
         var exact = SqlToolsLanguageService.ReadCompletions(Element(Enumerable.Range(0, 600).Select(index => new { label = "orders_" + index, kind = 7 })
             .Append(new { label = "sysorders", kind = 7 }).Append(new { label = "Orders", kind = 7 })), exactText, new(0, exactText.Length));
         check(exact.Items[0].Label == "Orders" && exact.IsIncomplete, "a case-insensitive exact name match ranks first and survives the response cap");
+        foreach (var (marked, expected, inserted) in new[]
+        {
+            ("SELECT [Fir|] FROM dbo.T", "SELECT [FirstOnly] FROM dbo.T", "[FirstOnly]"),
+            ("SELECT t.[Fir|] FROM dbo.T t", "SELECT t.[FirstOnly] FROM dbo.T t", "[FirstOnly]"),
+            ("SELECT [Fir| FROM dbo.T", "SELECT [FirstOnly] FROM dbo.T", "[FirstOnly]"),
+            ("SELECT Fir|] FROM dbo.T", "SELECT [FirstOnly]] FROM dbo.T", "[FirstOnly]"),
+            ("SELECT [Fir|] FROM dbo.T", "SELECT FirstOnly] FROM dbo.T", "FirstOnly")
+        })
+        {
+            var cursor = marked.IndexOf('|');
+            var text = marked.Remove(cursor, 1);
+            var start = text.LastIndexOfAny([' ', '.'], cursor - 1) + 1;
+            var range = new LanguageRange(new(0, start), new(0, cursor));
+            var item = SqlToolsLanguageService.ReadCompletions(Element(new[] { new { label = inserted, kind = 5, textEdit = new { range, newText = inserted } } }), text, new(0, cursor)).Items[0];
+            check(text[..item.TextEdit!.Range.Start.Character] + item.TextEdit.NewText + text[item.TextEdit.Range.End.Character..] == expected,
+                "a bracketed insertion replaces only a closing bracket Monaco auto-closed after a typed opening bracket: " + marked);
+        }
         var duplicateAlias = new CompletionClient();
         using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => duplicateAlias))
         {

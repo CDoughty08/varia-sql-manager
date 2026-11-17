@@ -18,7 +18,8 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
   and a truncated one is requested again.
 - **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
   the bare name still filters, and so does a name after a typed `[` or `"`. A table or other name that is inserted in
-  brackets because it needs quoting also shows its brackets.
+  brackets because it needs quoting also shows its brackets. Accepting a suggestion inside an auto-closed `[...]`
+  replaces the closing bracket rather than adding a second one.
 - Because each list is requested again as you type, a list opened with **Ctrl+Space** shows *No suggestions* once
   nothing matches, instead of keeping the last matches.
 - A table created after the query's metadata was loaded is not suggested until **Refresh Local Cache** (below).
