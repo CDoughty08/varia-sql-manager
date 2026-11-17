@@ -86,14 +86,15 @@ can move off the main window, onto another display.
 - **Size.** Options opens at 940 × 680, at least 640 × 440, and can be resized; the size it was left at is kept in
   `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
   screen. About has a fixed size. A window opens centred on the main window.
-- **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel; closing the dialog closes its window
+- **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel (while OK is saving, Options moves over
+  the main window until the save finishes); closing the dialog closes its window
   and gives focus back to where it was, in the main window or the popout it opened from (or to a dialog opened over the
   main window meanwhile). A window torn down without its `pagehide` (by the OS, or a crash) is noticed within a second,
   as a popout's is.
 - **Their own document.** Code inside a dialog reads its element's `ownerDocument` (or `windows.activeDocument()`), never
   the global `document`, and tests elements with `isElement` and `tagName` (`core/focus.ts`): `instanceof HTMLElement`
   is false for another window's elements, as in popouts.
-- **Fallback.** Where main refuses the window (no display under the main window), or the page runs without windows
+- **Fallback.** Where main refuses the window (no display under the main window, or at the window limits), or the page runs without windows
   (unit tests), the dialog shows over the main window as before, with its own close button.
 
 Other dialogs (Connect, object dialogs, properties) still show over the main window; they can move to dialog windows
