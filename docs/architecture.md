@@ -532,7 +532,7 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
 - **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
-  the grid group of output panels directly below the query editor and at the bottom of the dock (so Dockview gives its
+  the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its
   space to the editor) with Dockview's group visibility, which keeps its size for when a query is active again; moved,
   floating and popped-out output panels are never touched, and a query shown in another editor group keeps them. The
   saved layout always shows that group (`withGroupShown`), so yielding writes nothing and a restart or saved layout never

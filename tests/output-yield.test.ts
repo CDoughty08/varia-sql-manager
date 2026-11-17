@@ -131,6 +131,9 @@ describe('output yield', () => {
       return { left: 0, right: 1200, top: 600, bottom: 800 }
     }
     expect(yieldingGroup(api, stacked)).toBeUndefined()
+    // [Results | Messages] side by side under the editor: hiding one gives its width to the other.
+    const split: Measure = element => element === api.getPanel('editor')!.group.element ? { left: 0, right: 1200, top: 0, bottom: 500 } : { left: 0, right: 600, top: 500, bottom: 800 }
+    expect(yieldingGroup(api, split)).toBeUndefined()
     expect(yieldingGroup(api, column(api))?.id).toBe(results(api).id)
   })
 

@@ -8,8 +8,8 @@ const measureElement: Measure = element => element.getBoundingClientRect()
 const gap = 8
 
 /**
- * The group whose space a document that is not a query takes: docked in the grid directly below the query editor, at the
- * bottom of the dock, and holding only output panels, as the default layout's Results, Messages and Execution plan do.
+ * The group whose space a document that is not a query takes: docked in the grid directly below the query editor across
+ * its width (not split beside another group, which would take the space), at the bottom of the dock, and holding only output panels, as the default layout's Results, Messages and Execution plan do.
  * At the bottom, Dockview gives its space to the editor above it (a hidden view's space goes to its last visible
  * sibling); a group with another one below it would give its space to that one. Output panels the user moved elsewhere,
  * floated or popped out keep their place. None while a group is maximized.
@@ -23,7 +23,7 @@ export function yieldingGroup(api: DockviewApi, measure: Measure = measureElemen
   return docked.find(group => {
     if (group === editor.group || !group.panels.length || !group.panels.every(panel => isOutputPane(panel.id))) return false
     const box = measure(group.element)
-    return Math.abs(box.top - above.bottom) <= gap && box.bottom >= bottom - gap && box.left < above.right - gap && box.right > above.left + gap
+    return Math.abs(box.top - above.bottom) <= gap && box.bottom >= bottom - gap && Math.abs(box.left - above.left) <= gap && Math.abs(box.right - above.right) <= gap
   })
 }
 

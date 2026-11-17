@@ -14,7 +14,7 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
   values opened from the results have no query output, so while one is active the Results, Messages and Execution plan
   panels docked below the editor hide and it fills the area. They come back at their size when a query is active.
   While a query shows in another editor group the panels stay. Output panels you moved elsewhere, floated or put in their
-  own window stay where they are, as do panels with another panel docked below them. **Window › Results** or
+  own window stay where they are, as do panels with another panel docked below or beside them. **Window › Results** or
   **Toggle Results Pane** (Ctrl+R) shows the docked panels over such documents until a query is active again.
 - **Status bar.** Click **Ln/Col** to go to a line, or **INS/OVR** to switch between insert and overtype mode.
 - **SSMS query shortcuts.** SSMS's Alt+F1 `sp_help`, Ctrl+1 `sp_who` and Ctrl+2 `sp_lock` are the palette commands
