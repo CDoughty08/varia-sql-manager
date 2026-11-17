@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use details you just edited\.
+- **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
+
 ## [0.9.0] - 2026-11-15
 
 Organize, name and keep far larger results, see what is slowing your server with the rest of Activity Monitor, and pick up where you left off with restored connections\.

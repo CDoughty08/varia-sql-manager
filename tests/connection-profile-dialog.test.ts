@@ -70,7 +70,7 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
     await act(async () => { select().value = value; select().dispatchEvent(new Event('change', { bubbles: true })) })
   }
   const releaseLibrary = async () => { await act(async () => held.resolve()) }
-  return { ...workbench, host, button, choose, select, preference, reopen, saveConnectionProfile, onConnected, releaseLibrary, profiles: () => library.profiles }
+  return { ...workbench, host, button, choose, select, preference, reopen, saveConnectionProfile, onConnected, closed: onClose, releaseLibrary, profiles: () => library.profiles }
 }
 
 describe('saved profile startup reconnect preference', () => {
@@ -79,7 +79,7 @@ describe('saved profile startup reconnect preference', () => {
     return [first, second]
   }
 
-  it.each(['new', 'reuse'] as const)('keeps the selected Windows alias after Save Changes for a %s transport', async mode => {
+  it.each(['new', 'reuse'] as const)('keeps the selected Windows alias after Save for a %s transport', async mode => {
     const profiles = aliases(), targetId = id(50), handle = id(100), options = profiles[0].options
     const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'windows' as const, id: 'sid:fixture' } }
     const info = { id: handle, targetId, generation: 1, server: options.server, database: options.database, serverVersion: '17', authentication }
@@ -97,7 +97,7 @@ describe('saved profile startup reconnect preference', () => {
       finishConnectionDetails(view.connections, opened!, mode === 'reuse' ? 'current' : 'selected')
     })
     await view.choose('Second alias')
-    await act(async () => view.button('Save changes').click())
+    await act(async () => view.button('Save').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: profiles[1].id, autoReconnect: 'on' }))
     await act(async () => view.button('Connect').click())
     const context = view.api.connect.mock.calls[0]?.[1]
@@ -168,7 +168,7 @@ describe('saved profile startup reconnect preference', () => {
     await view.choose('Off profile')
     expect(view.select().value).toBe('off')
     await view.preference('on')
-    await act(async () => view.button('Save changes').click())
+    await act(async () => view.button('Save').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(1), autoReconnect: 'on' }))
     await view.reopen('inherit')
     await view.choose('Off profile')
@@ -200,7 +200,7 @@ describe('saved profile startup reconnect preference', () => {
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), autoReconnect: 'off', registered: true }))
     await act(async () => view.button('Connect').click())
     expect(view.api.connect).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mode: 'interactive', autoReconnect: 'off' }))
-    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal))
+    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal), true)
   })
 
   it('keeps a matching profile policy on ordinary live reuse while Keep Current preserves the target policy', async () => {
@@ -283,5 +283,96 @@ describe('Reset and the form environment', () => {
     await act(async () => view.button('Connect').click())
     expect(view.api.connect).toHaveBeenCalledTimes(1)
     expect(view.api.connect.mock.calls[0]?.[1]).not.toHaveProperty('setsEnvironment')
+  })
+})
+
+describe('saving connection details', () => {
+  const live = (options: ConnectionOptions, details = detailsOf(options, 'off')) => (workbench: ReturnType<typeof workbenchFixture>) => {
+    const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'windows' as const, id: 'sid:fixture' } }
+    const attempt = workbench.connections.beginConnect(options, 1, id(50), details)!
+    workbench.connections.accept({ id: id(100), targetId: id(50), generation: 1, server: options.server, database: options.database, serverVersion: '17', authentication }, options, id(50), authentication, attempt)
+  }
+  const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
+    const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
+    await act(async () => {
+      if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
+      else field.value = value
+      field.dispatchEvent(new Event(field instanceof HTMLInputElement ? 'input' : 'change', { bubbles: true }))
+    })
+  }
+  const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
+  const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
+
+  it('applies a saved name, color and environment to the live Explorer connection at once', async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], beforeRender: live(saved.options) })
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    await pick(view, 'input[type="color"]', '#e51400')
+    await pick(view, '#connect-environment', 'Production')
+    await pick(view, '#connect-auto-reconnect', 'on')
+    expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Off profile' })
+    await act(async () => view.button('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, autoReconnect: 'on' }))
+    expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Renamed', color: '#e51400', environment: 'Production' })
+    expect(view.connectionTargets.get(id(50))?.details).toEqual({ displayName: 'Renamed', color: '#e51400', environment: 'Production', autoReconnect: 'on' })
+  })
+
+  it('leaves Explorer connections for another server alone', async () => {
+    const saved = profile('Off profile', 1, 'off'), other = profile('Other', 2, 'off')
+    const view = await mount(undefined, { profiles: [saved, other], beforeRender: live(other.options) })
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    await act(async () => view.button('Save').click())
+    expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Other' })
+  })
+
+  it('asks before Cancel, Close or Escape drops edits to a saved connection', async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Off profile')
+    await pick(view, '#connect-environment', 'Production')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save changes to Off profile?')
+    // Cancel in the prompt keeps editing; the form keeps its edit.
+    await act(async () => promptButton('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.host.querySelector<HTMLSelectElement>('#connect-environment')!.value).toBe('Production')
+    await act(async () => view.host.querySelector('form')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(prompt()).not.toBeNull()
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ environment: 'Production' }) }))
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it("closes without saving on Don't Save, and without asking when nothing changed or the edits are saved", async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Off profile')
+    await act(async () => view.button('Close connection dialog').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledTimes(1)
+    await pick(view, '#connect-name', 'Renamed')
+    await act(async () => view.button('Close connection dialog').click())
+    await act(async () => promptButton("Don't Save").click())
+    expect(view.closed).toHaveBeenCalledTimes(2)
+    expect(view.saveConnectionProfile).not.toHaveBeenCalled()
+    await pick(view, '#connect-name', 'Saved name')
+    await act(async () => view.button('Save').click())
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledTimes(3)
+  })
+
+  it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+    expect(view.saveConnectionProfile).not.toHaveBeenCalled()
+    await view.choose('On profile')
+    await pick(view, 'input[type="color"]', '#e51400')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[1]?.[6]).toBe(true)
+    // Main records no labels when it reuses a live connection: the dialog saves them to that History entry itself.
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), options: expect.objectContaining({ color: '#e51400' }), autoReconnect: 'on' }))
   })
 })

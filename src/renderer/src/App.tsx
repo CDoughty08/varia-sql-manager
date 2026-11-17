@@ -208,7 +208,7 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal) {
+  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, detailsEdited = false) {
     let adopted = false
     const opened = await acceptConnectionReceipt({ api: window.varia, connections: workbench.connections, info, options: chosen, details: detailsOf(chosen, preference), attempt, requestId,
       current: () => !signal.aborted && (adopted || !documents.getSnapshot().busy), explicitlyCancelled: () => signal.aborted, signal,
@@ -218,8 +218,9 @@ export default function App() {
     if (signal.aborted) { opened.association?.abandon(true); return }
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
-    if (needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
-    await finishConnected(opened, 'current')
+    // Details the user edited in Connect are their choice already; only labels that came from a History entry ask.
+    if (!detailsEdited && needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
+    await finishConnected(opened, detailsEdited ? 'selected' : 'current')
   }
   async function finishConnected(opened: OpenedConnection, choice: 'selected' | 'current' | 'cancel') {
     setDetailsReview(undefined)

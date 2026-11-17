@@ -64,8 +64,9 @@ const layout = dialog => dialog.evaluate((form, part) => {
     connectInside: footer.bottom <= outer.bottom + 0.5, failureAtConnect: failure ? failure.top >= scroll.bottom - 0.5 && failure.bottom <= footer.top + 0.5 : null
   }
 }, part)
-/** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer. */
-const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(1).map(button => {
+/** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer.
+ *  Reset and Save come first; Save, disabled while connecting, gives way to Connecting… instead. */
+const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(2).map(button => {
   const box = button.getBoundingClientRect()
   return [box.top, box.bottom, box.right].map(Math.round)
 }))
@@ -201,7 +202,7 @@ try {
   // Always Encrypted and secure enclaves went back to False: stored as edited, they set nothing, so 8 of the 10 count.
   await expect(dialog.locator('#connect-advanced-summary')).toHaveText('8 properties set')
   await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toHaveAttribute('aria-describedby', 'connect-advanced-summary')
-  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
   // defaults, and Tools › Options for the command timeout, keep applying to the rest.
@@ -1124,8 +1125,13 @@ async function environmentLabels() {
   await expect(dialog.getByRole('alert')).toHaveText('Enter an environment label.')
   await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(dialog.getByLabel('Custom environment label', { exact: true })).toBeFocused()
+  // The chosen History entry has an unsaved edit: Cancel asks, and Don't Save closes without saving it.
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  let unsaved = page.getByRole('dialog', { name: /^Save changes to / })
+  await expect(unsaved).toBeVisible()
+  await unsaved.getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
+  expect(await saved()).toBe('Production')
   // (4c) Profile lookup folds server case, so typing the saved server's name in uppercase shows Production. Runtime
   // identity preserves the submitted spelling: restore the exact server before testing authenticated reuse of the
   // existing Staging target, whose details can change only after an explicit choice.
@@ -1235,7 +1241,7 @@ async function environmentLabels() {
   for (const label of [long, 'PROD']) {
     if (label === 'PROD') {
       await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
-      await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
     }
     const longEntry = savedConnections(dialog, 'Finance data warehouse').first()
     await expect(longEntry.locator(part.statusPill)).toHaveText(label)
@@ -1305,9 +1311,41 @@ async function environmentLabels() {
   })
   expect(forged).toEqual([false, false])
   expect(await saved()).toBe('Production')
+  // (6) Save in Connect's footer relabels the History entry and its live Explorer connection at once, with no reconnect.
+  // (4e) left two query tabs open, so check Explorer and the bars rather than shows()'s single tab.
+  const relabelled = async (text, tone) => {
+    for (const place of ['explorer', 'status']) {
+      await expect(tag(place).first(), place).toHaveText(text)
+      await expect(tag(place).first(), place).toHaveAttribute('data-tone', tone)
+    }
+  }
+  dialog = await open()
+  await savedConnections(dialog, 'prod-server').first().click()
+  if (await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).getAttribute('aria-expanded') !== 'true') await customProperties(dialog)
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('Test')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await relabelled('TEST', 'neutral')
+  await expect.poll(saved).toBe('Test')
+  // A further edit is not dropped silently: Cancel asks, and Cancel there keeps editing.
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('Staging')
+  await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save changes to prod-server?', exact: true })
+  await expect(unsaved).toBeVisible()
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unsaved).toHaveCount(0)
+  await expect(dialog.getByLabel('Environment', { exact: true })).toHaveValue('Staging')
+  // Connect applies a label the user edited to the reused connection without asking "Use selected connection details?".
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
+  await dialog.getByLabel('Password', { exact: true }).fill('any-password')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Use selected connection details?', exact: true })).toHaveCount(0)
+  await relabelled('PROD', 'critical')
+  await expect(serverRows(page)).toHaveCount(1)
+  expect(await saved()).toBe('Production')
   await app.close(); app = undefined
   const finalKept = JSON.parse(await readFile(join(userData, 'Session', 'session.json'), 'utf8'))
   expect(finalKept.workspace.targets).toHaveLength(1)
-  expect(finalKept.workspace.targets[0].details.environment).toBe(long)
+  expect(finalKept.workspace.targets[0].details.environment).toBe('Production')
   expect(await saved()).toBe('Production')
 }
