@@ -522,6 +522,18 @@ describe('saving connection details', () => {
     expect(view.api.connect.mock.calls[0]?.[1]).toMatchObject({ selectedProfileId: second.id })
   })
 
+  it('keeps nothing in History when Stop ends a connect that main then answers', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    const answer = deferred<Awaited<ReturnType<VariaApi['connect']>>>()
+    view.api.connect.mockImplementationOnce(() => answer.promise)
+    await act(async () => view.button('Connect').click())
+    await act(async () => view.button('Stop').click())
+    await act(async () => answer.resolve({ ok: true, value: { id: id(100), server: 'server-1', database: '', generation: 1, serverVersion: '17', authentication: { principal: { provider: 'sqlServer', authentication: 'windows', id: 'sid:fixture' } } } }))
+    expect(view.saveConnectionProfile).not.toHaveBeenCalled()
+  })
+
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {
     const view = await mount()
     await view.choose('Off profile')

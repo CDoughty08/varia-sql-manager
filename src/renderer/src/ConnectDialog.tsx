@@ -388,11 +388,14 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   /** After Connect: the edited Name, Color, Environment and Reconnect on startup in History (main's reuse of a live
    *  connection records none), and on that entry's other Explorer connections. A failure leaves the connection alone. */
   async function recordDetails(labelled: ConnectionOptions, reconnect: ConnectionDetails['autoReconnect'], id: string | undefined): Promise<boolean> {
+    // Stop waits for this short write: once it starts, History and Explorer take the labels together.
+    setSaving(true)
     try {
       const { value } = await persist({ id, options: { ...labelled, password: '' }, autoReconnect: reconnect }, labelled)
       if (alive.current) { showLibrary(value); startAfresh() }
       return true
     } catch { return false }
+    finally { if (alive.current) setSaving(false) }
   }
   /** The saved entry this form edits when the user changed it and has not saved since: the one Cancel asks about. */
   function unsaved(): ConnectionProfile | undefined {
@@ -429,7 +432,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     connectAbort.current = controller
     connectRequest.current = requestId
     const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
-    const selectedProfileId = selectedId ?? baseEntry(labelled)?.id ?? savedEntry(library.profiles, entryKeys, labelled)?.id
+    // The entry main records this connect in when it still has these settings; main otherwise takes the first that has them.
+    const named = selected ?? baseEntry(labelled) ?? savedEntry(library.profiles, entryKeys, labelled)
+    const selectedProfileId = named?.id
     let attempt: ConnectionAttempt | undefined
     try {
       await connectionReady
@@ -456,7 +461,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       const changedDetails = baseline.current ? changedConnectionDetails(detailsFrom(baseline.current.options, baseline.current.autoReconnect), detailsFrom(labelled, autoReconnect)).filter(field => detailFields.current.has(field)) : []
       // The entry this connect is recorded in: the chosen or starting one while it still has these settings, else (as main
       // chooses) the first with them. It takes only the changed labels and keeps its others.
-      const owner = [selected, baseEntry(labelled)].find(profile => profile && entryKey(profile.options) === entryKey(labelled)) ?? library.profiles.find(profile => entryKey(profile.options) === entryKey(labelled))
+      const owner = named && entryKey(named.options) === entryKey(labelled) ? named : library.profiles.find(profile => entryKey(profile.options) === entryKey(labelled))
       const pick = <K extends 'displayName' | 'color' | 'environment'>(field: K, value: ConnectionOptions[K]) => owner && !changedDetails.includes(field) ? owner.options[field] : value
       const environment = ownsEnvironment() ? labelled.environment : labelled.environment ?? (result.ok ? result.value.environment : undefined)
       // After Stop, nothing of this connect is kept: History and Explorer keep their labels.
@@ -557,7 +562,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     // Connect moves focus to Stop. A held Enter must not turn its next repeat into a cancellation there.
     if (event.key === 'Enter' && event.repeat) { event.preventDefault(); return }
     // While connecting, Escape is Stop, as the footer's button is.
-    if (event.key === 'Escape' && busy) { event.preventDefault(); event.stopPropagation(); stop() }
+    if (event.key === 'Escape' && busy) { event.preventDefault(); event.stopPropagation(); if (!saving) stop() }
     else if (event.key === 'Escape' && !locked) { event.preventDefault(); event.stopPropagation(); requestClose() }
     trapFocus(event)
   }
