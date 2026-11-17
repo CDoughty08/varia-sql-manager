@@ -1292,6 +1292,15 @@ and Properties can move to 0.11 without hurting the core experience.
   endpoint in the UI.
 - Table actions (delete, copy, expiration, labels), dataset creation, the external-account `executable` source behind
   an explicit opt-in.
+- From the 2026-11-16 mock review (ideas, not yet scoped):
+  - A permissions page for datasets, tables and views: who has which role, from the IAM policy, with grant and revoke.
+  - An authorized views manager: which views, routines and datasets a dataset authorizes, shown from both sides, with
+    add and remove (BigQuery Studio hides this in dataset sharing).
+  - Dataset actions beside the table actions: properties, default expiration, labels and description.
+  - Row access policies: list, script and drop a table's policies, and say in a result when they filtered rows.
+  - Time travel: query or restore a table as of a time within its window (`FOR SYSTEM_TIME AS OF`), and undelete.
+  - Upload and export: load a local CSV or JSON file into a table, and export a table to Cloud Storage.
+  - A BigQuery Table Designer: columns, types, modes, partitioning and clustering, built on the SQL Server designer.
 - Deleting the frozen 0.9.0 files (`connections.json`, `saved-passwords.json`, `Session/`, `AutoRecover/`).
 
 ## Decisions
