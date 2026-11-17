@@ -64,10 +64,12 @@ the Measurements below with the new baseline.
 ## Documentation-only changes
 
 - `scripts/ci-scope.mjs` sends a PR whose changes are limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`
-  and Markdown under `docs/` through a Linux documentation lane: `npm ci --ignore-scripts` (no
-  Electron download), then source-only vitest, which keeps the generated-document, README and published-changelog
-  assertions. It skips .NET, typechecking, production builds, SQL services, smoke and benchmarks. Anything else
-  (`release-notes/*.json`, schema JSON, scripts, workflows, build resources, tests, dependencies) runs full CI.
+  and any file under `docs/` or `prototypes/` (Markdown, images, mockups, theme schema and examples) through a Linux
+  documentation lane: `npm ci --ignore-scripts` (no Electron download), then source-only vitest, which keeps the
+  generated-document (theme schema included), README and published-changelog assertions. It skips .NET, typechecking,
+  production builds, SQL services, smoke and benchmarks. Nothing builds, typechecks or packages those folders, and
+  `tests/ci-scope.test.ts` fails if a build, typecheck, test or package config starts reading them. Anything else
+  (`release-notes/*.json`, scripts, workflows, build resources, tests, dependencies) runs full CI.
 - For PRs the scope job fetches full history but checks out only its classifier, and reads an untruncated,
   NUL-delimited diff from the merge-base to head (stacked PRs and earlier commits included; renames count both paths).
   Unknown or empty changes and missing history fall back to full CI. Git is used directly to avoid `paths`' 3,000-file
