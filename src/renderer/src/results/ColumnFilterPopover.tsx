@@ -1,10 +1,10 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { trapFocus } from '../trap-focus'
-import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, maxListSpace, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -32,13 +32,34 @@ const fallbackRow = 22
 const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.text
 const message = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message : fallback
 
-/** One checklist entry, placed at its row; a tick re-renders only the entries it changes. */
-const Item = memo(function Item({ value, top, height, checked, disabled, onToggle }: { value: DistinctValue; top: number; height: number; checked: boolean; disabled: boolean; onToggle(value: DistinctValue): void }) {
-  return <label className={'column-filter-item' + (value.text === '' ? ' empty' : '')} style={{ top, height }}>
-    <input type="checkbox" disabled={disabled} checked={checked} onChange={() => onToggle(value)} aria-label={`${shown(value)} (${formatCount(value.count)})`} />
+/** What a row of the checklist's listbox needs to be one of its options: its id (the listbox's active descendant), its
+ *  place among all the rows (the list draws only some), and whether it is the active row. */
+interface RowPlace { readonly id: string; readonly row: number; readonly rows: number; readonly active: boolean; readonly top: number; readonly height: number }
+/** A press on a row makes it the active one and keeps the focus on the listbox (the box drawn inside a row takes none). */
+type RowPick = (row: number) => void
+
+/** One checklist row: an option of the listbox at its place, its tick as `aria-checked`. A click ticks it, as Space does
+ *  the active row; the box inside is drawn only. */
+function Row({ place, label, checked, disabled, className, onToggle, onPick, children }: {
+  place: RowPlace; label: string; checked: boolean; disabled: boolean; className: string; onToggle(): void; onPick: RowPick; children: ReactNode
+}) {
+  return <div id={place.id} role="option" aria-checked={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
+    className={'column-filter-item ' + className + (place.active ? ' active' : '')} style={{ top: place.top, height: place.height }}
+    onMouseDown={event => { event.preventDefault(); onPick(place.row) }} onClick={() => { if (!disabled) onToggle() }}>
+    <input type="checkbox" tabIndex={-1} aria-hidden="true" disabled={disabled} checked={checked} readOnly />
+    {children}
+  </div>
+}
+
+/** Two places of a row are the same place (a new object each render). */
+const samePlace = (a: RowPlace, b: RowPlace) => a.id === b.id && a.row === b.row && a.rows === b.rows && a.active === b.active && a.top === b.top && a.height === b.height
+
+/** One value of the checklist; a tick or a move of the active row re-renders only the entries it changes. */
+const Item = memo(function Item({ value, place, checked, disabled, onToggle, onPick }: { value: DistinctValue; place: RowPlace; checked: boolean; disabled: boolean; onToggle(value: DistinctValue): void; onPick: RowPick }) {
+  return <Row place={place} label={`${shown(value)} (${formatCount(value.count)})`} checked={checked} disabled={disabled} className={value.text === '' ? 'empty' : ''} onToggle={() => onToggle(value)} onPick={onPick}>
     <bdi className="column-filter-text" title={value.text}>{shown(value)}</bdi><span className="column-filter-count" aria-hidden="true">{formatCount(value.count)}</span>
-  </label>
-})
+  </Row>
+}, (a, b) => a.value === b.value && a.checked === b.checked && a.disabled === b.disabled && a.onToggle === b.onToggle && a.onPick === b.onPick && samePlace(a.place, b.place))
 
 /**
  * What a funnel's popover filters: a column's distinct values as a snapshot (`DistinctList`), and the grid's filter it
@@ -86,7 +107,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   grid: HTMLElement
   onClose(refocus?: boolean): void
 }) {
-  const nullText = source.nullText ?? 'NULL', titleId = useId()
+  const nullText = source.nullText ?? 'NULL', titleId = useId(), rowId = useId()
   const offered = (source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions).map(([value, label]) => [value, source.conditionLabels?.[value] ?? label] as const)
   const { column, anchor } = target
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
@@ -111,14 +132,6 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   /** A tick failed: the ticks shown are a guess until the snapshot's own are read again. */
   const ticksStale = useRef(false)
-  /** Focus is on a row of the list: a row scrolled out of the drawn window unmounts, and focus would fall to the page, out
-   *  of reach of Escape and the focus trap, so the list itself takes it. Only a move to another element ends it, since a
-   *  removed element's blur (where a browser fires one) names none. */
-  const listFocus = useRef(false)
-  useLayoutEffect(() => {
-    const element = viewport.current, doc = element?.ownerDocument
-    if (listFocus.current && element && doc && (doc.activeElement === doc.body || doc.activeElement === null)) element.focus({ preventScroll: true })
-  })
   const list = load.status === 'ready' ? load.list : undefined
   const summary = list?.summary
 
@@ -158,6 +171,9 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const [scrollTop, setScrollTop] = useState(0)
   const [viewHeight, setViewHeight] = useState(0)
   const [rowHeight, setRowHeight] = useState(fallbackRow)
+  /** The listbox's active row (NULL's first when it is listed): the arrow keys move it and Space ticks it. Focus stays
+   *  on the listbox (`aria-activedescendant`), so a row scrolled out of the rows drawn takes no focus with it. */
+  const [active, setActive] = useState(0)
   const keyAbort = useRef<AbortController | undefined>(undefined)
   useLayoutEffect(() => {
     keyAbort.current?.abort()
@@ -168,6 +184,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     setTotal(needle ? undefined : summary?.distinct)
     setReadError(undefined)
     setScrollTop(0)
+    setActive(0)
     if (viewport.current) viewport.current.scrollTop = 0
     setVersion(value => value + 1)
   }, [list, summary, order, needle])
@@ -364,6 +381,43 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     : needle && total !== undefined ? `${formatCount(total)} of ${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} match. ${formatCount(ticks.checked)} ticked.`
       : `${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} in ${formatCount(summary.rows)} ${plural(summary.rows, 'row')}. ${formatCount(ticks.checked)} ticked.`
   const empty = !!summary && total === 0 && !showNull
+  const listRows = nullRows + valueRows
+
+  /** Makes `row` the active row and scrolls the list by the least that shows it. */
+  const moveTo = (row: number) => {
+    const element = viewport.current
+    if (listRows === 0) return
+    const next = Math.max(0, Math.min(listRows - 1, row))
+    setActive(next)
+    if (!element) return
+    const height = element.clientHeight || viewHeight, top = element.scrollTop
+    const at = listWindow({ scrollTop: top, viewHeight: height, rowHeight, rows: listRows, overscan: 0 })
+    const position = at.offset(next) - top
+    if (position >= 0 && position + rowHeight <= height) return
+    // Within the scroll space a row sits at its own pixels; past it (a mapped list) the scroll bar spans the rows.
+    const scroll = listRows * rowHeight <= maxListSpace ? (position < 0 ? next * rowHeight : (next + 1) * rowHeight - height)
+      : Math.max(0, position < 0 ? next : next + 1 - height / rowHeight) / Math.max(1, listRows - height / rowHeight) * Math.max(1, at.space - height)
+    element.scrollTop = Math.max(0, scroll)
+    setScrollTop(element.scrollTop)
+  }
+  /** Ticks or unticks the active row, as a click on it does; a row still being read has nothing to tick yet. */
+  const toggleActive = () => {
+    if (!listing || !summary) return
+    if (active < nullRows) return toggleNull()
+    const at = active - nullRows, value = blocks.current.get(Math.floor(at / blockSize))?.[at % blockSize]
+    if (value) toggle(value)
+  }
+  /** The listbox's keys: the arrows, Page Up and Down, Home and End move the active row; Space ticks it; Enter is OK. */
+  const listKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return
+    const page = Math.max(1, Math.floor((viewport.current?.clientHeight || viewHeight) / rowHeight) - 1)
+    const moves: Partial<Record<string, number>> = { ArrowDown: active + 1, ArrowUp: active - 1, PageDown: active + page, PageUp: active - page, Home: 0, End: listRows - 1 }
+    const target = moves[event.key]
+    if (target !== undefined) { event.preventDefault(); moveTo(target) }
+    else if (event.key === ' ') { event.preventDefault(); toggleActive() }
+    else if (event.key === 'Enter') { event.preventDefault(); void apply() }
+  }
+  const pick = useCallback<RowPick>(row => { setActive(row); viewport.current?.focus({ preventScroll: true }) }, [])
 
   return createPortal(<form ref={card} className="column-filter" role="dialog" aria-labelledby={titleId} style={place}
     onKeyDown={keyDown} onSubmit={event => { event.preventDefault(); void apply() }}>
@@ -378,27 +432,36 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     <div className="column-filter-search">
       <span className={codiconClass('search')} aria-hidden="true" />
       <input ref={searchBox} type="search" aria-label="Search values" placeholder="Search values" value={search} maxLength={wire.search.maxText} disabled={condition === 'null' || condition === 'notNull'}
-        onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} />
+        onChange={event => setSearch(event.target.value)} onKeyDown={event => {
+          if (event.key === 'Enter') event.preventDefault()
+          // Down from the search goes to the list, as in Excel's filter list.
+          else if (event.key === 'ArrowDown' && summary && listRows > 0) { event.preventDefault(); viewport.current?.focus({ preventScroll: true }) }
+        }} />
     </div>
     <div className="column-filter-bulk">
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(true)}>Select all</button>
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(false)}>Select none</button>
     </div>
-    <div ref={viewport} className="column-filter-list" role="group" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)} tabIndex={-1}
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onFocus={() => { listFocus.current = true }}
-      onBlur={event => { const next = event.relatedTarget as Node | null; if (next && !event.currentTarget.contains(next)) listFocus.current = false }}>
-      {load.status === 'loading' && <p className="column-filter-note" role="status">Listing values…</p>}
-      {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
-      {readError && <p className="column-filter-note error" role="alert">{readError}</p>}
-      {empty && <p className="column-filter-note">No values match.</p>}
-      {summary && <div className="column-filter-space" style={{ height: win.space }}>
-        {rows.map(({ index: row, value }) => row < nullRows
-          ? <label key="null" className="column-filter-item null" style={{ top: win.offset(0), height: rowHeight }}>
-            <input type="checkbox" disabled={!listing} checked={ticks.nullChecked} onChange={toggleNull} aria-label={`${nullText} (${formatCount(summary.nulls)})`} />
-            <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
-          </label>
-          : value ? <Item key={value.group} value={value} top={win.offset(row)} height={rowHeight} checked={value.checked} disabled={!listing} onToggle={toggle} />
-            : <div key={'row' + row} className="column-filter-item pending" style={{ top: win.offset(row), height: rowHeight }} aria-hidden="true" />)}
+    {load.status === 'loading' && <p className="column-filter-note" role="status">Listing values…</p>}
+    {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
+    {readError && <p className="column-filter-note error" role="alert">{readError}</p>}
+    {empty && <p className="column-filter-note">No values match.</p>}
+    {/* One Tab stop: the arrows move the active row inside it (aria-activedescendant), so focus never sits on a row the
+        list may stop drawing. */}
+    <div ref={viewport} className="column-filter-list" role="listbox" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
+      tabIndex={summary && listRows > 0 ? 0 : -1} aria-activedescendant={summary && active >= firstRow && active < lastRow ? `${rowId}-${active}` : undefined}
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onKeyDown={listKeyDown}>
+      {summary && <div className="column-filter-space" role="presentation" style={{ height: win.space }}>
+        {rows.map(({ index: row, value }) => {
+          const spot: RowPlace = { id: `${rowId}-${row}`, row, rows: listRows, active: row === active, top: win.offset(row), height: rowHeight }
+          return row < nullRows
+            ? <Row key="null" place={spot} label={`${nullText} (${formatCount(summary.nulls)})`} checked={ticks.nullChecked} disabled={!listing} className="null" onToggle={toggleNull} onPick={pick}>
+              <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
+            </Row>
+            : value ? <Item key={value.group} value={value} place={spot} checked={value.checked} disabled={!listing} onToggle={toggle} onPick={pick} />
+              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
+                className={'column-filter-item pending' + (spot.active ? ' active' : '')} style={{ top: spot.top, height: rowHeight }} />
+        })}
       </div>}
     </div>
     {note && <p className="column-filter-note">{note}{!summary?.complete ? ' Values in rows still arriving will be shown.' : ''}{summary?.approximate ? ' Long values were compared by their first characters.' : ''}{sourceNote ? ' ' + sourceNote : ''}</p>}

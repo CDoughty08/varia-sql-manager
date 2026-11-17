@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-// The header funnel's popover over a large snapshot: focus stays in the list when its row scrolls away, OK applies
+// The header funnel's popover over a large snapshot: the checklist is a listbox the keyboard drives (the arrows, Page Up
+// and Down, Home and End move its active row, Space ticks it, Enter is OK, Down from the search enters it), OK applies
 // nothing once the popover is gone and decides with the snapshot's own ticks after a failed tick, reads of blocks
 // scrolled away from are given up, and a read that succeeds clears a read error.
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -60,8 +61,10 @@ function fixture(o: { hold?: boolean } = {}) {
     root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 'e1'), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
   })
   const dialog = () => document.querySelector('form[role="dialog"]') as HTMLFormElement
-  const valueList = () => dialog().querySelector('[role="group"][aria-label="Values"]') as HTMLElement
-  const checkboxes = () => [...valueList().querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
+  const valueList = () => dialog().querySelector('[role="listbox"][aria-label="Values"]') as HTMLElement
+  const checkboxes = () => [...valueList().querySelectorAll('[role="option"]')] as HTMLElement[]
+  const activeRow = () => document.getElementById(valueList().getAttribute('aria-activedescendant') ?? '')
+  const key = (target: HTMLElement, name: string) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })) })
   /** Scrolls the list (happy-dom lays nothing out, so the position is set as the browser would report it). */
   const scrollTo = (top: number) => act(() => {
     Object.defineProperty(valueList(), 'scrollTop', { value: top, configurable: true, writable: true })
@@ -70,23 +73,75 @@ function fixture(o: { hold?: boolean } = {}) {
   const settle = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve() })
   const ok = () => act(() => { (dialog().querySelector('button[type="submit"]') as HTMLButtonElement).click() })
   return {
-    list, reads, tickRequests, results, onClose, dialog, valueList, checkboxes, scrollTo, settle, ok, ticks,
+    list, reads, tickRequests, results, onClose, dialog, valueList, checkboxes, activeRow, key, scrollTo, settle, ok, ticks,
     hold: (value: boolean) => { hold = value },
     unmount
   }
 }
 
 describe('column filter popover', () => {
-  it('keeps focus in the list when the focused row scrolls out of the rows drawn', async () => {
+  it('is a listbox of options the arrow keys move through and Space ticks, one Tab stop between the search and OK', async () => {
+    const view = fixture()
+    await view.settle()
+    const listbox = view.valueList()
+    expect(listbox.tabIndex).toBe(0)
+    expect(view.checkboxes()[0]!.getAttribute('aria-checked')).toBe('true')
+    expect(view.checkboxes()[0]!.getAttribute('aria-setsize')).toBe(String(distinct))
+    // The rows' drawn boxes take no Tab stop of their own: the listbox is the one.
+    expect([...listbox.querySelectorAll('input')].every(input => input.tabIndex === -1 && input.getAttribute('aria-hidden') === 'true')).toBe(true)
+    // Down from the search goes to the list, whose first row is active.
+    const search = view.dialog().querySelector('input[type="search"]') as HTMLInputElement
+    expect(document.activeElement).toBe(search)
+    view.key(search, 'ArrowDown')
+    expect(document.activeElement).toBe(listbox)
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v00000 (1)')
+    view.key(listbox, 'ArrowDown')
+    view.key(listbox, 'ArrowDown')
+    view.key(listbox, 'ArrowUp')
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v00001 (1)')
+    view.key(listbox, ' ')
+    await view.settle()
+    expect(view.list.tick).toHaveBeenLastCalledWith({ checked: false, groups: [1] })
+    expect(view.activeRow()?.getAttribute('aria-checked')).toBe('false')
+    // Home and End reach either end; the list scrolls to show the active row, and focus never leaves the listbox.
+    view.key(listbox, 'End')
+    await view.settle()
+    expect(listbox.scrollTop).toBeGreaterThan(0)
+    expect(document.activeElement).toBe(listbox)
+    expect(view.activeRow()?.getAttribute('aria-posinset')).toBe(String(distinct))
+    view.key(listbox, 'Home')
+    await view.settle()
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v00000 (1)')
+    view.unmount()
+  })
+
+  it('applies OK with Enter in the list, after the ticks before it', async () => {
+    const view = fixture()
+    await view.settle()
+    const listbox = view.valueList()
+    act(() => listbox.focus())
+    view.key(listbox, ' ')
+    view.key(listbox, 'Enter')
+    await view.settle()
+    await act(async () => { view.tickRequests[0]!.resolve({ checked: distinct - 1, nullsChecked: true }); await Promise.resolve() })
+    await view.settle()
+    expect(view.results.applyColumnFilter).toHaveBeenCalledWith('t', 'e1', 0, { kind: 'list', list: view.list })
+    expect(view.onClose).toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('keeps focus on the list when the active row scrolls out of the rows drawn', async () => {
     const view = fixture()
     await view.settle()
     const first = view.checkboxes()[0]!
-    act(() => first.focus())
-    expect(document.activeElement).toBe(first)
+    act(() => { first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+    expect(document.activeElement).toBe(view.valueList())
     view.scrollTo(22 * 5000)
     await view.settle()
     expect(first.isConnected).toBe(false)
     expect(document.activeElement).toBe(view.valueList())
+    // The active row is not drawn, so the listbox names no active descendant until it is scrolled back.
+    expect(view.valueList().getAttribute('aria-activedescendant')).toBeNull()
     view.unmount()
   })
 
@@ -134,12 +189,12 @@ describe('column filter popover', () => {
     const far = view.reads.at(-1)!
     expect(far.o.offset).toBe(Math.floor(5000 / 128) * 128)
     await act(async () => { far.reject(new Error('The backend is busy.')); await Promise.resolve() })
-    expect(view.valueList().querySelector('[role="alert"]')?.textContent).toBe('The backend is busy.')
+    expect(view.dialog().querySelector('[role="alert"]')?.textContent).toBe('The backend is busy.')
     // Scrolled on, the next block's read succeeds and the error goes.
     view.hold(false)
     view.scrollTo(22 * 7000)
     await view.settle()
-    expect(view.valueList().querySelector('[role="alert"]')).toBeNull()
+    expect(view.dialog().querySelector('[role="alert"]')).toBeNull()
     expect(view.checkboxes().length).toBeGreaterThan(0)
     view.unmount()
   })

@@ -39,11 +39,15 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   Highlights** starts again.
 - **Filter** (grid menu) keeps the selected cells' values, other values, the range from the lowest to the highest
   selected value, no NULLs in a column, or the rows that repeat in the selected columns or in every column. Values match
-  by the column's collation. Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
+  by the column's collation. A selection across columns, contiguous or Ctrl+clicked, adds one filter a column from the
+  cells selected in it, and a row must pass them all (**Filter for Selected Values** on two columns keeps the rows whose
+  values match in both). Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
   and Save Results As follow the filtered rows.
 - A column header's funnel (**Filter Column Values…**, Alt+Down in a grid) lists every distinct value with its count,
   most frequent first or by value, as a checklist with a search, Select all, Select none and NULL as an entry; OK keeps
-  the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL.
+  the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL. From the
+  keyboard: Down in the search goes to the list, the arrows, Page Up, Page Down, Home and End move through it, Space ticks
+  the value, Enter is OK and Escape cancels; the list is one Tab stop between the search and the condition.
 - **Search** (results toolbar, Ctrl+F in a grid) finds matching cells in every grid of the run, in memory, comparing text
   by its column's collation; Enter and Shift+Enter (F3 and Shift+F3 in a grid, ⌘G and ⇧⌘G on macOS) step through them in each grid's order.
   Its **Columns** mode searches column names instead and fades the columns that do not match.

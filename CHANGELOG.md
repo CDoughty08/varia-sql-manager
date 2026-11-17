@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl+click, and Filter for Selected Values (and Exclude Selected Values or Filter Between) adds one filter per column from the cells selected in it; a row must match in every column.
+- **A keyboard-driven column filter list:** In the list Alt+Down opens, Down moves from the search into the values, the arrow keys, Page Up, Page Down, Home and End move through them, Space ticks or unticks one and Enter filters. Screen readers hear it as a list of checkable options.
+
+### Fixes
+
+- **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved.
+
 ## [0.9.0] - 2026-11-15
 
 Organize, name and keep far larger results, see what is slowing your server with the rest of Activity Monitor, and pick up where you left off with restored connections\.
