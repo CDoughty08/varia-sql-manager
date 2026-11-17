@@ -17,8 +17,10 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
   Each list is re-ranked as the word grows: a complete answer is reused for identifier characters typed at the caret,
   and a truncated one is requested again.
 - **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
-  the bare name still filters. Any other suggestion shows exactly the text it inserts, so a name that needs quoting
-  shows its brackets.
+  the bare name still filters, and so does a name after a typed `[` or `"`. A table or other name that is inserted in
+  brackets because it needs quoting also shows its brackets.
+- Because each list is requested again as you type, a list opened with **Ctrl+Space** shows *No suggestions* once
+  nothing matches, instead of keeping the last matches.
 - A table created after the query's metadata was loaded is not suggested until **Refresh Local Cache** (below).
 - **Columns** rank ahead of general suggestions of equal match quality. In supported SELECT scopes, unqualified column
   suggestions carry their source qualifier (a self-join offers `t.[high]` and `b.[high]`; `hi` matches both). `t.` returns

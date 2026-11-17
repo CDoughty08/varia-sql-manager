@@ -644,7 +644,8 @@ interface CompletionCache {
   readonly model: Monaco.editor.ITextModel; readonly documentId: string; readonly key: string; readonly epoch: number
   readonly text: string; readonly position: LanguageRequest['position']; readonly items: readonly LanguageCompletionItem[]
 }
-const identifierCharacters = /^[\p{L}\p{N}_@#$]*$/u
+// Whatever Monaco's default word pattern counts as part of a word, plus SQL's @, # and $: typing one keeps the cache.
+const identifierCharacters = /^[^\s`~!%^&*()\-=+[{\]}\\|;:'",.<>/?]*$/u
 function offsetOf(text: string, position: LanguageRequest['position']): number {
   let offset = 0
   for (let line = 0; line < position.line; line++) {
@@ -696,7 +697,8 @@ function completionSuggestions(monaco: typeof Monaco, model: Monaco.editor.IText
     const exact = typed.length > 0 && unquoteSqlName(name).toLowerCase() === unquoteSqlName(typed).toLowerCase()
     // A bare filter cannot match a typed opening bracket or quote; filter on the name with it.
     const quote = typed[0] === '[' || typed[0] === '"' ? typed[0] : undefined
-    const filterText = exact ? typed : quote && item.filterText && !item.filterText.startsWith(quote) ? quote + item.filterText : item.filterText
+    const bare = item.filterText ?? unquoteSqlName(item.label)
+    const filterText = exact ? typed : quote && !bare.startsWith(quote) ? quote + bare : item.filterText
     return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
       detail: item.detail, documentation: item.documentation,
       // Exact matches first, then columns ahead of general SQL names of equal match quality, then the provider's order.

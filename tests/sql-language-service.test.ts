@@ -355,6 +355,37 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
   })
 
+  it('asks the backend again after a refresh, on another line and after a context change', async () => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const tab = f.documents.create('reuse.sql', 'SELECT * FROM o\nSELECT 1', 'master', 'connection-a')
+    f.api.languageComplete.mockResolvedValue({ ok: true, value: { isIncomplete: false, items: [{ label: 'Orders', kind: 7 }] } })
+    const grow = async (column: number, text: string, line = 1) => {
+      f.model(tab.id).applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text }])
+      return await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: line, column: column + text.length } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
+    }
+    await f.complete(tab.id, { lineNumber: 1, column: 16 } as Monaco.Position)
+    await grow(16, 'r')
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(1)
+    await f.service.refreshCache(tab.id)
+    await grow(17, 'd')
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    await grow(9, 'x', 2)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(3)
+    f.documents.update(tab.id, { database: 'other' })
+    await grow(10, 'y', 2)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(4)
+  })
+
+  it('filters a typed bracket against a name STS sends without filter text', async () => {
+    const f = await fixture(), tab = f.documents.create('bracket-table.sql', 'SELECT * FROM [Cust', 'master')
+    const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 19 } }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: 'Customers', kind: 7, textEdit: { range, newText: 'Customers' } }] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 20 } as Monaco.Position)
+    expect(result.suggestions[0]).toMatchObject({ label: 'Customers', filterText: '[Customers' })
+    expect(monacoOrder(result.suggestions, '[Cust')).toEqual(['Customers'])
+  })
+
   it('asks the backend again while its answer was truncated', async () => {
     const f = await fixture(), tab = f.documents.create('truncated.sql', 'SELECT * FROM o', 'master')
     f.api.languageComplete.mockResolvedValue({ ok: true, value: { isIncomplete: true, items: [{ label: 'orders_archive', kind: 7 }] } })
