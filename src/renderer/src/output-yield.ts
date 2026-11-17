@@ -27,6 +27,11 @@ export function yieldingGroup(api: DockviewApi, measure: Measure = measureElemen
   })
 }
 
+const arrangementOf = (api: DockviewApi, hidden: string) => JSON.stringify([
+  api.groups.find(group => group.id === hidden)?.panels.map(panel => panel.id) ?? [],
+  api.groups.filter(group => group.api.location.type === 'grid').map(group => group.id)
+])
+
 /**
  * Hides the output group below the query editor while a document that is not a query is active, and shows it again at its
  * size when a query is (Dockview keeps a hidden view's size). The layout saved meanwhile shows the group, so a restart or a
@@ -34,6 +39,8 @@ export function yieldingGroup(api: DockviewApi, measure: Measure = measureElemen
  */
 export class OutputYield {
   private hidden: string | undefined
+  // The arrangement when the group hid: its panels, and the docked groups. Any change to it shows the group again.
+  private arrangement = ''
   constructor(private readonly measure: Measure = measureElement) {}
 
   /** The group hidden now, if any. */
@@ -47,6 +54,7 @@ export class OutputYield {
     if (!group) return undefined
     this.hidden = group.id
     group.api.setVisible(false)
+    this.arrangement = arrangementOf(api, group.id)
     return group
   }
 
@@ -61,12 +69,12 @@ export class OutputYield {
   }
 
   /**
-   * Shows the hidden group again once it holds a panel that is not an output panel: a command moved one there (Tab with
-   * Results), and it would otherwise vanish with it. Returns whether it did.
+   * Shows the hidden group again once the docked arrangement changed while it hid: a command moved a panel into it (Tab
+   * with Results), which would otherwise vanish with it, or added or removed a docked group (Dock Bottom), after which
+   * the space it gave the editor is no longer the editor's to give back. Returns whether it did.
    */
   check(api: DockviewApi): boolean {
-    const group = this.hidden === undefined ? undefined : api.groups.find(item => item.id === this.hidden)
-    if (!group || group.panels.every(panel => isOutputPane(panel.id))) return false
+    if (this.hidden === undefined || arrangementOf(api, this.hidden) === this.arrangement) return false
     return this.restore(api)
   }
 

@@ -103,6 +103,24 @@ describe('output yield', () => {
     expect(yielding.groupId).toBeUndefined()
   })
 
+  it('shows a hidden group again when an output panel moves into it, or a docked group comes or goes', () => {
+    // A floating Messages panel tabbed with Results (Tab with Results) while the output is hidden.
+    const api = workbench(), yielding = new OutputYield(column(api))
+    api.addFloatingGroup(api.getPanel('messages')!)
+    const group = yielding.yieldSpace(api)!
+    expect(yielding.check(api)).toBe(false)
+    api.getPanel('messages')!.api.moveTo({ group })
+    expect(yielding.check(api)).toBe(true)
+    expect(group.api.isVisible).toBe(true)
+    // A panel docked at the bottom while the output is hidden adds a docked group.
+    const other = workbench(), second = new OutputYield(column(other))
+    other.addFloatingGroup(other.getPanel('plan')!)
+    second.yieldSpace(other)
+    other.getPanel('plan')!.group.api.moveTo({ position: 'bottom' })
+    expect(second.check(other)).toBe(true)
+    expect(results(other).api.isVisible).toBe(true)
+  })
+
   it('leaves an output group with another group below it, which would take its space instead of the editor', () => {
     const api = workbench()
     // [editor, output, Object Explorer] in one column: the boxes Dockview would lay out.

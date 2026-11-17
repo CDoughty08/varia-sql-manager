@@ -453,6 +453,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const api = apiRef.current
     // Panels in popout windows stay: Ctrl+R hides and shows the main window's output panels.
     if (!api || !outputPaneIds.some(id => showing(api, id) && !recordOf(id))) { revealOutput(view); return 'shown' }
+    // A group hidden for a document that is not a query shows first, so its panels return at their real size.
+    outputYield.restore(api)
     const ids = outputPaneIds.filter(id => api.getPanel(id)), shown = ids.filter(id => api.getPanel(id)!.group.activePanel?.id === id)
     for (const id of ids) close(id)
     hiddenOutput.current = { ids, shown }
@@ -526,6 +528,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       api.layout(width, height)
     } catch (error) {
       api.fromJSON(previous, { reuseExistingPanels: true })
+      restoring.current = false
+      syncYield()
       throw error
     } finally { restoring.current = false }
     syncWindows(validated.windows ?? [])

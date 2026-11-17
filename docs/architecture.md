@@ -536,8 +536,9 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   space to the editor) with Dockview's group visibility, which keeps its size for when a query is active again; moved,
   floating and popped-out output panels are never touched, and a query shown in another editor group keeps them. The
   saved layout always shows that group (`withGroupShown`), so yielding writes nothing and a restart or saved layout never
-  loses the output; a panel moved into the hidden group shows it again (`check`). It yields only when the active document
-  changes between a query and another kind, so a panel revealed over such a document stays until a query is active
+  loses the output; any change to the docked arrangement while it hides (a panel moved into it, a docked group added or
+  removed) shows it again (`check`). It re-decides only when the active document changes between a query and another
+  kind or a query appears or goes in another editor group, so a panel revealed over such a document stays until then
   (`tests/output-yield.test.ts`).
 - **Gestures** are declared only in `src/shared/commands/gestures.ts`; handlers read pointer modifiers only through
   `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`). Every pointer command has a
