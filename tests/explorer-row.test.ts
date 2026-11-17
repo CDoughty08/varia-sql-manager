@@ -29,7 +29,7 @@ function node(fields: Partial<TreeNode> = {}): TreeNode {
 
 describe('Object Explorer rows', () => {
   it('offers the recovery action as a mouse button without adding another tree tab stop, and leaves loading rows inert', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn(), dragOver: vi.fn(), drop: vi.fn(), dragEnd: vi.fn() }
     for (const [kind, action, label] of [[RowKind.Error, 'retry', 'Retry'], [RowKind.MoreError, 'retry', 'Retry'], [RowKind.Stopped, 'continue', 'Continue loading'], [RowKind.Paused, 'continue', 'Continue loading'], [RowKind.Capped, 'filter', 'Filter…']] as const) {
       expect(recoveryLabel({ type: action, id: 7 })).toBe(label)
       const html = renderToStaticMarkup(createElement(ExplorerRow, {
@@ -110,12 +110,12 @@ describe('Object Explorer rows', () => {
     expect(rowDescription(noted)).toBe('Integration Services Catalog\nLive updates stopped. This login cannot read the SSIS Catalog.')
     const html = renderToStaticMarkup(createElement(ExplorerRow, {
       rowId: 7, kind: RowKind.Node, top: 0, level: 3, posinset: 1, setsize: 1, node: noted, rev: 0, text: '', selected: false, draggable: false, active: false, color: undefined,
-      actions: { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }, menuTarget: () => {}
+      actions: { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn(), dragOver: vi.fn(), drop: vi.fn(), dragEnd: vi.fn() }, menuTarget: () => {}
     }))
     expect(html).toContain('<span class="oe-sublabel">(not updating)</span>')
   })
   it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn(), dragOver: vi.fn(), drop: vi.fn(), dragEnd: vi.fn() }
     const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {
       rowId: 7, kind: RowKind.Node, top: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
     }))
@@ -130,7 +130,7 @@ describe('Object Explorer rows', () => {
     expect(plain).not.toContain('explorer-rename')
   })
   it('end a server row with its environment tag, and say it in the row name and tooltip', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => false), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => false), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn(), dragOver: vi.fn(), drop: vi.fn(), dragEnd: vi.fn() }
     const render = (fields: Partial<TreeNode>, environment?: string) => renderToStaticMarkup(
       createElement(ExplorerRow, { rowId: 1, kind: RowKind.Node, top: 0, level: 1, posinset: 1, setsize: 1, node: node(fields), rev: 0, text: '', selected: false, draggable: false, active: false, color: undefined, environment, actions, menuTarget: () => {} }))
     const server = { id: 1, parent: 0, kind: 'server' as const, ref: { type: 'object' as const, object: { kind: 'server' as const } }, label: 'sql-prod-01', sublabel: '(SQL Server 17.0 - dba)', level: 1 }
@@ -147,7 +147,7 @@ describe('Object Explorer rows', () => {
 })
 
 describe('Object Explorer row visuals', () => {
-  const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }
+  const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn(), dragOver: vi.fn(), drop: vi.fn(), dragEnd: vi.fn() }
   // Folder and object rows need no workbench (server rows read the theme for their connection color).
   const render = (value: TreeNode, props: Partial<RowProps> = {}) => renderToStaticMarkup(createElement(ExplorerRow, {
     rowId: value.id, kind: RowKind.Node, top: 52, level: value.level, posinset: 1, setsize: 1, node: value, rev: 0, text: '', selected: false, draggable: false, active: false,

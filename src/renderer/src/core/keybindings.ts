@@ -43,8 +43,12 @@ export interface KeybindingServiceOptions {
   readonly menus?: MenuKeyRouter
   /** What a key's command acts on, when focus names it (a focused query tab: `tabId`); menus and the palette act on the active document. */
   readonly keyArgs?: (command: CommandId) => CommandArgs | undefined
+  /** Every key press, first, consumed or not: Peek peeks the row under a still pointer when its modifier goes down. Never consumes. */
+  readonly keyDown?: (event: KeyDownEvent) => void
   /** Every key release, after the menus': Peek forgets a Ctrl+hover when Ctrl goes up with the pointer still. Never consumes. */
   readonly keyUp?: (event: KeyDownEvent) => void
+  /** The window lost focus, so a held key's release will not be seen: Peek drops its modifier. */
+  readonly blur?: () => void
 }
 /** A captured chord: one canonical chord (`ctrl+shift+e`), or two separated by a space after Ctrl/⌘+K (`ctrl+k ctrl+c`). */
 export type CaptureListener = (chord: string, event: KeyDownEvent) => void
@@ -169,7 +173,10 @@ export class KeybindingService implements Disposable {
     target.addEventListener('keydown', keyDown, true)
     target.addEventListener('keyup', keyUp, true)
     target.addEventListener('focusout', focusOut, true)
-    const blur = () => { reset(); this.controlHeld = false }
+    const blur = () => {
+      reset(); this.controlHeld = false
+      try { this.options.blur?.() } catch (error) { onUnexpectedError(error) }
+    }
     target.addEventListener('blur', blur)
     const detach = () => {
       target.removeEventListener('keydown', keyDown, true)
@@ -184,6 +191,7 @@ export class KeybindingService implements Disposable {
   handleKeyDown(event: KeyDownEvent): void {
     try {
       if (event.key === 'Control' && !this.controlHeld) { this.controlHeld = true; this.controlPress++ }
+      try { this.options.keyDown?.(event) } catch (error) { onUnexpectedError(error) }
       if (event.defaultPrevented) return
       const { platform, menus } = this.options
       // An open menu keeps its keys (Escape, arrows, Enter) even while a capture box is recording.

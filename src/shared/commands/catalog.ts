@@ -426,6 +426,18 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.new', group: '1_security', order: 1, mnemonic: 'l', when: "explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')" }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
+  // Server order, kept across restarts in the connection workspace; dragging a server row does the same (gestures.ts).
+  // Enablement is the command's own `when` on its menu's server (a pinned shortcut's too), not the selection's context.
+  'explorer.moveServerUp': {
+    title: 'Move Up', category: 'Object Explorer', icon: 'arrow-up', keywords: ['reorder', 'order', 'sort', 'server', 'move'],
+    keybindings: [{ key: 'alt+up', when: 'explorerFocus && !textInputFocus' }],
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 1, mnemonic: 'u', when: "explorerNode == 'server'" }]
+  },
+  'explorer.moveServerDown': {
+    title: 'Move Down', category: 'Object Explorer', icon: 'arrow-down', keywords: ['reorder', 'order', 'sort', 'server', 'move'],
+    keybindings: [{ key: 'alt+down', when: 'explorerFocus && !textInputFocus' }],
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 2, mnemonic: 'w', when: "explorerNode == 'server'" }]
+  },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   // SSMS 2022's Group by Schema: the toolbar button and the palette flip the objectExplorer.groupBySchema setting.
   'explorer.groupBySchema': {

@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (346)
+## Commands (348)
 
 ### File
 
@@ -249,6 +249,8 @@ keys it uses are listed below.
 | New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New Login… |
 | Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New › Login… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
+| Move Up | `explorer.moveServerUp` | Alt+Up (`explorerFocus && !textInputFocus`) | Alt+Up (`explorerFocus && !textInputFocus`) | ⌥↑ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Up |
+| Move Down | `explorer.moveServerDown` | Alt+Down (`explorerFocus && !textInputFocus`) | Alt+Down (`explorerFocus && !textInputFocus`) | ⌥↓ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Down |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
@@ -716,6 +718,8 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `6_state` | **U**nlock… | `explorer.unlock` | `explorerActionUnlock != '' && explorerNode != 'background'` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
+| `7_order` | Move **U**p | `explorer.moveServerUp` | `explorerNode == 'server'` |
+| `7_order` | Move Do**w**n | `explorer.moveServerDown` | `explorerNode == 'server'` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 | `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
 | `9_properties` | **P**roperties | `ssis.folderProperties` | `explorerNode == 'ssisFolder' && ssisVerbFolderProperties != ''` |
