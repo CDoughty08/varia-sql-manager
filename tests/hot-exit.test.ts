@@ -96,6 +96,19 @@ describe('hot exit', () => {
     expect(f.api.closeWindowCancelled).toHaveBeenCalled()
     expect(f.documents.getSnapshot().documents).toHaveLength(1)
   })
+  it('keeps Object Explorer\'s expansion with the workspace, and a change to it while closing does not stop the close', () => {
+    const { documents } = fixture(), connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
+    connectionTargets.add({ id: targetId, options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
+    documents.create('Draft.sql', 'SELECT 1', 'Sales')
+    let expansion = new Map([[targetId, ['server-key', 'databases-key']]])
+    const checkpoint = keptSession(documents, () => 'sql01', { connectionTargets, explorerExpansion: () => expansion })
+    expect(checkpoint.session.workspace?.targets[0].explorerExpanded).toEqual(['server-key', 'databases-key'])
+    expect(connectionWorkspaceSchema.safeParse(checkpoint.session.workspace).success).toBe(true)
+    // The registry itself is unchanged: the expansion is the tree's, written only into what the close keeps.
+    expect(connectionTargets.get(targetId)?.explorerExpanded).toBeUndefined()
+    expansion = new Map([[targetId, ['server-key']]])
+    expect(checkpoint.checkpointCurrent()).toBe(true)
+  })
   it('revalidates captured query associations and target details by value after a checkpoint write', () => {
     const { documents } = fixture(), connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
     const details = { displayName: 'Production', autoReconnect: 'inherit' as const }

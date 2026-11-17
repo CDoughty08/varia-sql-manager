@@ -86,6 +86,8 @@ export interface PeekServiceOptions {
   readonly newId?: () => string
   /** Ctrl+hover peeks; on macOS ⌘+hover, as ⌘ is macOS's Ctrl. */
   readonly platform?: string
+  /** Peek on Hover's modifier as remapped (`explorer.peekHover`); without it, Ctrl (⌘ on macOS). */
+  readonly gestures?: { isModifierKey(id: 'explorer.peekHover', key: string): boolean }
   /** The clock kept scripts expire by; defaults to `Date.now`. */
   readonly now?: () => number
 }
@@ -650,7 +652,12 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
 export class PeekService extends PeekView {
   private hoverTimer: unknown
   private hoverRow: number | undefined
+  /** The row the pointer rests on, read when the modifier goes down with the pointer still. */
+  private pointerRow: (() => ExplorerMenuNode | undefined) | undefined
   private readonly timers: NonNullable<PeekServiceOptions['timers']>
+  private readonly armedStore = new (class extends SnapshotStore<boolean> { set(value: boolean) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(false)
+  /** Whether Peek on Hover's modifier is held: the tree shows the peek cursor over rows it can peek. */
+  readonly armed: ExternalStore<boolean> = this.armedStore
 
   constructor(private readonly options: PeekServiceOptions) {
     super(new PeekReads(options), 'close')
@@ -679,7 +686,7 @@ export class PeekService extends PeekView {
   createView(): PeekView { return new PeekView(this.reads, 'keep') }
 
   /** The pointer rests on a row with Ctrl (⌘ on macOS) held: the card opens after `peekLimits.hoverMs`. */
-  hover(node: ExplorerMenuNode | undefined): void {
+  hover(node: ExplorerMenuNode | undefined, delayMs: number = peekLimits.hoverMs): void {
     if (!this.canPeek(node)) { this.cancelHover(); return }
     if (this.hoverRow === node.id) return
     this.cancelHover()
@@ -687,7 +694,7 @@ export class PeekService extends PeekView {
     const open = this.getSnapshot().open
     if (open && (open.rowId === node.id || open.source !== 'hover')) return
     this.hoverRow = node.id
-    this.hoverTimer = this.timers.setTimeout(() => { this.hoverTimer = undefined; this.hoverRow = undefined; this.peek(node, 'hover') }, peekLimits.hoverMs)
+    this.hoverTimer = this.timers.setTimeout(() => { this.hoverTimer = undefined; this.hoverRow = undefined; this.peek(node, 'hover') }, delayMs)
   }
 
   /** The pointer left the row, or Ctrl (⌘) was released (the key dispatcher's `keyUp`): a card not yet open stays closed. */
@@ -697,9 +704,49 @@ export class PeekService extends PeekView {
     this.hoverRow = undefined
   }
 
-  /** A key went up anywhere in the window: releasing the hover's modifier with the pointer still forgets the hover. */
+  /**
+   * The pointer moved over a row (`node` reads it then; `held`: whether Peek on Hover's modifier was held) or left the
+   * tree's rows (undefined). The modifier's state from a pointer event also corrects `armed` after a press or release the
+   * window did not see (it had no focus then).
+   */
+  pointer(node: (() => ExplorerMenuNode | undefined) | undefined, held?: boolean): void {
+    this.pointerRow = node
+    if (held !== undefined) this.armedStore.set(held)
+    if (node && held) this.hover(node())
+    else this.cancelHover()
+  }
+
+  private isModifier(key: string): boolean {
+    return this.options.gestures ? this.options.gestures.isModifierKey('explorer.peekHover', key) : key === (this.options.platform === 'darwin' ? 'Meta' : 'Control')
+  }
+  /**
+   * A key went down anywhere in the window (the key dispatcher's `keyDown`). Peek on Hover's modifier pressed with the
+   * pointer resting on a row peeks it after `peekLimits.pressMs`, not the longer hover delay: the pointer is still, so the
+   * press is the request. Any other key before then makes it a chord (Ctrl+N), not a peek.
+   */
+  keyDown(key: string, repeat = false): void {
+    if (!this.isModifier(key)) { this.cancelHover(); return }
+    if (repeat && this.armedStore.getSnapshot()) return
+    this.armedStore.set(true)
+    const node = this.pointerRow?.()
+    if (!this.canPeek(node)) return
+    const open = this.getSnapshot().open
+    // As `hover`: a card the keyboard or the menu opened keeps its place.
+    if (open && open.source !== 'hover') return
+    this.hover(node, peekLimits.pressMs)
+  }
+
+  /** A key went up anywhere in the window: releasing the hover's modifier forgets a hover not yet open; an open card stays, so the pointer can move into it. */
   keyUp(key: string): void {
-    if (key === (this.options.platform === 'darwin' ? 'Meta' : 'Control')) this.cancelHover()
+    if (!this.isModifier(key)) return
+    this.armedStore.set(false)
+    this.cancelHover()
+  }
+
+  /** The window lost focus: a held modifier's release would go unseen. */
+  blur(): void {
+    this.armedStore.set(false)
+    this.cancelHover()
   }
 
   /**
@@ -718,6 +765,8 @@ export class PeekService extends PeekView {
   override dispose(): void {
     if (this.disposed) return
     this.cancelHover()
+    this.pointerRow = undefined
+    this.armedStore.clear()
     super.dispose()
     this.reads.dispose()
   }

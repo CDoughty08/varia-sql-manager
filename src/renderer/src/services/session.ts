@@ -1,5 +1,6 @@
 import type { ApiResult, ReloadPins, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
 import { sessionLimits } from '../../../shared/files/session'
+import { withExplorerExpansion } from '../../../shared/connection-targets'
 import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
@@ -32,14 +33,18 @@ const associations = (documents: readonly QueryDocument[]) => JSON.stringify(doc
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, assertConnectionsReady }: {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, explorerExpansion, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
+    /** Object Explorer's expanded nodes per target (`ExplorerService.savedExpansion`), kept with the workspace for the next start. */
+    explorerExpansion?: () => ReadonlyMap<string, readonly string[]>
     assertConnectionsReady?: () => void
   } = {}): KeptSession {
   assertConnectionsReady?.()
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
-  const workspace = connectionTargets?.exportWorkspace(), targetIds = new Set(workspace?.targets.map(target => target.id))
-  const capturedAssociations = associations(tabs), capturedWorkspace = JSON.stringify(workspace)
+  // The close's checkpoint compares the targets alone: the tree's expansion may change meanwhile without changing a target.
+  const targetsNow = connectionTargets?.exportWorkspace(), capturedWorkspace = JSON.stringify(targetsNow)
+  const workspace = targetsNow && explorerExpansion ? withExplorerExpansion(targetsNow, explorerExpansion()) : targetsNow, targetIds = new Set(workspace?.targets.map(target => target.id))
+  const capturedAssociations = associations(tabs)
   let used = workspace ? bytes(workspace) : 0, activeIndex = -1
   for (const document of tabs) {
     const model = documents.getModel(document.id)

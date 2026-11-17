@@ -8,7 +8,7 @@ import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService, type LiveConnection } from '../src/renderer/src/services/connections'
-import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits, type SeekOutcome } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, expansionKey, serverBrief, serverSublabel, type ExplorerServiceLimits, type SeekOutcome } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { ssisVerbContextValues, ssisVerbMenuState } from '../src/shared/ssis/catalog'
@@ -1382,7 +1382,7 @@ describe('ExplorerService: connections', () => {
     expect(f.explorer.node(a)).toBeUndefined()
     expect(f.explorer.table.get(a)).toBeUndefined()
   })
-  it('keeps a lost server collapsed until it is reconnected, which takes its place', async () => {
+  it('keeps a lost server collapsed until it is reconnected, which takes its place and opens what it showed', async () => {
     const f = fixture()
     f.connect('server-a')
     f.connect('server-b')
@@ -1403,7 +1403,8 @@ describe('ExplorerService: connections', () => {
     f.explorer.select(a)
     f.connections.replace(cid('server-a'), info('server-c', 2), connectionOptions)
     await settle()
-    expect(f.labels()).toEqual(['server-c.example', '  Databases', '  Security', '  Server Objects', 'server-b.example'])
+    // Databases was open when the server was lost; Security still waits for its first page.
+    expect(f.labels()).toEqual(['server-c.example', '  Databases', '    System Databases', '    Database Snapshots', '    AppData', '    Locked', '    Offline', '  Security', '  Server Objects', 'server-b.example'])
     expect(f.explorer.getSnapshot().selected).toBe(f.find('server-c.example'))
     expect(f.find('server-c.example')).toBe(a)
     expect(f.explorer.queryTarget(a)).toEqual({ connectionId: cid('server-c') })
@@ -2011,5 +2012,111 @@ describe('ExplorerService: server rows and freshness', () => {
     f.explorer.setFilter(tables, undefined)
     await settle()
     expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded + 120_000 })
+  })
+})
+
+describe('ExplorerService: saved server order and expansion', () => {
+  /** Servers from the connection workspace (a target id each), whose order and connected state the test sets. */
+  function workspaceFixture() {
+    const backend = fakeBackend()
+    const store = new (class extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } })([])
+    const server = (name: string, connected = true, generation = 1): LiveConnection => ({
+      ...info(name, generation), productVersion: '16.0.4135.4', login: 'sa', options: connectionOptions, targetId: uuid(0x100 + name.charCodeAt(name.length - 1)), inExplorer: true,
+      ...connected ? {} : { lost: true as const }
+    })
+    const reorder = vi.fn((ids: readonly string[]) => {
+      const current = store.getSnapshot(), next = ids.map(id => current.find(connection => connection.targetId === id)!)
+      if (next.every((connection, index) => connection === current[index])) return false
+      store.set(next)
+      return true
+    })
+    const targets = { savedExplorerExpansion: vi.fn((_id: string): readonly string[] | undefined => undefined), reorder }
+    let ids = 0
+    const explorer = new ExplorerService({ api: backend.api, connections: store, events: new EventBus(), timers: steppedTimers().timers, schedule: callback => callback(), newId: () => uuid(++ids), targets })
+    disposals.push(() => explorer.dispose())
+    const labels = () => Array.from(explorer.getSnapshot().rows.ids, id => id > 0 ? '  '.repeat(explorer.node(id)!.level - 1) + explorer.node(id)!.label : `[${explorer.rowText(id)}]`)
+    const find = (label: string) => Array.from(explorer.getSnapshot().rows.ids).find(id => id > 0 && explorer.node(id)!.label === label)!
+    return { backend, store, server, targets, reorder, explorer, labels, find }
+  }
+  const key = (ref: ExplorerNodeRef) => expansionKey(ref)
+  const serverKey = key({ type: 'object', object: { kind: 'server' } })
+  const databasesKey = key({ type: 'folder', owner: { kind: 'server' }, folder: 'databases' })
+  const appDataKey = key({ type: 'object', object: { kind: 'database', name: 'AppData' } })
+  const goneKey = key({ type: 'object', object: { kind: 'database', name: 'Gone' } })
+
+  it('keys a node by its identity without the connection, so a key survives a new connection', () => {
+    expect(serverKey).toBe(JSON.stringify(['', 'object', 'server', null, null, null, null, null, null, null]))
+  })
+  it('restores the nodes a restored server had expanded as their pages arrive, and keeps a server saved collapsed collapsed', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a'), b = f.server('server-b')
+    f.targets.savedExplorerExpansion.mockImplementation(id => id === a.targetId ? [serverKey, databasesKey, appDataKey, goneKey] : id === b.targetId ? [] : undefined)
+    f.store.set([a, b])
+    for (let turn = 0; turn < 4; turn++) await settle()
+    expect(f.labels()).toEqual([
+      'server-a.example', '  Databases', '    System Databases', '    Database Snapshots', '    AppData', '      Tables', '      Views', '    Locked', '    Offline', '  Security', '  Server Objects',
+      'server-b.example'
+    ])
+    // The collapsed server loads nothing.
+    expect(f.backend.sent.filter(entry => entry.params.connectionId === b.id)).toEqual([])
+    // What is saved is what shows, outermost first, then the node that no longer exists, still waiting for a page.
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, databasesKey, appDataKey, goneKey])
+    expect(f.explorer.savedExpansion().get(b.targetId!)).toEqual([])
+  })
+  it('opens a server connected for the first time to its first level, and a reconnect to what it showed when it disconnected', async () => {
+    const f = workspaceFixture()
+    const a = f.server('server-a')
+    f.store.set([a])
+    await settle()
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
+    f.explorer.expand(f.find('Databases'))
+    await settle()
+    f.explorer.collapse(f.find('Databases'))
+    f.explorer.expand(f.find('Security'))
+    await settle()
+    f.store.set([{ ...a, lost: true }])
+    expect(f.labels()).toEqual(['server-a.example'])
+    // A disconnected server keeps what it showed for the next start too; Databases was collapsed, so it is not kept.
+    const securityKey = key({ type: 'folder', owner: { kind: 'server' }, folder: 'serverSecurity' })
+    expect(f.explorer.savedExpansion().get(a.targetId!)).toEqual([serverKey, securityKey])
+    f.store.set([f.server('server-a', true, 2)])
+    for (let turn = 0; turn < 3; turn++) await settle()
+    // Security opens again, Databases stays collapsed.
+    expect(f.labels().slice(0, 4)).toEqual(['server-a.example', '  Databases', '  Security', '    Logins'])
+    expect(f.explorer.node(f.find('Databases'))!.expanded).toBe(false)
+  })
+  it('leaves out servers it never connected this run, so the workspace keeps the last close\'s expansion for them', async () => {
+    const f = workspaceFixture()
+    f.targets.savedExplorerExpansion.mockReturnValue([serverKey])
+    f.store.set([f.server('server-a', false)])
+    await settle()
+    expect(f.explorer.savedExpansion().size).toBe(0)
+    expect(f.targets.savedExplorerExpansion).not.toHaveBeenCalled()
+  })
+  it('moves servers through the workspace order, says where, and offers Move Up and Move Down only where they apply', async () => {
+    const f = workspaceFixture()
+    const [a, b, c] = ['server-a', 'server-b', 'server-c'].map(name => f.server(name))
+    f.store.set([a, b, c])
+    await settle()
+    const rowOf = (name: string) => f.find(`${name}.example`)
+    for (const name of ['server-a', 'server-b', 'server-c']) f.explorer.collapse(rowOf(name))
+    expect(f.explorer.serverPlace(rowOf('server-b'))).toEqual({ index: 1, count: 3 })
+    f.explorer.select(rowOf('server-a'))
+    expect(f.explorer.moveServer(rowOf('server-a'), 2)).toBe(true)
+    expect(f.reorder).toHaveBeenLastCalledWith([b.targetId, c.targetId, a.targetId])
+    expect(f.labels()).toEqual(['server-b.example', 'server-c.example', 'server-a.example'])
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Moved server-a.example to position 3 of 3')
+    // The selection stays on the moved server, which can now only move up.
+    expect(f.explorer.getSnapshot().selected).toBe(rowOf('server-a'))
+    expect(f.explorer.serverPlace(rowOf('server-a'))).toEqual({ index: 2, count: 3 })
+    expect(f.explorer.moveServer(rowOf('server-a'), 2)).toBe(false)
+    expect(f.explorer.moveServer(rowOf('server-a'), Number.NaN)).toBe(false)
+    expect(f.explorer.moveServer(rowOf('server-b'), -5)).toBe(false)
+    expect(f.reorder).toHaveBeenCalledTimes(1)
+    // Rows below a server do not move.
+    f.explorer.expand(rowOf('server-b'))
+    await settle()
+    expect(f.explorer.serverPlace(f.find('Databases'))).toBeUndefined()
+    expect(f.explorer.moveServer(f.find('Databases'), 0)).toBe(false)
   })
 })

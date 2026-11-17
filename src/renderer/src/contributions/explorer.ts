@@ -39,6 +39,11 @@ export function explorerContribution({ commands, documents, connections, explore
       run: args => { const node = filterNode(args); if (node) explorer.setFilter(node.id, undefined) }
     }),
     commands.register('explorer.collapseAll', { run: () => explorer.collapseAll() }),
+    // Lost servers move too: the order is the workspace's, not the connection's.
+    ...([['explorer.moveServerUp', -1], ['explorer.moveServerDown', 1]] as const).map(([id, step]) => {
+      const place = (args?: CommandArgs) => { const node = nodeOf(args); const at = node && explorer.serverPlace(node.id); return node && at && at.index + step >= 0 && at.index + step < at.count ? { node, to: at.index + step } : undefined }
+      return commands.register(id, { when: args => !!place(args), run: args => { const move = place(args); if (move) explorer.moveServer(move.node.id, move.to) } })
+    }),
     // The setting is the state: ExplorerService follows it, and its context key checks the button and the palette entry.
     commands.register('explorer.groupBySchema', { when: () => !!settings, run: () => settings?.toggle('objectExplorer.groupBySchema') }),
     commands.register('explorer.newQuery', {

@@ -4,6 +4,8 @@ import type { Disposable } from '../core/types'
 
 /** The drag type Object Explorer rows carry: `{"v":1,"text":…}`. */
 export const explorerDragType = 'application/x-varia-explorer'
+/** A server row being moved among the servers: the tree alone accepts it, so the query editor and other apps ignore it. */
+export const explorerServerDragType = 'application/x-varia-explorer-server'
 /** As long as a script may be. */
 export const maxDropText = 1_000_000
 

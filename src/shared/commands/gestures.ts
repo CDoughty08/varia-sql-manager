@@ -132,6 +132,11 @@ export const gestureCatalog = {
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'an object', modifiers: [], keyboard: ['explorer.copyName'],
     locked: 'Dragging is the only way to drop text; Copy Name does the same from the keyboard.'
   },
+  'explorer.reorderServer': {
+    title: 'Reorder Servers', description: 'Dropping a server above or below another server moves it there; the order is kept for the next start.',
+    kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'a server', modifiers: [], keyboard: ['explorer.moveServerUp', 'explorer.moveServerDown'],
+    locked: 'Dragging is the pointer\'s way to reorder; Move Up and Move Down in the server\'s menu do the same from the keyboard.'
+  },
   'dock.floatWhileDragging': {
     title: 'Float While Dragging', description: 'Holding the modifier while dragging a tab floats it instead of docking it on a guide.',
     kind: 'modifier', scope: 'panels', action: 'drag', target: 'a tab', modifiers: ['ctrl'],

@@ -52,6 +52,7 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerLoading: boolean
   /** Group by Schema is on (`objectExplorer.groupBySchema`). */
   readonly explorerGroupBySchema: boolean
+  /** The selected server can move up or down among the servers (Move Up, Move Down). */
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
@@ -99,7 +100,20 @@ export interface ExplorerServiceOptions {
   readonly now?: () => number
   /** Whether Group by Schema is on (the `objectExplorer.groupBySchema` setting), and a signal when it may have changed. */
   readonly groupBySchema?: GroupBySchemaSource
+  /** The connection workspace: the servers' saved order and expansion (`ConnectionTargetService`). */
+  readonly targets?: ExplorerTargets
 }
+/** What the tree asks of the connection workspace, by target id. */
+export interface ExplorerTargets {
+  /** The last close's expanded nodes for a server the start restored (`[]`: all collapsed); undefined for one this run added. */
+  savedExplorerExpansion(targetId: string): readonly string[] | undefined
+  /** Puts the servers in this order; true when it changed. */
+  reorder(targetIds: readonly string[]): boolean
+}
+/** A node's identity without its connection, as the workspace keeps expanded nodes across runs. */
+export const expansionKey = (ref: ExplorerNodeRef): string => refKey('', ref)
+/** A server whose saved expansion is still being restored: the keys not yet found, and the expanded rows whose children may hold them. */
+interface Restoring { readonly keys: Set<string>; readonly parents: Set<number> }
 export interface GroupBySchemaSource { get(): boolean; subscribe(listener: () => void): () => void }
 /** Where a database's live runtime state comes from (ExplorerStatusService): a peek at its last sample, and a signal when
  *  the samples change. */
@@ -258,6 +272,15 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
   private grouped = false
+  private readonly targets?: ExplorerTargets
+  /** Per server row, what its saved expansion still has to restore as pages arrive. */
+  private readonly restoring = new Map<number, Restoring>()
+  /** Rows a page brought that the restore expands once the page is in. */
+  private restoreQueue: TreeNode[] = []
+  /** Targets whose saved expansion was taken this run: a later connect follows `remembered`, or opens to the first level. */
+  private readonly consumed = new Set<string>()
+  /** A server's expanded nodes when it disconnected, for its reconnect. */
+  private readonly remembered = new Map<string, readonly string[]>()
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
 
@@ -272,6 +295,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.grouping = options.groupBySchema
+    this.targets = options.targets
     this.grouped = !!this.grouping?.get()
     this.unsubscribeGrouping = this.grouping?.subscribe(() => this.guard(() => this.groupingChanged()))
     this.syncConnections()
@@ -764,11 +788,99 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = roots
     if (removedAt >= 0) this.selected = roots[Math.min(removedAt, roots.length - 1)]
     if (this.selected === undefined && roots.length) this.selected = added[0] ?? roots[0]
-    for (const id of added) this.expand(id, 'user')
+    for (const id of added) this.openRoot(id)
     this.invalidate()
     // A seek on a server that went away ends now, not when a load that will never come settles.
     if (this.seeking) this.advanceSeek()
   }
+  /**
+   * A server that just became available restores the expansion its last close or disconnect left, as far as the nodes
+   * are still there; a server connected for the first time opens to its first level.
+   */
+  private openRoot(id: number): void {
+    const root = this.nodes.get(id)
+    if (!root) return
+    const saved = this.takeExpansion(root)
+    if (saved === undefined) { this.expand(id, 'user'); return }
+    const keys = new Set(saved)
+    // A collapsed server restores nothing below it: only what was showing was kept.
+    if (!keys.delete(expansionKey(root.ref))) return
+    if (keys.size) this.restoring.set(id, { keys, parents: new Set([id]) })
+    this.expand(id, 'user')
+  }
+  private takeExpansion(root: TreeNode): readonly string[] | undefined {
+    const targetId = root.targetId
+    if (!targetId) return undefined
+    const remembered = this.remembered.get(targetId)
+    this.remembered.delete(targetId)
+    if (remembered) { this.consumed.add(targetId); return remembered }
+    if (this.consumed.has(targetId)) return undefined
+    this.consumed.add(targetId)
+    return this.targets?.savedExplorerExpansion(targetId)
+  }
+  /** The server's expanded nodes that show (every ancestor expanded), outermost first, then those a restore has yet to find. */
+  private expandedKeys(root: TreeNode): string[] {
+    const keys: string[] = [], queue = [root]
+    for (let at = 0; at < queue.length; at++) {
+      const node = queue[at]
+      if (!node.expanded) continue
+      keys.push(expansionKey(node.ref))
+      for (const child of node.children ?? []) if (child.expanded) queue.push(child)
+    }
+    const pending = this.restoring.get(root.id)
+    return pending ? [...keys, ...pending.keys] : keys
+  }
+  /**
+   * Each server's expanded nodes by target id, for the workspace the session keeps (`withExplorerExpansion`): a connected
+   * server's as they show, a disconnected one's as it was left. Servers not connected this run are left out, so they keep
+   * the last close's.
+   */
+  savedExpansion(): ReadonlyMap<string, readonly string[]> {
+    const saved = new Map<string, readonly string[]>()
+    for (const id of this.roots) {
+      const root = this.nodes.get(id), targetId = root?.targetId
+      if (!root || !targetId) continue
+      if (!root.lost) saved.set(targetId, this.expandedKeys(root))
+      else if (this.remembered.has(targetId)) saved.set(targetId, this.remembered.get(targetId)!)
+    }
+    return saved
+  }
+  /** A row a page brought: the restore expands it after the page when the saved expansion names it. */
+  private restoreChild(parent: TreeNode, node: TreeNode): void {
+    for (const [rootId, restoring] of this.restoring) {
+      if (!restoring.parents.has(parent.id)) continue
+      if (restoring.keys.delete(expansionKey(node.ref)) && node.hasChildren) { restoring.parents.add(node.id); this.restoreQueue.push(node) }
+      if (!restoring.keys.size) this.restoring.delete(rootId)
+      return
+    }
+  }
+  private flushRestore(): void {
+    const queue = this.restoreQueue
+    if (!queue.length) return
+    this.restoreQueue = []
+    for (const node of queue) if (!node.expanded) this.expand(node.id, 'background')
+  }
+
+  /** Where a server row stands among the servers, and how many there are; undefined for any other row. */
+  serverPlace(rowId: number): { readonly index: number; readonly count: number } | undefined {
+    const index = this.targets && this.nodes.get(rowId)?.parent === 0 ? this.roots.indexOf(rowId) : -1
+    return index < 0 ? undefined : { index, count: this.roots.length }
+  }
+  /** Moves a server row to `to` among the servers (Move Up, Move Down, a drag); the workspace keeps the order across restarts. */
+  moveServer(rowId: number, to: number): boolean {
+    const place = this.serverPlace(rowId), node = this.nodes.get(rowId)
+    if (!place || !node || !Number.isFinite(to)) return false
+    const at = Math.max(0, Math.min(place.count - 1, Math.trunc(to)))
+    if (at === place.index) return false
+    const order = this.roots.filter(id => id !== rowId)
+    order.splice(at, 0, rowId)
+    const ids = order.map(id => this.nodes.get(id)?.targetId)
+    if (ids.some(id => !id) || !this.targets!.reorder(ids as string[])) return false
+    this.announce(`Moved ${node.label} to position ${at + 1} of ${place.count}`)
+    this.invalidate()
+    return true
+  }
+
   private addRoot(connection: LiveConnection): number {
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.targetId = connection.targetId
@@ -793,6 +905,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   private removeRoot(connectionId: string, rootId: number): void {
     this.abortWhere(task => task.connectionId === connectionId)
+    this.restoring.delete(rootId)
+    const targetId = this.nodes.get(rootId)?.targetId
+    if (targetId) this.remembered.delete(targetId)
     const filters = this.filters.get(connectionId)
     if (filters) { this.filterCount -= filters.size; this.filters.delete(connectionId) }
     this.rootByConnection.delete(connectionId)
@@ -801,6 +916,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   /** Disconnect retains the server row, discarding metadata and every load owned by its former handle. */
   private markLost(root: TreeNode): void {
+    // A row lost already (a reconnect under a new handle) has nothing showing: what it showed before stays remembered.
+    if (root.targetId && !root.lost) this.remembered.set(root.targetId, this.expandedKeys(root))
+    this.restoring.delete(root.id)
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
     Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined, note: undefined })
@@ -985,6 +1103,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
+    this.flushRestore()
     // Loads below a refreshed or filtered folder waited for its first page: gone with the old rows, or resumed now.
     if (running.mode !== 'more' && this.stalled.size) this.resumeStalled()
     this.enforceBudget()
@@ -1263,6 +1382,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren
     if (ref.type === 'folder' && this.filters.get(parent.connectionId)?.size) node.filtered = this.filters.get(parent.connectionId)!.has(refKey(parent.connectionId, ref))
+    if (this.restoring.size) this.restoreChild(parent, node)
     return node
   }
   /**

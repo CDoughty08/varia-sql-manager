@@ -39,6 +39,8 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
   private revision = 0
   private operations = new Map<string, ConnectionOperation>()
   private readonly bindingRevisions = new Map<string, { readonly id: string; readonly generation: number; readonly revision: number }>()
+  /** The targets the start's `restore` brought back, whose saved Explorer expansion applies. */
+  private restored = new Set<string>()
 
   constructor() { super(Object.freeze([])) }
   get(id: string): ConnectionTarget | undefined { return this.getSnapshot().find(target => target.id === id) }
@@ -55,7 +57,31 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     if (this.getSnapshot().some(target => !['disconnected', 'lost'].includes(target.lifecycle.state))) return false
     this.operations.clear()
     this.bindingRevisions.clear()
+    this.restored = new Set(parsed.targets.map(target => target.id))
     this.publish(Object.freeze(parsed.targets.map(target => entry(target, { state: 'disconnected' }))))
+    return true
+  }
+
+  /**
+   * Object Explorer's expanded nodes from the last close, for a target the start restored: empty (all collapsed) when that
+   * close kept none. Undefined for a target this run added, whose server opens to its first level as a new connection does.
+   */
+  savedExplorerExpansion(id: string): readonly string[] | undefined {
+    return this.restored.has(id) ? this.get(id)?.explorerExpanded ?? [] : undefined
+  }
+
+  /**
+   * Object Explorer's drag or Move Up/Down: the named targets take the places they hold now in the given order; every
+   * other target keeps its place. Unknown ids are ignored. True when the order changed.
+   */
+  reorder(ids: readonly string[]): boolean {
+    const current = this.getSnapshot(), wanted = [...new Set(ids)].filter(id => current.some(target => target.id === id))
+    const moving = new Set(wanted), slots = current.flatMap((target, index) => moving.has(target.id) ? [index] : [])
+    if (slots.length < 2) return false
+    const next = [...current]
+    slots.forEach((slot, at) => { next[slot] = current.find(target => target.id === wanted[at])! })
+    if (next.every((target, index) => target === current[index])) return false
+    this.publish(Object.freeze(next))
     return true
   }
 

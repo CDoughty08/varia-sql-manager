@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (22)
+## Gestures (23)
 
 ### Global
 
@@ -47,6 +47,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Peek on Hover | `explorer.peekHover` | Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row. | Modifier | Ctrl+Hover an object | Ctrl+Hover an object | ⌘ Hover an object | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek (`explorer.peek`) |
 | Open Peek as Tab | `explorer.openPeekTab` | Opens Peek on the object (a table, procedure, index, login and so on) in a document tab. | Command | Ctrl+Click an object | Ctrl+Click an object | ⌘ Click an object | Choose: Ctrl / ⌘, Shift / ⇧ | Open Peek as Tab (`explorer.openPeekTab`) |
 | Insert Name | `explorer.dragName` | Dropping an object in a query inserts its quoted name. | Fixed | Drag an object | Drag an object | Drag an object | Locked: Dragging is the only way to drop text; Copy Name does the same from the keyboard. | Copy Name (`explorer.copyName`) |
+| Reorder Servers | `explorer.reorderServer` | Dropping a server above or below another server moves it there; the order is kept for the next start. | Fixed | Drag a server | Drag a server | Drag a server | Locked: Dragging is the pointer's way to reorder; Move Up and Move Down in the server's menu do the same from the keyboard. | Move Up (`explorer.moveServerUp`), Move Down (`explorer.moveServerDown`) |
 
 ### Panels and Editor Tabs
 

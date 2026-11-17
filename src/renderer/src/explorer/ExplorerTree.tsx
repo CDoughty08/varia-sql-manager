@@ -6,7 +6,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { observeResize, requestFrame } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
-import { explorerDragType, maxDropText } from './drop'
+import { explorerDragType, explorerServerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
@@ -17,6 +17,7 @@ import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, r
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
 const announceDelayMs = 500
+interface DropMark { readonly rowId: number; readonly edge: 'before' | 'after' }
 interface FollowedQuery {
   readonly query: string
   readonly connection: string
@@ -49,6 +50,22 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   /** A row a key selected, scrolled into view once the rows it is among have rendered. */
   const reveal = useRef<number | undefined>(undefined)
   const typing = useMemo(() => new TypeAheadBuffer(), [])
+  /** The server row being dragged to a new place, and where it would drop (a ref too, for the drop handler). */
+  const dragging = useRef<number | undefined>(undefined)
+  const [dropAt, setDropAt] = useState<DropMark | undefined>(undefined)
+  const dropMark = useRef<DropMark | undefined>(undefined)
+  const setDropMark = useCallback((next: DropMark | undefined | ((mark: DropMark | undefined) => DropMark | undefined)) => {
+    const value = typeof next === 'function' ? next(dropMark.current) : next
+    if (value === dropMark.current) return
+    dropMark.current = value
+    setDropAt(value)
+  }, [])
+  // Peek on Hover's modifier held: the peek cursor over rows Peek describes. An attribute, so a press re-renders nothing.
+  useEffect(() => {
+    const apply = () => element.current?.toggleAttribute('data-peek-armed', peek.armed.getSnapshot())
+    apply()
+    return peek.armed.subscribe(apply)
+  }, [peek])
   // While type-ahead collects a name the tree carries data-type-ahead (explorerTypeAhead), so Space types a space rather
   // than running Peek's catalogue key, until the buffer would start over.
   const typeAheadTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -195,8 +212,16 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
-    // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type.
+    // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
+    // carries only its own type, so dropping it anywhere but on another server does nothing.
     dragStart: (rowId, transfer) => {
+      if ((explorer.serverPlace(rowId)?.count ?? 0) > 1) {
+        dragging.current = rowId
+        peek.cancelHover()
+        transfer.effectAllowed = 'move'
+        transfer.setData(explorerServerDragType, '')
+        return true
+      }
       const text = explorer.insertText(rowId)
       if (text === undefined || text.length > maxDropText) return false
       transfer.effectAllowed = 'copy'
@@ -215,9 +240,27 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
     },
+    dragOver: (rowId, edge, event) => {
+      const from = dragging.current
+      if (from === undefined || !explorer.serverPlace(rowId)) { setDropMark(undefined); return }
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+      setDropMark(mark => mark?.rowId === rowId && mark.edge === edge ? mark : { rowId, edge })
+    },
+    drop: (rowId, event) => {
+      const from = dragging.current, mark = dropMark.current
+      dragging.current = undefined
+      setDropMark(undefined)
+      if (from === undefined || mark?.rowId !== rowId) return
+      event.preventDefault()
+      const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(rowId)
+      if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
+    },
+    dragEnd: () => { dragging.current = undefined; setDropMark(undefined) },
+    // The pointer's row stays known while it rests, so pressing Peek on Hover's modifier peeks it without a move.
     peekHover: (rowId, held) => {
-      if (held && gestures.matches('explorer.peekHover', held)) peek.hover(explorer.menuNode(rowId))
-      else peek.cancelHover()
+      if (held) peek.pointer(() => explorer.menuNode(rowId), gestures.matches('explorer.peekHover', held))
+      else peek.pointer(undefined)
     },
     click: (rowId, event) => {
       if (!gestures.matches('explorer.openPeekTab', event)) return
@@ -226,7 +269,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (peek.getSnapshot().open?.source === 'hover') peek.close()
       run('explorer.openPeekTab', rowId)
     }
-  }), [explorer, run, activate, objectActions, peek, gestures])
+  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
   // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -327,11 +370,11 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
           const recovery = kind === RowKind.Node ? undefined : treeKey(rows, index, 'enter', 1)
           const label = recovery && recoveryLabel(recovery)
           return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
-            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
+            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1)}
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
             status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}
-            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} />
+            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.rowId === rowId ? dropAt.edge : undefined} />
         })}
       </div>
     </div>
