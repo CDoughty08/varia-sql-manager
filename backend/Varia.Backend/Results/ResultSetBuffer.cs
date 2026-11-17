@@ -91,9 +91,6 @@ internal sealed class ResultSetBuffer
     /// <summary>Counts whole unpacks (<see cref="UnpackAll"/>), so a pass of <see cref="Pack"/> that an operation's unpack
     /// overtook between its last page and its end does not mark the result packed.</summary>
     private int unpacks;
-    /// <summary>Whole unpacks the policy made for a shown result's open view (<see cref="ResultPacker"/>): not a use, so not
-    /// in <see cref="unpacks"/>, but it lengthens the wait before such a result is packed again while hidden.</summary>
-    private int viewUnpacks;
     /// <summary>Packing stopped, or was refused, for a pin or lease, or an operation unpacked the result: the last pin or
     /// lease to end tells the store (<see cref="ResultStore.Settle"/>), so the policy looks at the result again.</summary>
     private bool notifyIdle;
@@ -419,18 +416,6 @@ internal sealed class ResultSetBuffer
 
     public int Pins { get { lock (gate) return pins; } }
 
-    /// <summary>Whether a pin or lease holds the set now; if so, its last one ends by poking the policy
-    /// (<see cref="ResultStore.Settle"/>), as when packing stopped for it. In one lock, so the end cannot slip between.</summary>
-    public bool NotifyWhenIdle()
-    {
-        lock (gate)
-        {
-            if (pins == 0 && leases == 0) return false;
-            notifyIdle = state == 1;
-            return true;
-        }
-    }
-
     /// <summary>What the stage 2 policy (<see cref="ResultPacker"/>) reads to tell a result in use from an idle one, in one
     /// lock: the pins and leases taken so far (every read, operation, Copy or Save), whether one is held now, the whole
     /// unpacks so far (<see cref="Unpacks"/>), and when a pin or lease last began or ended or the set completed (on
@@ -594,8 +579,6 @@ internal sealed class ResultSetBuffer
     /// <summary>How many times an operation has unpacked the result whole (the policy counts each as a use).</summary>
     public int Unpacks { get { lock (gate) return unpacks; } }
 
-    public int ViewUnpacks { get { lock (gate) return viewUnpacks; } }
-
     /// <summary>Whether the policy (<see cref="ResultPacker"/>) may pack this result: complete, not a live table, and not
     /// already packed by a whole pass since it was last unpacked.</summary>
     public bool NeedsPacking { get { lock (gate) return state == 1 && !packDone && Budget.Live is null; } }
@@ -722,13 +705,12 @@ internal sealed class ResultSetBuffer
     /// working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from 64 MiB, as
     /// a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and
     /// view reads still work. The caller holds a pin, so nothing packs the pages again until it ends.</summary>
-    /// <param name="forView">The policy's, for a shown result's open view: counted in <see cref="ViewUnpacks"/>, not as a use.</param>
-    public bool TryUnpackAll(CancellationToken token = default, bool forView = false)
+    public bool TryUnpackAll(CancellationToken token = default)
     {
         if (!HasPacked) return true;
         var need = UnpackNeed();
         if (need > 0 && !store.TryReserveWork(Budget, need)) return false;
-        UnpackAll(need, token, forView);
+        UnpackAll(need, token);
         return true;
     }
 
@@ -749,7 +731,7 @@ internal sealed class ResultSetBuffer
     /// <summary>Unpacks every packed page in place, taking <paramref name="reserved"/> bytes already reserved from this
     /// set's budget as working memory (<see cref="UnpackNeed"/>) as its own, and giving back what it did not need. On
     /// failure (cancellation) the reservation is returned and nothing changes.</summary>
-    public void UnpackAll(long reserved, CancellationToken token = default, bool forView = false)
+    public void UnpackAll(long reserved, CancellationToken token = default)
     {
         StoredPage[] packed;
         bool wasDone;
@@ -759,15 +741,14 @@ internal sealed class ResultSetBuffer
             if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
             packed = [.. pages.Where(page => page.Stored is PackedPage)];
             wasDone = packDone;
-            generation = forView ? unpacks : unpacks + 1;
+            generation = unpacks + 1;
             // Nothing packed (a comparison unpacks every side once one is packed): nothing changes, and it is no use that
             // lengthens the policy's wait for this result.
             if (packed.Length > 0)
             {
                 // Whatever happens next, the policy may pack the result again once the operation's pin ends.
                 packDone = false;
-                if (forView) viewUnpacks++;
-                else unpacks++;
+                unpacks++;
                 notifyIdle = true;
             }
         }

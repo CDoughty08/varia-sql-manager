@@ -51,6 +51,38 @@ beforeAll(async () => {
 })
 afterAll(async () => { host?.close(); await supervisor?.stop() })
 
+// Sorting a packed result reads its pages packed (fused) and never unpacks it whole, so the budget keeps the packed
+// figure: a shown result that the policy packed and the user then sorts and re-sorts. The view's order (4 bytes a row) is
+// all a sort may add; an unpack for the view would give back the raw bytes (the whole result less its packed size).
+it('sorts a packed shown result without unpacking it', async () => {
+  const used = async () => (await supervisor.request('results.close', { resultIds: [2 ** 32 - 1] })).usedBytes
+  const empty = await used()
+  const descriptor = await supervisor.request('debug.results.synthesize', { shape: 'W1', rows: 1_000_000, pack: true }) as ResultDescriptor
+  try {
+    const packed = await used() - empty
+    expect(packed).toBeLessThan(descriptor.bytesStored * 0.75)
+    await supervisor.request('results.visibility', { source: crypto.randomUUID(), seq: 1, visible: [descriptor.resultId] })
+    const before = await used()
+    const times: number[] = []
+    let viewId: number | undefined
+    // Three sorts, each replacing the last view: what the policy would do after a view opens has happened by the third.
+    for (const descending of [true, false, true]) {
+      const started = performance.now()
+      const view = await supervisor.request('results.view', { resultId: descriptor.resultId, sort: [{ column: 3, descending, mode: 'value' }], ...viewId === undefined ? {} : { replaces: viewId } })
+      times.push(performance.now() - started)
+      expect(view.rows).toBe(1_000_000)
+      viewId = view.viewId
+    }
+    const grown = await used() - before
+    record(
+      { id: 'node.packedSort.sortMs', value: median(times), unit: 'ms', detail: `1,000,000 W1 rows packed to ${(packed / 1e6).toFixed(0)} MB of ${(descriptor.bytesStored / 1e6).toFixed(0)} MB, sorted by a decimal, median of 3` },
+      { id: 'node.packedSort.budgetGrowthMb', value: grown / 1e6, unit: 'MB', detail: `budget after three sorts less before; unpacking would add about ${((descriptor.bytesStored - packed) / 1e6).toFixed(0)} MB` }
+    )
+  } finally {
+    await supervisor.request('results.close', { resultIds: [descriptor.resultId] })
+  }
+})
+
 it('round-trips system.health between main and the backend', async () => {
   for (let i = 0; i < 300; i++) await supervisor.request('system.health', {})
   const samples: number[] = []

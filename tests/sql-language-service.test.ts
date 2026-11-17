@@ -11,6 +11,18 @@ import { BackendStateService } from '../src/renderer/src/services/backend'
 import { documentFixture, deferred, TestModel } from './fixtures/documents'
 import { PeekEditor, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
 import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
+// @ts-expect-error Monaco ships its internals without declarations; the suggest widget scores with this function.
+import { fuzzyScore } from 'monaco-editor/base/common/filters.js'
+
+type Scorer = (pattern: string, patternLow: string, patternStart: number, word: string, wordLow: string, wordStart: number) => [number] | undefined
+/** The suggest widget's order: fuzzy score of the typed word against filterText (else label), then sortText. */
+function monacoOrder(suggestions: Monaco.languages.CompletionItem[], typed: string): string[] {
+  return suggestions.flatMap(item => {
+    const filter = item.filterText ?? item.label as string
+    const score = (fuzzyScore as Scorer)(typed, typed.toLowerCase(), 0, filter, filter.toLowerCase(), 0)
+    return score ? [{ label: item.label as string, score: score[0], sortText: item.sortText ?? '' }] : []
+  }).sort((a, b) => b.score - a.score || (a.sortText < b.sortText ? -1 : a.sortText > b.sortText ? 1 : 0)).map(item => item.label)
+}
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks() })
@@ -288,7 +300,7 @@ describe('SQL language editor integration', () => {
     const result = await f.complete(tab.id, { lineNumber: 2, column: 4 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[0][0].position).toEqual({ line: 1, character: 3 })
     expect(result).toEqual({ incomplete: true, suggestions: [{ label: 'Customer', kind: 1400, detail: undefined, documentation: undefined,
-      sortText: '1:Customer', filterText: undefined,
+      sortText: '11:Customer', filterText: undefined,
       insertText: '${1:Customer}', insertTextRules: 4, range: { startLineNumber: 2, endLineNumber: 2, startColumn: 1, endColumn: 4 } }] })
     await f.complete(tab.id, { lineNumber: 1, column: 6 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[1][0].position).toEqual({ line: 0, character: 5 })
@@ -307,8 +319,94 @@ describe('SQL language editor integration', () => {
     const result = await f.complete(tab.id, { lineNumber: 1, column: 3 } as Monaco.Position)
     const sorted = [...result.suggestions].sort((a, b) => a.sortText! < b.sortText! ? -1 : 1)
     expect(sorted.map(item => item.label)).toEqual(['hiProperty', 't.hiColumn', 'hiOtherColumn', 'hiFunction', '@@hiGlobal', 'hiKeyword'])
-    expect(result.suggestions.find(item => item.label === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '0:999-column', kind: 500 })
+    expect(result.suggestions.find(item => item.label === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '10:999-column', kind: 500 })
     expect(result.suggestions.find(item => item.label === '@@hiGlobal')).toMatchObject({ filterText: 'hiGlobal', kind: 600 })
+  })
+
+  it('puts a case-insensitive exact match first, above case-matching prefixes, system objects and fuzzy matches', async () => {
+    const f = await fixture(), tab = f.documents.create('exact.sql', 'SELECT * FROM orderdetails', 'master')
+    const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [
+      { label: 'orderdetails_old', kind: 7, textEdit: { range, newText: 'orderdetails_old' } },
+      { label: 'sysorderdetails', kind: 7, textEdit: { range, newText: 'sysorderdetails' } },
+      { label: 'o_r_d_e_r_details', kind: 7, textEdit: { range, newText: 'o_r_d_e_r_details' } },
+      { label: '[OrderDetails]', kind: 7, filterText: 'OrderDetails', textEdit: { range, newText: '[OrderDetails]' } }
+    ] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
+    expect(result.incomplete).toBe(true)
+    expect(result.suggestions.find(item => item.label === '[OrderDetails]')).toMatchObject({ filterText: 'orderdetails', sortText: '01:[OrderDetails]' })
+    expect(monacoOrder(result.suggestions, 'orderdetails')[0]).toBe('[OrderDetails]')
+  })
+
+  it('re-ranks a complete answer as the word grows, without asking the backend again', async () => {
+    const f = await fixture(), tab = f.documents.create('grow.sql', 'SELECT * FROM o', 'master')
+    const item = (label: string, end: number) => ({ label, kind: 7, filterText: label, textEdit: { range: { start: { line: 0, character: 14 }, end: { line: 0, character: end } }, newText: label } })
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [item('orders_archive', 15), item('sysorders', 15), item('Orders', 15)] } })
+    const first = await f.complete(tab.id, { lineNumber: 1, column: 16 } as Monaco.Position)
+    expect(first.incomplete).toBe(true)
+    expect(first.suggestions.every(suggestion => suggestion.sortText!.startsWith('1'))).toBe(true)
+    f.model(tab.id).applyEdits([{ range: { startLineNumber: 1, startColumn: 16, endLineNumber: 1, endColumn: 16 }, text: 'rders' }])
+    const grown = await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 21 } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
+    expect(f.api.languageComplete).toHaveBeenCalledOnce()
+    expect(grown.suggestions.find(suggestion => suggestion.label === 'Orders')).toMatchObject({ filterText: 'orders', sortText: '01:Orders',
+      range: { startLineNumber: 1, startColumn: 15, endLineNumber: 1, endColumn: 21 } })
+    expect(monacoOrder(grown.suggestions, 'orders')[0]).toBe('Orders')
+    // Anything but identifier characters typed at the cursor, or a newer epoch, asks the backend.
+    f.model(tab.id).applyEdits([{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }, text: ' ' }])
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [] } })
+    await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 22 } as Monaco.Position, { triggerKind: 2 }, token())
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks the backend again after a refresh, on another line and after a context change', async () => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const tab = f.documents.create('reuse.sql', 'SELECT * FROM o\nSELECT 1', 'master', 'connection-a')
+    f.api.languageComplete.mockResolvedValue({ ok: true, value: { isIncomplete: false, items: [{ label: 'Orders', kind: 7 }] } })
+    const grow = async (column: number, text: string, line = 1) => {
+      f.model(tab.id).applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text }])
+      return await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: line, column: column + text.length } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
+    }
+    await f.complete(tab.id, { lineNumber: 1, column: 16 } as Monaco.Position)
+    await grow(16, 'r')
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(1)
+    await f.service.refreshCache(tab.id)
+    await grow(17, 'd')
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    await grow(9, 'x', 2)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(3)
+    f.documents.update(tab.id, { database: 'other' })
+    await grow(10, 'y', 2)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(4)
+  })
+
+  it('filters a typed bracket against a name STS sends without filter text', async () => {
+    const f = await fixture(), tab = f.documents.create('bracket-table.sql', 'SELECT * FROM [Cust', 'master')
+    const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 19 } }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: 'Customers', kind: 7, textEdit: { range, newText: 'Customers' } }] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 20 } as Monaco.Position)
+    expect(result.suggestions[0]).toMatchObject({ label: 'Customers', filterText: '[Customers' })
+    expect(monacoOrder(result.suggestions, '[Cust')).toEqual(['Customers'])
+  })
+
+  it('asks the backend again while its answer was truncated', async () => {
+    const f = await fixture(), tab = f.documents.create('truncated.sql', 'SELECT * FROM o', 'master')
+    f.api.languageComplete.mockResolvedValue({ ok: true, value: { isIncomplete: true, items: [{ label: 'orders_archive', kind: 7 }] } })
+    await f.complete(tab.id, { lineNumber: 1, column: 16 } as Monaco.Position)
+    f.model(tab.id).applyEdits([{ range: { startLineNumber: 1, startColumn: 16, endLineNumber: 1, endColumn: 16 }, text: 'r' }])
+    await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 17 } as Monaco.Position, { triggerKind: 2 }, token())
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows and inserts the same bracketed column name, and filters a typed bracket against it', async () => {
+    const f = await fixture(), tab = f.documents.create('brackets.sql', 'SELECT [col FROM dbo.T AS [bob]', 'master')
+    const range = { start: { line: 0, character: 7 }, end: { line: 0, character: 11 } }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [
+      { label: '[bob].[columnName]', kind: 5, filterText: 'columnName', insertText: '[bob].[columnName]', textEdit: { range, newText: '[bob].[columnName]' } }
+    ] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 12 } as Monaco.Position)
+    expect(result.suggestions[0]).toMatchObject({ label: '[bob].[columnName]', insertText: '[bob].[columnName]', filterText: '[columnName' })
+    expect(monacoOrder(result.suggestions, '[col')).toEqual(['[bob].[columnName]'])
   })
 
   it('renders hover as untrusted Markdown without HTML and rejects invalid hover ranges', async () => {
