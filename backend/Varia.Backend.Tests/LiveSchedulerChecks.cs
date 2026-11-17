@@ -3,6 +3,7 @@ using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Activity;
 using Varia.Backend.Live;
+using Varia.Backend.Plans;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
@@ -183,6 +184,22 @@ internal static class LiveSchedulerChecks
         check(missed.Count == 0 && good.Count == 0,
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
             + string.Join(", ", missed) + " | " + string.Join(", ", good));
+        // Live Plan's probe text: every variant passes the live lint, and only Azure's permission check may name DB_NAME().
+        var planProblems = LivePlanSql.All.SelectMany(text => LivePlanSql.Lint(text)).ToList();
+        check(planProblems.Count == 0
+            && LivePlanSql.For(5, 12) == LivePlanSql.Database && LivePlanSql.For(2, 16) == LivePlanSql.Performance && LivePlanSql.For(8, 16) == LivePlanSql.Performance
+            && LivePlanSql.For(3, 15) == LivePlanSql.Server && LivePlanSql.For(null, null) == LivePlanSql.Server
+            && LivePlanSql.Database.Contains(LivePlanSql.DatabaseScope, StringComparison.Ordinal) && LivePlanSql.Performance.Contains(LivePlanSql.PerformanceScope, StringComparison.Ordinal)
+            && LivePlanSql.Server.Contains(LivePlanSql.ServerScope, StringComparison.Ordinal)
+            && LivePlanSql.All.Count(text => text.Contains("DB_NAME", StringComparison.OrdinalIgnoreCase)) == 1
+            && LiveSql.Lint(LivePlanSql.Database).Contains("uses DB_NAME")
+            && LivePlanSql.Lint(LivePlanSql.Database.Replace("q.request_id=r.request_id", "q.request_id=r.request_id AND DB_NAME()<>N''", StringComparison.Ordinal)).Contains("uses DB_NAME")
+            && LivePlanSql.Lint(LivePlanSql.Server.Replace("NULL,NULL,'VIEW SERVER STATE'", "DB_NAME(r.database_id),'DATABASE','VIEW DATABASE STATE'", StringComparison.Ordinal)).Contains("uses DB_NAME")
+            && LivePlanSql.Lint(LivePlanSql.Server.Replace("c.connection_id=@client", "1=1", StringComparison.Ordinal)).Contains("does not match the session and its connection")
+            && LivePlanSql.Lint(LivePlanSql.Server.Replace("SELECT CAST(1 AS int);", "DELETE FROM dbo.t;", StringComparison.Ordinal)).Count > 0
+            && LivePlanSql.Lint(LivePlanSql.Server[LiveSql.UncommittedPrologue.Length..]).Contains("does not start with a live prologue"),
+            "the Live Plan probe's texts pass the live lint, pick their permission by edition and version, match both the session and its connection, and name DB_NAME() only once, in Azure's permission check: "
+            + string.Join(", ", planProblems));
         // Values are read by declared position, so every read checks what it got against the declaration.
         var overviewQuery = new LiveQuery("check", LiveSql.MaxBand, "SELECT 1;", ["ms_ticks", "start_ticks", "cpu_ms", "schedulers", "runnable_tasks", "batch_requests", "compilations", "recompilations", "user_sessions"],
             "ms_ticks", "start_ticks", []);

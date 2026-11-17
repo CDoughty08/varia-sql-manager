@@ -5,6 +5,7 @@ import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
 import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, documentTabFullyShown, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -123,7 +124,7 @@ async function rezoom(name, label) {
 }
 const exit = process.platform === 'win32' ? { label: 'Exit', key: 'Alt+F4' } : { label: 'Quit', key: 'Ctrl+Q' }
 /** The fake backend's requests of one method since the last `forgetCalls`, oldest first (their params). */
-const calls = async method => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method).map(call => call.params)
+const calls = async method => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
 const forgetCalls = () => writeFile(join(control, 'calls.jsonl'), '')
 /** Makes Object Explorer's tree three rows tall and scrolls it to the top, as a mouse wheel would, so its selected row is out of view. */
 async function scrollSelectionAway() {
@@ -1267,7 +1268,7 @@ try {
   expect(await page.evaluate(request => window.varia.showContextMenu(request), forged)).toEqual({ ok: false, error: 'Native context menus are not in use.' })
   expect(failures).toEqual([])
   await application.close()
-  application = await electron.launch({ ...launchOptions, env: { ...env, VARIA_SMOKE_MENU_STYLE: 'native' } })
+  application = await electron.launch({ ...launchOptions, env: { ...env, VARIA_SMOKE_MENU_STYLE: 'native', VARIA_TEST_SHOW_WINDOW: '0' } })
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
@@ -1388,7 +1389,8 @@ try {
     expect((await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, ...change })).ok, JSON.stringify(change)).toBe(false)
   }
   for (const call of [() => window.varia.runRole('openExternal'), () => window.varia.revealSqlFile('x')]) expect((await page.evaluate(call)).ok).toBe(false)
-  // Nor does an idle page get one: main shows a menu only in the focused window (the hidden smoke window never is) or
+  // Nor does an idle page get one: main shows a menu only in the focused window (this launch keeps it hidden, even under
+  // xvfb, so it never is) or
   // just after a click, tap, or key press in it, so a background page cannot put Paste where the user is working.
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false)
   await page.waitForTimeout(1500)

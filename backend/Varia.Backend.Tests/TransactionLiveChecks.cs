@@ -71,7 +71,7 @@ internal static class TransactionLiveChecks
             var lastError = await Run("SELECT @@ERROR;", tab);
             check(lastError.Status == "completed" && First(lastError) == "8134", "@@ERROR survives into the next execution: " + First(lastError));
             // The state read before a prompt is a statement in the session, as SSMS's check is: a session the user then keeps
-            // sees @@ROWCOUNT 1 and @@ERROR 0 (README and docs/ipc.md say so).
+            // sees @@ROWCOUNT 1 and @@ERROR 0 (docs/ipc.md, Transaction state).
             await Run("SELECT 1/0;", tab);
             var readState = await State(tab);
             var afterRead = await Run("SELECT @@ROWCOUNT, @@ERROR;", tab);
@@ -145,7 +145,7 @@ internal static class TransactionLiveChecks
                 var last = await Run(own, tab);
                 var buffer = await Run("SELECT event_info FROM sys.dm_exec_input_buffer(" + last.Spid + ", NULL);", holder);
                 check(buffer.Status == "completed" && First(buffer) == own, "another session sees the user's own SQL as the session's most recent: " + First(buffer));
-                // Until a state read before a prompt, which then is the most recent (README and docs/ipc.md say so).
+                // Until a state read before a prompt, which then is the most recent (docs/ipc.md, Transaction state).
                 await State(tab);
                 var readBuffer = await Run("SELECT event_info FROM sys.dm_exec_input_buffer(" + last.Spid + ", NULL);", holder);
                 check(readBuffer.Status == "completed" && First(readBuffer) == SqlService.TransactionCountSql, "after a state read, the session's most recent SQL is the read: " + First(readBuffer));
