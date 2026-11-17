@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { loadReleaseArchive } from './release-notes.mjs'
 import { gettingStartedSmoke } from './fixtures/help.mjs'
-import { pressToClose, aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, dockPopoutBack, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
+import { pressToClose, clickToClose, aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, dockPopoutBack, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'updates-profile-'))
@@ -106,7 +106,7 @@ try {
   await about.getByRole('button', { name: 'Project on GitHub', exact: true }).click()
   await about.getByRole('button', { name: 'Report an Issue', exact: true }).click()
   await about.screenshot({ path: 'artifacts/about-dialog-copy-failure.png' })
-  await about.getByRole('button', { name: 'Release Notes', exact: true }).click()
+  await clickToClose(about.getByRole('button', { name: 'Release Notes', exact: true }))
   await dialogClosed(aboutWindow, 'About Varia')
   const notes = releaseNotesPage(page)
   await expect(notes).toBeVisible()
@@ -223,7 +223,7 @@ try {
   // Restart to Update closes the app as File › Exit does, then installs.
   const exited = new Promise(resolveExit => application.process().once('exit', resolveExit))
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await about.getByRole('button', { name: 'Restart to Update', exact: true }).click()
+  await clickToClose(about.getByRole('button', { name: 'Restart to Update', exact: true }))
   await within(exited, 30000, () => { throw new Error('Restart to Update did not close the app.') })
   const applied = JSON.parse(await readFile(join(profile, 'update-applied.json'), 'utf8'))
   if (applied.kind !== 'nsis' || applied.version !== version || applied.file !== name) throw new Error(`Unexpected install: ${JSON.stringify(applied)}`)

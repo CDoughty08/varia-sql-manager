@@ -965,6 +965,8 @@ export async function dialogWindow(application, name, timeout = 15000) {
 }
 /** Presses `key` in a dialog's view where it closes the dialog: its window may close on the key going down, before the key comes up. */
 export const pressToClose = (view, key) => view.keyboard.press(key).catch(error => { if (!view.isClosed()) throw error })
+/** Clicks `target`, a button that closes its dialog window: the window may close before Playwright finishes the click. */
+export const clickToClose = target => target.click().catch(error => { if (!target.page().isClosed()) throw error })
 /** Waits until the dialog window `view` has closed or, where the dialog showed over the main window, the dialog named `name` is gone. */
 export const dialogClosed = (view, name) => expect.poll(async () => view.isClosed() || (!view.url().startsWith('about:') && !(await view.getByRole('dialog', named(name)).count().catch(() => 0)))).toBe(true)
 /** An Options form page's sections (role group, named by their headings) and the fields and lists of its control column. */
