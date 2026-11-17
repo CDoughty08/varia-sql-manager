@@ -23,6 +23,12 @@ import { focusToReturn, returnFocusTo } from './core/focus'
 import SubDialog from './dialogs/SubDialog'
 import { applySavedDetails } from './services/saved-connection-details'
 
+/** What Cancel compares: settings and labels (the environment as stored), never the password. */
+function labels(from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) {
+  const environment = parseEnvironment(from.environment)
+  return JSON.stringify([from.displayName ?? '', from.color ?? '', environment.ok ? environment.environment ?? '' : from.environment, autoReconnect])
+}
+const shape = (from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) => JSON.stringify([entryKey(from) ?? null, labels(from, autoReconnect)])
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
 // Profiles store the preset's value, which the theme maps to its own color for that preset.
@@ -143,8 +149,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   // Reconnect on startup, which Connect then applies to a reused Explorer connection without asking again.
   const edited = useRef(false)
   const detailsEdited = useRef(false)
-  // The saved entry the form named when the first edit began.
+  // The saved entry the form named, and the form itself, just before the first edit since it was opened, chosen, saved,
+  // reset or pointed at another server.
   const editBase = useRef<string | undefined>(undefined)
+  const baseline = useRef<{ options: ConnectionOptions; autoReconnect: ConnectionDetails['autoReconnect'] } | undefined>(undefined)
   const [customOpen, setCustomOpenState] = useState(customPropertiesOpen)
   const setCustomOpen = (open: boolean) => { customPropertiesOpen = open; setCustomOpenState(open) }
   const dialog = useRef<HTMLFormElement>(null)
@@ -270,15 +278,27 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (inherited) labelServer.current = null
     setSelectedId(undefined)
     update({ server, ...patch, ...(inherited ? { displayName: '', color: undefined, environment: undefined } : {}) })
-    editBase.current = undefined
+    // Edits so far described another server: neither Cancel nor Connect may carry them to this one's entry.
+    startAfresh()
   }
-  function update(patch: Partial<ConnectionOptions>) { if (!edited.current) editBase.current = (selected ?? entry)?.id; edited.current = true; setOptions(current => ({ ...current, ...patch })); setError(''); setNotice('') }
+  function markEdited() {
+    if (!edited.current) { editBase.current = (selected ?? entry)?.id; baseline.current = { options: currentOptions.current, autoReconnect } }
+    edited.current = true
+  }
+  function startAfresh() { edited.current = false; detailsEdited.current = false; editBase.current = undefined; baseline.current = undefined }
+  /** The entry the edits began on, while the form still has its server, database, login and settings (an alias whose
+   *  labels changed is no longer found by them). Other settings make it another entry. */
+  function baseEntry(from: ConnectionOptions = currentOptions.current): ConnectionProfile | undefined {
+    const base = library.profiles.find(profile => profile.id === editBase.current)
+    return base && entryKey(base.options) === entryKey(from) ? base : undefined
+  }
+  function update(patch: Partial<ConnectionOptions>) { markEdited(); setOptions(current => ({ ...current, ...patch })); setError(''); setNotice('') }
   function editDetails(patch: Partial<ConnectionOptions>) { labelServer.current = null; detailsEdited.current = true; update(patch) }
   function choose(profile: ConnectionProfile) {
     const chosen = { ...profile.options, password: '' }
     environmentOwner.current = null; setSelectedId(profile.id); setOptions(chosen); reconnectOwned.current = true; setAutoReconnect(profile.autoReconnect ?? 'inherit')
     // Enter selects and submits in one event; remembered credentials must follow the row before the form submits.
-    rememberEdited.current = false; edited.current = false; detailsEdited.current = false; editBase.current = undefined
+    rememberEdited.current = false; startAfresh()
     setRemember(!!rememberedProfile(library.profiles, savedIds, chosen, profile.id))
     labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null
     setError(''); setNotice('')
@@ -347,10 +367,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (!labelled) return false
     setSaving(true); setError(''); setNotice('')
     try {
-      const { value, savedId } = await persist({ id: profile?.id ?? selectedId ?? entry?.id ?? editBase.current, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect }, labelled, profile?.id)
+      const { value, savedId } = await persist({ id: profile?.id ?? selectedId ?? entry?.id ?? baseEntry(labelled)?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect }, labelled, profile?.id)
       if (!alive.current) return true
       showLibrary(value)
-      if (!profile) { setSelectedId(savedId); edited.current = false; editBase.current = undefined }
+      if (!profile) { setSelectedId(savedId); startAfresh() }
       return true
     } catch (reason) { if (alive.current) setError(message(reason)); return false }
     finally { if (alive.current) setSaving(false) }
@@ -360,18 +380,18 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   async function recordDetails(labelled: ConnectionOptions, id: string | undefined) {
     try {
       const { value } = await persist({ id, options: { ...labelled, password: '' }, autoReconnect }, labelled)
-      if (alive.current) { showLibrary(value); edited.current = false; editBase.current = undefined }
+      if (alive.current) { showLibrary(value); startAfresh() }
     } catch { if (alive.current) setNotice('Connected, but the changed name, color or environment could not be saved to History.') }
   }
   /** The saved entry this form edits when the user changed it and has not saved since: the one Cancel asks about. */
   function unsaved(): ConnectionProfile | undefined {
     // An alias found by its labels is no longer found once they change: the entry the edits began on still owns them.
-    const target = selected ?? entry ?? library.profiles.find(profile => profile.id === editBase.current)
-    if (!edited.current || !target) return undefined
-    const environment = parseEnvironment(options.environment)
-    const same = entryKey(target.options) === entryKey(options) && (target.options.displayName ?? '') === (options.displayName ?? '') && (target.options.color ?? '') === (options.color ?? '')
-      && environment.ok && (environment.environment ?? '') === (target.options.environment ?? '') && (target.autoReconnect ?? 'inherit') === autoReconnect
-    return same ? undefined : target
+    const target = selected ?? entry ?? baseEntry()
+    if (!edited.current || !target || !baseline.current) return undefined
+    const form = shape(options, autoReconnect)
+    // Only what the user changed counts (a password, or a form that began unlike the entry, is not an edit of it).
+    if (form === shape(baseline.current.options, baseline.current.autoReconnect)) return undefined
+    return form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : target
   }
   /** Cancel, Escape and Close: unsaved edits to a saved entry are never dropped without asking. */
   function requestClose() {
@@ -419,8 +439,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       if (!alive.current) return
       // Main says which label the entry kept when the form had none (the history had not loaded yet).
       // Main's reuse of a live connection records no labels in History: details edited here are saved by id, keeping recency.
-      if (result.ok && detailsEdited.current) await recordDetails({ ...labelled, environment: ownsEnvironment() ? labelled.environment : labelled.environment ?? result.value.environment }, selectedProfileId)
-      if (result.ok) { const { environment: kept, ...info } = result.value; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, detailsEdited.current); targetAttempt.current = undefined }
+      // Labels typed back to where they began are not a choice to replace the connection's own.
+      const detailsChanged = detailsEdited.current && !!baseline.current && labels(labelled, autoReconnect) !== labels(baseline.current.options, baseline.current.autoReconnect)
+      if (result.ok && detailsChanged) await recordDetails({ ...labelled, environment: ownsEnvironment() ? labelled.environment : labelled.environment ?? result.value.environment }, selectedId ?? baseEntry(labelled)?.id ?? selectedProfileId)
+      if (result.ok) { const { environment: kept, ...info } = result.value; await onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }, autoReconnect, attempt, requestId, controller.signal, detailsChanged); targetAttempt.current = undefined }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
@@ -576,7 +598,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
                 <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => editDetails({ displayName: event.target.value })} /></div>
                 <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => editDetails({ color: event.target.value || undefined })}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => editDetails({ color: event.target.value })} /></div></div>
                 <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { environmentOwner.current = options.server.trim().toLowerCase(); editDetails({ environment }) }} /></div>
-                <div className="property-row"><label htmlFor="connect-auto-reconnect">Reconnect on startup</label><select id="connect-auto-reconnect" disabled={locked} value={autoReconnect} onChange={event => { reconnectOwned.current = true; edited.current = true; detailsEdited.current = true; setAutoReconnect(event.target.value as ConnectionDetails['autoReconnect']) }}><option value="inherit">Use global default</option><option value="on">On</option><option value="off">Off</option></select></div>
+                <div className="property-row"><label htmlFor="connect-auto-reconnect">Reconnect on startup</label><select id="connect-auto-reconnect" disabled={locked} value={autoReconnect} onChange={event => { reconnectOwned.current = true; markEdited(); detailsEdited.current = true; setAutoReconnect(event.target.value as ConnectionDetails['autoReconnect']) }}><option value="inherit">Use global default</option><option value="on">On</option><option value="off">Off</option></select></div>
               </div>
               <div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button></div>
             </section>
@@ -593,7 +615,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
             {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
           </div>}
         </div>}
-        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); rememberEdited.current = false; edited.current = false; detailsEdited.current = false; editBase.current = undefined; labelServer.current = null; environmentOwner.current = null; reconnectOwned.current = true; setOptions(connectionDefaults(platform)); setAutoReconnect('inherit'); setError('') }}>Reset</button><span /><button type="button" title="Save these settings to History without connecting" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile()}>Save</button><button ref={connectButton} className="primary" type="submit" disabled={locked || !loaded || !authReady}>{busy ? 'Connecting…' : matchingTarget(options) && (options.password || rememberEdited.current) ? 'Update Credentials and Reconnect' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : requestClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
+        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); rememberEdited.current = false; startAfresh(); labelServer.current = null; environmentOwner.current = null; reconnectOwned.current = true; setOptions(connectionDefaults(platform)); setAutoReconnect('inherit'); setError('') }}>Reset</button><span /><button type="button" title="Save these settings to History without connecting" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile()}>Save</button><button ref={connectButton} className="primary" type="submit" disabled={locked || !loaded || !authReady}>{busy ? 'Connecting…' : matchingTarget(options) && (options.password || rememberEdited.current) ? 'Update Credentials and Reconnect' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : requestClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
       </div>
     </form></div>
     {confirmClose && <SubDialog title={`Save changes to ${confirmClose.options.displayName || confirmClose.options.server}?`} okLabel="Save" alternative={{ label: "Don't Save", run: () => { setConfirmClose(undefined); onClose() } }}

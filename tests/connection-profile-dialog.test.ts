@@ -200,7 +200,7 @@ describe('saved profile startup reconnect preference', () => {
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: id(2), autoReconnect: 'off', registered: true }))
     await act(async () => view.button('Connect').click())
     expect(view.api.connect).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mode: 'interactive', autoReconnect: 'off' }))
-    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal), true)
+    expect(view.onConnected).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'off', expect.anything(), expect.any(String), expect.any(AbortSignal), false)
   })
 
   it('keeps a matching profile policy on ordinary live reuse while Keep Current preserves the target policy', async () => {
@@ -388,6 +388,66 @@ describe('saving connection details', () => {
     await pick(view, '#connect-name', 'Named now')
     await act(async () => view.button('Connect').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ displayName: 'Named now', environment: 'Production' }) }))
+  })
+
+  const aliasPair = () => {
+    const first = profile('First alias', 1, 'off'), second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
+    return [first, second] as const
+  }
+
+  it('saves other settings on a prefilled form as a new entry instead of overwriting the one it began from', async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], initial: saved.options })
+    await pick(view, '#connect-database', 'OtherDb')
+    await act(async () => view.button('Add favorite').click())
+    expect(view.saveConnectionProfile.mock.calls.at(-1)?.[0].id).toBeUndefined()
+  })
+
+  it('forgets label edits when the server changes, so Connect asks again for the new server', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Edited')
+    await pick(view, '#connect-server', 'server-2')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+  })
+
+  it('does not treat a name typed back to where it began as a change', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Edited')
+    await pick(view, '#connect-name', 'Off profile')
+    await act(async () => view.button('Connect').click())
+    expect(view.onConnected.mock.calls[0]?.[6]).toBe(false)
+  })
+
+  it('tracks the alias when Reconnect on startup is the first edit, and Connect saves to that alias', async () => {
+    const [first, second] = aliasPair(), view = await mount(undefined, { profiles: [first, second], initial: second.options })
+    await pick(view, '#connect-auto-reconnect', 'off')
+    await pick(view, '#connect-name', 'Renamed alias')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save changes to Second alias?')
+    await act(async () => promptButton('Cancel').click())
+    await act(async () => view.button('Connect').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: second.id, options: expect.objectContaining({ displayName: 'Renamed alias' }) }))
+  })
+
+  it('does not ask when only a password changed on a form that began unlike its entry', async () => {
+    const saved: ConnectionProfile = { ...profile('Saved name', 1, 'off'), options: { ...profile('Saved name', 1).options, authentication: 'sql', username: 'reader' } }
+    const view = await mount(undefined, { profiles: [saved], initial: { ...saved.options, displayName: 'Connection name' } })
+    await pick(view, '#connect-password', 'secret')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it('applies only the labels a save changed, keeping a connection-only environment', async () => {
+    const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], beforeRender: live(saved.options, { ...detailsOf(saved.options, 'off'), environment: 'Staging' }) })
+    await view.choose('Off profile')
+    await pick(view, '#connect-name', 'Renamed')
+    await act(async () => view.button('Save').click())
+    expect(view.connections.get(id(50))).toMatchObject({ displayName: 'Renamed', environment: 'Staging' })
   })
 
   it('tells Connect which details the user edited, so a reused connection takes them without asking again', async () => {

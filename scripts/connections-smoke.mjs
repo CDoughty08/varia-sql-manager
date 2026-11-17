@@ -65,7 +65,7 @@ const layout = dialog => dialog.evaluate((form, part) => {
   }
 }, part)
 /** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer.
- *  Reset and Save come first; Save, disabled while connecting, gives way to Connecting… instead. */
+ *  Reset and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
 const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(2).map(button => {
   const box = button.getBoundingClientRect()
   return [box.top, box.bottom, box.right].map(Math.round)
