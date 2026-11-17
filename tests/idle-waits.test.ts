@@ -199,6 +199,15 @@ describe('idle waits', () => {
     expect(plan({ cpus: 4 })).toEqual({ all: [{ chain: ['Type check', 'vitest'] }, { chain: [{ gate: 'Release build (.NET)', then: { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }, 'electron-vite build'] }] })
     expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Release backend', 'electron-vite build'])
   })
+  // GitHub's Windows runner starts the job below normal priority and the C# compiler server at normal priority: it took the
+  // runner's four vCPUs during the build and starved vitest's workers past the 20 s test timeout.
+  it('build without the shared compiler server on CI, so the compiler shares the job priority', async () => {
+    const { sharedCompilation, steps } = await import('../scripts/check.mjs')
+    expect(sharedCompilation({ CI: 'true' })).toBe(' -p:UseSharedCompilation=false')
+    expect(sharedCompilation({})).toBe('')
+    expect(steps['Release build (.NET)']).toMatch(/^dotnet build backend\/Varia\.Backend\.Tests\/Varia\.Backend\.Tests\.csproj /)
+    expect(steps['Release build (.NET)'].endsWith(sharedCompilation())).toBe(true)
+  })
   // VARIA_CHECK_SKIP=tsc used to skip nothing while the summary reported it skipped.
   it('refuse an unknown VARIA_CHECK_SKIP name and report only the lanes left out', async () => {
     const { parseSkip, plan, skippedNote } = await import('../scripts/check.mjs')
