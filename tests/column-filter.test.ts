@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, sameFilterFamily } from '../src/renderer/src/results/column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, rowsInView, sameFilterFamily, scrollToShow } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -40,6 +40,33 @@ describe('column filter', () => {
       expect(isNotNullFilter(kept)).toBe(false)
     }
   })
+  it('scrolls a row into view by the least move, below the top padding of the list, within the space and past it', () => {
+    const base = { rowHeight: 22, viewHeight: 220, pad: 2 }
+    // Within the space: a row in view needs no move; one below ends at the view's bottom, padding included; one above starts at the top.
+    expect(scrollToShow({ ...base, rows: 1000, row: 5, scrollTop: 0 })).toBeUndefined()
+    expect(scrollToShow({ ...base, rows: 1000, row: 9, scrollTop: 0 })).toBe(10 * 22 + 2 - 220)
+    expect(scrollToShow({ ...base, rows: 1000, row: 50, scrollTop: 22 * 60 })).toBe(50 * 22 + 2)
+    expect(scrollToShow({ ...base, rows: 1000, row: 0, scrollTop: 500 })).toBe(0)
+    // Past the space (mapped): the row lands wholly inside the view. At the scroll range's end the mapping leaves the last
+    // rows' bottoms up to the padding lower, as the list draws them.
+    const rows = 2_000_000, maxSpace = 1_000_000
+    for (const row of [10, 777_777, 1_234_567, rows - 1]) {
+      for (const from of [0, maxSpace - 220]) {
+        const scrollTop = scrollToShow({ ...base, rows, row, scrollTop: from, maxSpace })
+        const at = listWindow({ scrollTop: scrollTop ?? from, viewHeight: 220, rowHeight: 22, rows, overscan: 0, maxSpace })
+        const position = at.offset(row) + 2 - (scrollTop ?? from)
+        expect(position).toBeGreaterThanOrEqual(-1e-6)
+        expect(position + 22).toBeLessThanOrEqual(220 + (scrollTop === maxSpace - 220 ? 2 : 0) + 1e-6)
+      }
+    }
+  })
+
+  it('names the rows wholly in view, below the top padding', () => {
+    expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 0, pad: 2 })).toEqual({ first: 0, last: 8 })
+    expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 30, pad: 2 })).toEqual({ first: 2, last: 10 })
+    expect(rowsInView({ rows: 3, rowHeight: 22, viewHeight: 220, scrollTop: 0 })).toEqual({ first: 0, last: 2 })
+  })
+
   it('gives each row its own pixels within the space a browser lays out, and maps the scroll bar past it so every row stays reachable', () => {
     const near = listWindow({ scrollTop: 2200, viewHeight: 220, rowHeight: 22, rows: 1_000_000, overscan: 8 })
     expect(near.space).toBe(22_000_000)

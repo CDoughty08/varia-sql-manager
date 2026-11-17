@@ -94,6 +94,39 @@ export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight
   }
 }
 
+/**
+ * The scroll position that shows `row` of a virtual list (`listWindow`'s rows, below the list's top padding `pad`, which
+ * scrolls with them) by the least move: aligned to the top when it is above the view, to the bottom when below; undefined
+ * when it is already wholly in view. Past `maxSpace` the scroll bar spans the rows, so the position is the row's share of
+ * the scroll range.
+ */
+export function scrollToShow(o: { row: number; rows: number; rowHeight: number; viewHeight: number; scrollTop: number; pad?: number; maxSpace?: number }): number | undefined {
+  const { row, rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0, maxSpace = o.maxSpace ?? maxListSpace
+  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace })
+  const position = at.offset(row) + pad - scrollTop
+  if (position >= 0 && position + rowHeight <= viewHeight) return undefined
+  const above = position < 0
+  if (rows * rowHeight <= maxSpace) return Math.max(0, above ? (row === 0 ? 0 : row * rowHeight + pad) : (row + 1) * rowHeight + pad - viewHeight)
+  // Mapped: listWindow puts the row `top` rows down at scrollTop / (space - view) × (rows - view / rowHeight); the row
+  // wanted at the top, or the one whose bottom meets the view's bottom (less the padding above the rows), solves for it.
+  const range = Math.max(1, at.space - viewHeight), span = Math.max(1, rows - viewHeight / rowHeight)
+  const top = above ? row : row + 1 - (viewHeight - pad) / rowHeight
+  // Whole pixels: down for a row above (it starts at or below the top), up for one below (it ends at or above the bottom).
+  const exact = Math.max(0, top) / span * range
+  return Math.min(range, Math.max(0, above ? Math.floor(exact) : Math.ceil(exact)))
+}
+
+/** The rows of the list fully in view at a scroll position (with its top padding): the first and the last. */
+export function rowsInView(o: { rows: number; rowHeight: number; viewHeight: number; scrollTop: number; pad?: number; maxSpace?: number }): { first: number; last: number } {
+  const { rows, rowHeight, viewHeight, scrollTop } = o, pad = o.pad ?? 0
+  const at = listWindow({ scrollTop, viewHeight, rowHeight, rows, overscan: 0, maxSpace: o.maxSpace })
+  let first = at.first
+  while (first < rows - 1 && at.offset(first) + pad - scrollTop < 0) first++
+  let last = first
+  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight) last++
+  return { first, last }
+}
+
 /** The cached blocks to drop so at most `max` stay: the farthest from those in view (`first` to `last`), never one in view. */
 export function blocksToDrop(blocks: Iterable<number>, first: number, last: number, max: number): number[] {
   const held = [...blocks]

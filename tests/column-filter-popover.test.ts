@@ -153,6 +153,14 @@ describe('column filter popover', () => {
     expect(view.valueList().scrollTop).toBe(0)
     expect(view.list.tick).toHaveBeenLastCalledWith({ checked: false, groups: [0] })
     expect(view.activeRow()?.getAttribute('aria-label')).toBe('v00000 (1)')
+    // Focus coming back to the list (Tab, Down from the search) with its active row scrolled away takes the first row in
+    // view as the active one, so a screen reader has one to announce.
+    view.scrollTo(22 * 5000)
+    await view.settle()
+    act(() => { (view.dialog().querySelector('input[type="search"]') as HTMLInputElement).focus() })
+    act(() => view.valueList().focus())
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v05000 (1)')
+    expect(view.activeRow()?.getAttribute('aria-selected')).toBe('true')
     view.unmount()
   })
 

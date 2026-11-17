@@ -4,7 +4,7 @@ import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/c
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { trapFocus } from '../trap-focus'
-import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, maxListSpace, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, rowsInView, scrollToShow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -29,6 +29,8 @@ const overscan = 8
 const maxBlocks = 32
 /** The list's row height before the theme's `--varia-row` is read. */
 const fallbackRow = 22
+/** The list's top padding, which the rows start below. */
+const padOf = (element: HTMLElement) => parseFloat((element.ownerDocument.defaultView ?? window).getComputedStyle(element).paddingTop) || 0
 const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.text
 const message = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message : fallback
 
@@ -43,7 +45,7 @@ type RowPick = (row: number) => void
 function Row({ place, label, checked, disabled, className, onToggle, onPick, children }: {
   place: RowPlace; label: string; checked: boolean; disabled: boolean; className: string; onToggle(): void; onPick: RowPick; children: ReactNode
 }) {
-  return <div id={place.id} role="option" aria-checked={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
+  return <div id={place.id} role="option" aria-checked={checked} aria-selected={checked} aria-disabled={disabled || undefined} aria-posinset={place.row + 1} aria-setsize={place.rows} aria-label={label}
     className={'column-filter-item ' + className + (place.active ? ' active' : '')} style={{ top: place.top, height: place.height }}
     onMouseDown={event => { event.preventDefault(); onPick(place.row) }} onClick={() => { if (!disabled) onToggle() }}>
     <input type="checkbox" tabIndex={-1} aria-hidden="true" disabled={disabled} checked={checked} readOnly />
@@ -397,17 +399,18 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     const next = Math.max(0, Math.min(listRows - 1, row))
     setActive(next)
     if (!element) return
-    const height = element.clientHeight || viewHeight, top = element.scrollTop
-    // The rows start below the list's top padding, which scrolls with them.
-    const pad = parseFloat((element.ownerDocument.defaultView ?? window).getComputedStyle(element).paddingTop) || 0
-    const at = listWindow({ scrollTop: top, viewHeight: height, rowHeight, rows: listRows, overscan: 0 })
-    const position = at.offset(next) + pad - top
-    if (position >= 0 && position + rowHeight <= height) return
-    // Within the scroll space a row sits at its own pixels; past it (a mapped list) the scroll bar spans the rows.
-    const scroll = listRows * rowHeight <= maxListSpace ? (position < 0 ? (next === 0 ? 0 : next * rowHeight + pad) : (next + 1) * rowHeight + pad - height)
-      : Math.max(0, position < 0 ? next : next + 1 - height / rowHeight) / Math.max(1, listRows - height / rowHeight) * Math.max(1, at.space - height)
-    element.scrollTop = Math.max(0, scroll)
+    const scroll = scrollToShow({ row: next, rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element) })
+    if (scroll === undefined) return
+    element.scrollTop = scroll
     setScrollTop(element.scrollTop)
+  }
+  /** Focus entering the list (Down from the search, Tab) with its active row scrolled out of view makes the first row in
+   *  view the active one, so a screen reader has an option to announce. */
+  const listFocused = () => {
+    const element = viewport.current
+    if (!element || listRows === 0 || !summary) return
+    const inView = rowsInView({ rows: listRows, rowHeight, viewHeight: element.clientHeight || viewHeight, scrollTop: element.scrollTop, pad: padOf(element) })
+    if (active < inView.first || active > inView.last) setActive(inView.first)
   }
   /** Ticks or unticks the active row, as a click on it does, scrolling it into view first (the wheel may have moved it
    *  out); a row still being read has nothing to tick yet. */
@@ -461,7 +464,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
         list may stop drawing. */}
     <div ref={viewport} className="column-filter-list" role="listbox" aria-multiselectable="true" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
       tabIndex={summary && listRows > 0 ? 0 : -1} aria-activedescendant={summary && active >= firstRow && active < lastRow ? `${rowId}-${active}` : undefined}
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onKeyDown={listKeyDown}>
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onKeyDown={listKeyDown} onFocus={event => { if (event.target === event.currentTarget) listFocused() }}>
       {summary && <div className="column-filter-space" role="presentation" style={{ height: win.space }}>
         {rows.map(({ index: row, value }) => {
           const spot: RowPlace = { id: `${rowId}-${row}`, row, rows: listRows, active: row === active, top: win.offset(row), height: rowHeight }
@@ -470,7 +473,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
               <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
             </Row>
             : value ? <Item key={value.group} value={value} place={spot} checked={value.checked} disabled={!listing} onToggle={toggle} onPick={pick} />
-              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
+              : <div key={'row' + row} id={spot.id} role="option" aria-checked={false} aria-selected={false} aria-disabled="true" aria-label="Reading values…" aria-posinset={row + 1} aria-setsize={listRows}
                 className={'column-filter-item pending' + (spot.active ? ' active' : '')} style={{ top: spot.top, height: rowHeight }} />
         })}
       </div>}

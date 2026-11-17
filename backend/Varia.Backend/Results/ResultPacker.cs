@@ -285,9 +285,8 @@ internal sealed class ResultPacker : IDisposable
     /// waits, which ask again while they still have no room). A read that ends between two pages does not stop it; one
     /// that holds the result as a page is replaced stops the pass there (<see cref="ResultSetBuffer.Pack"/>), and the waits ask
     /// again once it ends.</summary>
-    private bool PackForRoom()
+    private void PackForRoom()
     {
-        var any = false;
         while (roomWanted && !stopping)
         {
             bool all;
@@ -301,7 +300,6 @@ internal sealed class ResultPacker : IDisposable
                 roomWanted = false;
             }
             Interlocked.Increment(ref roomPasses);
-            any = true;
             var candidates = store.Sets()
                 .Where(set => ForRoom(set, all, queries))
                 .Select(set => (Set: set, Hidden: visibility.IsHidden(set.ResultId, out _), Bytes: set.BytesStored))
@@ -332,7 +330,6 @@ internal sealed class ResultPacker : IDisposable
             if (candidates.Count == 0 || saved > 0) store.RoomChanged();
             if (candidates.Count == 0 || saved == 0) break;
         }
-        return any;
     }
 
     /// <summary>Whether packing the set could make room for these queries: complete, not live, not packed yet, of
