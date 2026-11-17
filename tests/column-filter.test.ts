@@ -65,6 +65,9 @@ describe('column filter', () => {
     expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 0, pad: 2 })).toEqual({ first: 0, last: 8 })
     expect(rowsInView({ rows: 1000, rowHeight: 22, viewHeight: 220, scrollTop: 30, pad: 2 })).toEqual({ first: 2, last: 10 })
     expect(rowsInView({ rows: 3, rowHeight: 22, viewHeight: 220, scrollTop: 0 })).toEqual({ first: 0, last: 2 })
+    // At the mapped scroll range's end the last row, ending in the bottom padding, still counts as in view.
+    const rows = 2_000_000, maxSpace = 1_000_000
+    expect(rowsInView({ rows, rowHeight: 22, viewHeight: 220, scrollTop: maxSpace - 220, pad: 2, maxSpace }).last).toBe(rows - 1)
   })
 
   it('gives each row its own pixels within the space a browser lays out, and maps the scroll bar past it so every row stays reachable', () => {

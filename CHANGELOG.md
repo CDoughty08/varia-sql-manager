@@ -4,7 +4,7 @@
 
 ### New and improved
 
-- **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl+click, and Filter for Selected Values (and Exclude Selected Values or Filter Between) adds one filter per column from the cells selected in it; a row must match in every column.
+- **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl+click, and Filter for Selected Values (and Exclude Selected Values or Filter Between) adds one filter per column from the cells selected in it, and a row must pass every column's filter.
 - **A keyboard-driven column filter list:** In the list Alt+Down opens, Down moves from the search into the values, the arrow keys, Page Up, Page Down, Home and End move through them, Space ticks or unticks one and Enter filters. Screen readers hear it as a list of checkable options.
 
 ### Fixes

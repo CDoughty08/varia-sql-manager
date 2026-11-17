@@ -431,7 +431,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     else if (event.key === ' ') { event.preventDefault(); toggleActive() }
     else if (event.key === 'Enter') { event.preventDefault(); void apply() }
   }
-  const pick = useCallback<RowPick>(row => { setActive(row); viewport.current?.focus({ preventScroll: true }) }, [])
+  // Focus first: focusing the list from elsewhere runs listFocused, which may pick the first row in view; the clicked row wins.
+  const pick = useCallback<RowPick>(row => { viewport.current?.focus({ preventScroll: true }); setActive(row) }, [])
 
   return createPortal(<form ref={card} className="column-filter" role="dialog" aria-labelledby={titleId} style={place}
     onKeyDown={keyDown} onSubmit={event => { event.preventDefault(); void apply() }}>

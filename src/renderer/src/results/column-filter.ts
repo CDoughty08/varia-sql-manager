@@ -123,7 +123,8 @@ export function rowsInView(o: { rows: number; rowHeight: number; viewHeight: num
   let first = at.first
   while (first < rows - 1 && at.offset(first) + pad - scrollTop < 0) first++
   let last = first
-  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight) last++
+  // The last row may end in the bottom padding: the mapped scroll range's end leaves it there (scrollToShow).
+  while (last + 1 < rows && at.offset(last + 1) + pad - scrollTop + rowHeight <= viewHeight + (last + 2 === rows ? pad : 0)) last++
   return { first, last }
 }
 

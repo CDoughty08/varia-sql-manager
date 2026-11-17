@@ -164,6 +164,23 @@ describe('column filter popover', () => {
     view.unmount()
   })
 
+  it('makes a clicked row the active one when the click brings focus to the list', async () => {
+    const view = fixture()
+    await view.settle()
+    // Focus is in the search and row 0 is active; the wheel scrolls it away, then a row in view is clicked.
+    act(() => { (view.dialog().querySelector('input[type="search"]') as HTMLInputElement).focus() })
+    view.scrollTo(22 * 5000)
+    await view.settle()
+    const row = view.checkboxes().find(option => option.getAttribute('aria-label') === 'v05003 (1)')!
+    act(() => { row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+    act(() => row.click())
+    await view.settle()
+    expect(document.activeElement).toBe(view.valueList())
+    expect(view.activeRow()?.getAttribute('aria-label')).toBe('v05003 (1)')
+    expect(view.list.tick).toHaveBeenLastCalledWith({ checked: false, groups: [5003] })
+    view.unmount()
+  })
+
   it('applies nothing when the popover is gone before its last tick is answered, and closes its snapshot', async () => {
     const view = fixture()
     await view.settle()
