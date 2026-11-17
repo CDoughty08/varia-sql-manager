@@ -473,6 +473,44 @@ const remapped = (platform: Platform) => {
 }
 const f9 = (platform: Platform) => key('F9', 'F9', { ...mod(platform), shift: true })
 
+describe('key hooks for Peek', () => {
+  it('hands every press to keyDown first, consumed or not, and a lost window focus to blur, and consumes nothing for them', () => {
+    const pressed: string[] = [], blurred = vi.fn()
+    const execute = vi.fn<CommandService['execute']>(async () => true)
+    const keybindings = new KeybindingService({
+      platform: 'win32', commands: { execute }, context: { get: () => contextRecord('win32', {}) }, modalOpen: () => false, editorHasTextFocus: () => false,
+      keyDown: event => { pressed.push(event.key + (event.repeat ? ' (repeat)' : '')) }, blur: blurred
+    })
+    const control = key('ControlLeft', 'Control')
+    keybindings.handleKeyDown(control)
+    expect(control.consumed).toBe(false)
+    keybindings.handleKeyDown(key('ControlLeft', 'Control', { ctrl: true, repeat: true }))
+    // A key a rule consumes (Ctrl+N) and one a handler already took still reach it.
+    const newQuery = letter('n', 'win32')
+    keybindings.handleKeyDown(newQuery)
+    keybindings.handleKeyDown(key('KeyA', 'a', { defaultPrevented: true }))
+    expect(newQuery.consumed).toBe(true)
+    expect(pressed).toEqual(['Control', 'Control (repeat)', 'n', 'a'])
+    const target = new EventTarget(), attached = keybindings.attach(target)
+    target.dispatchEvent(new Event('blur'))
+    expect(blurred).toHaveBeenCalledTimes(1)
+    attached.dispose()
+    target.dispatchEvent(new Event('blur'))
+    expect(blurred).toHaveBeenCalledTimes(1)
+  })
+  it('keeps dispatching when a hook throws', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const execute = vi.fn<CommandService['execute']>(async () => true)
+    const keybindings = new KeybindingService({
+      platform: 'win32', commands: { execute }, context: { get: () => contextRecord('win32', {}) }, modalOpen: () => false, editorHasTextFocus: () => false,
+      keyDown: () => { throw new Error('hook') }
+    })
+    keybindings.handleKeyDown(letter('n', 'win32'))
+    expect(execute).toHaveBeenCalledWith('file.new', undefined, 'keybinding')
+    errors.mockRestore()
+  })
+})
+
 describe('keybinding rules at run time', () => {
   it.each(platforms)('swaps every table, label and listener at once with setRules on %s', platform => {
     const { press, ran, keybindings } = service(platform)

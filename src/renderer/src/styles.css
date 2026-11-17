@@ -2986,3 +2986,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
    the whole button, so its focus ring stays at full strength. */
 .compare-foot button[aria-disabled="true"], .compare-foot button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }
+/* Object Explorer: a server dragged to a new place shows where it drops; Peek on Hover's modifier held shows the peek cursor. */
+.explorer-row[data-drop="before"] { box-shadow: inset 0 2px 0 var(--varia-focusBorder); }
+.explorer-row[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--varia-focusBorder); }
+.explorer-tree[data-peek-armed] .explorer-row[data-peekable], .explorer-tree[data-peek-armed] .explorer-row[data-peekable] * { cursor: zoom-in; }

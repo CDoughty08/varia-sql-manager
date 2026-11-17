@@ -797,6 +797,18 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
+  // Ctrl pressed with the pointer already resting on the row peeks at once, with no move, and shows the peek cursor until
+  // it goes up; the open card stays, so the pointer can move into it.
+  await peekRow.locator(part.explorerRowText).first().hover({ position: { x: 8, y: 4 } })
+  await expect(peekRow).toHaveCSS('cursor', 'default')
+  await page.keyboard.down(peekKey)
+  await expect(peekCard).toBeVisible()
+  await expect(peekRow).toHaveCSS('cursor', 'zoom-in')
+  await page.keyboard.up(peekKey)
+  await expect(peekRow).toHaveCSS('cursor', 'default')
+  await expect(peekCard).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeHidden()
   // 8c. View Dependencies: the menu opens Object Dependencies on the table. Its tree reads the root's level at once and a node's
   // only when it expands, marks the table met again below its view as a cycle, and the other choice starts again from the root.
   await peekRow.click({ button: 'right' })
@@ -832,7 +844,7 @@ try {
   await expect(tree()).toBeFocused()
   expect((await active())?.label).toBe('dbo.Orders')
   console.log('Object Explorer checks: View Dependencies opens Object Dependencies from the menu, reads a level as a node expands, marks a cycle and another database, switches its choice, and Enter selects the node in Object Explorer.')
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu, Ctrl+hover and Ctrl pressed over a resting pointer (with the peek cursor while Ctrl is held), shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -1936,7 +1948,11 @@ try {
     else await button.click({ button: 'right' })
     await expect(menu('Object Explorer')).toBeVisible()
     expect(await menuItemNames(menu('Object Explorer'))).toEqual(fullServerMenu)
-    expect(await menuItemNames(menu('Object Explorer'), { disabled: true })).toEqual(disabledServerItems)
+    // Move Up and Move Down follow the shortcut's own server (pin-a is first, pin-f last), not the selected row.
+    const moves = ['Move Up', 'Move Down']
+    const disabled = await menuItemNames(menu('Object Explorer'), { disabled: true })
+    expect(disabled.filter(name => !moves.includes(name))).toEqual(disabledServerItems.filter(name => !moves.includes(name)))
+    expect(disabled.filter(name => moves.includes(name))).toEqual(server === 'pin-a' ? ['Move Up'] : server === 'pin-f' ? ['Move Down'] : [])
     if (overflow) await expect(overflow).toBeHidden()
     if (keyboard && overflow) {
       const invoker = await restore.boundingBox(), opened = await menu('Object Explorer').boundingBox()
