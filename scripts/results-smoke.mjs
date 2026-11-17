@@ -2130,7 +2130,7 @@ try {
   await cell(0, 0).click()
   await page.keyboard.press('Alt+ArrowDown')
   await funnel('id').getByRole('combobox', { name: 'Condition', exact: true }).selectOption({ label: 'Between' })
-  await expect(funnel('id').getByRole('option').first()).toBeDisabled()
+  await expect(funnel('id').getByRole('listbox', { name: 'Values', exact: true }).getByRole('option').first()).toBeDisabled()
   await funnel('id').getByRole('combobox', { name: 'Lowest value', exact: true }).selectOption({ label: '2' })
   await funnel('id').getByRole('combobox', { name: 'Highest value', exact: true }).selectOption({ label: '13' })
   await funnel('id').getByRole('button', { name: 'OK', exact: true }).click()
