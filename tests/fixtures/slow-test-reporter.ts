@@ -32,7 +32,7 @@ export default class SlowTestReporter implements Reporter {
   onInit(): void {
     if (!process.env.CI) return
     // Which processes hold the CPU early in the check, when vitest workers stall.
-    const ps = "Get-Counter '\Process(*)\% Processor Time' -SampleInterval 2 -MaxSamples 1 | ForEach-Object { $_.CounterSamples } | Sort-Object CookedValue -Descending | Select-Object -First 14 | ForEach-Object { '{0} {1:N0}' -f $_.InstanceName, $_.CookedValue }"
+    const ps = 'Get-Process | Sort-Object CPU -Descending | Select-Object -First 16 | ForEach-Object { $_.Name + " " + [math]::Round($_.CPU, 1) + "s " + $_.PriorityClass }'
     for (const at of [12, 25, 35, 45]) setTimeout(() => {
       const since = ((Date.now() - (this.checkStarted ?? Date.now())) / 1000).toFixed(1)
       if (process.platform === 'win32') execFile('powershell', ['-NoProfile', '-Command', ps], (error, out) => this.diag.push(`processes at ${since} s: ${error ? error.message : out.trim().split(/\r?\n/).join(' | ')}`))
