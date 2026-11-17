@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
+  dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 
@@ -1533,7 +1533,7 @@ try {
     await expect(peekEditorWidgetHosts(popout)).toHaveCount(0)
     await expect(peekEditorWidgetHosts(page)).toHaveCount(0)
     console.log('Object Explorer checks: Peek in a popped-out Object Explorer stacks Properties under the definition in a slim window, whose editor, made in that window, copies, takes focus and finds.')
-    await popoutDockButton(popout).click()
+    await dockPopoutBack(popout)
     await expect(tree()).toBeVisible()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')
     await expect(objectSearchBox(page)).toHaveCount(0)

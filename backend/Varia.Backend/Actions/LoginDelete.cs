@@ -73,12 +73,15 @@ internal sealed partial class ActionService
         var databases = new List<ScannedDatabase>(listed.Count);
         var mapped = 0;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+        // The clock decides whether the next database is read; the token, which a timer thread cancels some time after the budget
+        // passes (on a busy machine, after a quick database or two even with no budget), only stops a read already running.
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         limit.CancelAfter(budget);
         foreach (var (name, readOnly, canDrop) in listed)
         {
             var found = new List<T>();
             var read = false;
-            if (!limit.IsCancellationRequested)
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) < budget && !limit.IsCancellationRequested)
             {
                 try
                 {

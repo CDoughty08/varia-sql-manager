@@ -13,6 +13,7 @@ import { electron, expect, within } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
 import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
 import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryBarButton, queryServer, querySession, toolbarButton } from './ui.mjs'
+import { parseCalls } from './call-log.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
 
@@ -39,7 +40,7 @@ const messages = application => application.evaluate(() => globalThis.variaPromp
 const titles = application => application.evaluate(() => globalThis.variaPrompts.map(prompt => prompt.title))
 const lastPrompt = application => application.evaluate(() => globalThis.variaPrompts.at(-1))
 const answerNext = (application, ...labels) => application.evaluate((_electron, queued) => { globalThis.variaAnswers.push(...queued) }, labels)
-const calls = async (control, method) => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method)
+const calls = async (control, method) => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method)
 // These are repeated user quits, each cancellable. Electron's POSIX SIGTERM handler restores SIG_DFL after its first signal.
 const quit = application => application.evaluate(({ app }) => { setImmediate(() => app.quit()) })
 

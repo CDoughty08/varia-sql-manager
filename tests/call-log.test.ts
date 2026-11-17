@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { completeLines, parseCalls } from '../scripts/fixtures/call-log.mjs'
 
@@ -27,5 +27,12 @@ describe('the smoke suites\' call log reader', () => {
     expect(source).toContain("import { parseCalls } from './fixtures/call-log.mjs'")
     expect(source).toContain("const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))")
     expect(source).not.toMatch(/calls\.jsonl.*JSON\.parse/)
+  })
+
+  // ssis-operations-smoke and options-smoke split calls.jsonl themselves and failed the same way.
+  it('is how every smoke suite and fixture parses a log split into lines', () => {
+    const offenders = ['scripts', 'scripts/fixtures'].flatMap(folder => readdirSync(folder).filter(name => name.endsWith('.mjs')).map(name => `${folder}/${name}`))
+      .filter(path => /split\((['"])\\n\1\)[^\n]*JSON\.parse/.test(readFileSync(path, 'utf8')))
+    expect(offenders).toEqual([])
   })
 })

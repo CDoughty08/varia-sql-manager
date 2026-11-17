@@ -11,6 +11,7 @@ import { electron, expect, within } from './smoke.mjs'
 import { actionsStubData, installActionsStub } from './actions-stub.mjs'
 import { expandExplorerPath, explorerRow, revealExplorerRow } from './explorer-tree.mjs'
 import { anyResultGrid, backendReady, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
+import { parseCalls } from './call-log.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -169,7 +170,7 @@ export async function dialogLifecycle(launchOptions) {
     // A double-click on Restart (or the command twice) asks once and starts one backend; the count is taken when the
     // prompt's turn comes.
     const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').length
-    const executions = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === 'query.execute').length
+    const executions = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8')).filter(call => call.method === 'query.execute').length
     const before = await spawns()
     const queriesBeforeRestart = await executions()
     expect(await page.evaluate(() => Promise.all([window.varia.restartBackend(), window.varia.restartBackend()]))).toEqual([{ ok: true, value: true }, { ok: true, value: true }])
@@ -422,7 +423,7 @@ const observeRecovery = (application, file) => application.evaluate(({ app, Brow
     app.off('browser-window-created', replacement)
   }
 }, file)
-const recoveryRecords = async file => (await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const recoveryRecords = async file => parseCalls(await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error }))
 /** Same-window reload needs Chromium's report; replacement must occur while only the watchdog knows the process died. */
 function recoveryReplaced(records, source) {
   const replaced = records[0]?.kind === 'replacement'
