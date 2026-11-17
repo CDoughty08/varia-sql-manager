@@ -10,6 +10,11 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
   and runs the whole document (`QueryBar.tsx`).
 - **Zoom.** Ctrl+wheel over the editor (Cmd+wheel also works on macOS) enlarges or shrinks the text in every editor tab
   for this session. The **View** menu's zoom commands resize the whole workbench.
+- **Documents without query output.** Activity Monitor, Properties, Table Designer, New Database, the SSIS pages and
+  values opened from the results have no query output, so while one is active the Results, Messages and Execution plan
+  panels docked below the editor hide and it fills the area. They come back at their size when a query is active.
+  Output panels you moved elsewhere, floated or put in their own window stay where they are. **Window › Results** or
+  **Toggle Results Pane** (Ctrl+R) shows the docked panels over such documents until a query is active again.
 - **Status bar.** Click **Ln/Col** to go to a line, or **INS/OVR** to switch between insert and overtype mode.
 - **SSMS query shortcuts.** SSMS's Alt+F1 `sp_help`, Ctrl+1 `sp_who` and Ctrl+2 `sp_lock` are the palette commands
   **New Query with sp_help**, **New Query with sp_who** and **New Query with sp_lock**. Each opens a new query on the

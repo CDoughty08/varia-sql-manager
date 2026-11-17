@@ -221,6 +221,26 @@ export function dockReference<T extends { readonly id: string; readonly location
  * The layout without hidden-header state. Which headers hide follows `hidesHeader`, not the layout, so a saved or exported
  * layout leaves it out and shows the same panels however Panel Tabs is set when it is loaded.
  */
+/**
+ * `layout` with the hidden grid group `groupId` visible again at the size it had (Dockview saves that size), taken back from
+ * its largest visible sibling, which had been given the space: the layout as it was before the group was hidden.
+ */
+export function withGroupShown(layout: WorkspaceLayout, groupId: string): WorkspaceLayout {
+  type Item = { type?: string; data?: unknown; size?: number; visible?: boolean }
+  const copy = JSON.parse(JSON.stringify(layout)) as { grid: { root: Item } }
+  const branch = (item: Item): boolean => {
+    if (item?.type !== 'branch' || !Array.isArray(item.data)) return false
+    const children = item.data as Item[]
+    const leaf = children.find(child => child?.type === 'leaf' && (child.data as { id?: unknown } | undefined)?.id === groupId && child.visible === false)
+    if (!leaf) return children.some(branch)
+    delete leaf.visible
+    const sibling = children.filter(child => child !== leaf && child.visible !== false && typeof child.size === 'number').sort((a, b) => b.size! - a.size!)[0]
+    if (sibling && typeof leaf.size === 'number') sibling.size = Math.max(0, sibling.size! - leaf.size)
+    return true
+  }
+  branch(copy.grid.root)
+  return copy as unknown as WorkspaceLayout
+}
 export function withoutHeaderState(layout: WorkspaceLayout): WorkspaceLayout {
   const copy = JSON.parse(JSON.stringify(layout)) as { grid: { root: unknown }; floatingGroups?: { data?: Record<string, unknown>; grid?: { root: unknown } }[] }
   const node = (value: unknown): void => {
