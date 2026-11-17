@@ -976,8 +976,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Room for a query.** A query row its half or the global budget refuses waits (≤ 10 s a wait,
   `ResultStore.RoomWaitMs`; 4 waits a row, `SqlService.MaxRoomWaits`; 30 s a query, `SqlService.MaxRoomWaitMs`; never
   a live table's or a derived set's row) while the packer packs other unheld complete results of 1 MiB or more on the
-  results' workers (any query's for the global budget, only the query's own when its own half is full), except one the
-  user is working with (shown with an open view, or unpacked and still used by an operation); then it retries, or the query is truncated.
+  results' workers (any query's for the global budget, only the query's own when its own half is full), except one an
+  operation unpacked and still uses; then it retries, or the query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
   reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
@@ -2371,6 +2371,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 - **The packed sort** stores 1,000,000 W1 rows packed (`debug.results.synthesize`'s test-only `pack`), reports the
   result shown, sorts it three times and reads the budget: a sort reads packed pages in place, so the budget may grow
   only by the view's order, never by an unpack ([page-compression-findings.md](page-compression-findings.md#stage-2-as-built)).
+- **The view tiles** sort 1,000,000 W1 rows stored raw, then packed, and read 300 random 128-row tiles of the view (the
+  grid's tile) through main's supervisor and the stream: the p99 of each, packed and raw. What a sorted grid on screen
+  pays for being packed.
 - **The live snapshot churn** runs main's live path with a worker stand-in that acknowledges each frame at once:
   `debug.synthetic.wide` stores 5,000 rows of 23 typed columns every 10 ms if it can, each revision owned, retired,
   forgotten and released one at a time, for 5 s. It reports revisions a second and backend gen2 collections per revision

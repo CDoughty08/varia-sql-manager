@@ -83,6 +83,41 @@ it('sorts a packed shown result without unpacking it', async () => {
   }
 })
 
+// What a sorted grid pays for a read when its result is packed: the grid reads 128-row tiles (gridLimits.tileRows), and a
+// sorted view's tile takes its rows from pages all over the result, so packed each read decompresses a page or so a row.
+// Measured through main's supervisor, the backend's view read and the stream, at random tiles of a 1,000,000-row view.
+it('reads the 128-row tiles of a sorted view from a packed result and a raw one', async () => {
+  const tile = 128, reads = 300, rows = 1_000_000
+  const latencies = async (pack: boolean) => {
+    const descriptor = await supervisor.request('debug.results.synthesize', { shape: 'W1', rows, pack }) as ResultDescriptor
+    try {
+      await supervisor.request('results.visibility', { source: crypto.randomUUID(), seq: 1, visible: [descriptor.resultId] })
+      const view = await supervisor.request('results.view', { resultId: descriptor.resultId, sort: [{ column: 3, descending: true, mode: 'value' }] })
+      const sink = { data: () => undefined }
+      const read = (firstRow: number) => supervisor.request('results.read', { resultId: descriptor.resultId, firstRow, maxRows: tile, viewId: view.viewId }, { stream: sink, credit: 64 * MiB })
+      let seed = 7
+      const next = () => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return Math.floor(seed / 2 ** 31 * (rows / tile)) * tile }
+      for (let i = 0; i < 20; i++) await read(next())
+      const times: number[] = []
+      for (let i = 0; i < reads; i++) {
+        const started = performance.now()
+        const answer = await read(next())
+        times.push(performance.now() - started)
+        expect(answer.rows).toBe(tile)
+      }
+      return times
+    } finally {
+      await supervisor.request('results.close', { resultIds: [descriptor.resultId] })
+    }
+  }
+  const raw = await latencies(false), packed = await latencies(true)
+  const detail = (times: number[], other: number[], name: string) => `${reads} random tiles of a sorted 1,000,000-row W1 view; p50 ${median(times).toFixed(2)} ms, max ${Math.max(...times).toFixed(1)} ms; ${name} p50 ${median(other).toFixed(2)} ms, p99 ${percentile(other, 99).toFixed(2)} ms`
+  record(
+    { id: 'node.viewTile.packedP99Ms', value: percentile(packed, 99), unit: 'ms', detail: detail(packed, raw, 'raw') },
+    { id: 'node.viewTile.rawP99Ms', value: percentile(raw, 99), unit: 'ms', detail: detail(raw, packed, 'packed') }
+  )
+})
+
 it('round-trips system.health between main and the backend', async () => {
   for (let i = 0; i < 300; i++) await supervisor.request('system.health', {})
   const samples: number[] = []

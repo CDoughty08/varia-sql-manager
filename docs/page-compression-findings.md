@@ -53,18 +53,19 @@ minute. Hidden results keep 5 s.
   packed: the result shows as `partial` in the Memory panel and falls due again 30 s later. Plain reads never unpack a
   result whole. Each operation that unpacks it whole (see [Operations that unpack first](#operations-that-unpack-first))
   doubles the wait, up to eight times as long (`MaxBackoff` = 3 doublings, 4 minutes).
-- **A sorted or filtered grid is not packed while shown, and never unpacked for its view.** A view's screen reads its
-  rows' pages in the view's order, a page or so a row: about 4.5 ms a 256-row screen packed against 0.9 ms raw on 16
-  workers (p99 25 ms against 7 ms). So a shown result with an open view is not packed while idle (a hidden one is), but
-  one already packed when its grid is sorted or filtered, or shown again with a view open, stays packed: the sort reads
-  it fused and its screens read the packed pages. Unpacking it whole for its view would give the budget back the raw
-  bytes (131 MiB for a 256 MiB `orders` result) for screens a few milliseconds faster. Closing its last view wakes the
-  policy. `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a
-  packed shown result grows the budget by more than its view's order.
+- **A sorted or filtered grid is packed like any other, and never unpacked for its view.** A view reads its rows' pages
+  in the view's order, a page or so a row. The grid reads 128-row tiles: through main, a random tile of a sorted
+  1,000,000-row view takes about 3.1 ms packed against 0.5 ms raw (p99 7.0 against 1.3 ms, `node.viewTile.*`). The grid
+  prefetches two views either way once scrolling pauses and reads nothing during a fast scroll until it settles, so
+  scrolling rarely waits on it and a jump pays one or two tiles. A shown result with an open view is packed once idle,
+  and the sort reads a packed result fused and its screens read the packed pages. Unpacking it whole for its view would
+  give the budget back the raw bytes (131 MiB for a 256 MiB `orders` result) for tiles a few milliseconds faster.
+  `node.packedSort.budgetGrowthMb` (`npm run bench`, floor in `tests/bench/floors.json`) fails if sorting a packed shown
+  result grows the budget by more than its view's order.
 - **Value lists do not keep a result raw.** A distinct snapshot keeps its result's pages, not their bytes, so its later
   reads go through packed pages.
 - **Candidates are asked again** before a pass starts and before each page: one the user began to work with meanwhile
-  (a view opened, an operation's unpack) is left alone.
+  (an operation holds it or has unpacked it) is left alone.
 
 ### Room for a query
 
@@ -73,8 +74,8 @@ When the budget refuses a query's row (its half or the global budget) and someth
 wait, 4 waits a row, 30 s in all for the query) while the policy packs at once, at normal priority, on the workers'
 gate (`ViewSorter.Gate`, a page an item, sharing threads fairly with sorts and reads). It packs complete, unheld results
 of 1 MiB or more that could make room: any query's for the global budget, only the query's own when its half is full;
-hidden first, then largest, until no query waits. It ignores the idle delays but never takes a shown result with an
-open view or one an operation unpacked and still uses. While a row waits, the rows committed before it are not yet
+hidden first, then largest, until no query waits. It ignores the idle delays but never takes one an operation unpacked
+and still uses. While a row waits, the rows committed before it are not yet
 sealed. With nothing to pack, or once the waits run out, the row is refused and the query truncated as before. Stored
 rows are never dropped, and a stop is never undone: stored rows stay a prefix of the rows read.
 

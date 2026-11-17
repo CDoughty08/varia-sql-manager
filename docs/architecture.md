@@ -275,13 +275,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). A shown result with an open view is not packed while idle; one packed before its
-    view, or shown again with one, stays packed (its sort and screens read the packed pages; a view never unpacks a
-    result whole, `node.packedSort.budgetGrowthMb`), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+    saving under a tenth stays raw). An open view (a sorted or filtered grid) does not prevent packing, nor does an open
+    distinct snapshot: their sorts and screens read the packed pages, and a view never unpacks a result whole
+    (`node.packedSort.budgetGrowthMb`, `node.viewTile.packedP99Ms`).
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
-    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
+    of an operation that unpacked it (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
     held, released or the service disposed.
   - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
     at once and counts toward `CollectNow`'s next collection, never a compacting one.
@@ -290,7 +290,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`; rows committed before the waiting row
     are sealed only once it ends) while the
     policy packs at normal priority on the workers' gate the complete, unheld results of 1 MiB or more that could make
-    room, never one the user is working with (a shown result with an open view, or one an operation unpacked and still uses)
+    room, never one an operation unpacked and still uses
     (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
     With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
