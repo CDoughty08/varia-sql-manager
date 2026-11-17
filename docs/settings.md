@@ -280,7 +280,7 @@ A property grid: True/False lists, values that differ from their default in bold
 
 What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
 
-Sections: **New monitors** (What a new Activity Monitor starts with), **Thresholds** (When the overview tiles warn).
+Sections: **New monitors**, **Thresholds** (When the overview tiles warn).
 
 | Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

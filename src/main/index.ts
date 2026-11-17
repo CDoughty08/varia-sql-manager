@@ -59,7 +59,7 @@ import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMe
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { installPermissionHandlers } from './permissions'
-import { PopoutWindows } from './popout-windows'
+import { PopoutWindows, settledNativeTheme } from './popout-windows'
 import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
@@ -515,6 +515,7 @@ const menuBridge = new NativeMenuBridge({
   build: () => Menu.buildFromTemplate(applicationMenuTemplate({
     theme: appearance.state, title: menuTitle, recentFiles: recentFilesMenuModel(recent.list(settings.current()['environment.recentFiles.count']), process.platform), rules: shortcutRules()
   }, menuActions, process.platform)),
+  // Never while a child window is closing: Electron can crash setting the menu on a window it is tearing down.
   install: menu => Menu.setApplicationMenu(menu)
 })
 
@@ -536,8 +537,6 @@ function applyWindowChrome(): void {
   if (process.platform !== 'darwin') {
     try { window.setTitleBarOverlay(chrome.overlay) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
   }
-  // Dialog windows keep the active title bar's colors: their own focus is not tracked.
-  popouts.chrome(windowChromeFor(previewTheme ?? appearance.state.active).overlay)
 }
 
 /** Drops any preview, including one still being resolved, and shows the active theme's chrome again. */
@@ -867,7 +866,7 @@ app.whenReady().then(async () => {
   connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
-  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
+  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme: settledNativeTheme(nativeTheme, popouts) })
   await appearance.initialize()
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())

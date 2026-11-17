@@ -117,6 +117,7 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
  */
 export function DialogHeading({ id, title, closeLabel, disabled, onClose }: { readonly id: string; readonly title: string; readonly closeLabel: string; readonly disabled?: boolean; readonly onClose: () => void }) {
   const { inWindow, platform } = useDialogWindow()
-  if (inWindow) return <div className="dialog-titlebar" data-platform={platform}><h2 id={id}>{title}</h2></div>
+  // macOS's traffic lights sit in the title bar; elsewhere the window is frameless and the page draws its close button.
+  if (inWindow) return <div className="dialog-titlebar" data-platform={platform}><h2 id={id}>{title}</h2>{platform !== 'darwin' && <button type="button" className="dialog-window-close" aria-label={closeLabel} disabled={disabled} onClick={onClose}><Icon name="close" /></button>}</div>
   return <div className="connection-heading"><h2 id={id}>{title}</h2><button type="button" className="icon-button" aria-label={closeLabel} disabled={disabled} onClick={onClose}><Icon name="close" /></button></div>
 }

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent, resizeWindow } from './fixtures/window-resize.mjs'
-import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator, expectEditorShown } from './fixtures/ui.mjs'
+import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator, expectEditorShown, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'options-resize-profile-'))
@@ -15,7 +15,8 @@ let stage = 'launch'
 const failures = []
 const watchdog = setTimeout(() => { console.error('Options resize regression exceeded two minutes.'); application?.process()?.kill(); process.exitCode = 1 }, 120000)
 const tools = () => page.getByRole('menu', { name: 'Tools', exact: true })
-const options = () => page.getByRole('dialog', { name: 'Options', exact: true })
+// Options opens in a dialog window of its own: none is open while the application has only its main window.
+const optionsOpen = () => application.windows().length > 1
 const text = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
 const openTools = async () => {
   await editorTextbox(page).focus()
@@ -63,7 +64,7 @@ try {
   await expect(tools()).toHaveCount(0)
   await page.keyboard.press('o')
   await expect.poll(text).toContain('o')
-  await expect(options()).toHaveCount(0)
+  expect(optionsOpen()).toBe(false)
   console.log('Options resize regression reproduced: delayed resize dismisses Tools and sends O to the editor.')
 
   stage = 'verify resize event barrier'
@@ -80,10 +81,12 @@ try {
   await expect(memoryBreakdown(page)).toBeVisible()
   await openTools()
   await page.keyboard.press('o')
-  await expect(options()).toBeVisible()
-  await expect(memoryBreakdown(page)).toBeHidden()
-  await options().getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(options()).toHaveCount(0)
+  const optionsWindow = await dialogWindow(application, 'Options')
+  const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
+  await expect(options).toBeVisible()
+  await options.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await dialogClosed(optionsWindow, 'Options')
+  await expect.poll(optionsOpen).toBe(false)
   await expect.poll(text).toBe('SELECT 1')
   // Repeating the same size has no native event and must still complete.
   stage = 'verify same-size completion'

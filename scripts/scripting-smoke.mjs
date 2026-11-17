@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf, expectEditorShown, dialogClosed, dialogWindow, pressToClose } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -44,7 +44,10 @@ async function menu(id) {
   }, id)
 }
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
-const dialog = () => page.getByRole('dialog', { name: 'Options', exact: true })
+// Tools › Options opens in a dialog window of its own (popouts/DialogWindow.tsx): the page of that window while it is open.
+let options
+const dialog = () => options.getByRole('dialog', { name: 'Options', exact: true })
+const closed = () => dialogClosed(options, 'Options')
 const option = label => dialog().getByLabel(label, { exact: true })
 const stored = () => readFile(settingsFile, 'utf8').then(JSON.parse, () => null)
 const scriptingKey = key => 'objectExplorer.scripting.' + key
@@ -62,6 +65,8 @@ async function openOptions({ keyboard = !mac } = {}) {
     await expect(tools.getByRole('menuitem', { name: 'Options…', exact: true })).toBeFocused()
     await page.keyboard.press('o')
   } else await menu('preferences.options')
+  options = await dialogWindow(application, 'Options')
+  options.setDefaultTimeout(15000)
   await expect(dialog()).toBeVisible()
   const heading = optionsHeading(dialog())
   if (await heading.textContent() !== 'SQL Server Object Explorer › Scripting') {
@@ -72,7 +77,7 @@ async function openOptions({ keyboard = !mac } = {}) {
   await option('Delimit individual statements').focus()
 }
 /** Where the dialog lies in the window, and whether the page itself overflows. */
-const layout = () => page.evaluate(pageList => {
+const layout = () => options.evaluate(pageList => {
   const box = document.querySelector('[role="dialog"]').getBoundingClientRect(), list = document.querySelector(pageList)
   return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
     width: Math.round(box.width), height: Math.round(box.height), innerWidth, innerHeight, listScrolls: list.scrollHeight > list.clientHeight }
@@ -172,8 +177,8 @@ try {
   await option('Script for database engine type').click({ force: true })
   await expect(optionsDescription(dialog()).locator('strong')).toHaveText('Script for database engine type')
   expect(await focusInDialog()).toBe(true)
-  await page.keyboard.press('Escape')
-  await expect(dialog()).toHaveCount(0)
+  await pressToClose(options, 'Escape')
+  await closed()
   await openOptions()
   await expect(option('Delimit individual statements')).toBeFocused()
   console.log('Scripting checks: Alt+T, O opens Tools › Options on the Scripting page, with the version rows greyed and their descriptions a click away that keeps Escape working.')
@@ -193,8 +198,8 @@ try {
   expect(await disabledRows()).toHaveLength(3)
   await option('Script owner').selectOption('true')
   await option('Script owner').focus()
-  await page.keyboard.press('Escape')
-  await expect(dialog()).toHaveCount(0)
+  await pressToClose(options, 'Escape')
+  await closed()
   await expect(textbox()).toBeFocused()
   expect(await stored()).toBeNull()
   console.log('Scripting checks: bold changed values, the description pane, Reset to Defaults, and Escape discarding the draft.')
@@ -204,16 +209,17 @@ try {
   await expect(option('Script owner')).toHaveValue('false')
   await option('Script USE <database>').selectOption('false')
   await option('Script USE <database>').focus()
-  await page.keyboard.press('Enter')
+  await options.keyboard.press('Enter')
   await expect(dialog()).toBeVisible()
   await dialog().getByRole('button', { name: 'Cancel', exact: true }).focus()
-  await page.keyboard.press('Tab')
-  expect(await page.evaluate(() => document.activeElement?.closest('[role="dialog"]') !== null)).toBe(true)
-  await dialog().getByRole('button', { name: 'Close options', exact: true }).focus()
-  await page.keyboard.press('Shift+Tab')
+  await options.keyboard.press('Tab')
+  expect(await options.evaluate(() => document.activeElement?.closest('[role="dialog"]') !== null)).toBe(true)
+  // The first stop is the title bar's close button; macOS has its traffic lights instead, so there it is the search box.
+  await (mac ? dialog().getByRole('searchbox', { name: 'Search Options', exact: true }) : dialog().getByRole('button', { name: 'Close options', exact: true })).focus()
+  await options.keyboard.press('Shift+Tab')
   await expect(dialog().getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
-  await expect(dialog()).toHaveCount(0)
+  await closed()
   // Only what differs from the defaults is stored.
   await expect.poll(stored).toEqual({ version: 1, values: { [scriptingKey('scriptUseDatabase')]: false } })
   expect((await page.evaluate(() => window.varia.getSettings())).value.values[scriptingKey('scriptUseDatabase')]).toBe(false)
@@ -385,13 +391,12 @@ try {
   expect(await weight('Script USE <database>')).toBe('700')
   const small = await layout()
   expect(small).toMatchObject({ inside: true, overflow: false, listScrolls: true })
-  expect(small.width).toBeLessThanOrEqual(820)
-  expect(small.height).toBeLessThanOrEqual(600)
   await option('Script USE <database>').focus()
-  await page.screenshot({ path: resolve('artifacts', 'scripting-options-dark.png') })
+  await options.screenshot({ path: resolve('artifacts', 'scripting-options-dark.png') })
   // The new script's editor asked for focus on a frame this hidden window renders only now; the dialog keeps it.
   await expect(option('Script USE <database>')).toBeFocused()
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   await openNestedScriptMenu()
   expect(await menusInside()).toEqual({ inside: true, count: 3, overflow: false })
   await page.screenshot({ path: resolve('artifacts', 'scripting-dark.png') })
@@ -403,9 +408,9 @@ try {
   await option('Match script settings to source').selectOption('false')
   await option('Script for server version').selectOption('170')
   await option('Script for server version').focus()
-  await page.screenshot({ path: resolve('artifacts', 'scripting-options-light.png') })
-  await page.keyboard.press('Escape')
-  await expect(dialog()).toHaveCount(0)
+  await options.screenshot({ path: resolve('artifacts', 'scripting-options-light.png') })
+  await pressToClose(options, 'Escape')
+  await closed()
   await openNestedScriptMenu()
   expect(await menusInside()).toEqual({ inside: true, count: 3, overflow: false })
   await page.screenshot({ path: resolve('artifacts', 'scripting-light.png') })
@@ -420,7 +425,8 @@ try {
   await openOptions()
   await expect(option('Script USE <database>')).toHaveValue('false')
   await expect(option('Script for server version')).toHaveValue('160')
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   await close()
   await unlink(settingsFile)
   await writeFile(legacyFile, '{ "version": 1, "options": { "scriptUseDatabase": "no" } }')
@@ -432,7 +438,8 @@ try {
   expect(files[0]).toMatch(/^scripting-options\.json\.invalid-[0-9a-f-]{36}\.json$/)
   await openOptions()
   await expect(option('Script USE <database>')).toHaveValue('true')
-  await page.keyboard.press('Escape')
+  await pressToClose(options, 'Escape')
+  await closed()
   // A reload of the window does not report the same file again.
   await page.reload()
   await expectEditorShown(page)

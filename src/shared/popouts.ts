@@ -29,7 +29,7 @@ export const dialogWindowName = /^varia-dialog-(options|about)-[0-9a-f]{8}-[0-9a
 /** The kind a dialog window's name says, or undefined when it is not one. */
 export const dialogWindowKind = (name: string): DialogWindowKind | undefined => dialogWindowName.test(name) ? name.split('-')[2] as DialogWindowKind : undefined
 export const dialogLimits = {
-  /** Dialog windows open at once: one per kind. */
-  maxWindows: Object.keys(dialogWindowKinds).length,
+  /** Dialog windows open at once: two per kind, so one can open while the last is still closing. */
+  maxWindows: Object.keys(dialogWindowKinds).length * 2,
   maxSize: 16_000
 } as const

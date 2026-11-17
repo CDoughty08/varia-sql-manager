@@ -36,8 +36,8 @@ async function mount(options: { dialogWindows?: boolean; refuse?: boolean } = {}
   const onClose = vi.fn()
   const root = createRoot(host)
   const render = (shown: boolean) => act(async () => {
-    root.render(createElement(WorkbenchProvider, { workbench, children: shown ? createElement(DialogWindow, { kind: 'options', onClose },
-      createElement('form', { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'fixture-title' }, createElement(DialogHeading, { id: 'fixture-title', title: 'Options', closeLabel: 'Close options', onClose }))) : null }))
+    root.render(createElement(WorkbenchProvider, { workbench, children: shown ? createElement(DialogWindow, { kind: 'options', onClose, children:
+      createElement('form', { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'fixture-title' }, createElement(DialogHeading, { id: 'fixture-title', title: 'Options', closeLabel: 'Close options', onClose })) }) : null }))
   })
   await render(true)
   cleanups.push(() => { act(() => { root.unmount() }); host.remove() })
@@ -78,9 +78,12 @@ describe('DialogWindow', () => {
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()
     expect(doc.querySelector('.dialog-window-root [role="dialog"]')).not.toBeNull()
     expect(doc.title).toBe('Options')
-    // The system's own button closes the window: the heading is its title bar, with no close button of its own.
+    // The heading is the frameless window's title bar, with its own close button (macOS has its traffic lights instead).
     expect(doc.querySelector('.dialog-titlebar h2')?.textContent).toBe('Options')
-    expect(doc.querySelector('[aria-label="Close options"]')).toBeNull()
+    const close = doc.querySelector<HTMLButtonElement>('.dialog-titlebar [aria-label="Close options"]')
+    expect(close).not.toBeNull()
+    close!.click()
+    expect(view.onClose).toHaveBeenCalled()
   })
   it('treats the window closed by the user as the dialog\'s Cancel, and closes the window and remembers its size when the dialog goes', async () => {
     const view = await mount()

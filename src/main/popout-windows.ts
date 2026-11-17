@@ -1,5 +1,6 @@
 import { dialogLimits, dialogWindowKind, dialogWindowKinds, popoutLimits, popoutWindowName, type DialogWindowKind } from '../shared/popouts'
 import { windowControls } from '../shared/theme/metrics'
+import type { NativeThemeLike } from './appearance'
 import { UserActivation } from './window-roles'
 
 export interface Bounds { x: number; y: number; width: number; height: number }
@@ -69,7 +70,6 @@ export interface PopoutWindow<W = unknown> {
   setAutoHideMenuBar(hide: boolean): void
   /** A dialog window stays above the main window and goes with it (BrowserWindow has both; test fakes may leave them out). */
   setParentWindow?(parent: W | null): void
-  setTitleBarOverlay?(options: { color: string; symbolColor: string }): void
   on(event: 'closed', listener: () => void): void
   once(event: 'focus', listener: () => void): void
   removeListener(event: 'focus', listener: () => void): void
@@ -91,17 +91,24 @@ export interface PopoutWindow<W = unknown> {
  */
 /** Explicit, not inherited: no preload, the same sandbox and isolation, no Node, and no test arguments. */
 const childPreferences = { preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true } as const
-/** What main passes for every window the page opens: its background, whether it shows, and the theme's overlay colors. */
-export interface WindowBase { readonly backgroundColor: string; readonly show: boolean; readonly overlay?: { readonly color: string; readonly symbolColor: string } }
+/** What main passes for every window the page opens: its background and whether it shows. */
+export interface WindowBase { readonly backgroundColor: string; readonly show: boolean }
 /** How long an allowed popout counts against the limit before Electron creates it. */
 const pendingMs = 10_000
 /** How long after a restore a popout that takes focus gives it back: macOS activates it only once its animation ends. */
 export const restoreFocusMs = 2000
 
+/** How long after 'closed' Electron may still be tearing a window down (`settled`). */
+const teardownMs = 500
+
 export class PopoutWindows<W extends PopoutWindow<W>> {
   private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string; dialog?: DialogWindowKind }>()
   /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
   private pending: number[] = []
+  /** Until when a child window that closed may still be torn down natively, and the work held until then (`settled`). */
+  private quietUntil = 0
+  private held?: () => void
+  private holdTimer?: ReturnType<typeof setTimeout>
   constructor(private readonly options: {
     readonly platform: NodeJS.Platform
     /** The displays' work areas now, where a restored window must still land. */
@@ -140,21 +147,21 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
   }
   private popoutCount(): number { return [...this.windows.values()].filter(item => !item.dialog).length }
   /**
-   * A dialog window: one of each kind at a time, on a display, with the main window's hidden title bar (the traffic lights
-   * on macOS, the themed window-controls overlay elsewhere) and only a close button, kept above the main window by `adopt`.
+   * A dialog window (the page shows one of each kind; a bounded few, so one can open while the last closes), on a display,
+   * kept above the main window by `adopt`. macOS keeps its traffic lights in the page's title bar; elsewhere the window is
+   * frameless and the page draws the title bar and its close button, in the theme's colours with nothing to keep in step.
    */
   private openDialog(kind: DialogWindowKind, requested: Bounds, base: WindowBase): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
     const bounds = scaleBounds(requested, zoomFactor(this.options.zoomLevel())), limits = dialogWindowKinds[kind], controls = windowControls()
     const open = [...this.windows.values()].filter(item => item.dialog && !item.window.isDestroyed())
-    if (open.some(item => item.dialog === kind) || open.length >= dialogLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    if (open.length >= dialogLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
     const now = this.now()
     this.pending = this.pending.filter(at => now - at < pendingMs)
     this.pending.push(now)
     return { action: 'allow', overrideBrowserWindowOptions: {
       ...bounds, useContentSize: true, minWidth: limits.minWidth, minHeight: limits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
       title: limits.title, resizable: limits.resizable, minimizable: false, maximizable: false, fullscreenable: false, autoHideMenuBar: false,
-      titleBarStyle: 'hidden',
-      ...this.options.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...base.overlay, height: controls.overlayHeight } },
+      ...this.options.platform === 'darwin' ? { titleBarStyle: 'hidden', trafficLightPosition: controls.trafficLights } : { frame: false },
       webPreferences: childPreferences
     } }
   }
@@ -184,6 +191,7 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
     window.on('closed', () => {
       this.windows.delete(window.id)
       this.options.changed(this.windows.size)
+      this.quietUntil = this.now() + teardownMs
     })
     this.options.changed(this.windows.size)
   }
@@ -213,13 +221,24 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
     window.moveTop()
     return true
   }
-  /** The dialog windows' overlay follows the theme, as the main window's does (macOS draws its own traffic lights). */
-  chrome(overlay: { readonly color: string; readonly symbolColor: string }): void {
-    if (this.options.platform === 'darwin') return
-    for (const { window, dialog } of this.windows.values()) {
-      if (!dialog || window.isDestroyed()) continue
-      try { window.setTitleBarOverlay?.({ ...overlay }) } catch { /* Cosmetic; some window managers reject overlay updates. */ }
-    }
+  /**
+   * Runs `work` now, or once no child window has closed within `teardownMs`; held work is replaced by newer work. Chromium
+   * tells every window when the theme source changes, and Electron 45 crashes on a window it is still tearing down after
+   * 'closed' (`settledNativeTheme`).
+   */
+  settled(work: () => void): void {
+    const wait = this.quietUntil - this.now()
+    if (wait <= 0) { this.held = undefined; work(); return }
+    this.held = work
+    if (this.holdTimer === undefined) this.holdTimer = setTimeout(() => this.release(), wait)
+  }
+  private release(): void {
+    this.holdTimer = undefined
+    const wait = this.quietUntil - this.now()
+    if (wait > 0) { this.holdTimer = setTimeout(() => this.release(), wait); return }
+    const work = this.held
+    this.held = undefined
+    work?.()
   }
   /** Every popout follows the main window's zoom. */
   zoom(level: number): void { for (const { window } of this.windows.values()) if (!window.isDestroyed()) window.webContents.setZoomLevel(level) }
@@ -229,5 +248,22 @@ export class PopoutWindows<W extends PopoutWindow<W>> {
     for (const { window } of [...this.windows.values()]) if (!window.isDestroyed()) window.destroy()
     this.windows.clear()
     this.pending = []
+  }
+}
+
+/**
+ * `nativeTheme` for the appearance service, whose theme source changes wait until no child window is being torn down
+ * (`PopoutWindows.settled`). Reads see the newest mode at once; System mode's colours follow when the change lands, through
+ * nativeTheme's 'updated'.
+ */
+export function settledNativeTheme(native: NativeThemeLike, windows: { settled(work: () => void): void }): NativeThemeLike {
+  let held: NativeThemeLike['themeSource'] | undefined
+  return {
+    get themeSource() { return held ?? native.themeSource },
+    set themeSource(mode) {
+      held = mode
+      windows.settled(() => { held = undefined; native.themeSource = mode })
+    },
+    get shouldUseDarkColors() { return native.shouldUseDarkColors }
   }
 }

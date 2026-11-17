@@ -9,7 +9,7 @@ import {
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
-import { focusToReturn, returnFocusTo } from '../core/focus'
+import { focusToReturn, isElement, returnFocusTo } from '../core/focus'
 import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
 import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
 import type { CaptureSource } from './shortcuts/CaptureField'
@@ -85,9 +85,11 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const [saving, setSaving] = useState(false)
   // Read while rendering, before the search box takes focus.
   const [returnFocus] = useState(focusToReturn)
-  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), formRef = useRef<HTMLFormElement>(null), focusSetting = useRef<string | undefined>(setting)
+  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string | undefined>(setting)
   // Tools › Options… again while the dialog is open: its window comes forward, on the page asked for.
   const request = useServiceSnapshot(settings.dialog)
+  // State, not a ref: in a dialog window the form mounts a render later, once the window is open, and focusing the setting waits for it.
+  const [formElement, setForm] = useState<HTMLFormElement | null>(null)
   const found = useMemo(() => searchPages(query, platform), [query, platform])
   const rows = treeRows(expanded, found?.shown)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
@@ -96,13 +98,12 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
 
   useEffect(() => { settings.showedPage(page) }, [settings, page])
   // The tree keeps focus on the row it moved to; a field OK found invalid takes focus once its page shows.
-  useEffect(() => { if (focusId && tree.current?.contains(document.activeElement)) tree.current.querySelector<HTMLElement>(`[data-page="${focusId}"]`)?.focus() }, [focusId])
+  useEffect(() => { if (focusId && tree.current?.contains(tree.current.ownerDocument.activeElement)) tree.current.querySelector<HTMLElement>(`[data-page="${focusId}"]`)?.focus() }, [focusId])
   useEffect(() => {
     const key = focusSetting.current
-    if (!key) return
+    if (!key || !formElement) return
     focusSetting.current = undefined
-    // The dialog's own document: in a dialog window it is not the main window's.
-    ;(formRef.current?.ownerDocument ?? document).getElementById(controlId(key))?.focus()
+    formElement.ownerDocument.getElementById(controlId(key))?.focus()
   })
   const firstRequest = useRef(request)
   useEffect(() => {
@@ -208,7 +209,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     } else if (target === search.current && (event.key === 'ArrowDown' || event.key === 'Enter')) {
       event.preventDefault()
       tree.current?.querySelector<HTMLElement>(`[data-page="${focusId}"]`)?.focus()
-    } else if (event.key === 'Enter' && !(target instanceof HTMLSelectElement) && !(target instanceof HTMLButtonElement)) { event.preventDefault(); void ok() }
+    } else if (event.key === 'Enter' && !(isElement(target) && (target.tagName === 'SELECT' || target.tagName === 'BUTTON'))) { event.preventDefault(); void ok() }
   }
 
   const highlight = (label: string): ReactNode => found ? highlightParts(label, query).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text) : label
@@ -225,7 +226,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const path = pagePath(form.page.id), ancestors = path.slice(0, -1).map(node => node.title).join(' › ')
 
   // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
-  return <DialogWindow kind="options" onClose={close} raise={request}><form ref={formRef} className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
+  return <DialogWindow kind="options" onClose={close} raise={request}><form ref={setForm} className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void ok() }} onKeyDown={keyDown}>
     <DialogHeading id="options-title" title="Options" closeLabel="Close options" disabled={saving} onClose={close} />
     <div className="options-body">

@@ -7,6 +7,7 @@ import Icon from '../../Icon'
 import { KeyCaps } from './CaptureField'
 import type { GestureRow } from './gesture-rows'
 import { sourceTitles, type BindingRow, type BindingSource, type CommandRow } from './shortcut-draft'
+import { isElement } from '../../core/focus'
 import type { ShortcutGroup } from './shortcuts-search'
 
 export const platformTitles: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
@@ -57,7 +58,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
   // Gesture rows follow the command rows in the arrow keys' order; they take focus but not the selection.
   const keys = [...order.map(selectionKey), ...gestures?.map(gesture => gestureKey + gesture.id) ?? []]
   const keyDown = (event: KeyboardEvent<HTMLTableElement>) => {
-    if (!(event.target instanceof HTMLElement) || !event.target.matches('[data-row]')) return
+    if (!isElement(event.target) || !event.target.matches('[data-row]')) return
     const focused = event.target.dataset.row ?? '', onGesture = focused.startsWith(gestureKey)
     const at = keys.indexOf(onGesture ? focused : current ?? '')
     const to = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? keys.length - 1 : undefined

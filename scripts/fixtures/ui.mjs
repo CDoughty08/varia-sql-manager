@@ -909,6 +909,29 @@ export const attachFileNameShown = cell => cell.evaluate((td, selector) => {
 }, part.attachPathName)
 /** Whether a text input shows the end of its value (an Attach Databases path's file name) rather than its start. */
 export const inputShowsEnd = input => input.evaluate(element => element.scrollLeft + element.clientWidth >= element.scrollWidth - 1)
+/**
+ * A dialog window (Tools › Options, Help › About): the page of the window that shows the dialog named `name`. Those dialogs
+ * open in OS windows of their own (popouts/DialogWindow.tsx), each a page of the application; where main refuses the
+ * window, the dialog shows over the main window and that page is returned.
+ */
+export async function dialogWindow(application, name, timeout = 15000) {
+  let found
+  await expect.poll(async () => {
+    for (const candidate of application.windows()) {
+      if (candidate.isClosed()) continue
+      if (await candidate.getByRole('dialog', named(name)).count().catch(() => 0)) { found = candidate; return true }
+    }
+    return false
+  }, { timeout }).toBe(true)
+  return found
+}
+/** Presses `key` in a dialog's view where it closes the dialog: its window may close on the key going down, before the key comes up. */
+export const pressToClose = (view, key) => view.keyboard.press(key).catch(error => { if (!view.isClosed()) throw error })
+/** Waits until the dialog window `view` has closed or, where the dialog showed over the main window, the dialog named `name` is gone. */
+export const dialogClosed = (view, name) => expect.poll(async () => view.isClosed() || (!view.url().startsWith('about:') && !(await view.getByRole('dialog', named(name)).count().catch(() => 0)))).toBe(true)
+/** An Options form page's sections (role group, named by their headings) and the fields and lists of its control column. */
+export const optionsSection = (dialog, name) => optionsForm(dialog).getByRole('group', named(name))
+export const optionsControls = dialog => optionsForm(dialog).locator('input[type="number"], select')
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)

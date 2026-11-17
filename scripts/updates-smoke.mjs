@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { loadReleaseArchive } from './release-notes.mjs'
 import { gettingStartedSmoke } from './fixtures/help.mjs'
-import { aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, popoutDockButton, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts } from './fixtures/ui.mjs'
+import { pressToClose, aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, popoutDockButton, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts, dialogClosed, dialogWindow } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'updates-profile-'))
@@ -70,17 +70,24 @@ try {
     shell.openExternal = async url => { globalThis.aboutSmoke.urls.push(url) }
   })
   await menu('help.about')
-  const about = aboutDialog(page)
+  // About opens in a dialog window of its own.
+  // Each opening is a window of its own: `aboutWindow` and `about` follow the latest.
+  let aboutWindow = await dialogWindow(application, 'About Varia')
+  let about = aboutDialog(aboutWindow)
   await expect(about).toBeVisible()
   const currentVersion = await application.evaluate(({ app }) => app.getVersion())
   const installedNotes = archive.find(record => record.version === currentVersion)
   if (!installedNotes) throw new Error('The running version has no bundled release record.')
   await expect(about).toContainText(`Version ${currentVersion}`)
   await expect(about.getByRole('button', { name: 'Done', exact: true })).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(about.getByRole('button', { name: 'Close About Varia', exact: true })).toBeFocused()
-  await page.keyboard.press('Shift+Tab')
+  // Tab wraps inside the dialog (to the title bar's close button; macOS has its traffic lights instead), and Shift+Tab comes back to Done.
+  await aboutWindow.keyboard.press('Tab')
+  if (process.platform === 'darwin') await expect(about.getByRole('button', { name: 'Done', exact: true })).not.toBeFocused()
+  else await expect(about.getByRole('button', { name: 'Close About Varia', exact: true })).toBeFocused()
+  expect(await aboutWindow.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true)
+  await aboutWindow.keyboard.press('Shift+Tab')
   await expect(about.getByRole('button', { name: 'Done', exact: true })).toBeFocused()
+  expect(await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows().find(item => item.getTitle() === 'About Varia SQL Manager'); return window && { resizable: window.isResizable(), parent: !!window.getParentWindow() } })).toEqual({ resizable: false, parent: true })
   await about.screenshot({ path: 'artifacts/about-dialog.png' })
   await about.getByRole('button', { name: 'Copy Version Details', exact: true }).click()
   await expect(about).toContainText('Details copied.')
@@ -100,7 +107,7 @@ try {
   await about.getByRole('button', { name: 'Report an Issue', exact: true }).click()
   await about.screenshot({ path: 'artifacts/about-dialog-copy-failure.png' })
   await about.getByRole('button', { name: 'Release Notes', exact: true }).click()
-  await expect(about).not.toBeVisible()
+  await dialogClosed(aboutWindow, 'About Varia')
   const notes = releaseNotesPage(page)
   await expect(notes).toBeVisible()
   await expect(notes.getByRole('combobox', { name: 'Release version', exact: true })).toHaveValue(currentVersion)
@@ -158,12 +165,14 @@ try {
   await page.keyboard.press('F1')
   await quickInputBox(page).fill('> About Varia')
   await page.keyboard.press('Enter')
+  aboutWindow = await dialogWindow(application, 'About Varia')
+  about = aboutDialog(aboutWindow)
   await expect(about).toBeVisible()
   await about.getByRole('button', { name: 'Check for Updates', exact: true }).click()
   await expect(about).toContainText('Could not check for updates')
   await expect(about.getByRole('button', { name: 'Try Again', exact: true })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(about).not.toBeVisible()
+  await pressToClose(aboutWindow, 'Escape')
+  await dialogClosed(aboutWindow, 'About Varia')
 
   // A content filter's page where the manifest should be: the failure, its remedy and its details.
   await memoryIndicator(page).click()
@@ -199,6 +208,8 @@ try {
   await notes.getByRole('button', { name: `Read installed version ${currentVersion}`, exact: true }).click()
   await expect(notes).toContainText(installedNotes.summary)
   await menu('help.about')
+  aboutWindow = await dialogWindow(application, 'About Varia')
+  about = aboutDialog(aboutWindow)
   await expect(about).toContainText(`Version ${version} is ready`)
   await expect(about.getByRole('button', { name: 'Restart to Update', exact: true })).toBeEnabled()
   await about.screenshot({ path: 'artifacts/about-update-ready.png' })

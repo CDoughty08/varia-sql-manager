@@ -14,10 +14,11 @@ only when a summary line stops being true.
   origin reaches every local file. Packaged builds set the fuses in `build/fuses.cjs` (flipped in afterPack, read back by
   `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
   checked.
-  The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
-  `about:blank` child named `varia-popout-<uuid>`, exact bounds on a display, no preload, sandboxed, isolated, no popups
-  or navigation of its own, closed with the page. Its content is the page's DOM through React portals, so it sends no
-  IPC, and `trusted()` still accepts only the main window's main frame.
+  The only windows the page may open are popouts and dialog windows (`src/main/popout-windows.ts`, docs/popout-windows.md):
+  same-origin `about:blank` children named `varia-popout-<uuid>` or `varia-dialog-<kind>-<uuid>` (Options, About), exact
+  bounds on a display, no preload, sandboxed, isolated, no popups or navigation of its own, closed with the page. Their
+  content is the page's DOM through React portals, so they send no IPC, and `trusted()` still accepts only the main
+  window's main frame.
 - **Backend methods.** Add one in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema in
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.

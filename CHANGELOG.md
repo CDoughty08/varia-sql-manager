@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **A clearer Tools › Options:** Every page lines its labels, fields and lists up in columns, and longer pages group their settings under headings, such as Results to Grid's Grid display, Copy and save, Limits and memory, and Execution plan\. Units and hints such as "0 = no limit" sit beside the field, and searching a heading's name finds its settings\.
+- **Options and About in their own windows:** Tools › Options and Help › About open in themed windows of their own that you can move anywhere, even to another monitor\. Options can be resized, opens at the size you last left it, and lets you keep working in the main window while it is open\.
+
 ## [0.9.0] - 2026-11-15
 
 Organize, name and keep far larger results, see what is slowing your server with the rest of Activity Monitor, and pick up where you left off with restored connections\.

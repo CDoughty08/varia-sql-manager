@@ -33,6 +33,6 @@ export const settingPages = [
   { id: 'objectExplorer', title: 'SQL Server Object Explorer' },
   { id: 'objectExplorer.commands', title: 'Commands', parent: 'objectExplorer', layout: 'propertyGrid' },
   { id: 'objectExplorer.scripting', title: 'Scripting', parent: 'objectExplorer', layout: 'propertyGrid' },
-  { id: 'activityMonitor', title: 'Activity Monitor', layout: 'form', description: 'What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.', sections: [{ label: 'New monitors', description: 'What a new Activity Monitor starts with.' }, { label: 'Thresholds', description: 'When the overview tiles warn.' }] },
+  { id: 'activityMonitor', title: 'Activity Monitor', layout: 'form', description: 'What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.', sections: [{ label: 'New monitors' }, { label: 'Thresholds', description: 'When the overview tiles warn.' }] },
   { id: 'integrationServices', title: 'SQL Server Integration Services', layout: 'form', description: 'How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.', sections: [{ label: 'Object Explorer' }, { label: 'Operations', description: 'The Operations view of the SSIS Catalog.' }] }
 ] as const satisfies readonly SettingPage[]
