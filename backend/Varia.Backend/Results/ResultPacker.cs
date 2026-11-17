@@ -13,7 +13,7 @@ namespace Varia.Backend.Results;
 /// <remarks>
 /// Scheduling is the backend's alone: one thread that sleeps until the next result falls due or until something may have
 /// made one packable or asked for room (a set completed, the visible set changed, a pin or lease that stopped packing
-/// ended, a result's last view closed, a query's row waits for room), so an idle
+/// ended, a query's row waits for room), so an idle
 /// backend does no work. Idle packing (both stages) packs one result at a time, page by page, compressing each at the
 /// lowest thread priority (and doing everything that takes a lock or allocates at normal priority, so it is never
 /// preempted holding a lock; only Windows honours the lowered priority, and on Linux and macOS compression competes as an
@@ -313,7 +313,6 @@ internal sealed class ResultPacker : IDisposable
                 // operation that unpacks it during its pass stops it too (Pack's unpacks).
                 if (!ForRoom(set, all, queries)) continue;
                 var unpacks = set.Unpacks;
-                var hidden = visibility.IsHidden(set.ResultId, out _);
                 long got;
                 // One candidate's failure (out of memory compressing a page) skips it rather than every other candidate and
                 // the scheduled passes after this one.

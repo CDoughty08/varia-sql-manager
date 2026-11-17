@@ -55,7 +55,8 @@ minute. Hidden results keep 5 s.
   doubles the wait, up to eight times as long (`MaxBackoff` = 3 doublings, 4 minutes).
 - **A sorted or filtered grid is packed like any other, and never unpacked for its view.** A view reads its rows' pages
   in the view's order, a page or so a row. The grid reads 128-row tiles: through main, a random tile of a sorted
-  1,000,000-row view takes about 3.1 ms packed against 0.5 ms raw (p99 7.0 against 1.3 ms, `node.viewTile.*`). The grid
+  1,000,000-row view takes about 3.1 ms packed against 0.5 ms raw on 16 cores (p99 7.0 against 1.3 ms; on 4, 7.2 ms
+  packed, p99 19 ms; `node.viewTile.*`). The grid
   prefetches two views either way once scrolling pauses and reads nothing during a fast scroll until it settles, so
   scrolling rarely waits on it and a jump pays one or two tiles. A shown result with an open view is packed once idle,
   and the sort reads a packed result fused and its screens read the packed pages. Unpacking it whole for its view would

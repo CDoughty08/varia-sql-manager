@@ -111,8 +111,8 @@ internal static partial class PageCompressionBench
         var rawSort = SortSeconds();
         Report("raw", Plain(trace), Plain(jumpsAt), Screens(screensAt), rawSort);
 
-        // After: stage 2 packs the shown result once idle. A sorted grid (an open view) keeps it raw, so the view closes first;
-        // it is built again on the packed result to show what its screens would cost.
+        // After: stage 2 packs the shown result once idle. The view closes first and is built again on the packed result, so
+        // its screens are measured on a view sorted from packed pages, as a grid sorted after packing would be.
         store.CloseViews(shown.ResultId, [view!.ViewId]);
         view = null;
         var after = new ResultPacker(store, visibility) { Priority = ThreadPriority.Normal };

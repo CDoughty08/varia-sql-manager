@@ -967,8 +967,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Packing results.** A complete result of 1 MiB or more is packed when hidden for 5 s (stage 1) or shown but idle for
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
   Zstandard level 2 bytes (a page saving under a tenth stays raw), charged at its packed size. Never a result still
-  storing, a live table, one held by a read, operation, Copy or Save, or a shown one with an open sorted or filtered
-  view; sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
+  storing, a live table, or one held by a read, operation, Copy or Save; a sorted or filtered grid does not keep its
+  result raw, and sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
   the workers' gate (except packing for a waiting query), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
   most operations read packed pages directly; an operation that must unpack reserves the raw size first and answers

@@ -478,8 +478,9 @@ internal static class IdlePackerChecks
 
     private static void RoomRecheck(Action<bool, string> check)
     {
-        // An operation that takes hold of a later shown candidate while packing for room works on an earlier one: that
-        // candidate is asked again before it is packed, so a result an operation is reading is not packed under it.
+        // An operation that unpacks a later shown candidate whole while packing for room works on an earlier one, and ends
+        // before that candidate's turn: the candidate is asked again before it is packed, and one an operation unpacked and
+        // still uses is not packed for the query (its next operation would need the room again).
         var (store, visibility, packer) = Running(40L << 20, 40L << 20);
         using var running = packer;
         var first = Filled(store, "hidden first", BigRows * 2);
@@ -489,20 +490,20 @@ internal static class IdlePackerChecks
         visibility.Set(Guid.NewGuid(), 1, [later.ResultId, spare.ResultId], out _);
         var query = Open(store, "query");
         var opened = 0;
-        IDisposable? hold = null;
+        var unpacked = false;
         packer.OnPage = page =>
         {
             if (page != first || Interlocked.Exchange(ref opened, 1) != 0) return;
-            hold = later.Pin();
+            later.Pack(() => true);
+            using (later.Pin()) unpacked = later.TryUnpackAll();
         };
         // A wait for more than packing everything can free: it asks again on every page's saving and stays until nothing is
         // left to pack, so the pass goes on past the first to every later candidate.
         var fits = store.WaitForRoomAsync(query.Budget, 39L << 20, waitMs: 60_000).GetAwaiter().GetResult();
         SpinWait.SpinUntil(() => AllPacked(first) && AllPacked(spare), 60_000);
         packer.OnPage = null;
-        check(!fits && opened == 1 && AllPacked(first) && AllPacked(spare) && !later.HasPacked,
-            "a shown result an operation took hold of while packing for room works on another is not packed for it: " + opened + ", first packed " + AllPacked(first) + ", spare packed " + AllPacked(spare) + ", later packed " + later.HasPacked);
-        hold?.Dispose();
+        check(!fits && opened == 1 && unpacked && later.Unpacks == 1 && AllPacked(first) && AllPacked(spare) && !later.HasPacked,
+            "a shown result an operation unpacked while packing for room works on another is not packed for it: " + opened + ", unpacked " + unpacked + " (" + later.Unpacks + "), first packed " + AllPacked(first) + ", spare packed " + AllPacked(spare) + ", later packed " + later.HasPacked);
     }
 
     private static void RoomSpares(Action<bool, string> check)
