@@ -325,7 +325,9 @@ try {
   // 4b. Sections and alignment: Results to Grid groups its rows under headings, and every field and list on a page shares
   // one control column. The window is the main window's resizable child, and opens again at the size it was left.
   await openOptions()
-  expect(await optionsWindow()).toMatchObject({ parent: true, resizable: true, minimizable: false, maximizable: false })
+  // Electron reports minimizable and maximizable only on Windows and macOS; on Linux the window manager decides, and
+  // tests/popout-windows.test.ts checks that main asks for neither.
+  expect(await optionsWindow()).toMatchObject({ parent: true, resizable: true, ...process.platform === 'linux' ? {} : { minimizable: false, maximizable: false } })
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
   for (const name of ['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan']) await expect(optionsSection(dialog(), name)).toBeVisible()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('checkbox', { name: 'Show outline', exact: true })).toBeChecked()
