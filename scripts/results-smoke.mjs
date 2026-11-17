@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
 } from './fixtures/ui.mjs'
 
@@ -309,13 +309,13 @@ try {
   await page.keyboard.press('Alt+ArrowDown')
   const names = page.getByRole('dialog', { name: 'Filter name', exact: true })
   await expect(names).toContainText('1,000,000 values in 1,000,000 rows. 1,000,000 ticked.', { timeout: 60000 })
-  const valueList = names.getByRole('group', { name: 'Values', exact: true })
+  const valueList = names.getByRole('listbox', { name: 'Values', exact: true })
   await valueList.evaluate(list => { list.scrollTop = list.scrollHeight })
-  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
-  expect(await valueList.getByRole('checkbox').count()).toBeLessThan(100)
+  await expect(names.getByRole('option', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  expect(await valueList.getByRole('option').count()).toBeLessThan(100)
   await names.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000999995')
   await expect(names).toContainText('1 of 1,000,000 values match.')
-  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  await expect(names.getByRole('option', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
   await names.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(names).toHaveCount(0)
   console.log('Results checks: the header funnel lists a million values a window at a time, reaches the last by its scroll bar and searches them in the backend.')
@@ -650,9 +650,8 @@ try {
   await expect(planViewer(page).getByRole('treeitem').filter({ hasText: 'Index Scan' })).toHaveAttribute('aria-selected', 'true')
   await planViewer(page).getByRole('button', { name: 'Open plan document', exact: true }).click()
   await expect(activeDocument(page)).toContainText('ExecutionPlan1.sqlplan')
-  // The enlarged output leaves only a few editor lines on a 1024×768 display. Give the plan
-  // document the editor's space through the normal toggle before interacting with its outline.
-  await page.keyboard.press('Control+R')
+  // A plan document is not a query: the docked output gives it the whole document area, so the enlarged output does not
+  // leave it only a few lines on a 1024×768 display.
   await expect(outputPanel(page, 'plan')).toBeHidden()
   await expect(planCanvas(page)).toBeFocused()
   await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
@@ -688,7 +687,7 @@ try {
   await expect.poll(planParseCalls).toBe(parsesBeforePlan + 3)
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  await page.keyboard.press('Control+R')
+  // Back on the query, the output returns on the view it showed.
   await expect(outputTab(/^Execution plan/)).toHaveAttribute('aria-selected', 'true')
   await page.screenshot({ path: resolve('artifacts', 'results-head.png') })
   console.log('Results checks: one run summary, captions that collapse and close their results, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
@@ -1198,6 +1197,11 @@ try {
   // A value has no server and never executes: it has no query bar.
   await expect(queryBar(page)).toHaveCount(0)
   await expect(server()).toHaveCount(0)
+  // Nor any output: the Results panel docked below the editor gives the value the whole document area.
+  await expect(pane(page, 'results')).toBeHidden()
+  // Toggle Results Pane shows it on request, saying why it is empty; focus stays in the value.
+  await page.keyboard.press('Control+R')
+  await expect(textbox()).toBeFocused()
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
   // Varia's own table icon, as in Object Explorer.
@@ -1820,8 +1824,8 @@ try {
     await (await activeCell(0)).click()
     await page.keyboard.press('Alt+ArrowDown')
     const list = page.getByRole('dialog', { name: 'Filter active', exact: true })
-    await list.getByRole('checkbox', { name: check, exact: true }).check()
-    await list.getByRole('checkbox', { name: uncheck, exact: true }).uncheck()
+    await list.getByRole('option', { name: check, exact: true }).check()
+    await list.getByRole('option', { name: uncheck, exact: true }).uncheck()
     await list.getByRole('button', { name: 'OK', exact: true }).click()
     await expect(list).toHaveCount(0)
   }
@@ -2070,7 +2074,7 @@ try {
   await idInView()
   await header('name').hover()
   await header('name').locator(gridPart.funnelButton).click()
-  await expect(funnel('name').getByRole('checkbox', { name: 'Customer 0000000001 GmbH (1)', exact: true })).toBeChecked()
+  await expect(funnel('name').getByRole('option', { name: 'Customer 0000000001 GmbH (1)', exact: true })).toBeChecked()
   await expect(funnel('name').getByRole('searchbox', { name: 'Search values', exact: true })).toBeFocused()
   await expect(funnel('name')).toContainText('100 values in 100 rows.')
   await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -2084,9 +2088,24 @@ try {
   await expect(caption).not.toContainText(' of ')
   await cell(0, 6).click()
   await page.keyboard.press('Alt+ArrowDown')
-  await expect(funnel('active').getByRole('checkbox', { name: '0 (66)', exact: true })).toBeChecked()
-  await funnel('active').getByRole('checkbox', { name: '1 (34)', exact: true }).uncheck()
-  await funnel('active').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(funnel('active').getByRole('option', { name: '0 (66)', exact: true })).toBeChecked()
+  // The keyboard alone: Down from the search enters the list on its first value, Down moves to the next, Space unticks
+  // it, Tab leaves the list (one stop) for the condition and Shift+Tab comes back, and Enter in the list is OK.
+  const activeValues = funnel('active').getByRole('listbox', { name: 'Values', exact: true })
+  const activeOption = () => activeValues.evaluate(list => list.ownerDocument.getElementById(list.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label'))
+  await page.keyboard.press('ArrowDown')
+  await expect(activeValues).toBeFocused()
+  await expect.poll(activeOption).toBe('0 (66)')
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(activeOption).toBe('1 (34)')
+  await page.keyboard.press('Space')
+  await expect(funnel('active').getByRole('option', { name: '1 (34)', exact: true })).not.toBeChecked()
+  await expect(funnel('active').getByRole('option', { name: '0 (66)', exact: true })).toBeChecked()
+  await page.keyboard.press('Tab')
+  await expect(funnel('active').getByRole('combobox', { name: 'Condition', exact: true })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(activeValues).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect(funnel('active')).toHaveCount(0)
   await expect(caption).toContainText('66 of 100 rows')
   await expect(filterList).toContainText("active = '0'")
@@ -2095,15 +2114,15 @@ try {
   await cell(0, 7).click()
   await page.keyboard.press('Alt+ArrowDown')
   const score = funnel('score')
-  await expect(score.getByRole('checkbox', { name: 'NULL (13)', exact: true })).toBeChecked()
+  await expect(score.getByRole('option', { name: 'NULL (13)', exact: true })).toBeChecked()
   await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('zzz')
   await expect(score).toContainText('No values match.')
   await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('')
   await score.getByRole('button', { name: 'Select none', exact: true }).click()
-  await expect(score.getByRole('checkbox', { name: 'NULL (13)', exact: true })).not.toBeChecked()
+  await expect(score.getByRole('option', { name: 'NULL (13)', exact: true })).not.toBeChecked()
   await score.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(score.getByRole('alert')).toHaveText('Select at least one value.')
-  await score.getByRole('checkbox', { name: 'NULL (13)', exact: true }).check()
+  await score.getByRole('option', { name: 'NULL (13)', exact: true }).check()
   await score.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(caption).toContainText('13 of 100 rows')
   await expect(filterList).toContainText('score is NULL')
@@ -2117,7 +2136,7 @@ try {
   await cell(0, 0).click()
   await page.keyboard.press('Alt+ArrowDown')
   await funnel('id').getByRole('combobox', { name: 'Condition', exact: true }).selectOption({ label: 'Between' })
-  await expect(funnel('id').getByRole('checkbox').first()).toBeDisabled()
+  await expect(funnel('id').getByRole('listbox', { name: 'Values', exact: true }).getByRole('option').first()).toBeDisabled()
   await funnel('id').getByRole('combobox', { name: 'Lowest value', exact: true }).selectOption({ label: '2' })
   await funnel('id').getByRole('combobox', { name: 'Highest value', exact: true }).selectOption({ label: '13' })
   await funnel('id').getByRole('button', { name: 'OK', exact: true }).click()
@@ -2126,8 +2145,8 @@ try {
   // Active's list now covers the ids 2 to 13 (its own filter left out), with only the value its filter keeps ticked.
   await cell(0, 6).click()
   await page.keyboard.press('Alt+ArrowDown')
-  await expect(funnel('active').getByRole('checkbox', { name: '0 (8)', exact: true })).toBeChecked()
-  await expect(funnel('active').getByRole('checkbox', { name: '1 (4)', exact: true })).not.toBeChecked()
+  await expect(funnel('active').getByRole('option', { name: '0 (8)', exact: true })).toBeChecked()
+  await expect(funnel('active').getByRole('option', { name: '1 (4)', exact: true })).not.toBeChecked()
   await page.screenshot({ path: resolve('artifacts', 'results-funnel.png') })
   await page.keyboard.press('Escape')
   await expect(funnel('active')).toHaveCount(0)

@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition } from '../../../shared/language-service'
+import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition, type LanguageCompletionItem } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -86,17 +86,24 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private backendEpoch = 0
   private backendState = ''
   private backendGeneration?: number
+  /** The last complete completion answer: one document's at a time, the one being typed in. */
+  private completionCache?: CompletionCache
   constructor(monaco: typeof Monaco, private readonly api: LanguageApi,
     private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService) {
     super({ checking: false, documentErrors: new Map(), activities: new Map() })
     this.bindings.push(monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters: ['.'],
-      provideCompletionItems: async (model, position, _context, token) => {
+      provideCompletionItems: async (model, position, context, token) => {
         const capture = this.capture(model, position)
         // Peek's definition is read-only: nothing to complete.
         if (!capture || capture.peek || token.isCancellationRequested) return { suggestions: [] }
         if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return { suggestions: [] }
         if (!this.current(capture, token) || !this.supports(capture, 'completion')) return { suggestions: [] }
+        // Every list is returned as incomplete so Monaco asks again as the word grows; a complete backend answer is then
+        // re-ranked against the longer word here instead of going back to the backend (see `reuseCompletion`).
+        const reused = context.triggerKind === 2 ? reuseCompletion(this.completionCache, capture) : undefined
+        if (reused) return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, reused) }
+        this.completionCache = undefined
         const pending = this.begin(`${capture.request.documentId}:completion`, token)
         if (!pending) return { suggestions: [], incomplete: true }
         const foreground = this.beginForeground(capture.request.documentId)
@@ -113,25 +120,9 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (!this.current(capture, token)) return { suggestions: [] }
           if (!result.ok) { this.failure(capture.request.documentId, result.error); return { suggestions: [] } }
           this.failure(capture.request.documentId)
-          const word = model.getWordUntilPosition(position)
-          const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn }
-          return {
-            incomplete: result.value.isIncomplete,
-            suggestions: result.value.items.flatMap(item => {
-              const edit = item.textEdit
-              if (edit && (!validRange(model, edit.range) || edit.range.start.line !== position.lineNumber - 1 ||
-                edit.range.end.line !== position.lineNumber - 1 || edit.range.start.character > position.column - 1 || edit.range.end.character < position.column - 1)) return []
-              return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
-                detail: item.detail, documentation: item.documentation,
-                // Monaco scores prefix/fuzzy matches first, then uses sortText to break ties. Keep columns ahead of
-                // general SQL names without making a weak column match outrank an exact function or keyword match.
-                sortText: `${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
-                filterText: item.filterText,
-                insertText: edit?.newText ?? item.insertText ?? item.label,
-                insertTextRules: item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-                range: edit ? toMonacoRange(edit.range) : range }]
-            })
-          }
+          if (!result.value.isIncomplete) this.completionCache = { model, documentId: capture.request.documentId, key: capture.key, epoch: capture.epoch,
+            text: capture.request.text, position: capture.request.position, items: result.value.items }
+          return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, result.value.items) }
         } catch (error) {
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return { suggestions: [] }
@@ -528,6 +519,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       const served = this.served(id)
       if (next === key && served) continue
       this.epochs.set(id, (this.epochs.get(id) ?? 0) + 1)
+      // Never keep a closed query's model alive through the completion cache.
+      if (this.completionCache?.documentId === id) this.completionCache = undefined
       this.refreshing.get(id)?.cancel()
       this.syncActivity(id)
       if (served) this.contexts.set(id, next)
@@ -611,6 +604,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.completionCache = undefined
     this.statusSequence++
     this.statusWake?.()
     this.statusRequest = undefined
@@ -644,4 +638,74 @@ function validRange(model: Monaco.editor.ITextModel, range: LanguageRange): bool
 }
 function toMonacoRange(range: LanguageRange): Monaco.IRange {
   return { startLineNumber: range.start.line + 1, startColumn: range.start.character + 1, endLineNumber: range.end.line + 1, endColumn: range.end.character + 1 }
+}
+
+interface CompletionCache {
+  readonly model: Monaco.editor.ITextModel; readonly documentId: string; readonly key: string; readonly epoch: number
+  readonly text: string; readonly position: LanguageRequest['position']; readonly items: readonly LanguageCompletionItem[]
+}
+// Whatever Monaco's default word pattern counts as part of a word, plus SQL's @, # and $: typing one keeps the cache.
+const identifierCharacters = /^[^\s`~!%^&*()\-=+[{\]}\\|;:'",.<>/?]*$/u
+function offsetOf(text: string, position: LanguageRequest['position']): number {
+  let offset = 0
+  for (let line = 0; line < position.line; line++) {
+    const next = text.indexOf('\n', offset)
+    if (next < 0) return -1
+    offset = next + 1
+  }
+  return offset + position.character
+}
+/**
+ * The cached answer, still right for this request when the only edit since is identifier characters typed at its cursor
+ * on the same line, in the same document, context and epoch. Its edit ranges then end that much further along.
+ */
+function reuseCompletion(cache: CompletionCache | undefined, capture: Capture): LanguageCompletionItem[] | undefined {
+  const { documentId, text, position } = capture.request
+  if (!cache || cache.model !== capture.model || cache.documentId !== documentId || cache.key !== capture.key || cache.epoch !== capture.epoch
+    || position.line !== cache.position.line || position.character < cache.position.character) return
+  const before = offsetOf(cache.text, cache.position), delta = position.character - cache.position.character
+  if (before < 0 || text.length !== cache.text.length + delta || !text.startsWith(cache.text.slice(0, before))
+    || !text.endsWith(cache.text.slice(before)) || !identifierCharacters.test(text.slice(before, before + delta))) return
+  return cache.items.map(item => {
+    const range = item.textEdit?.range
+    if (!range || range.end.line !== position.line || range.end.character < cache.position.character) return item
+    return { ...item, textEdit: { ...item.textEdit!, range: { start: range.start, end: { line: range.end.line, character: range.end.character + delta } } } }
+  })
+}
+/** A completion's name without SQL Server's brackets or double quotes, as the backend's `UnquoteCompletion` reads it. */
+function unquoteSqlName(value: string): string {
+  if (value.startsWith('[')) return (value.length > 1 && value.endsWith(']') ? value.slice(1, -1) : value.slice(1)).replaceAll(']]', ']')
+  if (value.startsWith('"')) return (value.length > 1 && value.endsWith('"') ? value.slice(1, -1) : value.slice(1)).replaceAll('""', '"')
+  return value
+}
+/**
+ * Monaco orders suggestions by its fuzzy score before sortText, and that score prefers a case-matching prefix: typing
+ * `orders` scores `orders_archive` or a lower-case system view above the table `Orders`. An exact name match, ignoring
+ * case and quoting, filters on exactly the typed text, so nothing outscores it, and sorts first among equal scores.
+ */
+function completionSuggestions(monaco: typeof Monaco, model: Monaco.editor.ITextModel, position: Monaco.Position, items: readonly LanguageCompletionItem[]): Monaco.languages.CompletionItem[] {
+  const word = model.getWordUntilPosition(position)
+  const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn }
+  const line = model.getLineContent(position.lineNumber)
+  return items.flatMap(item => {
+    const edit = item.textEdit
+    if (edit && (!validRange(model, edit.range) || edit.range.start.line !== position.lineNumber - 1 ||
+      edit.range.end.line !== position.lineNumber - 1 || edit.range.start.character > position.column - 1 || edit.range.end.character < position.column - 1)) return []
+    const replace = edit ? toMonacoRange(edit.range) : range
+    const typed = line.slice(replace.startColumn - 1, position.column - 1).trimStart()
+    const name = item.filterText ?? item.label
+    const exact = typed.length > 0 && unquoteSqlName(name).toLowerCase() === unquoteSqlName(typed).toLowerCase()
+    // A bare filter cannot match a typed opening bracket or quote; filter on the name with it.
+    const quote = typed[0] === '[' || typed[0] === '"' ? typed[0] : undefined
+    const bare = item.filterText ?? unquoteSqlName(item.label)
+    const filterText = exact ? typed : quote && !bare.startsWith(quote) ? quote + bare : item.filterText
+    return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
+      detail: item.detail, documentation: item.documentation,
+      // Exact matches first, then columns ahead of general SQL names of equal match quality, then the provider's order.
+      sortText: `${exact ? '0' : '1'}${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
+      filterText,
+      insertText: edit?.newText ?? item.insertText ?? item.label,
+      insertTextRules: item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+      range: replace }]
+  })
 }

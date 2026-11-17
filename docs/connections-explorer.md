@@ -31,8 +31,17 @@ initial database, TLS, advanced settings and execution policy. A saved profile o
 Name, color, environment and startup reconnect preference are presentation details; favorites belong only to saved
 profiles.
 
-Choosing different details for an existing target opens **Use selected connection details?**, with Current and Selected
-columns of only the changed fields beside the common destination, database and account.
+**Save**, in Connect's footer, saves the form to History without connecting and applies its name, color, environment and
+startup reconnect preference at once to every Explorer connection with the same server, database, login and settings
+(Explorer, query tabs and both status bars), changing only the labels the save changed. When History aliases share those settings, only connections still showing
+the saved entry's previous labels follow it. Add favorite and Register server save the same way. Cancel, Escape or the
+close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
+
+Connect applies the labels the user changed in the dialog to a reused target without asking again (only those: a
+connection-only environment set from the server menu stays) and saves them to History. Otherwise, choosing
+different details for an existing target, such as a History entry whose labels differ from the target's, opens **Use
+selected connection details?**, with Current and Selected columns of only the changed fields beside the common
+destination, database and account.
 
 | Choice | Effect |
 | --- | --- |

@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
@@ -73,6 +74,9 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toHaveText('Ready', { timeout: 30000 })
+  // A short window, as properties documents take the whole document area: Project Properties' sections then overflow
+  // their column, so choosing one scrolls to it.
+  await resizeContent(application, page, 1440, 700)
   await connect('server-a')
   await expandExplorerPath(page, ...finance, 'Projects', 'Loads', 'Packages')
   await expandExplorerPath(page, ...finance, 'Environments')

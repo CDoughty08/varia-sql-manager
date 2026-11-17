@@ -14,6 +14,7 @@ editor.context, for the query editor
   ---
   &Go To Definition  F12  ----
   Pee&k Definition  ⌥F12  ----
+  Open De&finition in Peek Tab  ----
   ---
   E&xecute  F5  ++--
   Ca&ncel Executing Query  --+-
@@ -23,6 +24,10 @@ editor.context, for the query editor
   Cu&t  ⌘X  ++++
   &Copy  ⌘C  ++++
   &Paste  ⌘V  ++++
+  ---
+  Toggle &Brackets  ⌘[  ++++
+  &Move Commas to Front  ++++
+  Mo&ve Commas to End  ++++
   ---
   Comm&and Palette…  ⇧⌘P  ++++
 documentTab.context, for a saved query's tab

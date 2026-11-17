@@ -242,7 +242,7 @@ noted where it matters.
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
 | `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
 | `language.refresh` | invoke | unary | control | 30 s; on the control lane so it can cancel stale language work while the metadata slots are full |
-| `language.definition` | invoke (F12, Alt+F12) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
+| `language.definition` | invoke (F12, Alt+F12, Ctrl+hover, Ctrl+click) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
@@ -968,9 +968,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
   Zstandard level 2 bytes (a page saving under a tenth stays raw), charged at its packed size. Never a result still
   storing, a live table, one held by a read, operation, Copy or Save, or a shown one with an open sorted or filtered
-  view. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
+  view; sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
-  the workers' gate (except packing for a waiting query and unpacking a shown result for its view), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
+  the workers' gate (except packing for a waiting query), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
   most operations read packed pages directly; an operation that must unpack reserves the raw size first and answers
   `TOO_LARGE` when refused. Rationale: [page-compression-findings.md](page-compression-findings.md#stage-2-as-built).
 - **Room for a query.** A query row its half or the global budget refuses waits (≤ 10 s a wait,
@@ -2368,6 +2368,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   (`dotnet publish -r <rid> --self-contained -c Release`). CI's Linux benchmarks publish that build as package.yml does,
   and the bench fails unless `Varia.Backend.dll`, `Microsoft.Data.SqlClient.dll` and `Microsoft.SqlServer.Smo.dll` there
   are ReadyToRun.
+- **The packed sort** stores 1,000,000 W1 rows packed (`debug.results.synthesize`'s test-only `pack`), reports the
+  result shown, sorts it three times and reads the budget: a sort reads packed pages in place, so the budget may grow
+  only by the view's order, never by an unpack ([page-compression-findings.md](page-compression-findings.md#stage-2-as-built)).
 - **The live snapshot churn** runs main's live path with a worker stand-in that acknowledges each frame at once:
   `debug.synthetic.wide` stores 5,000 rows of 23 typed columns every 10 ms if it can, each revision owned, retired,
   forgotten and released one at a time, for 5 s. It reports revisions a second and backend gen2 collections per revision

@@ -152,11 +152,18 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `QUOTENAME(@db)`; default schema, then dbo, then sys; server-level objects in the login's default database) within
     10 s. Not found or unavailable is `null` (a status-bar notice, never an error banner); an unreachable server or login
     is an error. A newer F12 supersedes one waiting; a query with no connection says so.
-  - F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
-    `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions; each editor drops
-    Monaco's Ctrl+hover link (`create-editor.ts`), which would query the backend for every word. F12 scripts CREATE to a
-    new query through Script As, Alt+F12 opens a Peek tab; both run on `editorTextFocus || peekEditorFocus` with no
-    query-tab precondition.
+  - F12, Alt+F12, Ctrl+hover and Ctrl+click are Varia's (`edit.goToDefinition`, `edit.peekDefinition`, gestures
+    `editor.peekHover` and `editor.goToDefinition`, through `EditorPeekService`); `KeybindingService` takes the keys before
+    Monaco's gotoSymbol actions, and each editor drops Monaco's Ctrl+hover link (`create-editor.ts`), which would query the
+    backend for every word crossed. F12 scripts CREATE to a new query through Script As; Alt+F12 and Ctrl+hover open
+    Object Explorer's Peek card (`PeekService.peekAt`, one card for both, drawn beside its `PeekAnchor` by the workbench's
+    `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
+    timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
+    `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+- **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
+  `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
+  change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
@@ -276,10 +283,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). A shown result with an open view stays raw; one packed before its view, or shown
-    again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
-    (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
-    delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+    saving under a tenth stays raw). A shown result with an open view is not packed while idle; one packed before its
+    view, or shown again with one, stays packed (its sort and screens read the packed pages; a view never unpacks a
+    result whole, `node.packedSort.budgetGrowthMb`), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
@@ -532,6 +538,15 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
   keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
+- **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
+  the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its
+  space to the editor) with Dockview's group visibility, which keeps its size for when a query is active again; moved,
+  floating and popped-out output panels are never touched, and a query shown in another editor group keeps them. The
+  saved layout always shows that group (`withGroupShown`), so yielding writes nothing and a restart or saved layout never
+  loses the output; any change to the docked arrangement while it hides (a panel moved into it, a docked group added or
+  removed) shows it again (`check`). It re-decides only when the active document changes between a query and another
+  kind or a query appears or goes in another editor group, so a panel revealed over such a document stays until then
+  (`tests/output-yield.test.ts`).
 - **Gestures** are declared only in `src/shared/commands/gestures.ts`; handlers read pointer modifiers only through
   `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`). Every pointer command has a
   keyboard path, and tooltips naming a gesture take its words from the service.

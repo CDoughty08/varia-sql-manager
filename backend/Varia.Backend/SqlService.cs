@@ -2623,6 +2623,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 set.TryCommitRow();
             }
             set.Complete();
+            if (args.Pack)
+            {
+                if (store.Packing == PagePacking.Off) throw new RequestException("INVALID_PARAMS", "Page packing is off in this backend.");
+                set.Pack();
+            }
             return set.Describe();
         }
         catch

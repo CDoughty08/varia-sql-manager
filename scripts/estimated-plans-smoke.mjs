@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
-import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView, selectOpenDocument } from './fixtures/ui.mjs'
+import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView, pane, selectOpenDocument } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -156,8 +156,8 @@ try {
       await application.evaluate(({ dialog }, filePath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] }) }, resolve('tests/fixtures/plans/diagnostics.sqlplan'))
       await page.keyboard.press(`${mod}+o`)
       await expect(documentTabs(page).getByRole('tab', { selected: true })).toContainText('diagnostics.sqlplan')
-      // The earlier estimate enlarged output; give the saved plan's editor surface its normal full height.
-      await page.keyboard.press(`${mod}+r`)
+      // A plan document is not a query: the enlarged output gives it the whole document area by itself.
+      await expect(pane(page, 'plan')).toBeHidden()
       const viewer = planViewer(page), properties = viewer.getByRole('complementary', { name: 'Plan properties' })
       await viewer.getByRole('treeitem').filter({ hasText: 'Index Seek' }).click()
       await properties.getByText('Predicates (3)', { exact: true }).click()

@@ -273,7 +273,7 @@ internal static class IdlePackerChecks
         // A comparison unpacks every side once one is packed: a raw side changes nothing and is no use of it.
         var raw = Filled(rig.Store, "raw side", BigRows);
         using (raw.Pin()) raw.UnpackAll(0);
-        check(raw.Unpacks == 0 && raw.ViewUnpacks == 0, "unpacking a result with nothing packed is not counted as an unpack");
+        check(raw.Unpacks == 0, "unpacking a result with nothing packed is not counted as an unpack");
         // A cancelled unpack changes nothing: the whole packing still holds, so it is neither partly packed nor due again.
         var packed = Filled(rig.Store, "cancelled unpack", BigRows);
         rig.Packer.PackDue();
@@ -326,67 +326,34 @@ internal static class IdlePackerChecks
         check(AllPacked(sorted), "a hidden result with an open view is packed after its 5 s");
         rig.Show(sorted.ResultId);
         rig.Packer.PackDue();
-        check(!sorted.HasPacked && rig.Store.HasViews(sorted), "shown again with its grid still sorted, it is unpacked for the view's screens");
+        check(AllPacked(sorted) && rig.Store.HasViews(sorted) && sorted.Unpacks == 0, "shown again with its grid still sorted, it stays packed: its screens read the packed pages");
 
-        // A shown result packed while idle, then sorted: the view's screens would read a page or so a row, so it is unpacked.
+        // A shown result packed while idle, then sorted: the sort reads it packed and the policy leaves it packed, so sorting
+        // never costs the raw bytes back (Stage 2 once unpacked it whole for the view's screens).
         var later = Filled(rig.Store, "sorted later", BigRows);
         rig.Show(later.ResultId);
         rig.Packer.PackDue();
         rig.Clock += Idle;
         rig.Packer.PackDue();
         check(AllPacked(later), "the fixture: a shown result packed once idle");
-        pokes = rig.Pokes;
-        Call<ResultsViewResult>("results.view", new { resultId = later.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
-        var poked = rig.Pokes > pokes;
+        long unpackNeed;
+        using (later.Pin()) unpackNeed = later.UnpackNeed();
+        var usedPacked = rig.Store.UsedBytes;
+        var sortedLater = Call<ResultsViewResult>("results.view", new { resultId = later.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         rig.Packer.PackDue();
-        check(poked && !later.HasPacked && State(rig.Store, later) == "raw", "sorting a packed shown result wakes the policy, which unpacks it for the view");
+        var grown = rig.Store.UsedBytes - usedPacked;
+        check(AllPacked(later) && later.Unpacks == 0 && State(rig.Store, later) == "packed" && grown < unpackNeed / 4,
+            "sorting a packed shown result leaves it packed after the policy looks: grew " + grown + " bytes, unpacking would add " + unpackNeed);
+        // Its screens read through the view without unpacking it whole.
+        var screen = rig.Store.FindView(later.ResultId, sortedLater.ViewId) ?? throw new InvalidOperationException("The view was not kept.");
+        var screenRows = 0;
+        foreach (var page in ViewPages.Build(screen, later.RowsAvailable / 2, 256)) screenRows += page.Rows;
+        rig.Packer.PackDue();
+        check(screenRows == 256 && AllPacked(later) && later.Unpacks == 0, "a sorted screen of a packed shown result reads it packed: " + screenRows + " rows");
         rig.Clock += 100 * Idle;
-        check(rig.Packer.PackDue() is null && !later.HasPacked, "and it stays raw while the view is open");
+        check(rig.Packer.PackDue() is null && AllPacked(later), "and it stays packed while the view is open");
 
-        // The view's own build still holds the result when it pokes: the policy finds it held, and its end pokes again.
-        var held = Filled(rig.Store, "held at view", BigRows);
-        rig.Show(held.ResultId);
-        rig.Packer.PackDue();
-        rig.Clock += Idle;
-        rig.Packer.PackDue();
-        var building = held.Pin();
-        Call<ResultsViewResult>("results.view", new { resultId = held.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
-        rig.Packer.PackDue();
-        var stillPacked = AllPacked(held);
-        pokes = rig.Pokes;
-        building.Dispose();
-        var pokedAtEnd = rig.Pokes > pokes;
-        rig.Packer.PackDue();
-        check(stillPacked && pokedAtEnd && !held.HasPacked, "a view's result held while the policy looks is unpacked once the hold ends, which wakes it");
-
-        // Hidden again with its grid still sorted, the last was unpacked once for its view: it waits twice the delay, so
-        // switching tabs back and forth does not unpack and pack it every time.
-        rig.Show();
-        var hiddenAt = rig.Clock;
-        var hiddenDue = rig.Packer.PackDue();
-        check(hiddenDue == hiddenAt + 2 * ResultPacker.DelayMs && held.ViewUnpacks == 1 && !held.HasPacked,
-            "a hidden result unpacked once for its view waits twice the delay: " + (hiddenDue - hiddenAt) + " ms, " + held.ViewUnpacks + " view unpacks");
-        foreach (var done in new[] { later, held, sorted }) rig.Store.Release(done.ResultId);
-
-        // Without room for it twice over, it stays packed and the policy looks again after the delay (freeing memory pokes nothing).
-        var tight = Filled(rig.Store, "tight", BigRows);
-        rig.Show(tight.ResultId);
-        Call<ResultsViewResult>("results.view", new { resultId = tight.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
-        rig.Show();
-        rig.Packer.PackDue();
-        rig.Clock += ResultPacker.DelayMs;
-        rig.Packer.PackDue();
-        var packedHidden = AllPacked(tight);
-        var global = rig.Store.GlobalBytes;
-        var query = rig.Store.QueryBytes;
-        rig.Store.Resize(rig.Store.UsedBytes + (1L << 20), rig.Store.UsedBytes + (1L << 20));
-        rig.Show(tight.ResultId);
-        var retryAt = rig.Packer.PackDue();
-        var leftPacked = packedHidden && AllPacked(tight) && retryAt == rig.Clock + ResultPacker.DelayMs;
-        rig.Store.Resize(global, query);
-        rig.Clock += ResultPacker.DelayMs;
-        rig.Packer.PackDue();
-        check(leftPacked && !tight.HasPacked, "without room for it the view's result stays packed and is unpacked at the next look once there is room: " + (retryAt - rig.Clock + ResultPacker.DelayMs));
+        foreach (var done in new[] { later, sorted }) rig.Store.Release(done.ResultId);
 
         // A column's value list (a distinct snapshot) keeps its result's pages, not their bytes, and reads them packed: a
         // result with one open is packed as any other, and the budget gets the raw bytes back.

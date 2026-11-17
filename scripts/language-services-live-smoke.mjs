@@ -140,7 +140,7 @@ try {
   expect(status.ok && status.value.providers.some(provider => provider.id === 'sqlserver' && provider.configured)).toBe(true)
 
   const first = await connect('master')
-  await suggest(page, page, { prefix: 'SELECT d.database_', suffix: ' FROM sys.databases AS d;', label: 'database_id' })
+  await suggest(page, page, { prefix: 'SELECT d.database_', suffix: ' FROM sys.databases AS d;', label: '[database_id]' })
   console.log('Live language UI: real database column suggestion inserts through Monaco without a service-path override.')
   await hover(page, page, 'SELECT d.datab'.length, 'database_id', 'int')
   const second = await connect('msdb')
@@ -149,8 +149,8 @@ try {
   await editorTextbox(page).focus()
   await page.keyboard.press(`${mod}+\\`)
   await expect(editorGroups(page)).toHaveCount(2)
-  const master = { prefix: 'SELECT v.num', suffix: ' FROM dbo.spt_values AS v;', label: 'number' }
-  const msdb = { prefix: 'SELECT j.job_', suffix: ' FROM dbo.sysjobs AS j;', label: 'job_id' }
+  const master = { prefix: 'SELECT v.num', suffix: ' FROM dbo.spt_values AS v;', label: '[number]' }
+  const msdb = { prefix: 'SELECT j.job_', suffix: ' FROM dbo.sysjobs AS j;', label: '[job_id]' }
   const firstGroup = editorGroupForDocument(page, first.tab), secondGroup = editorGroupForDocument(page, second.tab)
   await suggest(page, firstGroup, master)
   await context(page, first.connectionId, 'master')

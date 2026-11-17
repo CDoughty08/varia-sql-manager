@@ -91,7 +91,7 @@ describe('gesture rows follow the page', () => {
     // Scope ids match too, as the page's `@scope:editor` does for keyboard rows (case-folded, like every token).
     expect(ids(gestureRows(file, 'win32', '@scope:resultsgrid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn', 'resultTabs.scroll'])
     expect(ids(gestureRows(file, 'win32', '@scope:tableDesigner'))).toEqual(['grid.addToSelection', 'grid.extendSelection'])
-    expect(ids(gestureRows(file, 'win32', '@scope:queryeditor', { multiCursorModifier: 'alt' }))).toEqual(['editor.goToDefinition', 'editor.wheelZoom', 'textEditor.multiCursorModifier'])
+    expect(ids(gestureRows(file, 'win32', '@scope:queryeditor', { multiCursorModifier: 'alt' }))).toEqual(['editor.peekHover', 'editor.goToDefinition', 'editor.wheelZoom', 'textEditor.multiCursorModifier'])
     expect(ids(gestureRows(file, 'win32', '@scope:messages'))).toEqual(['messages.revealError'])
     expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
     expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])

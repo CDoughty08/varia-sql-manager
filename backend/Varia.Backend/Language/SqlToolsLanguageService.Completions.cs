@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace Varia.Backend.Language;
@@ -14,7 +15,7 @@ internal sealed partial class SqlToolsLanguageService
     private static async Task<JsonElement> ScopedCompletionAsync(ILspClient current, Document document, LanguageRequest request,
         object position, CancellationToken token)
     {
-        var original = await CompletionAsync(current, document, request, position, token);
+        var original = NormalizeCompletions(await CompletionAsync(current, document, request, position, token));
         var array = CompletionArray(original);
         if (array.ValueKind != JsonValueKind.Array || !array.EnumerateArray().Any(IsColumn)) return original;
         var scope = ResolveCompletionScope(array, request.Text, request.Position);
@@ -58,7 +59,7 @@ internal sealed partial class SqlToolsLanguageService
                 var probe = request with { Text = probeText, Position = probePosition };
                 var result = await CompletionAsync(current, document, probe,
                     new { textDocument = new { uri = document.Uri }, position = probePosition }, budget.Token);
-                var columns = CompletionArray(result);
+                var columns = CompletionArray(NormalizeCompletions(result));
                 if (columns.ValueKind != JsonValueKind.Array || !columns.EnumerateArray().Any(IsColumn))
                 {
                     incomplete = true;
@@ -98,6 +99,57 @@ internal sealed partial class SqlToolsLanguageService
         var items = candidates.UnorderedItems.OrderByDescending(item => item.Priority).Select(item => item.Element);
         return JsonSerializer.SerializeToElement(new { items, isIncomplete = incomplete }, CompletionJson);
     }
+
+    /// <summary>
+    /// Makes each suggestion insert exactly what it shows. A column always inserts its bracketed name: STS brackets a
+    /// column's label but not its insertion after a bracketed alias (<c>[bob].</c>), and only brackets names that need it
+    /// elsewhere. Any other item whose label and insertion differ only by quoting shows and inserts the quoted form.
+    /// The bare name stays the filter text, so typing it still matches.
+    /// </summary>
+    internal static JsonElement NormalizeCompletions(JsonElement result)
+    {
+        var array = CompletionArray(result);
+        if (array.ValueKind != JsonValueKind.Array) return result;
+        List<JsonElement> items = [];
+        var changed = false;
+        foreach (var item in array.EnumerateArray())
+        {
+            var normalized = NormalizeCompletion(item);
+            changed |= normalized is not null;
+            items.Add(normalized ?? item);
+        }
+        return changed ? JsonSerializer.SerializeToElement(new { items, isIncomplete = Property(result, "isIncomplete").ValueKind == JsonValueKind.True }, CompletionJson) : result;
+    }
+
+    private static JsonElement? NormalizeCompletion(JsonElement item)
+    {
+        var label = String(item, "label");
+        var edit = Property(item, "textEdit");
+        var newText = String(edit, "newText");
+        var insert = newText ?? String(item, "insertText") ?? label;
+        if (string.IsNullOrEmpty(label) || string.IsNullOrEmpty(insert) || label.Length > 1024 || insert.Length > 16_384 || Number(item, "insertTextFormat") == 2) return null;
+        string quoted, name;
+        if (IsColumn(item))
+        {
+            name = UnquoteCompletion(IsQuoted(insert) ? insert : IsQuoted(label) ? label : insert);
+            if (name.Length == 0 || name == "*") return null;
+            quoted = "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
+        }
+        else if (label != insert && IsQuoted(insert) && UnquoteCompletion(insert) == label) (quoted, name) = (insert, label);
+        else if (label != insert && IsQuoted(label) && UnquoteCompletion(label) == insert) (quoted, name) = (label, insert);
+        else return null;
+        // STS wraps names in delimiters without escaping them: A]B arrives as [A]B].
+        quoted = quoted[0] == '"' ? "\"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"" : "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
+        if (label == quoted && insert == quoted && String(item, "filterText") == name) return null;
+        var node = JsonSerializer.SerializeToNode(item, CompletionJson)!.AsObject();
+        node["label"] = quoted;
+        node["filterText"] = name;
+        if (node["insertText"] is not null || newText is null) node["insertText"] = quoted;
+        if (newText is not null) node["textEdit"]!["newText"] = quoted;
+        return JsonSerializer.SerializeToElement(node, CompletionJson);
+    }
+
+    private static bool IsQuoted(string value) => value.Length > 1 && (value[0] == '[' && value[^1] == ']' || value[0] == '"' && value[^1] == '"');
 
     private static Task ReplaceCompletionBufferAsync(ILspClient current, Document document, string previous, string text, CancellationToken token) =>
         current.NotifyAsync("textDocument/didChange", new

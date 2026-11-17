@@ -252,8 +252,9 @@ internal sealed record ResultsExportArgs(uint ResultId, string Path, string Form
 /// <summary>Rows are the source rows written; Capped those a transposed job left out for lying past the rows a transposed
 /// grid draws (0 otherwise).</summary>
 internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial, long Capped = 0);
-/// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
-internal sealed record SynthesizeArgs(string Shape, int Rows);
+/// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only). Pack packs the stored result's pages before it
+/// answers (the benchmarks' packed result), as the policy would once it went idle.</summary>
+internal sealed record SynthesizeArgs(string Shape, int Rows, bool Pack = false);
 
 /// <summary>live.subscribe (results port only; docs/ipc.md, Live subscriptions). Args are read per source
 /// (Live/LiveService.cs), so each source's members are checked and unknown ones refused.</summary>
