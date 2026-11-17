@@ -100,8 +100,12 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
     if (!opened) return undefined
     const { child } = opened
     let closing = false, timer: ReturnType<typeof setTimeout> | undefined
+    let poll: ReturnType<typeof setInterval> | undefined
+    // Once, whichever notices first (pagehide or the poll): a dialog still open after it (a save failed) stays open.
     const closed = () => {
       if (closing) return
+      closing = true
+      clearInterval(poll)
       closeRef.current()
       // A dialog that stays open (Options while OK saves) shows over the main window from here; one that closed is gone
       // in the same render.
@@ -114,7 +118,7 @@ export default function DialogWindow({ kind, onClose, raise, children }: { reado
     child.addEventListener('pagehide', closed)
     child.addEventListener('resize', resized)
     // A window torn down without its pagehide (by the OS, or a crash), which popouts watch for the same way.
-    const poll = setInterval(() => { if (child.closed) { clearInterval(poll); closed() } }, 1000)
+    poll = setInterval(() => { if (child.closed) closed() }, 1000)
     return () => {
       closing = true
       clearInterval(poll)

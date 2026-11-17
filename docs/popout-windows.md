@@ -82,8 +82,7 @@ can move off the main window, onto another display.
   has closed in the last half second (`PopoutWindows.settled`, `settledNativeTheme`); popouts benefit too.
 - **Modeless.** The workbench keeps working in the main window while a dialog window is open. Keys pressed in the
   dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
-  window. Tools › Options… while Options is open brings its window forward on the page asked for. Surfaces that close
-  for a dialog over the main window, such as the memory indicator's pinned breakdown, stay open beside one.
+  window. Tools › Options… while Options is open brings its window forward on the page asked for.
 - **Size.** Options opens at 940 × 680, at least 640 × 440, and can be resized; the size it was left at is kept in
   `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
   screen. About has a fixed size. A window opens centred on the main window.

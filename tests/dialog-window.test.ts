@@ -144,6 +144,12 @@ describe('DialogWindow', () => {
       expect(view.onClose).toHaveBeenCalledTimes(1)
       await act(async () => { vi.advanceTimersByTime(3000) })
       expect(view.onClose).toHaveBeenCalledTimes(1)
+      // After pagehide, the poll finding the window closed does not close a dialog that stayed open (its save failed).
+      const kept = await mount()
+      await act(async () => { kept.fake.emit('pagehide') })
+      kept.fake.child.closed = true
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(kept.onClose).toHaveBeenCalledTimes(1)
     } finally { vi.useRealTimers() }
   })
   it('shows a dialog that stays open after its window was closed (Options while OK saves) over the main window', async () => {
