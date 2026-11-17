@@ -1,24 +1,35 @@
-# SQL Server Agent plan (0.10.0)
+# SQL Server Agent plan (0.11.0)
 
 Status: **agreed with the owner on 2026-11-15** (decisions below), revised after adversarial review. Nothing here is
 implemented yet. This page is the plan of record for the Agent lanes; each lane's PR updates the area's own page (a new
 docs/sql-server-agent.md, generated below a marker like docs/integration-services.md) and moves the lane's row here to Done.
 
-0.10.0 ships two headline features: SQL Server Agent (this page) and BigQuery (docs/bigquery-plan.md, in
-CDoughty08/varia-sql-manager#528, not yet on main). SSMS 2022/22 is the parity target for names, menus, keys and
-behaviour; visuals follow Calm Pro.
+Agent is planned for 0.11.0. 0.10.0 focuses on BigQuery (docs/bigquery-plan.md, in CDoughty08/varia-sql-manager#528, not
+yet on main); until then Agent work is limited to these docs and the mocks. SSMS 2022/22 is the parity target for names,
+menus, keys and behaviour; visuals follow Calm Pro.
 
 Mocks of every new or changed surface: [docs/mockups/sql-server-agent.html](mockups/sql-server-agent.html) (open it in a
 browser; Dark and Light, a picker per surface, design notes as dashed boxes). Each lane's PR builds what its mock shows, or
 updates the mock in the same PR when the design changes.
 
+## Owner decisions (2026-11-16)
+
+- **Release**: Agent moves from 0.10.0 to 0.11.0 so 0.10.0 can focus on BigQuery. Until then only the plan and mocks are
+  polished.
+- **UI rethink adopted** ([docs/agent-ui-rethink.md](agent-ui-rethink.md)): Agent objects become document tabs with
+  in-place editing and inline creation, replacing the stacked child dialogs decided on 2026-11-16. Agent's first release
+  takes the rethink's first two tiers plus Create several.
+- **Review the mocks first**: every view the rethink changes gets a "Rethink" scene in the mocks, and the SSMS-style scenes
+  stay as reference. The sections and lanes below still describe the dialog design; they are rewritten to the document
+  model once the owner has reviewed the rethink scenes.
+
 ## Owner decisions (2026-11-15)
 
 - **Plan home**: this docs page plus the mocks, in a docs-only PR (as docs/bigquery-plan.md), pushed only with mocks for
   all new and changed UI in Varia's style.
-- **Agent service control**: Start, Stop and Restart in 0.10.0 through `master.dbo.xp_servicecontrol`, behind a
+- **Agent service control**: Start, Stop and Restart in 0.11.0 through `master.dbo.xp_servicecontrol`, behind a
   confirmation, sysadmin and Windows servers only, hidden on Linux and Managed Instance. **Must ship** (lane AG-2).
-- **Proxies and credentials**: full dialogs in 0.10.0: New and Properties for proxies (General, Principals, References),
+- **Proxies and credentials**: full dialogs in 0.11.0: New and Properties for proxies (General, Principals, References),
   New Credential **and** Credential Properties (lane AG-8b).
 - **Log File Viewer**: master/detail (runs grid, the selected run's steps below, details pane); no tree mode in `GridView`.
 - **Local live checks**: the owner's local MSSQLSERVER runs Agent (Automatic, running since 2026-11-15 18:13), so
@@ -36,7 +47,7 @@ updates the mock in the same PR when the design changes.
   every Agent role, showing the jobs that login may see.
 - **Write path**: Agent writes run inside ActionService, templates in `AgentSql` with a lint chained from `ActionSql.Lint`.
 - **SSIS package steps** stay in the must-ship steps lane (AG-6b).
-- **Scope cut if 0.10.0 runs long**: must ship AG-0 to AG-6c; may slip AG-7 (operators and alerts dialogs), AG-8a (Agent
+- **Scope cut if 0.11.0 runs long**: must ship AG-0 to AG-6c; may slip AG-7 (operators and alerts dialogs), AG-8a (Agent
   Properties) and AG-8b (proxy and credential dialogs). Operators, alerts and proxies stay listable and scriptable from
   AG-1 and AG-4.
 
@@ -710,7 +721,7 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   back; mock scene `job-alerts-child`).
 - **Notifications**: E-mail / Page / Net send operator with When (succeeds, fails, completes), Write to the Windows
   Application event log, Automatically delete job. Kinds the platform gates refuse are disabled with the reason.
-- **Targets**: "Target local server" only in 0.10.0; multi-server (MSX/TSX) targets are later and shown disabled.
+- **Targets**: "Target local server" only in 0.11.0; multi-server (MSX/TSX) targets are later and shown disabled.
 
 ## Job Activity Monitor and history
 
@@ -807,7 +818,7 @@ Database Mail logs, which SSMS shows there).
 
 ## Alerts, operators, proxies, credentials, schedules, error logs, Database Mail
 
-| Area | 0.10.0 | Later |
+| Area | 0.11.0 | Later |
 | --- | --- | --- |
 | Shared schedules | Schedule dialog, Pick, Jobs in Schedule, Manage Schedules: Delete offered for any schedule the login owns (sysadmin: any), never judged "unused" from Jobs in schedule counts; `sp_delete_schedule` without `@force_delete`, whose in-use refusal maps to `IN_USE` with msdb's message (an `AgentActions` check) | |
 | Job categories | Category picker | Manage Job Categories dialog |

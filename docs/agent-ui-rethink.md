@@ -1,7 +1,8 @@
 # Rethinking SQL Server Agent's UI
 
-Status: proposal for the owner, 2026-11-16 (second pass). Nothing here is in `docs/agent-plan.md` yet; once accepted,
-the plan is revised to match. Mocks: the four "Rethink · …" groups at the top of `docs/mockups/sql-server-agent.html`.
+Status: **adopted by the owner on 2026-11-16** for Agent's first release, now 0.11.0 (0.10.0 focuses on BigQuery).
+`docs/agent-plan.md` is rewritten to match once the owner has reviewed the rethink scenes. Mocks: the "Rethink · …" groups
+at the top of `docs/mockups/sql-server-agent.html`; the SSMS-style scenes below them stay as reference.
 
 SSMS's Agent UI dates from small monitors: every object is a modal dialog with a page list, and anything inside it
 (a step, a schedule, an operator, a credential) opens another modal on top. Setting up a job is a walk down three
@@ -115,7 +116,7 @@ As › CREATE, edit the text, run it. Varia adds a direct path.
   skipped rows go back to the table to fix and retry. "Enable the created jobs" is one click, since they were saved
   disabled.
 
-## If accepted, what changes in the plan
+## What changes in the plan
 
 - Job, alert, operator, proxy and schedule editors become document tabs instead of `ObjectDialog` pages. These stay
   unchanged: save paths, msdb templates, identity and `STALE` guards, the step save planner, role rules and read-only
@@ -131,9 +132,9 @@ As › CREATE, edit the text, run it. Varia adds a direct path.
   - Create Job Like This joins AG-6a. Create several is its own small lane.
   - Overall sizing is about even: document infrastructure replaces the child-dialog infrastructure.
 
-## Proposed tiers
+## Tiers (decided 2026-11-16)
 
-Recommended for 0.10.0, cost-neutral or close to it:
+In Agent's first release (0.11.0):
 - The document model.
 - Inline creation.
 - Alert and proxy on one screen.
@@ -142,24 +143,51 @@ Recommended for 0.10.0, cost-neutral or close to it:
 - Problems on the document.
 - Create Job Like This with Replace across the copy.
 - Job Activity Monitor's chevron, double-click to open, and bulk Enable, Disable and Start.
-
-Small aids worth adding to 0.10.0:
 - Add recommended alerts (sp_add_alert and sp_add_notification, which the plan already uses).
 - Send test e-mail and the Agent mail check (sysadmin reads).
 - The Operators and notifications grid (it replaces three pages, so it is close to neutral).
 - Bulk Change owner and Attach schedule (one request per job).
-
-Later (0.11.0 or after):
 - Create several.
+
+Later:
 - Schedules Timeline.
 - Agent overview health checks.
 - Copy to another server (a write on a second connection).
 - New Job templates.
 - A Flow view of step targets.
 
+## Every changed view has a rethink scene
+
+| SSMS-style scene (kept for reference) | Rethink scene |
+| --- | --- |
+| Job Properties · General, Targets | rx-job-general |
+| Job Properties · Notifications | rx-job-notifications |
+| Job Properties · Alerts, Job › Alerts › New Alert (stacked child) | rx-job-alerts |
+| Job Properties · read-only | rx-job-readonly |
+| Save refused (changed by someone else, permission denied) | rx-job-stale, rx-job-denied |
+| Job Properties · Steps, Job Step · General (T-SQL) | rx-job-steps |
+| Job Step · General (PowerShell, proxy), Advanced | rx-step-ps |
+| Job Step · General (CmdExec) | rx-step-cmdexec |
+| Job Step · General (SSIS package) | rx-step-ssis |
+| Delete step (other steps jump to it) | rx-step-delete |
+| Start Job at Step | rx-start-step |
+| Job Properties · Schedules, Job Schedule | rx-job-schedules |
+| Pick Schedule, Jobs in Schedule, CPU idle warning | rx-schedule-pick |
+| Remove schedule (offer to delete) | rx-schedule-remove |
+| Manage Schedules | rx-schedules-doc |
+| Alert Properties · General, Response, Options, History | rx-alert |
+| Alert Properties · performance condition, WMI | rx-alert-perf |
+| Operator Properties · General, Notifications, History | rx-operators |
+| Delete Object · operator, Reassign to | rx-operator-delete |
+| Proxy Properties, New Credential | rx-proxy |
+| Credential Properties | rx-credential |
+| SQL Server Agent Properties · General, History, purge confirmation | rx-agent-props |
+| Job Activity Monitor | rx-jam |
+
+Unchanged, so no rethink scene: the Object Explorer scenes, Log File Viewer (cross-job history and the error log), every
+service-control dialog and progress state, Delete Object for a job, Delete History, Filter Settings and the status-bar
+chip.
+
 ## Questions for the owner
 
-1. Adopt documents and in-place editing for Agent objects, retiring stacked child dialogs?
-2. Which tiers go into 0.10.0: the first only, the first two, or a different cut?
-3. Create several: 0.10.0 or later?
-4. On Create from…, should schedules default to Share or Copy?
+1. On Create from…, should schedules default to Share or Copy? The mocks show Share.
