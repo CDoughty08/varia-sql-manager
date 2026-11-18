@@ -290,7 +290,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     const tone = kind === RowKind.Error || kind === RowKind.MoreError ? ' error' : kind === RowKind.More || kind === RowKind.Loading ? ' progress' : ''
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
-      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
+      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}
+      // Not a place a server drops: passing over it clears the line the row above left, so releasing here moves nothing.
+      onDragOver={(event: DragEvent) => actions.dragOver(rowId, 'after', event)}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
       {!inert && recovery && <button type="button" className="oe-recovery-action" tabIndex={-1} title={`${recovery.label} (Enter)`}
         onMouseDown={event => { event.preventDefault(); event.stopPropagation(); actions.select(rowId) }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}

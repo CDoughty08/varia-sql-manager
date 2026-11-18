@@ -17,7 +17,8 @@ import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, r
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
 const announceDelayMs = 500
-interface DropMark { readonly rowId: number; readonly edge: 'before' | 'after' }
+/** Where a dragged server drops: above or below a server row; `end` (the background) draws the line below the tree's last row. */
+interface DropMark { readonly rowId: number; readonly edge: 'before' | 'after'; readonly end?: true }
 interface FollowedQuery {
   readonly query: string
   readonly connection: string
@@ -265,7 +266,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       run('explorer.openPeekTab', rowId)
     }
   }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
-  // The background below the last row drops a server last, and its line shows that. Rows mark themselves (actions.dragOver);
+  // The background below the last row drops a server last, and its line shows that: below the tree's last row, which is
+  // the last server's last child when it is expanded. Rows mark themselves (actions.dragOver);
   // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
   const dragOverTree = (event: DragEvent<HTMLDivElement>) => {
     if ((event.target as Element).closest?.('[role="treeitem"]')) return
@@ -273,7 +275,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (from === undefined || last === undefined) { setDropMark(undefined); return }
     event.preventDefault()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-    setDropMark(mark => mark?.rowId === last && mark.edge === 'after' ? mark : { rowId: last, edge: 'after' })
+    setDropMark(mark => mark?.end && mark.rowId === last ? mark : { rowId: last, edge: 'after', end: true })
   }
   // Releasing drops where the line is, whichever element is under the pointer: a row, its edge or the background.
   const dropOnTree = (event: DragEvent<HTMLDivElement>) => {
@@ -392,7 +394,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
             status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}
-            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.rowId === rowId ? dropAt.edge : undefined} />
+            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.end ? (index === rows.count - 1 ? 'after' : undefined) : dropAt?.rowId === rowId ? dropAt.edge : undefined} />
         })}
       </div>
     </div>
