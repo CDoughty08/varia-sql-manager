@@ -26,8 +26,8 @@ internal sealed class SearchFold
         1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
-    // About 200 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
-    // a handful (at most 35 cultures times 16 option sets, if every one were searched).
+    // About 450 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
+    // a handful (at most 35 cultures times 16 option sets, about 250 MB, if every one were searched).
     private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
     /// <summary>The fold for a culture and compare options once it is built, else null (and the build started on the thread
@@ -54,9 +54,13 @@ internal sealed class SearchFold
     /// <summary>Builds any culture's fold, verified or not (the differential check measures unverified ones).</summary>
     internal static SearchFold Build(int lcid, CompareOptions options) => new(CultureInfo.GetCultureInfo(lcid).CompareInfo, options);
 
-    // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss) or none.
+    // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss, a Hangul
+    // syllable to its jamo where accents count) or none. Those are packed, not a dictionary of strings, which took 1 MB a
+    // fold: each code unit's entry (from 1), and each entry's fold as a range of one pool.
     private readonly char[] single = new char[65536];
-    private readonly Dictionary<char, string> multiple = [];
+    private readonly ushort[] multipleEntries = new ushort[65536];
+    private readonly int[] multipleStarts;
+    private readonly char[] multiplePool;
     private const char Multiple = '\uFFFF';
     // Each code unit's kind: Unvouched (its cell goes to the compare), Plain (vouched and NFC-stable) or Accent (a combining
     // accent, vouched only once NFC composes it into a plain letter).
@@ -119,6 +123,8 @@ internal sealed class SearchFold
             representatives[key] = chosen;
             return chosen;
         }
+        var starts = new List<int>();
+        var pool = new StringBuilder();
         for (var c = 0; c < 65536; c++)
         {
             var unit = (char)c;
@@ -134,10 +140,15 @@ internal sealed class SearchFold
             else
             {
                 single[c] = Multiple;
-                multiple[unit] = fold;
+                starts.Add(pool.Length);
+                multipleEntries[c] = checked((ushort)starts.Count);
+                pool.Append(fold);
             }
             if (c < 128) ascii[c] = fold;
         }
+        starts.Add(pool.Length);
+        multipleStarts = [.. starts];
+        multiplePool = pool.ToString().ToCharArray();
     }
 
     private static bool Stable(char c)
@@ -148,7 +159,7 @@ internal sealed class SearchFold
 
     /// <summary>The code units the fold vouches for, whose collation in the verified cultures depends on no neighbour (the
     /// key-class scan in SearchFoldChecks finds no two strings of them alike to the compare and folded apart): tab, line
-    /// breaks and printable ASCII; no-break space, Latin-1 and Extended-A letters, and Extended-B's Vietnamese ơ ư, pinyin ǎ
+    /// breaks and printable ASCII; no-break space, Latin-1 and Extended-A letters (and × ÷), and Extended-B's Vietnamese ơ ư, pinyin ǎ
     /// to ǜ and Romanian ș ț; Greek and Cyrillic letters; Hebrew letters; Arabic letters from أ and Arabic-Indic digits;
     /// dashes (U+2010 to U+2015) and quotes (U+2018 to U+201F); hiragana and katakana letters, full-width and half-width; CJK ideographs; Hangul syllables;
     /// full-width ASCII; and, but in Japanese, the <see cref="Repeating"/> marks. Not ·, which root joins with l, nor the
@@ -207,8 +218,12 @@ internal sealed class SearchFold
                 continue;
             }
             if (folded != Multiple) Append(ref buffer, ref length, folded);
-            else if (!multiple.TryGetValue(c, out var several)) return false;
-            else foreach (var part in several) Append(ref buffer, ref length, part);
+            else
+            {
+                var entry = multipleEntries[c];
+                if (entry == 0) return false;
+                for (var k = multipleStarts[entry - 1]; k < multipleStarts[entry]; k++) Append(ref buffer, ref length, multiplePool[k]);
+            }
         }
         return true;
     }

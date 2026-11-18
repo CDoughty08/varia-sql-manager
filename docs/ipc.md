@@ -1333,7 +1333,7 @@ The results toolbar's search runs in the backend over held rows in the grid's or
 - **Pre-check.** A culture compare (ICU) reads text that is not ASCII at about 90 MB/s, so a character column of a
   verified culture first folds the cell with the culture's search fold for the column's options (`SearchFold`: each
   character mapped to one representative of the characters its collator gives the same sort key under those options,
-  built in about 50 ms on first use, off the search) and looks for the text's fold by code point; only a cell holding it
+  built in 0.05 – 0.1 s on first use, off the search) and looks for the text's fold by code point; only a cell holding it
   goes to the compare. The answers are the compare's, about 3.3 times sooner over SQL Server's own messages in 22
   languages. Collation is not always per character (Japanese ー repeats the sound before it, l·l joins, ligatures and
   presentation forms equal letter pairs), so the fold vouches only for an allowlist of characters whose collation depends
@@ -1345,7 +1345,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   and Croatian collations are never pre-checked (they treat a letter as a pair of letters), nor is Thai (its compare
   finds characters its sort keys tell apart). `SearchFoldChecks` compares every verified culture's answers with the
   compare's over fuzzed text and known context-dependent cells under four option sets, checks that strings with the same
-  key fold alike, and asks the compare itself about pairs of characters under all sixteen option sets. The column
+  key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
+  and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
   filter's value search uses the same matcher.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
