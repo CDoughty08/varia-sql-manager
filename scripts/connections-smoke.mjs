@@ -131,7 +131,7 @@ try {
   await dialog.getByRole('button', { name: 'Remove saved focus-server', exact: true }).click()
   await expect(savedConnections(dialog, 'focus-server')).toHaveCount(0)
   await expect(dialog).toBeFocused()
-  // Save in the prompt saves the new connection to History, then closes; a password alone would not have asked.
+  // Save in the prompt saves the new connection to History, then closes.
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await dialog.getByLabel('Server Name', { exact: true }).fill('prompt-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -145,7 +145,7 @@ try {
   await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Remove saved prompt-server', exact: true }).click()
   await expect(savedConnections(dialog, 'prompt-server')).toHaveCount(0)
-  // Once saved, a typed password alone does not ask: closing keeps nothing the user would lose.
+  // Once saved, a typed password alone does not ask about the saved entry: closing loses nothing it keeps.
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -157,8 +157,32 @@ try {
   await expect(dialog).toHaveCount(0)
   await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
   dialog = await open()
+  // Settings a saved entry already has are not new: closing does not ask.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  dialog = await open()
+  // A Name typed for that entry is an edit of it: closing asks about the entry.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await customProperties(dialog)
+  await dialog.getByLabel('Name', { exact: true }).fill('Typed after')
+  await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save changes to password-server?', exact: true })
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unsaved).toHaveCount(0)
+  // Removing that entry is a choice about it: closing then does not offer to save it back.
   await dialog.getByRole('button', { name: 'Remove saved password-server', exact: true }).click()
   await expect(savedConnections(dialog, 'password-server')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
+  dialog = await open()
   // A Save in the prompt that fails (here a blank Custom environment label) keeps the dialog open with the reason.
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await dialog.getByLabel('Server Name', { exact: true }).fill('label-server')

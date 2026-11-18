@@ -177,7 +177,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const baseline = useRef<{ options: ConnectionOptions; autoReconnect: ConnectionDetails['autoReconnect'] } | undefined>(undefined)
   // The form as it was opened, chosen, saved or reset, and whether the user changed it since (pointing it at another
   // server included): a new connection with changes is not closed without asking either.
-  const pristine = useRef(shape({ ...initial, password: '' }, initialAutoReconnect ?? 'inherit'))
+  const [opened] = useState(() => shape({ ...initial, password: '' }, initialAutoReconnect ?? 'inherit'))
+  const pristine = useRef(opened)
   const touched = useRef(false)
   const [customOpen, setCustomOpenState] = useState(customPropertiesOpen)
   const setCustomOpen = (open: boolean) => { customPropertiesOpen = open; setCustomOpenState(open) }
@@ -524,7 +525,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   async function remove(profile: ConnectionProfile) {
     setSaving(true); setError('')
-    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { showLibrary(value); if (selectedId === profile.id) setSelectedId(undefined) } }
+    // Removing the entry the form edits is a choice about it: closing then does not offer to save it back.
+    const editing = selectedId === profile.id || editedEntry()?.id === profile.id
+    try { const value = unwrap(await window.varia.removeConnectionProfile(profile.id)); if (alive.current) { showLibrary(value); if (selectedId === profile.id) setSelectedId(undefined); if (editing) { startAfresh(); settle(currentOptions.current, autoReconnect) } } }
     catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
