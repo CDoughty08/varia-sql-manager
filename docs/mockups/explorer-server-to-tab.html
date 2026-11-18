@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Varia · Drag a server onto a query tab (mock)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Mock for dragging an Object Explorer server onto a query tab to move that query to the server. Colours are Varia's
+  built-in Dark and Light palette slots (src/shared/theme/palette.ts), sizes the Compact metrics. Static, self-contained,
+  fictional data; no network. Not product code: the renderer takes colours only from the theme.
+-->
+<style>
+:root { color-scheme: dark }
+body { margin: 0; padding: 16px; background: #0b0c0f; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 20px; color: #d9dce3 }
+body.light { background: #e9ebef; color: #1c1f26; color-scheme: light }
+body { --canvas:#16181d; --side:#111317; --chrome:#111317; --raised:#1c1f25; --overlay:#1d2026; --input:#101216; --accentSurface:#232842; --hover:#262a32; --active:#30343e; --sel:#21273b; --selStrong:#29314f; --text:#d9dce3; --strong:#f5f6f8; --text2:#bcc1cb; --text3:#a3a9b5; --muted:#9298a4; --textAccent:#bcc5ff; --border:#262a31; --borderStrong:#2e323a; --sep:#30343c; --inputBorder:#6a7184; --accent:#8f9cff; --onAccent:#0e1230; --error:#f39a9a; --warning:#e4bb6a; --success:#74d19c; --errorSurface:#3a1d22; --errorSurfaceText:#f6bcc1; --warningSurface:#33291a; --warningSurfaceText:#f0d49e; --icon:#a3a9b5; --iconMuted:#7f8694; --iconFolder:#bfa878; --badge:#30343e; --badgeText:#d9dce3; --scrim:#0008; --srvA:#5fb3a1; --srvB:#c58af9; --srvC:#e5806b }
+body.light { --canvas:#ffffff; --side:#f7f8fa; --chrome:#f7f8fa; --raised:#f1f3f6; --overlay:#ffffff; --input:#ffffff; --accentSurface:#dde1f9; --hover:#dfe2e7; --active:#d6dae0; --sel:#e7ebfc; --selStrong:#d9e0fb; --text:#1c1f26; --strong:#0a0c10; --text2:#3a404b; --text3:#4d5461; --muted:#5c6370; --textAccent:#3240b0; --border:#e3e6eb; --borderStrong:#d4d8df; --sep:#dcdfe5; --inputBorder:#878e9b; --accent:#4453d0; --onAccent:#ffffff; --error:#b42229; --warning:#875800; --success:#146f3b; --errorSurface:#fdecec; --errorSurfaceText:#8f1d24; --warningSurface:#fff5dc; --warningSurfaceText:#6b4400; --icon:#4d5461; --iconMuted:#6b7280; --iconFolder:#7d6532; --badge:#e3e6eb; --badgeText:#3a404b; --scrim:#1c1f2640; --srvA:#1f7f6c; --srvB:#8a3fd1; --srvC:#b8462f }
+* { box-sizing: border-box }
+button, select { font: inherit; color: inherit }
+h1 { font-size: 16px; margin: 0 0 4px }
+.lead { margin: 0 0 12px; color: var(--text3); max-width: 1100px }
+.pick { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 12px }
+.pick button { background: var(--raised); border: 1px solid var(--borderStrong); border-radius: 4px; height: 26px; padding: 0 10px; cursor: pointer }
+.pick button[aria-pressed="true"] { background: var(--accentSurface); border-color: var(--accent); color: var(--textAccent) }
+.pick .sep { width: 1px; height: 20px; background: var(--sep); margin: 0 4px }
+
+.win { position: relative; height: 560px; min-width: 1100px; display: grid; grid-template-rows: 1fr 24px; background: var(--canvas); border: 1px solid var(--border); border-radius: 8px; overflow: hidden }
+.body { display: grid; grid-template-columns: 300px 1fr; min-height: 0 }
+.status { display: flex; align-items: center; gap: 14px; background: var(--chrome); border-top: 1px solid var(--border); padding: 0 10px; font-size: 11px; color: var(--text3) }
+
+/* Object Explorer */
+.oe { background: var(--side); border-right: 1px solid var(--borderStrong); display: flex; flex-direction: column; min-height: 0 }
+.oe-head { height: 32px; display: flex; align-items: center; padding: 0 8px; font-size: 12px; font-weight: 600; color: var(--text2); border-bottom: 1px solid var(--border) }
+.oe-search { margin: 6px 8px; height: 26px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); color: var(--muted); display: flex; align-items: center; padding: 0 8px; font-size: 12px }
+.tree { flex: 1; position: relative }
+.row { height: 22px; display: flex; align-items: center; gap: 4px; padding-right: 8px; white-space: nowrap; position: relative }
+.row.server { height: 30px; font-weight: 600 }
+.row .accent { position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 2px }
+.row .chev { width: 16px; text-align: center; color: var(--iconMuted); font-size: 10px }
+.row .ic { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--icon) }
+.row .sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 4px }
+.row.dragging { opacity: .45 }
+.row.sel { background: var(--selStrong) }
+
+/* Documents */
+.main { display: flex; flex-direction: column; min-width: 0; position: relative }
+.tabs { height: 44px; display: flex; align-items: stretch; background: var(--chrome); border-bottom: 1px solid var(--border); position: relative }
+.tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 30px 0 10px; min-width: 168px; border-right: 1px solid var(--border); border-top: 2px solid transparent; color: var(--muted); transition: transform .16s cubic-bezier(.2,.8,.2,1), background-color .16s, opacity .16s }
+.tab.on { background: var(--canvas); color: var(--strong); border-top-color: var(--accent) }
+.tab .tx { display: flex; flex-direction: column; line-height: 15px }
+.tab .nm { font-size: 13px }
+.tab .meta { display: flex; gap: 4px; align-items: center; margin-top: 2px }
+.tab .srv { font-size: 11px; color: var(--text3); display: inline-flex; align-items: center; gap: 4px }
+.tab .srv i { width: 7px; height: 7px; border-radius: 50%; display: inline-block }
+.sid { padding: 0 4px; border-radius: 3px; background: var(--badge); color: var(--badgeText); font-size: 10px; line-height: 14px }
+.env { padding: 0 5px; border-radius: 3px; font-size: 10px; line-height: 14px; font-weight: 600; background: var(--errorSurface); color: var(--errorSurfaceText) }
+.tab .x { position: absolute; right: 8px; color: var(--iconMuted) }
+.tab .spin { width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; display: inline-block }
+@keyframes spin { to { transform: rotate(360deg) } }
+
+/* Drag states: every query tab shows it can take the server (a socket under it), the rest dim. */
+.dragging-server .tab.can::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 3px; height: 2px; border-radius: 2px; background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 10px); opacity: .7 }
+.dragging-server .tab.cannot { opacity: .45 }
+.tabs .tab.target { background: var(--accentSurface); transform: translateY(-1px); box-shadow: inset 0 0 0 1px var(--accent) }
+.tabs .tab.target::after { background: var(--accent) !important; opacity: 1 !important; animation: socket 1s ease-in-out infinite }
+@keyframes socket { 50% { opacity: .45 } }
+.tab.refuse { box-shadow: inset 0 0 0 1px var(--borderStrong) }
+
+/* The card under the tab names what the drop will do. */
+.card { position: absolute; z-index: 5; top: 50px; width: 300px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 6px; box-shadow: 0 8px 24px #0007; padding: 10px 12px; font-size: 12px; line-height: 17px }
+.card::before { content: ""; position: absolute; top: -6px; left: 40px; width: 10px; height: 10px; background: var(--overlay); border-left: 1px solid var(--borderStrong); border-top: 1px solid var(--borderStrong); transform: rotate(45deg) }
+.card .h { font-weight: 600; color: var(--strong); font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px }
+.card .move { display: flex; align-items: center; gap: 8px; margin: 6px 0 }
+.chipsrv { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--raised); border: 1px solid var(--border); font-weight: 600 }
+.chipsrv i { width: 8px; height: 8px; border-radius: 50%; display: inline-block }
+.chipsrv.old { color: var(--muted); font-weight: 400; text-decoration: line-through; text-decoration-color: var(--muted) }
+.card .arrow { color: var(--accent) }
+.card .note { color: var(--text3) }
+.card .warn { margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: var(--warningSurface); color: var(--warningSurfaceText) }
+.card .no { color: var(--muted) }
+.card kbd { font: inherit; font-size: 11px; border: 1px solid var(--sep); border-radius: 3px; padding: 0 4px; color: var(--text3) }
+
+/* The drag image follows the pointer: the server's name in its colour. */
+.ghost { position: absolute; z-index: 6; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: 6px; background: var(--overlay); border: 1px solid var(--accent); box-shadow: 0 6px 18px #0008; font-weight: 600; pointer-events: none }
+.ghost i { width: 8px; height: 8px; border-radius: 50%; display: inline-block }
+.cursor { position: absolute; z-index: 7; width: 14px; height: 20px; pointer-events: none }
+.no-cursor { position: absolute; z-index: 7; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--error); pointer-events: none }
+.no-cursor::after { content: ""; position: absolute; left: 50%; top: -1px; bottom: -1px; width: 2px; background: var(--error); transform: translateX(-50%) rotate(45deg) }
+
+/* Editor */
+.editor { flex: 1; padding: 10px 0 0 0; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; line-height: 19px; position: relative }
+.ln { display: flex }
+.ln b { width: 44px; text-align: right; padding-right: 14px; color: var(--iconMuted); font-weight: 400 }
+.kw { color: var(--accent) } .st { color: var(--success) }
+.toast { position: absolute; right: 16px; bottom: 16px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 6px; padding: 8px 12px; box-shadow: 0 6px 18px #0006; font-size: 12px; display: flex; gap: 8px; align-items: center }
+
+/* Dialog (the existing session prompt, reused) */
+.scrim { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; z-index: 9 }
+.dlg { width: 440px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 8px; box-shadow: 0 16px 40px #0009; padding: 16px 18px }
+.dlg h2 { font-size: 14px; margin: 0 0 8px }
+.dlg p { margin: 0 0 8px; color: var(--text2); font-size: 12.5px }
+.dlg .btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px }
+.btn { height: 28px; padding: 0 14px; border-radius: 4px; border: 1px solid var(--borderStrong); background: var(--raised); cursor: default }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--onAccent) }
+
+/* The drop: the ghost flies into the tab, a ring in the server's colour spreads from it, the server line swaps in. */
+.play .ghost { animation: fly .42s cubic-bezier(.5,0,.75,0) forwards }
+@keyframes fly { to { left: var(--tx); top: 18px; transform: scale(.35); opacity: 0 } }
+.play .tab.drop { animation: settle .5s .38s cubic-bezier(.2,.9,.3,1.3) both }
+@keyframes settle { 0% { transform: translateY(-1px) scale(1) } 40% { transform: translateY(0) scale(1.04) } 100% { transform: none } }
+.ring { position: absolute; z-index: 4; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--srvB); opacity: 0; pointer-events: none }
+.play .ring { animation: ring .6s .38s ease-out both }
+@keyframes ring { 0% { opacity: .9; transform: scale(.4) } 100% { opacity: 0; transform: scale(6) } }
+.tab .srv .was, .tab .srv .now { display: inline-flex; align-items: center; gap: 4px }
+.tab .srv .now { display: none }
+.play .tab.drop .srv .was { animation: out .2s .5s forwards }
+.play .tab.drop .srv .now { display: inline-flex; animation: in .25s .7s both }
+.play .tab.drop .sid { animation: sid 1.2s .5s both }
+@keyframes out { to { opacity: 0; transform: translateY(-6px) } }
+@keyframes in { from { opacity: 0; transform: translateY(6px) } }
+@keyframes sid { 0%, 40% { opacity: .3 } 100% { opacity: 1 } }
+.play .tab.drop .stripe { position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: var(--srvB); transform-origin: left; animation: stripe .5s .45s ease-out both }
+@keyframes stripe { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+@media (prefers-reduced-motion: reduce) {
+  .play .ghost, .play .ring { animation: none; opacity: 0 }
+  .play .tab.drop, .play .tab.drop .stripe, .play .tab.drop .sid { animation: none }
+  .play .tab.drop .srv .was { animation: none; display: none }
+  .play .tab.drop .srv .now { animation: none }
+}
+
+.notes { max-width: 1100px; margin: 14px 0 0; color: var(--text2); font-size: 12.5px; line-height: 19px }
+.notes h3 { font-size: 13px; margin: 12px 0 4px }
+.notes li { margin: 2px 0 }
+.notes code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px }
+</style>
+</head>
+<body>
+<h1>Drag a server onto a query tab</h1>
+<p class="lead">Dragging a server from Object Explorer onto a query tab moves that query to the server, as Query › Change Connection… does.
+Pick a scene; <b>Play the drop</b> runs the animation (the reduced-motion setting swaps the server at once instead).</p>
+<div class="pick" role="toolbar" aria-label="Mock controls">
+  <button data-theme="dark" aria-pressed="true">Dark</button><button data-theme="light" aria-pressed="false">Light</button>
+  <span class="sep"></span>
+  <button data-scene="drag" aria-pressed="true">1 · Dragging</button>
+  <button data-scene="hover" aria-pressed="false">2 · Over a query</button>
+  <button data-scene="play" aria-pressed="false">3 · Play the drop</button>
+  <button data-scene="txn" aria-pressed="false">4 · Open transaction</button>
+  <button data-scene="running" aria-pressed="false">5 · Running query</button>
+  <button data-scene="same" aria-pressed="false">6 · Same server</button>
+  <button data-scene="other" aria-pressed="false">7 · Not a query</button>
+  <button data-scene="prod" aria-pressed="false">8 · Production</button>
+</div>
+
+<div class="win" id="win">
+  <div class="body">
+    <aside class="oe">
+      <div class="oe-head">Object Explorer</div>
+      <div class="oe-search">Search objects</div>
+      <div class="tree">
+        <div class="row server"><span class="accent" style="background:var(--srvA)"></span><span class="chev">›</span><span class="ic">▣</span>SALES-SQL01<span class="sub">16.0 · sa</span></div>
+        <div class="row server" id="dragRow"><span class="accent" style="background:var(--srvB)"></span><span class="chev">›</span><span class="ic">▣</span><span id="dragName">REPORTING-SQL</span><span class="sub">15.0 · ana</span></div>
+        <div class="row server"><span class="accent" style="background:var(--srvC)"></span><span class="chev">›</span><span class="ic">▣</span>PROD-SQL<span class="sub">16.0 · ana</span><span class="env" style="margin-left:6px">PROD</span></div>
+      </div>
+    </aside>
+    <section class="main">
+      <div class="tabs" id="tabs">
+        <div class="tab can on" id="t1"><span class="stripe"></span><span class="ic">▤</span><div class="tx"><span class="nm">Orders report.sql</span><span class="meta"><span class="srv"><span class="was"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="now"><i style="background:var(--srvB)"></i>REPORTING-SQL</span></span><span class="sid">SID 57</span></span></div><span class="x">×</span></div>
+        <div class="tab can" id="t2"><span class="ic">▤</span><div class="tx"><span class="nm">SQLQuery2.sql</span><span class="meta"><span class="srv"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="sid">SID 61</span></span></div><span class="x">×</span></div>
+        <div class="tab can" id="t3"><span class="ic">▤</span><div class="tx"><span class="nm">Nightly load.sql <span class="spin" title="Executing"></span></span><span class="meta"><span class="srv"><i style="background:var(--srvB)"></i>REPORTING-SQL</span><span class="sid">SID 64</span></span></div><span class="x">×</span></div>
+        <div class="tab cannot" id="t4"><span class="ic">◷</span><div class="tx"><span class="nm">Activity Monitor</span><span class="meta"><span class="srv"><i style="background:var(--srvA)"></i>SALES-SQL01</span></span></div><span class="x">×</span></div>
+      </div>
+      <div class="editor" id="editor">
+        <div class="ln"><b>1</b><span><span class="kw">SELECT</span> TOP (100) o.OrderId, o.Placed, c.Name</span></div>
+        <div class="ln"><b>2</b><span><span class="kw">FROM</span> dbo.Orders <span class="kw">AS</span> o</span></div>
+        <div class="ln"><b>3</b><span><span class="kw">JOIN</span> dbo.Customers <span class="kw">AS</span> c <span class="kw">ON</span> c.CustomerId = o.CustomerId</span></div>
+        <div class="ln"><b>4</b><span><span class="kw">WHERE</span> o.Region = <span class="st">N'North'</span>;</span></div>
+      </div>
+      <div id="overlay"></div>
+    </section>
+  </div>
+  <div class="status" id="status"><span>● SALES-SQL01</span><span>AppData</span><span>ana</span><span style="margin-left:auto">Ln 4, Col 30</span></div>
+</div>
+
+<div class="notes">
+  <h3>How it behaves</h3>
+  <ul>
+    <li><b>Starts</b> when a server row is dragged. Every query tab shows a dashed socket under it; tabs that are not queries dim. Reordering servers in Object Explorer still works during the same drag, so one gesture does either.</li>
+    <li><b>Over a query tab</b> the tab lifts and fills with the accent, its socket pulses, and a card names the move: old server struck through → new server, and the database it will use. Hovering does not switch tabs.</li>
+    <li><b>Dropping</b> runs <code>targets.changeConnection</code>, the same path as Change Connection…: the query's session ends first, and the query opens on the new server's default database (the database remembered for that server when it had one). The tab becomes the active tab and the editor takes focus.</li>
+    <li><b>The animation</b> (≈ 0.9 s, no layout shift): the drag image flies into the tab and shrinks, a ring in the server's colour spreads from the drop point, a stripe in that colour sweeps across the tab's top edge, the server name rolls over, and the SID badge fades back in when the new session opens. Under reduced motion the server name simply changes.</li>
+    <li><b>Open transaction:</b> the existing prompt asks Commit, Roll Back or Cancel before the session ends; Cancel leaves the query where it was.</li>
+    <li><b>Running query:</b> the tab refuses the drop (no-entry cursor, no socket pulse) and the card says to stop the query first. The query is never stopped for you.</li>
+    <li><b>Same server:</b> refused quietly; the card says the query is already there, so the session and its temp tables are kept.</li>
+    <li><b>Not a query</b> (Activity Monitor, Table Designer, Properties, Peek, SSIS pages): refused; they keep the server they were opened for.</li>
+    <li><b>Production:</b> the card shows the server's environment tag; no extra confirmation (the move itself changes nothing on either server).</li>
+    <li><b>Disconnected servers</b> cannot be dragged onto tabs (their rows offer Reconnect instead). A server dropped on the tab strip's empty space opens a new query on it.</li>
+    <li><b>Keyboard and screen readers:</b> Change Connection… stays the keyboard path; the drop is announced ("Orders report.sql moved to REPORTING-SQL").</li>
+  </ul>
+  <h3>Questions for the owner</h3>
+  <ol>
+    <li><b>Database after the move:</b> the new server's default database (what Change Connection… does today), or the query's current database when the new server has one of that name?</li>
+    <li><b>Empty tab-strip space:</b> should dropping a server there open a new query on it (shown above), or do nothing?</li>
+    <li><b>Database rows:</b> should dragging a database onto a query tab move the query to its server <em>and</em> that database?</li>
+    <li><b>Production:</b> is the environment tag in the card enough, or should moving a query to a Production server ask first?</li>
+    <li><b>Animation:</b> keep the full sequence (fly-in, ring, stripe, roll-over, ≈ 0.9 s), or only the stripe and roll-over (≈ 0.5 s)?</li>
+  </ol>
+</div>
+
+<script>
+const win = document.getElementById('win'), overlay = document.getElementById('overlay'), tabs = [...document.querySelectorAll('.tab')]
+const cards = {
+  hover: { tab: 't1', html: `<div class="h">Move this query to REPORTING-SQL</div>
+    <div class="move"><span class="chipsrv old"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="arrow">→</span><span class="chipsrv"><i style="background:var(--srvB)"></i>REPORTING-SQL</span></div>
+    <div class="note">Database: <b>master</b> (REPORTING-SQL's default). The query's session on SALES-SQL01 ends.</div>`, accept: true },
+  running: { tab: 't3', html: `<div class="h">Nightly load.sql is executing</div><div class="no">Stop the query (Alt+Break) to move it to another server.</div>`, accept: false },
+  same: { tab: 't3', html: `<div class="h">Already on REPORTING-SQL</div><div class="no">The query keeps its session, temp tables and open transaction.</div>`, accept: false },
+  other: { tab: 't4', html: `<div class="h">Activity Monitor keeps its server</div><div class="no">Only query tabs can move to another server. Open a new Activity Monitor on REPORTING-SQL from its context menu.</div>`, accept: false },
+  prod: { tab: 't2', name: 'PROD-SQL', color: '--srvC', html: `<div class="h">Move this query to PROD-SQL <span class="env">PROD</span></div>
+    <div class="move"><span class="chipsrv old"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="arrow">→</span><span class="chipsrv"><i style="background:var(--srvC)"></i>PROD-SQL</span></div>
+    <div class="note">Database: <b>master</b> (PROD-SQL's default). The query's session on SALES-SQL01 ends.</div>`, accept: true }
+}
+function at(id) { const tab = document.getElementById(id), host = overlay.parentElement.getBoundingClientRect(), box = tab.getBoundingClientRect(); return { x: box.left - host.left, w: box.width } }
+function ghost(x, y, name = 'REPORTING-SQL', color = '--srvB') { return `<div class="ghost" style="left:${x}px;top:${y}px;--tx:${x - 20}px"><i style="background:var(${color})"></i>${name}</div>` }
+function show(scene) {
+  win.className = 'win'
+  tabs.forEach(tab => tab.classList.remove('target', 'refuse', 'drop', 'on'))
+  overlay.innerHTML = ''
+  document.getElementById('dragRow').classList.remove('dragging')
+  document.getElementById('t1').classList.add('on')
+  if (scene === 'txn') {
+    overlay.innerHTML = `<div class="scrim" style="position:fixed"><div class="dlg" role="dialog" aria-label="Move query"><h2>Orders report.sql has an open transaction</h2>
+      <p>Moving the query to REPORTING-SQL ends its session on SALES-SQL01. Commit the transaction, or roll it back?</p>
+      <p style="color:var(--text3)">1 open transaction (@@TRANCOUNT = 1), started 4 minutes ago.</p>
+      <div class="btns"><button class="btn">Cancel</button><button class="btn">Roll Back</button><button class="btn primary">Commit</button></div></div></div>`
+    return
+  }
+  win.classList.add('dragging-server')
+  document.getElementById('dragRow').classList.add('dragging')
+  if (scene === 'drag') { overlay.innerHTML = ghost(250, 150); return }
+  const card = cards[scene === 'play' ? 'hover' : scene], tab = document.getElementById(card.tab), { x, w } = at(card.tab)
+  tab.classList.add(card.accept ? 'target' : 'refuse')
+  const pointer = card.accept ? `<svg class="cursor" style="left:${x + w / 2 + 10}px;top:18px" viewBox="0 0 14 20"><path d="M1 1v15l4-4 3 7 2-1-3-7h6z" fill="var(--strong)" stroke="var(--canvas)"/></svg>` : `<span class="no-cursor" style="left:${x + w / 2 + 10}px;top:20px"></span>`
+  if (scene === 'play') {
+    tab.classList.add('drop')
+    overlay.innerHTML = ghost(x + w / 2 + 24, 30) + `<span class="ring" style="left:${x + w / 2 - 12}px;top:10px"></span>`
+    win.classList.remove('dragging-server')
+    document.getElementById('dragRow').classList.remove('dragging')
+    requestAnimationFrame(() => requestAnimationFrame(() => win.classList.add('play')))
+    setTimeout(() => { overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`); document.getElementById('status').firstElementChild.textContent = '● REPORTING-SQL' }, 1100)
+    return
+  }
+  document.getElementById('status').firstElementChild.textContent = '● SALES-SQL01'
+  overlay.innerHTML = ghost(x + w / 2 + 30, 36, card.name, card.color) + pointer + `<div class="card" style="left:${Math.max(4, x)}px">${card.html}</div>`
+}
+document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-scene]').forEach(other => other.setAttribute('aria-pressed', other === button))
+  show(button.dataset.scene)
+}))
+document.querySelectorAll('[data-theme]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-theme]').forEach(other => other.setAttribute('aria-pressed', other === button))
+  document.body.classList.toggle('light', button.dataset.theme === 'light')
+}))
+show('drag')
+</script>
+</body>
+</html>
