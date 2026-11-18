@@ -207,8 +207,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   Options limit changes, as each generation becomes ready and after each successful settings read,
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
-  its working memory before it builds (search reserves only its rooms for a packed result, or what unpacking takes
-  through a sorted view); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
+  of one the view's inverse, 4 bytes a row of the result); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
@@ -283,13 +283,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). A shown result with an open view is not packed while idle; one packed before its
-    view, or shown again with one, stays packed (its sort and screens read the packed pages; a view never unpacks a
-    result whole, `node.packedSort.budgetGrowthMb`), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+    saving under a tenth stays raw). An open view (a sorted or filtered grid) does not prevent packing, nor does an open
+    distinct snapshot: their sorts and screens read the packed pages, and a view never unpacks a result whole
+    (`node.packedSort.budgetGrowthMb`, `node.viewTile.packedP99Ms`).
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
-    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
+    of an operation that unpacked it (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
     held, released or the service disposed.
   - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
     at once and counts toward `CollectNow`'s next collection, never a compacting one.
@@ -298,7 +298,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`; rows committed before the waiting row
     are sealed only once it ends) while the
     policy packs at normal priority on the workers' gate the complete, unheld results of 1 MiB or more that could make
-    room, never one the user is working with (a shown result with an open view, or one an operation unpacked and still uses)
+    room, never one an operation unpacked and still uses
     (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
     With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
@@ -317,7 +317,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     eighth) unpack ahead in two batches of rooms. A diff keeps `ResultDiffer.LeftSlots`/`RightSlots` and past
     `UnpacksPerPage` (counted by `ResultDiffer.Local`) unpacks the first result in place (`TryUnpackAll`). A distinct
     snapshot keeps pages, not bytes (`KeptPages`), reading in row order through one `ReadRoom`. A search through a far
-    (sorted) view (`ResultSearcher.Local`) unpacks in place first (`SqlService.Unpack`: `UnpackNeed`, then `UnpackAll`).
+    (sorted) view (`ResultSearcher.Local`) reads in page order instead, each row placed at its view position through the
+    view's inverse, and keeps per run only the rows the answer may take (`ResultSearcher.ByPages`); it never unpacks.
   - A transposed Copy or Save holds the pages its rows lie on (`BodiesTogether`, `TOO_LARGE` when refused); a plain one
     reads through one `ReadRoom` (refused, through the accessor and cache).
   - The Memory panel's state is `partial` while some pages are packed and no whole pass has ended since the last unpack
@@ -533,7 +534,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
   the role, custom menus and the palette run it through `varia:run-role`. Varia's two-part chords are `bridge`
-  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
+  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. The one other Monaco rule is
+  Escape closing Peek's card (`registerPeekCardEscape`), while a query editor's `variaPeekCard` key is set (never in Peek's
+  own editor); an added rule outranks Monaco's defaults, so its clause steps aside for each Monaco widget that takes Escape
+  (`monacoEscapeContextKeys`, pinned by `tests/monaco-keybindings.test.ts`). User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
   keys only through `KeybindingService.capture`. Peek's Ctrl state comes from `KeybindingService`'s `keyDown`, `keyUp` and
