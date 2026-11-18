@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Ctrl+F in Object Explorer:** With focus in Object Explorer, Ctrl+F (Cmd+F on macOS) jumps to its search box, as Ctrl+Shift+F does. In the query editor Ctrl+F is still Find.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.
