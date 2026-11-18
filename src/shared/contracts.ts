@@ -1,6 +1,6 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
-import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
+import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
@@ -729,7 +729,7 @@ export interface VariaApi {
   loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
-  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibraryView>>
+  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionSaveView>>
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
   /** Set Connection Environment: main changes only the label of the entry the options name (saving it again when it left
    *  history) and returns the library it wrote. */
