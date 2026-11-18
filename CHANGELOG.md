@@ -6,6 +6,12 @@
 
 - **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
 - **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
+
+### Fixes
+
+- **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
+- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
 
 ## [0.9.1] - 2026-11-16
 
