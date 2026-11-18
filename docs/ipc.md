@@ -264,7 +264,7 @@ noted where it matters.
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values ([Distinct values](#distinct-values)) |
 | `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 values, optionally searched |
-| `results.distinctTick` | port | unary | results | 30 s; ticks or clears all values or a search's |
+| `results.distinctTick` | port | unary | results | 30 s; ticks or clears values, all, a search's, ranges of the list, or inverts |
 | `results.distinctClose` | port | unary | control | 10 s; releases 1 – 64 snapshots |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, no backstop: only CANCEL, disconnect, shutdown, failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -1331,6 +1331,24 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only
   locale-ignored characters (U+200B, U+00AD) matches by code point. Other columns compare display text ignoring case;
   binary matches `0x` and hex, skipped when the text is not hex.
+- **Pre-check.** A culture compare (ICU) reads text that is not ASCII at about 90 MB/s, so a character column of a
+  verified culture first folds the cell with the culture's search fold for the column's options (`SearchFold`: each
+  character mapped to one representative of the characters its collator gives the same sort key under those options,
+  built in 0.05 – 0.1 s on first use, off the search) and looks for the text's fold by code point; only a cell holding it
+  goes to the compare. The answers are the compare's, about 3.3 times sooner over SQL Server's own messages in 22
+  languages. Collation is not always per character (Japanese ー repeats the sound before it, l·l joins, ligatures and
+  presentation forms equal letter pairs), so the fold vouches only for an allowlist of characters whose collation depends
+  on no neighbour (`SearchFold.Vouched`: Latin, Greek, Cyrillic, Hebrew and Arabic letters, kana, CJK ideographs, Hangul
+  syllables, full-width forms, after NFC); a cell with any other character (Thai, Indic, ligatures, a supplementary
+  character) goes to the compare alone, and a matcher stops pre-checking once more than 60 % of its first 1,024 cells
+  pass. A fold is per option set because options are not monotonic: Estonian finds Ｚ in Z case-sensitively but not
+  case-insensitively, and ignoring accents the compare ignores case too (so those keys do). Danish, Norwegian, Hungarian
+  and Croatian collations are never pre-checked (they treat a letter as a pair of letters), nor is Thai (its compare
+  finds characters its sort keys tell apart). `SearchFoldChecks` compares every verified culture's answers with the
+  compare's over fuzzed text and known context-dependent cells under four option sets, checks that strings with the same
+  key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
+  and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
+  filter's value search uses the same matcher.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
@@ -1379,9 +1397,12 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   1 – 1,024 characters }`** answers `{ total, offset, values: [{ group, row, text, count, checked }], checked,
   nullsChecked }`; `count` order is most frequent first, ties in value order; `search` matches as [Search in
   results](#search-in-results) does, `total` then counts only the matches, and they are kept for scrolling.
-- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls? }`** sets ticks of the
-  named groups, all values (or all `search` matches), and NULL; answers `{ checked, nullsChecked }`. A frozen snapshot
-  refuses it (`INVALID_PARAMS`).
+- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls?, order?, ranges?: 1 –
+  512 [offset, count], toggle?, invert? }`** sets ticks of the named groups, all values (or all `search` matches), the
+  values at `ranges` (sorted and disjoint) of the list in `order` (searched with `search`), or flips every value (`invert`), and NULL; one of
+  those at most. `toggle` (with `ranges`) ticks them all when any, or NULL when `nulls` is given, is cleared, else clears
+  them all, NULL alike, ignoring `checked`. Answers `{ checked, nullsChecked }`. A range past the list's end or a frozen
+  snapshot is refused (`INVALID_PARAMS`).
 - **`results.distinctClose { resultId, snapshotIds: 1 – 64 }`** answers `{ closed }`; ids already gone are skipped. A
   closed snapshot asked for again answers `VIEW_NOT_FOUND`.
 - **Filter.** The first `results.view` using `{ op: 'groups', column, snapshotId }` freezes the snapshot: `in` of the
@@ -1394,7 +1415,7 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   answers (rows below 2³¹, `checked` ≤ `distinct` ≤ `rows`, `nulls` ≤ `rows`, exactly `min(count, total − offset)`
   values, at the offset asked) and closes a snapshot built after its port went.
 - **Renderer.** `ColumnFilterPopover` lists the snapshot over the rows the grid's other filters keep, as a virtualized
-  checklist with backend search, Select all / none, NULL, and custom conditions (equals, does not equal, between, is
+  checklist with backend search, an action list (every value, the matches, the selected rows as ranges), NULL, and custom conditions (equals, does not equal, between, is
   NULL, is not NULL); OK hands it to the grid as a `groups` filter in the replaced filter's place. The grid keeps the snapshot while a filter
   names it and closes it once the view it shows no longer does; a popover closed without OK closes its own. Keep Selected Rows
   (`ResultsService.keepSelectedRows`) is no column's filter, one per grid, counted among the 16; more than 4,095 rows or
@@ -1879,7 +1900,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
 { t: 'distinctRead'; rid; generation; resultId: u32; snapshotId: u32; order: 'count' | 'value'; offset; count: 1..limits.distinct.maxWindow; search? }
-{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true (search? only with all); nulls? }
+{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true | ranges? (with order) | invert?: true (search? with all or ranges; toggle? with ranges); nulls? }
 { t: 'distinctClose'; rid; generation; resultId: u32; snapshotIds: u32[1..limits.distinct.maxClose] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
@@ -2303,7 +2324,8 @@ and reports that block skipped.
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
   `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
   `VARIA_TEST_SHOW_WINDOW=1` (shows the main window inactive; the smoke fixture sets it under xvfb, where a never-shown
-  window sometimes ran no animation frames).
+  window sometimes ran no animation frames), and `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (`--varia-follow-system-motion`:
+  the renderer reduces motion whenever the emulated media asks, without the setting).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing
@@ -2387,6 +2409,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 - **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
   (`backend/Varia.Backend.Tests/SearchBench.cs`): one letter over a synthetic index of 1,000,000 objects in 20 databases
   (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates.
+  Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
+  Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
+  characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits
+  below real multilingual text's.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml

@@ -411,6 +411,8 @@ describe('menu state', () => {
       'output.find', 'output.findNext', 'output.findPrevious',
       // The results toolbar's Profile and Row size toggles, also in the grid's menu.
       'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.compare', 'output.pivot', 'output.closeResult',
+      // The column profile's Selected Columns Only button, also in the results toolbar's ⋯ menu.
+      'output.toggleProfileSelectedColumns',
       // An out-of-date Pivot's caption offers Update, also in the grid's menu.
       'output.updatePivot',
       // The grid menu's Transpose submenu, also the results toolbar's Transposed and Headers.
@@ -427,7 +429,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.toggleColumnProfile', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.transpose', 'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleResultsTabs', 'output.toggleRowSize', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Varia mock · Column profile · Selection peek options</title>
+<!-- Design mock for a Column Profile "peek" at the grid's selected columns. Self-contained: no network, no build step. Not production code. -->
+<style>
+/* Palette: src/shared/theme/palette.ts (Varia Dark, Varia Light). Metrics: src/shared/theme/metrics.ts (Compact). */
+:root {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+  --size-xs: 11px; --size-sm: 12px; --size-md: 13px;
+  --radius-sm: 4px; --radius-pill: 999px;
+  --grid-row: 20px; --grid-head: 22px;
+}
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #16181d; --panel: #16181d; --chrome: #111317; --raised: #1c1f25; --overlay: #1d2026; --input: #101216; --side: #131519;
+  --accentSurface: #232842; --hover: #262a32; --active: #30343e; --selection: #21273b; --selectionStrong: #29314f;
+  --text: #d9dce3; --textStrong: #f5f6f8; --textSecondary: #bcc1cb; --textTertiary: #a3a9b5; --textMuted: #9298a4; --textAccent: #bcc5ff;
+  --border: #262a31; --borderSubtle: #1f2228; --borderStrong: #2e323a; --controlBorder: #6b7286; --inputBorder: #6a7184;
+  --accent: #8f9cff; --onAccent: #0e1230; --chartBlue: #6d9eeb; --warning: #e4bb6a;
+}
+html[data-theme='light'] {
+  color-scheme: light;
+  --canvas: #ffffff; --panel: #ffffff; --chrome: #f7f8fa; --raised: #f1f3f6; --overlay: #ffffff; --input: #ffffff; --side: #f7f8fa;
+  --accentSurface: #dde1f9; --hover: #dfe2e7; --active: #d6dae0; --selection: #e7ebfc; --selectionStrong: #d9e0fb;
+  --text: #1c1f26; --textStrong: #0a0c10; --textSecondary: #3a404b; --textTertiary: #4d5461; --textMuted: #5c6370; --textAccent: #3240b0;
+  --border: #e3e6eb; --borderSubtle: #eceef2; --borderStrong: #d4d8df; --controlBorder: #878e9b; --inputBorder: #878e9b;
+  --accent: #4453d0; --onAccent: #ffffff; --chartBlue: #3b6fc4; --warning: #875800;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--chrome); color: var(--text); font: var(--size-md)/20px var(--font-ui); font-synthesis: none; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; background: none; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 0; cursor: default; }
+button:focus-visible, [tabindex]:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+svg.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- Mock controls: not part of the app ---- */
+.mock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; border-bottom: 1px dashed var(--controlBorder); background: var(--raised); font-size: var(--size-sm); line-height: 16px; position: sticky; top: 0; z-index: 5; }
+.mock-bar h1 { margin: 0; font-size: var(--size-md); font-weight: 600; color: var(--textStrong); }
+.mock-bar .tag { padding: 0 6px; border: 1px dashed var(--controlBorder); border-radius: var(--radius-pill); color: var(--textMuted); font-size: var(--size-xs); }
+.mock-bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--textMuted); }
+.grow { flex: 1; }
+.seg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius-sm); flex: none; }
+.seg button { height: 20px; padding: 0 8px; color: var(--textMuted); font-size: var(--size-xs); white-space: nowrap; }
+.seg button:hover { background: var(--hover); }
+.seg button[aria-pressed='true'] { background: var(--selection); color: var(--textStrong); font-weight: 600; }
+.mock-note { margin: 0; padding: 6px 12px; color: var(--textMuted); font-size: var(--size-xs); line-height: 16px; border-bottom: 1px dashed var(--border); background: var(--raised); }
+.mock-note b { color: var(--textSecondary); font-weight: 600; }
+.kbd { display: inline-block; padding: 0 4px; border: 1px solid var(--borderStrong); border-bottom-width: 2px; border-radius: 3px; font-size: 10px; line-height: 13px; color: var(--textSecondary); }
+.stage { padding: 16px; display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
+
+/* ---- The results pane ---- */
+.pane { display: flex; flex-direction: column; width: 100%; max-width: 1180px; height: 460px; background: var(--panel); border: 1px solid var(--borderStrong); font-size: var(--size-sm); line-height: 16px; overflow: hidden; }
+.toolbar { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 6px; border-bottom: 1px solid var(--border); background: var(--chrome); flex: none; }
+.tb { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; color: var(--textSecondary); font-size: var(--size-xs); }
+.tb:hover { background: var(--hover); }
+.tb[aria-pressed='true'] { background: var(--selection); color: var(--textStrong); }
+.tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.main { flex: 1; min-height: 0; display: flex; }
+.gridwrap { flex: 1; min-width: 0; overflow: auto; position: relative; }
+table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.grid th, .grid td { height: var(--grid-row); padding: 0 8px; border-right: 1px solid var(--borderSubtle); border-bottom: 1px solid var(--borderSubtle); text-align: left; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.grid thead th { position: sticky; top: 0; height: var(--grid-head); background: var(--raised); color: var(--textSecondary); font-weight: 600; z-index: 1; }
+.grid .rn { position: sticky; left: 0; background: var(--raised); color: var(--textMuted); text-align: right; min-width: 34px; z-index: 1; font-weight: 400; }
+.grid thead .rn { z-index: 2; }
+.grid td.sel { background: var(--selection); }
+.grid th.sel { background: var(--selectionStrong); color: var(--textStrong); }
+.grid td.act { outline: 1px solid var(--accent); outline-offset: -1px; }
+.grid td.null { color: var(--textMuted); font-style: italic; }
+.grid td.num { text-align: right; }
+
+/* ---- Column profile panel (styles.css .profile-*) ---- */
+.profile-panel { display: flex; flex: 0 0 300px; flex-direction: column; min-height: 0; border-left: 1px solid var(--borderStrong); background: var(--side); font-size: var(--size-xs); position: relative; }
+.profile-head { display: flex; flex-shrink: 0; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--border); }
+.profile-title { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--textMuted); white-space: nowrap; }
+.profile-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--textMuted); }
+.ib { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--textTertiary); }
+.ib:hover { background: var(--hover); }
+.ib[aria-pressed='true'] { background: var(--accentSurface); color: var(--textAccent); }
+.profile-strip { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--border); color: var(--textSecondary); flex: none; }
+.profile-strip.peek { background: var(--accentSurface); color: var(--textAccent); }
+.profile-strip .link { color: var(--textAccent); text-decoration: underline; text-underline-offset: 2px; }
+/* Motion: only transform and opacity animate (compositor-only). Colour changes are cross-fades of overlay layers. */
+:root { --ease: cubic-bezier(.2, 0, 0, 1); --dur: 180ms; }
+.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 6px; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .profile-cards { scroll-behavior: auto; } :root { --dur: 0ms; } }
+.profile-card { position: relative; isolation: isolate; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
+/* The highlight is colour only: the same 1px border, recoloured, and a tint behind the content, both cross-faded. */
+.profile-card::before, .profile-card::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; z-index: -1; opacity: 0; transition: opacity var(--dur) var(--ease); }
+.profile-card::before { border: 1px solid var(--accent); background: var(--selection); }
+.profile-card::after { background: var(--selectionStrong); }
+.profile-card.selected::before { opacity: 1; }
+.profile-card.current::after { opacity: .7; }
+.profile-card.leaving { position: absolute; margin: 0; pointer-events: none; }
+.profile-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+@media (forced-colors: active) { .profile-card::before { border-color: Highlight; } }
+.profile-card-title { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.profile-card-title b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--textStrong); }
+.profile-card-title span { color: var(--textMuted); white-space: nowrap; }
+.pill { padding: 0 5px; border-radius: var(--radius-pill); background: var(--accentSurface); color: var(--textAccent); font-size: 10px; line-height: 14px; opacity: 0; transform: scale(.9); transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.pill.on { opacity: 1; transform: none; }
+.profile-figures { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; margin: 3px 0 0; }
+.profile-figures > div { display: contents; }
+.profile-figures dt { color: var(--textMuted); }
+.profile-figures dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.profile-histogram { display: flex; align-items: flex-end; gap: 1px; height: 22px; margin-top: 5px; border-bottom: 1px solid var(--border); }
+.profile-histogram i { flex: 1; background: var(--chartBlue); }
+.peek-hint { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 4px 8px; border: 1px solid var(--borderStrong); border-radius: var(--radius-sm); background: var(--overlay); color: var(--textSecondary); box-shadow: 0 4px 12px #0004; text-align: center; z-index: 2; opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.peek-hint.on { opacity: 1; transform: none; }
+.note .motion { color: var(--textSecondary); }
+
+/* ---- Notes below the pane ---- */
+.notes { width: 100%; max-width: 1180px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+.note { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); font-size: var(--size-sm); line-height: 18px; }
+.note h2 { margin: 0 0 6px; font-size: var(--size-md); color: var(--textStrong); }
+.note h2 .rec { margin-left: 6px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--accent); color: var(--onAccent); font-size: 10px; vertical-align: 1px; }
+.note ul { margin: 0; padding-left: 18px; }
+.note li { margin: 2px 0; }
+.note .pro { color: var(--textSecondary); }
+.note.current { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <h1>Column profile · peek at the selected columns</h1><span class="tag">mock</span>
+  <label>Option <span class="seg" id="opt">
+    <button data-v="A">A · Ctrl+hover filter</button>
+    <button data-v="B">B · Follow selection</button>
+    <button data-v="C">C · Selected only toggle</button>
+    <button data-v="R" aria-pressed="true">Recommended · B + C + Ctrl peek</button>
+  </span></label>
+  <span class="grow"></span>
+  <label><input type="checkbox" id="fakeCtrl"> Hold Ctrl (simulated)</label>
+  <label>Theme <span class="seg" id="theme"><button data-v="dark" aria-pressed="true">Dark</button><button data-v="light">Light</button></span></label>
+</div>
+<p class="mock-note" id="howto"></p>
+
+<div class="stage">
+  <div class="pane" role="region" aria-label="Results">
+    <div class="toolbar">
+      <button class="tb"><svg class="i" viewBox="0 0 16 16"><path d="M2 4h12M4 8h8M6 12h4"/></svg>Sort</button>
+      <button class="tb"><svg class="i" viewBox="0 0 16 16"><path d="M2 3h12l-5 6v4l-2 1V9z"/></svg>Filter</button>
+      <button class="tb"><svg class="i" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="M10 10l4 4"/></svg>Search</button>
+      <span class="tb-sep"></span>
+      <button class="tb" aria-pressed="true"><svg class="i" viewBox="0 0 16 16"><path d="M3 13V8M7 13V3M11 13V6"/></svg>Profile</button>
+      <button class="tb"><svg class="i" viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h5"/></svg>Row size</button>
+      <span class="grow"></span>
+      <span style="color:var(--textMuted);font-size:var(--size-xs);padding-right:6px">Open orders, Result 1 · 1,204 rows</span>
+    </div>
+    <div class="main">
+      <div class="gridwrap" id="gridwrap"><table class="grid" id="grid" role="grid" aria-label="Open orders, Result 1"></table></div>
+      <aside class="profile-panel" id="panel" aria-label="Column profile">
+        <div class="profile-head">
+          <span class="profile-title">Column profile</span>
+          <span class="profile-facts" id="facts">1,204 rows</span>
+          <button class="ib" id="onlyBtn" title="Selected Columns Only" aria-label="Selected Columns Only" aria-pressed="false"><svg class="i" viewBox="0 0 16 16"><rect x="2.5" y="3" width="3" height="10" rx=".5"/><rect x="6.5" y="3" width="3" height="10" rx=".5" fill="currentColor"/><rect x="10.5" y="3" width="3" height="10" rx=".5"/></svg></button>
+          <button class="ib" title="Close Column Profile" aria-label="Close Column Profile"><svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+        </div>
+        <div class="profile-strip" id="strip" hidden></div>
+        <div class="profile-cards" id="cards"></div>
+        <div class="peek-hint" id="hint" aria-hidden="true"></div>
+      </aside>
+    </div>
+  </div>
+  <div id="live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></div>
+
+  <div class="notes">
+    <div class="note" data-for="A">
+      <h2>A · Ctrl+hover filters the profile</h2>
+      <ul>
+        <li>Rest the pointer on the profile panel and hold <span class="kbd">Ctrl</span> (<span class="kbd">⌘</span> on macOS): the panel shows only the selected columns' cards. Release and every card comes back, scrolled where it was.</li>
+        <li>The same shape as Peek on Hover in Object Explorer and the editor: a modifier gesture with a target (here, the panel), rebindable to Shift in Shortcut Mapping (<code>gestures.ts</code>, <code>output.profilePeekHover</code>).</li>
+        <li>Scoped to the panel on purpose: Ctrl held over the grid is Ctrl+click (add to selection) and Ctrl+C, so Ctrl anywhere would flash the panel on every copy.</li>
+        <li class="pro">Con: invisible until you know it; nothing a keyboard user can hold, so it needs a command anyway.</li>
+      </ul>
+    </div>
+    <div class="note" data-for="B">
+      <h2>B · The profile follows the selection</h2>
+      <ul>
+        <li>Always on, no modifier. The cards of the selected columns take an iris border and a selection tint (colour only, the border stays 1px); the active cell's column card is shaded and scrolled into view as the selection moves (arrow keys, clicks, header clicks).</li>
+        <li>Two-way: clicking a card selects that column in the grid and scrolls the grid to it (as SSMS-style object sync does).</li>
+        <li>A multi-column selection marks each card; the scroll goes to the active column only, so a big selection does not jump around.</li>
+        <li class="pro">Con: on a 200-column result you still scroll past unselected cards to compare two columns.</li>
+      </ul>
+    </div>
+    <div class="note" data-for="C">
+      <h2>C · "Selected Columns Only" toggle</h2>
+      <ul>
+        <li>A toggle in the panel's head (and a command, <em>Column Profile: Selected Columns Only</em>, in the palette and the grid menu). On: the panel lists only the selected columns' cards, updating as the selection changes.</li>
+        <li>A strip says "2 of 10 columns · Show all"; a single-cell selection still shows its column, so the panel is never empty.</li>
+        <li>Sticky per results pane; a new run keeps it. Profiles are still computed for every column, so turning it off is instant.</li>
+        <li class="pro">Con: one more control; a quick look needs two clicks (on, then off).</li>
+      </ul>
+    </div>
+    <div class="note" data-for="R">
+      <h2>Recommended · B always, C as the toggle, Ctrl+hover peeks C<span class="rec">Agreed</span></h2>
+      <ul>
+        <li><b>B</b> by default: highlight and scroll answer "where is this column's profile?" with no learning.</li>
+        <li><b>C</b> for comparing a few columns of a wide result, sticky and reachable from the keyboard and the palette.</li>
+        <li><b>Ctrl+hover on the panel</b> flips C for as long as Ctrl is held: our universal "peek", so the quick look needs no clicks. With C on, Ctrl+hover shows all columns.</li>
+        <li>The strip names the state while peeking ("Peeking 2 selected columns · release Ctrl to show all"), so the panel never silently changes.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>Motion</h2>
+      <ul class="motion">
+        <li>Only <code>transform</code> and <code>opacity</code> animate, so the compositor runs every transition and the grid's frame budget is untouched.</li>
+        <li>Highlight on/off is a cross-fade of two overlay layers (border + tint, current-column shade), not a colour transition.</li>
+        <li>Filtering keeps the card elements: the cards that stay slide from their old place to the new one (FLIP: measure, change, invert with a transform, play); leaving cards lift out of the flow and fade with a slight shrink; arriving cards fade in a beat later. The peek strip slides in and the cards below move down with it.</li>
+        <li>Interrupting (Ctrl released mid-animation, a new selection) starts from where each card is drawn, so nothing snaps.</li>
+        <li>Scrolling the active card into view is smooth scrolling. 180 ms with Calm Pro's ease-out; all of it off with <code>prefers-reduced-motion</code>.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>Keyboard and accessibility</h2>
+      <ul>
+        <li>Keyboard: <em>Column Profile: Selected Columns Only</em> is a catalogue command (no default key proposed; bindable). <em>Column Profile: Reveal Column</em> (<span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">P</span> proposed, grid focus) moves focus to the active column's card; Escape returns to the grid.</li>
+        <li>Cards become one Tab stop with Up/Down between them; Enter on a card selects that column in the grid. Each card's name says "selected" (<code>aria-current</code> for the active column).</li>
+        <li>Filtering or peeking announces once in a polite live region ("Showing 2 of 10 columns"), never per selection move.</li>
+        <li>The highlight uses iris and selection tokens on the existing 1px border; forced-colours mode keeps the border as Highlight.</li>
+        <li>Ctrl going up with the window unfocused is handled as Peek does (<code>KeybindingService</code> blur drops the modifier), so the panel never stays stuck filtered.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const cols = [
+  ['OrderID', 'int', 'num'], ['CustomerName', 'nvarchar(80)'], ['OrderDate', 'datetime2(0)'], ['Status', 'varchar(12)'], ['Region', 'char(4)'],
+  ['Total', 'decimal(12,2)', 'num'], ['Discount', 'decimal(5,2)', 'num'], ['ShipCity', 'nvarchar(60)'], ['Notes', 'nvarchar(max)'], ['CreatedBy', 'sysname']
+]
+const profiles = [
+  { NULLs: '0', Distinct: '1,204 · unique', Min: '10001', Max: '11204' },
+  { NULLs: '0', Distinct: '312', Min: 'Abernathy Supply', Max: 'Zenith Outfitters', Length: '6 – 41 · avg 17.3' },
+  { NULLs: '0', Distinct: '1,187', Min: '2026-01-02 08:14:00', Max: '2026-11-16 17:52:09' },
+  { NULLs: '0', Distinct: '5', Min: 'Cancelled', Max: 'Shipped', Length: '4 – 9 · avg 7.1' },
+  { NULLs: '18 (1.5%)', Distinct: '6', Min: 'APAC', Max: 'WEST', Length: '4' },
+  { NULLs: '0', Distinct: '1,096', Min: '12.50', Max: '48,920.00' },
+  { NULLs: '911 (75.7%)', Distinct: '7', Min: '0.05', Max: '0.25' },
+  { NULLs: '4 (0.3%)', Distinct: '143', Min: 'Aberdeen', Max: 'Zaragoza', Length: '4 – 22 · avg 8.9' },
+  { NULLs: '1,021 (84.8%)', Distinct: '177', Min: 'Call before delivery', Max: 'Use side gate', Length: '9 – 412 · avg 61.0' },
+  { NULLs: '0', Distinct: '9', Min: 'svc_import', Max: 'w.ortega', Length: '7 – 12 · avg 9.4' }
+]
+const hist = i => Array.from({ length: 16 }, (_, b) => Math.max(0, Math.round(50 + 45 * Math.sin((b + 1) * (i + 2) * 0.7) + (b * 7 * (i + 1)) % 30)))
+const names = ['Abernathy Supply', 'Brightwell Ltd', 'Calder & Sons', 'Dunmore Retail', 'Everly Goods', 'Fairhaven Co', 'Granite Peak', 'Holloway Mart']
+const cities = ['Aberdeen', 'Lyon', 'Osaka', 'Denver', null, 'Porto', 'Leeds', 'Austin']
+const rows = Array.from({ length: 30 }, (_, r) => [
+  10001 + r, names[r % 8], `2026-0${1 + r % 9}-${String(2 + r % 27).padStart(2, '0')} 0${r % 10}:1${r % 6}:00`, ['Open', 'Shipped', 'Pending', 'Cancelled', 'Backorder'][r % 5],
+  r % 13 === 4 ? null : ['WEST', 'EAST', 'APAC', 'EMEA', 'NORT', 'SOUT'][r % 6], (r * 731.37 % 9000 + 12.5).toFixed(2), r % 4 ? null : '0.' + (5 + r % 20 * 1).toString().padStart(2, '0'),
+  cities[r % 8], r % 6 ? null : 'Call before delivery', ['svc_import', 'w.ortega', 'a.li', 'k.mensah'][r % 4]
+])
+
+const state = { option: 'R', selected: new Set([2]), active: { row: 0, col: 2 }, anchor: 2, only: false, ctrl: false, overPanel: false, theme: 'dark' }
+const $ = id => document.getElementById(id)
+
+function renderGrid() {
+  const t = $('grid')
+  let h = '<thead><tr><th class="rn"></th>' + cols.map(([n], c) => `<th data-c="${c}" class="${state.selected.has(c) ? 'sel' : ''}" title="${n}">${n}</th>`).join('') + '</tr></thead><tbody>'
+  rows.forEach((row, r) => {
+    h += `<tr><th class="rn">${r + 1}</th>` + row.map((v, c) => {
+      const cls = [state.selected.has(c) ? 'sel' : '', state.active.row === r && state.active.col === c ? 'act' : '', v === null ? 'null' : '', cols[c][2] || ''].join(' ')
+      return `<td data-r="${r}" data-c="${c}" class="${cls}">${v === null ? 'NULL' : v}</td>`
+    }).join('') + '</tr>'
+  })
+  t.innerHTML = h + '</tbody>'
+}
+
+// What the panel shows: all columns, or only the selected ones (C's toggle, A's peek, or the recommended toggle flipped by a peek).
+function filtering() {
+  const peeking = state.ctrl && state.overPanel
+  if (state.option === 'A') return peeking
+  if (state.option === 'C') return state.only
+  if (state.option === 'R') return peeking ? !state.only : state.only
+  return false
+}
+const peekActive = () => state.ctrl && state.overPanel && (state.option === 'A' || state.option === 'R')
+const marks = () => state.option === 'B' || state.option === 'R'
+
+let lastAnnounce = ''
+// Cards are kept, never rebuilt, so each one can move from where it was: FLIP (measure, change, invert with a transform,
+// play to none). Leaving cards are lifted out of the flow at their old spot and fade; entering ones fade in. Only transform
+// and opacity animate, through the Web Animations API, so the compositor runs them.
+const cardEls = new Map()
+const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches
+const timing = { duration: 180, easing: 'cubic-bezier(.2, 0, 0, 1)' }
+function buildCard(c) {
+  const [n, type] = cols[c], p = profiles[c], h = hist(c), most = Math.max(...h)
+  const el = document.createElement('section')
+  el.className = 'profile-card'; el.dataset.c = c; el.tabIndex = -1
+  el.innerHTML = `<div class="profile-card-title"><b>${n}</b><span class="pill" aria-hidden="true">selected</span><span>${type}</span></div>
+    <dl class="profile-figures">${Object.entries(p).map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+    <div class="profile-histogram" aria-hidden="true">${h.map(v => `<i style="height:${Math.max(6, v / most * 100)}%"></i>`).join('')}</div>`
+  return el
+}
+function renderPanel(scroll) {
+  const only = filtering()
+  const list = cols.map((_, c) => c).filter(c => !only || state.selected.has(c))
+  const cards = $('cards')
+  if (!cardEls.size) cols.forEach((_, c) => { const el = buildCard(c); cardEls.set(c, el); cards.append(el) })
+  const animate = motion()
+  // First: where every shown card is now (mid-animation included, so an interrupted move continues from where it is).
+  const before = new Map()
+  for (const [c, el] of cardEls) if (!el.hidden && !el.classList.contains('leaving')) before.set(c, el.getBoundingClientRect())
+  const box = cards.getBoundingClientRect()
+  const entering = [], leaving = []
+  for (const [c, el] of cardEls) {
+    const [n] = cols[c]
+    const sel = marks() && state.selected.has(c), cur = marks() && state.active.col === c
+    el.classList.toggle('selected', sel); el.classList.toggle('current', cur)
+    el.querySelector('.pill').classList.toggle('on', sel && state.selected.size > 1)
+    el.setAttribute('aria-label', n + (sel ? ', selected' : ''))
+    cur ? el.setAttribute('aria-current', 'true') : el.removeAttribute('aria-current')
+    const show = list.includes(c)
+    if (show && (el.hidden || el.classList.contains('leaving'))) {
+      el.getAnimations().forEach(a => a.cancel())
+      el.classList.remove('leaving'); el.style.top = el.style.left = el.style.width = ''; el.hidden = false
+      entering.push(el)
+    } else if (!show && before.has(c)) leaving.push([el, before.get(c)])
+  }
+  const strip = $('strip')
+  const stripWasHidden = strip.hidden
+  const peek = peekActive()
+  strip.className = 'profile-strip' + (peek ? ' peek' : '')
+  if (peek) {
+    strip.hidden = false
+    strip.innerHTML = only ? `<svg class="i" viewBox="0 0 16 16"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>Peeking ${list.length} selected ${list.length === 1 ? 'column' : 'columns'} · release Ctrl to show all`
+      : `<svg class="i" viewBox="0 0 16 16"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>Peeking all ${cols.length} columns · release Ctrl to go back`
+  } else if (only) {
+    strip.hidden = false
+    strip.innerHTML = `${list.length} of ${cols.length} columns · <button class="link" id="showAll">Show all</button>`
+  } else strip.hidden = true
+  if (animate && stripWasHidden && !strip.hidden) strip.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], timing)
+  // Leaving cards: out of the flow at their old place, then fade and settle.
+  for (const [el, r] of leaving) {
+    if (!animate) { el.hidden = true; continue }
+    el.classList.add('leaving')
+    el.style.top = (r.top - box.top + cards.scrollTop) + 'px'; el.style.left = (r.left - box.left) + 'px'; el.style.width = r.width + 'px'
+    const a = el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.97)' }], { ...timing, duration: 140 })
+    a.onfinish = () => { el.hidden = true; el.classList.remove('leaving'); el.style.top = el.style.left = el.style.width = '' }
+  }
+  // Last, invert, play: every card still shown slides from where it was; entering cards fade in where they land.
+  if (animate) for (const [c, el] of cardEls) {
+    if (el.hidden || el.classList.contains('leaving')) continue
+    if (entering.includes(el)) { el.animate([{ opacity: 0, transform: 'translateY(-4px) scale(.98)' }, { opacity: 1, transform: 'none' }], { ...timing, delay: 40, fill: 'backwards' }); continue }
+    const old = before.get(c); if (!old) continue
+    el.getAnimations().forEach(a => a.cancel())
+    const dy = old.top - el.getBoundingClientRect().top
+    if (Math.abs(dy) > 0.5) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], timing)
+  }
+  $('onlyBtn').hidden = !(state.option === 'C' || state.option === 'R')
+  $('onlyBtn').setAttribute('aria-pressed', String(state.only))
+  const hint = $('hint')
+  hint.classList.toggle('on', state.overPanel && !state.ctrl && (state.option === 'A' || state.option === 'R'))
+  hint.innerHTML = state.option === 'R' && state.only ? 'Hold <span class="kbd">Ctrl</span> to peek at every column' : 'Hold <span class="kbd">Ctrl</span> to peek at the selected columns'
+  $('facts').textContent = only ? `${list.length} of ${cols.length} columns · 1,204 rows` : '1,204 rows'
+  const announce = only ? `Showing ${list.length} of ${cols.length} columns` : 'Showing all columns'
+  if (announce !== lastAnnounce) { $('live').textContent = announce; lastAnnounce = announce }
+  // Reveal the active card by its layout place (offsetTop ignores the FLIP transform, which scrollIntoView would read as
+  // "already visible"); the smooth scroll runs on the compositor.
+  const active = cardEls.get(state.active.col)
+  if (scroll && marks() && active && !active.hidden) {
+    const top = active.offsetTop - 6, bottom = active.offsetTop + active.offsetHeight + 6
+    const to = top < cards.scrollTop ? top : bottom > cards.scrollTop + cards.clientHeight ? bottom - cards.clientHeight : null
+    if (to !== null) cards.scrollTo({ top: to, behavior: animate ? 'smooth' : 'auto' })
+  }
+  document.querySelectorAll('.note[data-for]').forEach(n => n.classList.toggle('current', n.dataset.for === state.option))
+}
+
+const howto = {
+  A: 'Select columns in the grid (click a header, <b>Ctrl+click</b> to add, <b>Shift+click</b> for a range), then rest the pointer on the profile panel and hold <span class="kbd">Ctrl</span>.',
+  B: 'Click cells or headers, or use the arrow keys in the grid: the matching cards light up and the active column\'s card scrolls into view. Click a card to select its column.',
+  C: 'Select columns, then press the <b>Selected Columns Only</b> toggle in the panel\'s head. The list keeps up as the selection changes.',
+  R: 'Select columns: the cards follow (B). Rest on the panel and hold <span class="kbd">Ctrl</span> for a quick look at only the selected ones; press the toggle to keep it that way (C), and Ctrl+hover then shows all.'
+}
+function render(scroll = true) { renderGrid(); renderPanel(scroll); $('howto').innerHTML = howto[state.option] + ' Use “Hold Ctrl (simulated)” if your keyboard is busy.' }
+
+function selectColumn(c, { add, range }) {
+  if (range) { const [a, b] = [Math.min(state.anchor, c), Math.max(state.anchor, c)]; if (!add) state.selected.clear(); for (let i = a; i <= b; i++) state.selected.add(i) }
+  else if (add) { state.selected.has(c) && state.selected.size > 1 ? state.selected.delete(c) : state.selected.add(c); state.anchor = c }
+  else { state.selected = new Set([c]); state.anchor = c }
+  state.active.col = c
+  render()
+}
+$('grid').addEventListener('mousedown', e => {
+  const cell = e.target.closest('[data-c]'); if (!cell) return
+  e.preventDefault()
+  if (cell.dataset.r !== undefined) state.active.row = +cell.dataset.r
+  selectColumn(+cell.dataset.c, { add: e.ctrlKey || e.metaKey, range: e.shiftKey })
+  $('gridwrap').focus()
+})
+$('gridwrap').tabIndex = 0
+$('gridwrap').addEventListener('keydown', e => {
+  const d = { ArrowLeft: -1, ArrowRight: 1 }[e.key]; const v = { ArrowUp: -1, ArrowDown: 1 }[e.key]
+  if (d) { e.preventDefault(); const c = Math.max(0, Math.min(cols.length - 1, state.active.col + d)); selectColumn(c, { add: false, range: e.shiftKey }) }
+  if (v) { e.preventDefault(); state.active.row = Math.max(0, Math.min(rows.length - 1, state.active.row + v)); render(false) }
+})
+$('cards').addEventListener('click', e => {
+  const card = e.target.closest('.profile-card'); if (!card || !marks()) return
+  const c = +card.dataset.c
+  state.selected = new Set([c]); state.anchor = c; state.active.col = c; render()
+  document.querySelector(`#grid th[data-c="${c}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+})
+$('panel').addEventListener('click', e => { if (e.target.id === 'showAll') { state.only = false; render(false) } })
+$('onlyBtn').addEventListener('click', () => { state.only = !state.only; render() })
+$('panel').addEventListener('mouseenter', () => { state.overPanel = true; renderPanel(false) })
+$('panel').addEventListener('mouseleave', () => { state.overPanel = false; renderPanel(false) })
+const setCtrl = on => { if (state.ctrl === on) return; state.ctrl = on; renderPanel(true) }
+addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') setCtrl(true) })
+addEventListener('keyup', e => { if (e.key === 'Control' || e.key === 'Meta') setCtrl($('fakeCtrl').checked) })
+addEventListener('blur', () => setCtrl($('fakeCtrl').checked))
+$('fakeCtrl').addEventListener('change', e => { setCtrl(e.target.checked); if (e.target.checked) { state.overPanel = true; renderPanel(true) } })
+function seg(id, fn) { $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); fn(b.dataset.v) }) }
+seg('opt', v => { state.option = v; if (v !== 'C' && v !== 'R') state.only = false; render() })
+seg('theme', v => { document.documentElement.dataset.theme = v })
+render()
+</script>
+</body>
+</html>

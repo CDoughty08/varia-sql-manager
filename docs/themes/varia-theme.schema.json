@@ -1718,8 +1718,8 @@
         },
         "live.indicator": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. Default $success (Dark #74d19c, Light #146f3b).",
-          "markdownDescription": "(Varia) Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. Default `$success` (Dark `#74d19c`, Light `#146f3b`)."
+          "description": "(Varia) Dot of a live view that is collecting; it pulses unless reduced motion is on (Reduce motion when the system asks, while the system asks). Default $success (Dark #74d19c, Light #146f3b).",
+          "markdownDescription": "(Varia) Dot of a live view that is collecting; it pulses unless reduced motion is on (Reduce motion when the system asks, while the system asks). Default `$success` (Dark `#74d19c`, Light `#146f3b`)."
         },
         "live.pausedForeground": {
           "$ref": "#/definitions/value",

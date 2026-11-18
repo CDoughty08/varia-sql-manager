@@ -1092,8 +1092,10 @@ export const commandCatalog = {
     title: 'Keep Selected Rows', category: 'Query', icon: 'filter', keywords: ['filter', 'keep', 'selected', 'rows', 'only', 'subset', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '3_rows', order: 1, mnemonic: 'k', when: "outputView == 'grid'" }]
   },
+  // Ctrl+Shift+L: Excel's key that turns a sheet's filters off.
   'output.clearFilters': {
-    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
+    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'remove', 'reset', 'grid'], palette: false,
+    keybindings: [{ key: 'mod+shift+l', when: 'outputGridFocus' }],
     menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputLiveFilterable" }]
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
@@ -1195,6 +1197,12 @@ export const commandCatalog = {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
     toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 1, title: 'Column Profile', mnemonic: 'f' }]
   },
+  // The column profile's Selected Columns Only button (queryResults.grid.columnProfileSelectedOnly); Ctrl+hover on the panel
+  // (gestures.ts output.profilePeekHover) shows the other list while held.
+  'output.toggleProfileSelectedColumns': {
+    title: 'Column Profile: Selected Columns Only', category: 'Query', icon: 'filter', keywords: ['profile', 'selected', 'selection', 'columns', 'filter', 'peek', 'stats'],
+    toggled: 'resultsProfileSelectedOnly', menus: [{ menu: 'output.tools', group: '3_show', order: 2, title: 'Profile Selected Columns Only', mnemonic: 'o' }]
+  },
   // The results toolbar's layout toggle (queryResults.grid.layout): every result stacked, or one at a time under tabs.
   'output.toggleResultsTabs': {
     title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
@@ -1268,7 +1276,7 @@ export const commandCatalog = {
   },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
-    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 2, title: 'Row Size', mnemonic: 'z' }]
+    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 3, title: 'Row Size', mnemonic: 'z' }]
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },

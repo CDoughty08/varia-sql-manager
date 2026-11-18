@@ -120,6 +120,7 @@ export const contextKeys = {
   resultsSortTextChars: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters).' },
   resultsSortTextBytes: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes).' },
   resultsColumnProfile: { type: 'boolean', scope: 'state', description: 'The column profile panel shows beside the results (Show Column Profile).' },
+  resultsProfileSelectedOnly: { type: 'boolean', scope: 'state', description: 'The column profile lists only the selected columns (Column Profile: Selected Columns Only).' },
   resultsGridTransposed: { type: 'boolean', scope: 'state', description: "The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is." },
   resultsTabs: { type: 'boolean', scope: 'state', description: 'Results show as tabs, one at a time, rather than stacked (Show Results as Tabs).' },
   resultsRowSize: { type: 'boolean', scope: 'state', description: 'A bar behind each row number shows the row\'s size (Show Row Size in Results).' },

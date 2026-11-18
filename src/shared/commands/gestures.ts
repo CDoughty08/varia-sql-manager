@@ -121,6 +121,14 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
+  // The column profile's peek: while held over the panel, it shows the other list (only the selected columns, or every column
+  // when Selected Columns Only is on). Scoped to the panel: over the grid the same Ctrl is Add to Selection and Ctrl+C.
+  'output.profilePeekHover': {
+    title: 'Peek at Selected Columns', description: 'Shows only the selected columns\' cards in the column profile (or every column when Selected Columns Only is on) while the pointer rests on the panel.',
+    kind: 'modifier', scope: 'resultsGrid', action: 'hover', target: 'the column profile', modifiers: ['mod'],
+    // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
+    choices: [['mod'], ['shift']], keyboard: ['output.toggleProfileSelectedColumns']
+  },
   // Object Explorer's Peek on Hover in the query editor: the same card, anchored at the name.
   'editor.peekHover': {
     title: 'Peek Definition on Hover', description: 'Peeks the object whose name the pointer rests on (a table, view, procedure, function and so on) in a card beside it.',
@@ -141,7 +149,7 @@ export const gestureCatalog = {
     locked: 'Dragging is the only way to drop text; Copy Name does the same from the keyboard.'
   },
   'explorer.reorderServer': {
-    title: 'Reorder Servers', description: 'Dropping a server above or below another server moves it there; the order is kept for the next start.',
+    title: 'Reorder Servers', description: 'Dropping a server above or below another server, or below the last row, moves it where its line shows; the order is kept for the next start.',
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'a server', modifiers: [], keyboard: ['explorer.moveServerUp', 'explorer.moveServerDown'],
     locked: 'Dragging is the pointer\'s way to reorder; Move Up and Move Down in the server\'s menu do the same from the keyboard.'
   },

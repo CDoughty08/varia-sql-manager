@@ -7,7 +7,7 @@ import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import { requestFrame } from '../core/windows'
 import { gridLimits as g } from '../grid/constants'
-import { copyPlan, noColumnName, resolveBlocks, selectAll, transposedCopyPlan, type GridSelection } from '../grid/selection'
+import { columnSelection, copyPlan, noColumnName, resolveBlocks, selectAll, transposedCopyPlan, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
 import type { DistinctList, ResultClient, ResultHandle, ResultView } from './ResultClient'
@@ -347,6 +347,8 @@ export interface GridController {
   fitDrawn?(row: number | undefined): void
   /** Opens the header funnel's popover for a column (results grids). */
   filterColumn?(column: number): void
+  /** Selects a whole column (in the result's columns) and scrolls it into view, without taking the focus. */
+  selectColumn?(column: number): void
 }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
@@ -523,6 +525,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
   readonly turned: ExternalStore<Readonly<Record<string, FocusedOrientation>>> = this.turnedStore
+  private readonly selectionStore = new (class extends SnapshotStore<number> { bump() { this.publish(this.getSnapshot() + 1) } clear() { this.clearListeners() } })(0)
+  /** A revision that changes with any grid's selection (every arrow key): a store of its own, so a selection move redraws
+   *  only what follows the selection (the column profile), never everything the service's snapshot feeds. */
+  readonly selections: ExternalStore<number> = this.selectionStore
   private scheduled = false
   private disposed = false
   private announcedCount = 0
@@ -900,6 +906,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!set) return
     this.gridState(tabId, set.key).selection = selection
     this.controllers.get(set.key)?.repaint()
+    this.selectionChanged()
+  }
+  /** A grid's selection changed (the grid reports its own presses and keys; `setSelection` and the rest report theirs). */
+  selectionChanged(): void { this.selectionStore.bump() }
+  /**
+   * Selects a whole column of a grid from outside it (a column profile card) and scrolls the grid to it, keeping the
+   * active row; the grid keeps its focus where it was. A grid not drawn just takes the selection.
+   */
+  selectColumn(tabId: string, key: EntryKey, column: number): void {
+    const set = this.entry(this.runs.get(tabId), key)
+    if (!set || !Number.isInteger(column) || column < 0 || column >= set.descriptor.columns.length) return
+    const controller = this.controllers.get(set.key)
+    if (controller?.selectColumn) controller.selectColumn(column)
+    else this.setSelection(tabId, set.key, columnSelection(set.key, column, this.selection(tabId, set.key)?.active.row ?? 0))
   }
   /** Select All: an open-ended block that grows as rows stream in. */
   selectAll(tabId: string, key: EntryKey): void {
@@ -914,6 +934,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       state.selection = undefined
       this.controllers.get(key)?.repaint()
     }
+    this.selectionChanged()
   }
 
   /** The entry a copy of this tab's runs now (the service's own state, a frame ahead of the published job list): a
@@ -1342,6 +1363,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.setsStore.clear()
     this.steppableStore.clear()
     this.turnedStore.clear()
+    this.selectionStore.clear()
     this.clearListeners()
   }
 

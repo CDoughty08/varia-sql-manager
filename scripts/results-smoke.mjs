@@ -1691,6 +1691,20 @@ try {
   await expect.poll(() => profileFigures(profileCard(page, 'id'))).toMatchObject({ NULLs: '0', Distinct: '100 · unique', Min: '0', Max: '99' })
   await expect.poll(() => profileFigures(profileCard(page, 'score'))).toMatchObject({ NULLs: '20 (20%)' })
   expect(await profileFigures(profileCard(page, 'name'))).toHaveProperty('Length')
+  // The panel follows the grid's selection: a cell marks its column's card, Selected Columns Only lists just that card
+  // (Show all lists every one again), and a click on a card selects its column in the grid.
+  await gridCell(anyResultGrid(page), 0, 1).click()
+  await expect(profileCard(page, 'name')).toHaveAttribute('aria-current', 'true')
+  const selectedOnly = columnProfile(page).getByRole('button', { name: 'Selected Columns Only', exact: true })
+  await selectedOnly.click()
+  await expect(selectedOnly).toHaveAttribute('aria-pressed', 'true')
+  await expect(columnProfile(page).getByRole('region')).toHaveCount(1)
+  await columnProfile(page).getByRole('button', { name: 'Show all', exact: true }).click()
+  await expect(selectedOnly).toHaveAttribute('aria-pressed', 'false')
+  await expect(columnProfile(page).getByRole('region')).toHaveCount(liveColumns.length)
+  await profileCard(page, 'id').click()
+  await expect(profileCard(page, 'id')).toHaveAttribute('aria-current', 'true')
+  await expect(profileCard(page, 'name')).not.toHaveAttribute('aria-current', 'true')
   // Running again with the panel open replaces the run's grids rather than leaving the last run's beside them.
   await run('-- varia-fake: sets=W1*100')
   await settled()
@@ -2077,6 +2091,24 @@ try {
   await expect(funnel('name').getByRole('option', { name: 'Customer 0000000001 GmbH (1)', exact: true })).toBeChecked()
   await expect(funnel('name').getByRole('searchbox', { name: 'Search values', exact: true })).toBeFocused()
   await expect(funnel('name')).toContainText('100 values in 100 rows.')
+  // It opens beside its column, covering none of it, and its corner grip resizes it; the size is remembered (a setting).
+  const across = async box => { const column = await header('name').boundingBox(); return box.x >= column.x + column.width || box.x + box.width <= column.x }
+  const funnelBox = await funnel('name').boundingBox()
+  if (!await across(funnelBox)) throw new Error(`The funnel popover covers its column: ${JSON.stringify(funnelBox)}`)
+  const grip = await funnel('name').locator(gridPart.funnelGrip).boundingBox()
+  const towards = grip.x > funnelBox.x + funnelBox.width / 2 ? 1 : -1
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  // Narrower, which always fits: a drag never grows it past the room on its side, which a small window may not have.
+  await page.mouse.move(grip.x + grip.width / 2 - 40 * towards, grip.y + grip.height / 2 + 30, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) - 40)
+  await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(funnel('name')).toHaveCount(0)
+  await header('name').hover()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) - 40)
+  if (!await across(await funnel('name').boundingBox())) throw new Error('The resized funnel popover covers its column.')
   await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(funnel('name')).toHaveCount(0)
   // A second press on the open funnel closes it, as a menu button does.
@@ -2101,6 +2133,37 @@ try {
   await page.keyboard.press('Space')
   await expect(funnel('active').getByRole('option', { name: '1 (34)', exact: true })).not.toBeChecked()
   await expect(funnel('active').getByRole('option', { name: '0 (66)', exact: true })).toBeChecked()
+  // Selecting is not ticking: Shift+Up selects both rows, and Space ticks the selection (one was unticked, so both).
+  const selectedValues = activeValues.getByRole('option', { selected: true })
+  await page.keyboard.press('Shift+ArrowUp')
+  await expect(selectedValues).toHaveCount(2)
+  await page.keyboard.press('Space')
+  await expect(funnel('active').getByRole('option', { name: '1 (34)', exact: true })).toBeChecked()
+  // Left enters the action list, which offers the selection's actions first; Untick all runs from the keyboard and the
+  // focus stays there; Right goes back to the values.
+  const actionList = funnel('active').getByRole('listbox', { name: 'Actions', exact: true })
+  const activeAction = () => actionList.evaluate(list => list.ownerDocument.getElementById(list.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label'))
+  await page.keyboard.press('ArrowLeft')
+  await expect(actionList).toBeFocused()
+  await expect.poll(activeAction).toBe('Tick the selected (2)')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(activeAction).toBe('Untick all (2)')
+  await page.keyboard.press('Enter')
+  await expect(funnel('active').getByRole('option', { name: '0 (66)', exact: true })).not.toBeChecked()
+  await expect(funnel('active').getByRole('option', { name: '1 (34)', exact: true })).not.toBeChecked()
+  await expect(actionList).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(activeValues).toBeFocused()
+  // Ctrl+A selects every value (no shortcut elsewhere takes it); Home selects the first alone and Space ticks it.
+  await page.keyboard.press('ControlOrMeta+a')
+  await expect(selectedValues).toHaveCount(2)
+  await page.keyboard.press('Home')
+  await expect(selectedValues).toHaveCount(1)
+  await page.keyboard.press('Space')
+  await expect(funnel('active').getByRole('option', { name: '0 (66)', exact: true })).toBeChecked()
   await page.keyboard.press('Tab')
   await expect(funnel('active').getByRole('combobox', { name: 'Condition', exact: true })).toBeFocused()
   await page.keyboard.press('Shift+Tab')
@@ -2118,7 +2181,7 @@ try {
   await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('zzz')
   await expect(score).toContainText('No values match.')
   await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('')
-  await score.getByRole('button', { name: 'Select none', exact: true }).click()
+  await score.getByRole('option', { name: /^Untick all \(/ }).click()
   await expect(score.getByRole('option', { name: 'NULL (13)', exact: true })).not.toBeChecked()
   await score.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(score.getByRole('alert')).toHaveText('Select at least one value.')
@@ -2152,9 +2215,11 @@ try {
   await expect(funnel('active')).toHaveCount(0)
   await expect(grid()).toBeFocused()
   await expect(caption).toContainText('8 of 100 rows')
-  await filterList.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  // Clear Filters' key (Ctrl+Shift+L, ⇧⌘L on macOS) takes both filters off from the grid.
+  await page.keyboard.press('ControlOrMeta+Shift+L')
   await expect(caption).not.toContainText(' of ')
-  console.log('Results checks: the header funnel lists distinct values with counts, filters by the values ticked, NULL, a search, a range and Clear filter, and opens with Alt+Down.')
+  await expect(header('active').locator(gridPart.funnelOn)).toHaveCount(0)
+  console.log('Results checks: the header funnel opens beside its column at its remembered size, lists distinct values with counts, filters by the values ticked, NULL, a search, a range and Clear filter, opens with Alt+Down, and Ctrl+Shift+L clears every filter.')
 
   // 14. Styling: NULL, truncation, read errors and the selection (focused or not) take their tokens; a theme change
   // recolours the same nodes.

@@ -13,6 +13,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * - AppData › Views: `views` expandable views (dbo.view0…), paged the same way.
  * - Security › Audits fails with PERMISSION_DENIED until `auditsOk` is set.
  * - Server Objects › Linked Servers is held until `release()` or a cancel for its request.
+ * - AppData › Programmability › Stored Procedures: System Stored Procedures (empty), then `procedures` procedures
+ *   (dbo.usp_ShipOrders first), each with an empty Parameters folder, held while `holdParameters` is set.
  * - Peek's Top rows (query.execute with maxRows 10): fail once, then answer ten synthetic W1 rows (the backend's test hooks).
  * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders, dbo.Orders.trg_Orders, dbo.table1 and
  *   dbo.table2.
@@ -25,7 +27,7 @@ export function explorerStubData() {
 export function installExplorerStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = {
     calls: [], cancels: [], held: new Map(), connections: {},
-    tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, holdTablePages: false, auditsOk: false, holdLinked: true, tablesError: undefined,
+    tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, holdTablePages: false, auditsOk: false, holdLinked: true, tablesError: undefined, procedures: 0, holdParameters: false,
     // holdSearch: explorer.search answers only on release(); searchHidden: names the index leaves out of its answers.
     holdSearch: false, searchHidden: [],
     release() { for (const [id, resolve] of [...stub.held]) { stub.held.delete(id); resolve() } }
@@ -87,6 +89,18 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'audits':
         if (!stub.auditsOk) return ok({ nodes: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } })
         return ok({ nodes: [object({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit', 'shield', { hasChildren: false })], total: 1, elapsedMs: 1 })
+      case 'storedProcedures': {
+        const procedure = index => { const name = index === 0 ? 'usp_ShipOrders' : `usp_${index}`; return object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'procedure') }
+        const nodes = [...folders(owner, statics.folders.storedProcedures), ...Array.from({ length: stub.procedures }, (_, index) => procedure(index))]
+        return ok({ nodes, total: nodes.length, elapsedMs: 1 })
+      }
+      case 'parameters': {
+        if (stub.holdParameters) {
+          const cancelled = await new Promise(resolve => { stub.held.set(params.requestId, resolve) })
+          if (cancelled) return { ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' }
+        }
+        return ok({ nodes: [], total: 0, elapsedMs: 1 })
+      }
       case 'linkedServers': {
         if (stub.holdLinked) {
           const cancelled = await new Promise(resolve => { stub.held.set(params.requestId, resolve) })

@@ -305,7 +305,7 @@ const groups = {
     'chip.activeBackground': ['X', '$selection', 'A filter chip while on.', 'css'],
     'chip.activeForeground': ['X', '$textAccent', 'Label and check mark of a filter chip while on.', 'css'],
     'chip.activeBorder': ['X', '$accent', 'Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on.', 'css'],
-    'live.indicator': ['X', '$success', 'Dot of a live view that is collecting; it pulses unless the system asks for reduced motion.', 'css'],
+    'live.indicator': ['X', '$success', 'Dot of a live view that is collecting; it pulses unless reduced motion is on (Reduce motion when the system asks, while the system asks).', 'css'],
     'live.pausedForeground': ['X', '$textMuted', 'Text and glyph of a live view that is not collecting: starting, paused, stopped or ended.', 'css'],
     'live.staleForeground': ['X', '$warningSurfaceText', 'Text and glyph of live data that is out of date, as in "Stale since 22:44:03".', 'css'],
     'live.staleBackground': ['X', '$warning/14', 'Badge behind out-of-date live data.', 'css'],

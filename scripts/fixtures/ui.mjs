@@ -322,6 +322,8 @@ export const gridPart = {
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
+  /** The funnel popover's corner resize grip, pointer only (Options sets the same size), hidden from screen readers. */
+  funnelGrip: '.column-filter-grip',
   /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
    *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
   searchMatch: '.rg-c.is-hit',
@@ -838,6 +840,8 @@ export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
+/** The row a dragged server's drop line is drawn on (its data-drop says above or below it); none while no line shows. */
+export const explorerDropLine = page => explorerTree(page).locator('[role="treeitem"][data-drop]')
 /** Offline roots may name a concise recovery reason and their environment after Disconnected. */
 export const lostServerRows = page => serverRows(page).and(explorerTree(page).getByRole('treeitem', { name: /\(Disconnected(?: · [^)\r\n]{1,80})?\)(?:, [^\r\n]{1,256})?$/ }))
 export const explorerLabel = row => row.locator(part.explorerLabel)
