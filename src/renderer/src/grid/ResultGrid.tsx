@@ -256,7 +256,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind,
+      // A Pivot's or comparison's grid is named for itself, so its number ("Result 4" in a save's name) is kept here.
+      ...derivedGridName(entry) ? { 'data-result-number': entry.number } : {}, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
       ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
       // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
       // menus' toggle and the pivot builder follow.

@@ -42,12 +42,11 @@ describe('result names', () => {
   })
 
   it('lists every grid named by a result number', () => {
-    // A results grid, which passes `derivedGridName` as its label for a comparison or Pivot, and a live grid, which always
-    // passes its own label.
+    // A results grid, which passes `derivedGridName` as its label for a comparison or Pivot (tests/result-grid-name.test.ts),
+    // and a live grid, which always passes its own label.
     expect(callers(/(?<!readonly )\bresultNumber: /)).toEqual([
       'grid/ResultGrid.tsx: entry: key',
       'live/LiveGridPane.tsx: entry: \'live\''
     ])
-    expect(readFileSync(join(root, 'grid/ResultGrid.tsx'), 'utf8')).toMatch(/resultNumber: entry\.number, .*\.\.\.label \? \{ label \} : \{\}/)
   })
 })
