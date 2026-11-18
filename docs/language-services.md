@@ -39,10 +39,12 @@ query tab; on a column it goes to the column's table, using the statement's alia
 Object Explorer row ([Peek](object-explorer.md#peek)):
 
 - **Ctrl+hover** (**⌘+hover** on macOS): rest the pointer on a name with Ctrl held and Peek's card opens below it (above
-  it near the bottom of the window) without taking focus. A press outside the card, editing the query or another peek
-  closes it; it follows the name as the editor scrolls. Unlike Object Explorer, the editor shows no peek cursor, and pressing
+  it near the bottom of the window) without taking focus. **Esc** in the editor, a press outside the card, editing the
+  query or another peek closes it; it follows the name as the editor scrolls. Esc first closes the suggestions, Find, the
+  read-only message, an SQL issue (F8) or a snippet when the editor shows one, then the card; a hover showing beside it closes with the card. Unlike Object Explorer, the editor shows no peek cursor, and pressing
   Ctrl with the pointer already resting on a name does nothing until the pointer moves.
 - **Alt+F12** (Peek Definition) opens the same card at the caret and moves focus into it; **Esc** returns to the editor.
+  Esc pressed while the name is still being looked up cancels the peek, so a slow server never opens the card later.
 - **Ctrl+click** (**⌘-click**), **Open Definition in Peek Tab** on the editor's context menu, or **Ctrl+Enter** in the card
   opens the object in a Peek tab.
 

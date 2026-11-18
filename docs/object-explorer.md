@@ -381,7 +381,8 @@ held, rows that can peek show a zoom-in cursor. Pressing it with the pointer alr
 shortcut such as Ctrl+N reaches its second key first, so it peeks nothing); a key typed since the pointer last moved means
 the pointer is only resting there, so the press peeks nothing until it moves. Releasing it keeps an open card, so the pointer
 can move into it.
-Esc, a click elsewhere or another peek closes the card, and
+Esc (in the card, the tree, or a query editor that kept focus while a row was hovered), a click elsewhere or another peek
+closes the card, and
 cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.
 Properties sit beside the definition; a card or tab narrower than 560px (a slim popped-out Object Explorer) stacks them
 under it, so the editor of the definition always has room.

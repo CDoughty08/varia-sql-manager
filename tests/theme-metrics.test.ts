@@ -5,7 +5,7 @@ import { gridLimits } from '../src/renderer/src/grid/constants'
 import { explorerLimits } from '../src/shared/explorer/catalog'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import {
-  defaultDensity, densities, densityUse, glyphConditions, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, windowControls,
+  defaultDensity, densities, densityUse, glyphConditions, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, reducedMotionRoot, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, windowControls,
   type DensityMetrics, type GlyphSizeName, type TypeStepName
 } from '../src/shared/theme/metrics'
 import { cssRules, stylesheetRules, type CssRule } from './fixtures/css-rules'
@@ -13,9 +13,12 @@ import { cssRules, stylesheetRules, type CssRule } from './fixtures/css-rules'
 const rules = stylesheetRules()
 const all = rules.flatMap(rule => rule.declarations.map(declaration => ({ ...declaration, selector: rule.selector, at: rule.at, where: `${[...rule.at, rule.selector].join(' ')} { ${declaration.property}: ${declaration.value} }` })))
 const ascending = (values: readonly number[]) => values.every((value, index) => index === 0 || value > values[index - 1])
-const reducedAt = '@media (prefers-reduced-motion: reduce)'
 /** A selector list's parts; commas inside :has() and :not() stay in their part. */
 const parts = (selector: string) => selector.split(/,(?![^(]*\))/).map(part => part.trim())
+/** Whether a rule applies only under reduced motion: every part starts with the root class (`:root.varia-reduced-motion`). */
+const reduced = (selector: string) => parts(selector).every(part => part === reducedMotionRoot || part.startsWith(reducedMotionRoot + ' '))
+/** What a reduced-motion part styles without its root class. */
+const unreduced = (part: string) => part.slice(reducedMotionRoot.length).trim()
 /** The compound a selector part styles (`button.active` in `.title-bar-menus button.active`). */
 const subject = (part: string) => part.split(/\s*[\s>+~]\s*(?![^(]*\))/).pop() ?? ''
 
@@ -155,12 +158,12 @@ describe('metric tokens', () => {
     const loops = timed.filter(({ value }) => /\binfinite\b/.test(value))
     // Transitions run once and use fast or base, which reduced motion sets to 0, in every rule but the ones that turn
     // motion off; loops use their own periods.
-    expect(timed.filter(({ value, at }) => !at.includes(reducedAt) && value !== 'none' && !loops.some(loop => loop.value === value) && !/var\(--varia-motion-(?:fast|base)\)/.test(value)).map(({ where }) => where)).toEqual([])
+    expect(timed.filter(({ value, selector }) => !reduced(selector) && value !== 'none' && !loops.some(loop => loop.value === value) && !/var\(--varia-motion-(?:fast|base)\)/.test(value)).map(({ where }) => where)).toEqual([])
     expect(loops.filter(({ value }) => !/var\(--varia-motion-(?:spin|pulse)\)/.test(value)).map(({ where }) => where)).toEqual([])
-    const stopped = (selector: string) => rules.some((rule: CssRule) => rule.at.includes(reducedAt) && parts(rule.selector).includes(selector)
+    const stopped = (selector: string) => rules.some((rule: CssRule) => reduced(rule.selector) && parts(rule.selector).map(unreduced).includes(selector)
       && rule.declarations.some(({ property, value }) => property === 'animation' && value === 'none'))
     expect(loops.length).toBeGreaterThan(0)
-    expect(loops.filter(({ selector }) => !stopped(selector)).map(({ where }) => where), 'a looping animation needs animation: none under prefers-reduced-motion').toEqual([])
+    expect(loops.filter(({ selector }) => !stopped(selector)).map(({ where }) => where), 'a looping animation needs animation: none under :root.varia-reduced-motion').toEqual([])
     expect(reducedMotion).toEqual(['fast', 'base'])
     // Hover fills and surfaces that appear use the motion (the 80/120 ms of the design language).
     const uses = (selector: string, token: string) => all.some(entry => entry.selector === selector && !entry.at.length && /^(?:transition|animation)$/.test(entry.property) && entry.value.includes(`var(--varia-motion-${token})`))
@@ -172,8 +175,8 @@ describe('metric tokens', () => {
     const monaco = cssRules(readFileSync('node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css', 'utf8'))
     const spinning = monaco.filter(rule => !rule.at.length && rule.declarations.some(({ property, value }) => /^animation/.test(property) && /\binfinite\b/.test(value))).flatMap(rule => parts(rule.selector))
     expect(spinning).toEqual(expect.arrayContaining(['.codicon-loading.codicon-modifier-spin', '.codicon-loading']))
-    const stops = rules.filter(rule => rule.at.includes(reducedAt) && rule.declarations.some(({ property, value }) => property === 'animation' && value === 'none')).flatMap(rule => parts(rule.selector))
-    expect(spinning.filter(loop => !stops.some(stop => outranks(stop, loop))), 'add a stronger animation: none under prefers-reduced-motion').toEqual([])
+    const stops = rules.filter(rule => reduced(rule.selector) && rule.declarations.some(({ property, value }) => property === 'animation' && value === 'none')).flatMap(rule => parts(rule.selector))
+    expect(spinning.filter(loop => !stops.some(stop => outranks(stop, loop))), 'add a stronger animation: none under :root.varia-reduced-motion').toEqual([])
   })
   it('fades only hover and pressed fills, so selection and other states change at once', () => {
     const fast = all.filter(({ property, value }) => property.startsWith('transition') && value.includes('var(--varia-motion-fast)'))
@@ -182,8 +185,8 @@ describe('metric tokens', () => {
     // A rule that colours a selected, current, pressed, expanded or focused button or row while it may be hovered.
     const state = /\[aria-(?:selected|current|expanded|pressed|checked)=|\.active(?:-connection)?(?![\w-])|:focus-visible|\[data-active\]/
     const coloured = /^(?:background(?:-color)?|color|border(?:-[a-z]+)*-color)$/
-    const instant = new Set(rules.filter(rule => !rule.at.includes(reducedAt) && rule.declarations.some(({ property, value }) => property === 'transition' && value === 'none')).flatMap(rule => parts(rule.selector)))
-    const states = rules.filter(rule => !rule.at.includes(reducedAt) && rule.declarations.some(({ property }) => coloured.test(property))).flatMap(rule => parts(rule.selector))
+    const instant = new Set(rules.filter(rule => !reduced(rule.selector) && rule.declarations.some(({ property, value }) => property === 'transition' && value === 'none')).flatMap(rule => parts(rule.selector)))
+    const states = rules.filter(rule => !reduced(rule.selector) && rule.declarations.some(({ property }) => coloured.test(property))).flatMap(rule => parts(rule.selector))
       .filter(part => !/:hover\b/.test(part) && state.test(subject(part)) && /^(?:button|\.icon-button|\.explorer-row)(?![\w-])/.test(subject(part)))
     expect(states).toEqual(expect.arrayContaining(['.explorer-row[aria-selected="true"]', '.object-dialog-pages > button[aria-current="page"]', '.title-bar-menus button[aria-expanded="true"]']))
     expect([...new Set(states.filter(part => !instant.has(part)))], 'set transition: none on the state rule').toEqual([])
