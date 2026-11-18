@@ -75,6 +75,8 @@ describe('comparison gutter', () => {
     const sets = [{ key: 'a', descriptor: { rowsStored: 12 } }, { key: 'b', descriptor: { rowsStored: 30_000 } }] as never
     expect(diffSidesOf({ left: 'a', right: 'b', leftNumber: 1, rightNumber: 2, leftName: 'Open orders' }, sets)).toEqual({ old: 'Open orders', new: 'Result 2', rows: 30_000 })
     expect(diffSidesOf({ left: 'a', right: 'gone', leftNumber: 1, rightNumber: 2 }, sets).rows).toBe(12)
+    // The inputs' rows when compared still size the numbers once both are closed.
+    expect(diffSidesOf({ left: 'gone', right: 'also gone', leftNumber: 1, rightNumber: 2, inputRows: 50_000 }, sets).rows).toBe(50_000)
   })
   it('reads the whole suffix with each row tile, across two tile columns', () => {
     const handle = { getWindow: () => new Promise<never>(() => {}), peekWindow: () => undefined, prefetch: () => {} }

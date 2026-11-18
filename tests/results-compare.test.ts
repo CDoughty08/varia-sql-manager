@@ -106,7 +106,7 @@ describe('the Compare popover', () => {
     compare.open('t1', keys[2])
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ active: keys[2], target: keys[0], swapped: true, exact: true })
     expect(compare.existing('t1', keys[2], keys[0], true)?.key).toBe(made.key)
-    expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true })
+    expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true, inputRows: 2 })
   })
 
   it('leaves the focus where the user put it while the comparison ran, and says a cancel in the picker', async () => {

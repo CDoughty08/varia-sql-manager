@@ -516,6 +516,8 @@ internal static class DiffChecks
                 Code("results.view", new { resultId = id, sort = new[] { new { column = hidden, descending = false, mode = "value" } } }),
                 Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "in", column = hidden, rows = new[] { 0 } } } }),
                 Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "duplicates", columns = new[] { 0, hidden } } } }),
+                // No value list 999 exists, so only the column check answers INVALID_PARAMS (the list's would be VIEW_NOT_FOUND).
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "groups", column = hidden, snapshotId = 999u } } }),
                 Code("results.distinct", new { resultId = id, column = hidden }),
                 Code("results.profile", new { resultId = id, columns = new[] { hidden } }),
                 Code("results.identify", new { resultId = id, by = "column", column = hidden })
@@ -525,6 +527,10 @@ internal static class DiffChecks
         check(refused.Count == 0, "sort keys, filters, duplicates columns, distinct values, profiles and identify refuse a hidden column: " + string.Join(" | ", refused));
         check(Code("results.view", new { resultId = id, sort = new[] { new { column = 2, descending = false, mode = "value" } } }) is null, "a diff's data columns still sort");
         check(Code("results.identify", new { resultId = id, by = "column", column = 0 }) == "INVALID_PARAMS", "results.identify refuses by column on a diff: entry identity is its only identity");
+        // Outside a diff, where by column is allowed, identify still refuses a hidden (tone) column and takes a data one.
+        var toned = Fill(store, left.Budget, 7, [["1", "a", "same"], ["2", "b", "same"]], [Columns[0], Columns[1], new ResultColumn("", "nvarchar(500)", "text", Role: "tone")]);
+        check(Code("results.identify", new { resultId = toned.ResultId, by = "column", column = 2 }) == "INVALID_PARAMS" && Code("results.identify", new { resultId = toned.ResultId, by = "column", column = 0 }) is null,
+            "results.identify by column refuses a toned result's hidden tone column and takes its data column");
         var auto = Call<ResultsIdentifyResult>("results.identify", new { resultId = id, by = "auto" });
         var ids = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = id, firstRow = 0, count = 16 }).Ids;
         // Rows: =1, ~2 (− and +), −4 (after the row it followed), +3.

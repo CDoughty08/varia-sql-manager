@@ -41,9 +41,10 @@ export interface ResultGridProps {
 }
 
 /** What a comparison's gutter calls its inputs (the names they were compared under) and the larger one's row count. */
-export function diffSidesOf(info: Pick<CompareInfo, 'left' | 'right' | 'leftNumber' | 'rightNumber' | 'leftName' | 'rightName'>, sets: readonly Pick<ResultSetEntry, 'key' | 'descriptor'>[]): DiffSides {
+export function diffSidesOf(info: Pick<CompareInfo, 'left' | 'right' | 'leftNumber' | 'rightNumber' | 'leftName' | 'rightName' | 'inputRows'>, sets: readonly Pick<ResultSetEntry, 'key' | 'descriptor'>[]): DiffSides {
+  // Frozen when compared, so closing an input leaves the numbers room; the open inputs answer for an older comparison.
   const rows = (key: EntryKey) => sets.find(set => set.key === key)?.descriptor.rowsStored ?? 0
-  return { old: info.leftName ?? entryNumber({ number: info.leftNumber }), new: info.rightName ?? entryNumber({ number: info.rightNumber }), rows: Math.max(rows(info.left), rows(info.right)) }
+  return { old: info.leftName ?? entryNumber({ number: info.leftNumber }), new: info.rightName ?? entryNumber({ number: info.rightNumber }), rows: Math.max(info.inputRows ?? 0, rows(info.left), rows(info.right)) }
 }
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
