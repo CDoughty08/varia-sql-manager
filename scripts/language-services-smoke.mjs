@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, editorWordPoint, floatingEditorGroups, movePane, paneMenuButton, part, peekCard, peekCardInEditor, dockPopoutBack, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton, expectEditorShown } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -248,6 +248,61 @@ try {
   await expect(errorBanner(page)).toHaveCount(0)
   expect(await activeDocumentName(page)).toBe(tabA)
   console.log('Language checks: F12 scripts the object under the caret to a new query tab, and an unknown name only shows a status notice.')
+
+  // Peek from the editor, as from an Object Explorer row: Ctrl+hover (⌘ on macOS) on a name opens Peek's card beside it without
+  // taking focus, a press elsewhere or Esc closes it, Alt+F12 opens it at the caret with focus (Esc returns to the editor), and
+  // Ctrl+click opens a Peek tab.
+  await setText(page, page, 'SELECT * FROM dbo.Orders')
+  const card = peekCard(page, 'dbo.Orders'), queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
+  await expect.poll(() => text(page)).toBe('SELECT * FROM dbo.Orders')
+  const orders = await editorWordPoint(page, 'Orders')
+  const definitions = (await languageCalls('language.definition')).length
+  await page.mouse.move(orders.x, orders.y)
+  await page.keyboard.down(mod)
+  await page.mouse.move(orders.x + 1, orders.y)
+  await expect(card).toBeVisible()
+  await page.keyboard.up(mod)
+  expect(await peekCardInEditor(card)).toBe(true)
+  await expect(queryText).toBeFocused()
+  expect((await languageCalls('language.definition')).length).toBe(definitions + 1)
+  await expect.poll(async () => (await calls()).filter(call => call.method === 'explorer.peek').at(-1)?.params.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
+  await page.mouse.click(orders.x + 200, orders.y)
+  await expect(card).toBeHidden()
+  // Esc in the editor closes a hovered card too, though focus never left the text, once Monaco's own widgets have had it:
+  // the first Esc closes the suggestions, the second the card.
+  await page.mouse.move(orders.x, orders.y)
+  await page.keyboard.down(mod)
+  await page.mouse.move(orders.x + 1, orders.y)
+  await expect(card).toBeVisible()
+  await page.keyboard.up(mod)
+  await expect(queryText).toBeFocused()
+  // After "SELECT ", where every suggestion fits (moving the caret leaves the card open).
+  await page.keyboard.press('Home')
+  for (let step = 0; step < 'SELECT '.length; step++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionWidget(page)).toBeVisible()
+  await expect(card).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(suggestionWidget(page)).toBeHidden()
+  await expect(card).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(card).toBeHidden()
+  await expect(queryText).toBeFocused()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Alt+F12')
+  await expect(card).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(card).toBeHidden()
+  await expect(queryText).toBeFocused()
+  // page.mouse.click takes no modifiers, so the key is held around the click.
+  await page.keyboard.down(mod)
+  await page.mouse.click(orders.x, orders.y)
+  await page.keyboard.up(mod)
+  await expect(documentTab(page, 'dbo.Orders')).toBeVisible()
+  await expect(card).toHaveCount(0)
+  await page.keyboard.press(`${mod}+W`)
+  await expect.poll(() => activeDocumentName(page)).toBe(tabA)
+  console.log('Language checks: Ctrl+hover peeks a name in a card beside it, Alt+F12 opens that card at the caret, and Ctrl+click opens a Peek tab.')
 
   const idB = await connect('language-server-b')
   expect(idB).not.toBe(idA)

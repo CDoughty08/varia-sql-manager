@@ -17,6 +17,11 @@ export const environmentSettings = [
     description: 'Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query\'s Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release.'
   },
   {
+    key: 'environment.reduceMotionWithSystem', page: 'environment.general', label: 'Reduce motion when the system asks', type: 'boolean', default: false, varia: true,
+    keywords: ['motion', 'animation', 'reduced motion', 'accessibility', 'spinner', 'transition', 'prefers-reduced-motion'],
+    description: 'Follows the operating system\'s reduced-motion preference: while the system asks for reduced motion, menus, dialogs and hover fills appear at once, and spinners and the live dot stop. Off, every animation plays whatever the system asks.'
+  },
+  {
     key: 'environment.layout.panelTabs', page: 'environment.general', label: 'Show panel tabs', type: 'boolean', default: false, varia: true, hidden: true,
     keywords: ['panel', 'tab', 'dock', 'header', 'drag'],
     description: 'Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs.'

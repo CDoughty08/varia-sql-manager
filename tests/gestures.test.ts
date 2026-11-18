@@ -109,14 +109,20 @@ describe('GestureService', () => {
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with the catalogue: Ctrl+click (⌘-click) on a row opens it in a Peek tab.
       'explorer.openPeekTab': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
-      // New with Go to Definition: Ctrl+click (⌘-click) on a name in a SQL editor, as F12.
+      // New with Go to Definition: Ctrl+click (⌘-click) on a name in a SQL editor, now a Peek tab as on an explorer row.
       'editor.goToDefinition': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with the editor's Peek: Ctrl+hover (⌘+hover) on a name opens Peek's card there, as on an explorer row.
+      'editor.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with the column profile's peek: Ctrl+hover (⌘+hover) on the panel shows only the selected columns while held.
+      'output.profilePeekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // macOS: ⌘, since Control+press is a right-click there (the tab's menu opened instead of the drag starting).
       'dock.floatWhileDragging': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'dock.dragFloatingTitleBar': event => !!event.shiftKey,
       // Except on macOS, where Control+double-click never arrived (Control+click is a right-click): ⌘ instead.
       'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'popout.returnToMain': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with dragging a server onto a query: the modifier inserts its name instead (⌥, macOS's copy modifier).
+      'explorer.dropServerName': (event, platform) => !!(platform === 'darwin' ? event.altKey : event.ctrlKey),
       'documentTabs.rows': event => !!event.ctrlKey,
       'documentTabs.scroll': () => true,
       'documentTabs.rename': () => true

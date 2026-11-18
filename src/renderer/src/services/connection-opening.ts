@@ -1,5 +1,5 @@
 import type { ConnectionOptions } from '../../../shared/contracts'
-import { changedConnectionDetails, type ConnectionDetails } from '../../../shared/connection-targets'
+import { changedConnectionDetails, type ConnectionDetailField, type ConnectionDetails } from '../../../shared/connection-targets'
 import { detailsOf, type ConnectionAssociationHandoff, type ConnectionAttempt, type ConnectionService, type LiveConnection, type TargetConnectionInfo } from './connections'
 import type { ConnectionCompletion } from './connection-targets'
 import { isQueryDocument } from '../documents'
@@ -50,6 +50,13 @@ export function adoptConnection(connections: ConnectionService, info: TargetConn
   const reused = !!previous && !(attempt?.created && previous.targetId === attempt.operation.targetId)
   if (!reused) connections.setDetails(connection.id, selected)
   return { id: connection.id, targetId: connection.targetId, generation: connection.generation, bindingRevision: connections.bindingRevision(connection), previousId: reused ? previous?.id : undefined, sourceTargetId: attempt?.operation.targetId, reused, current, selected }
+}
+
+/** Labels the user changed in Connect, and only those, for a reused connection: its other labels (a connection-only
+ *  environment) stay. A new connection already has every selected detail. */
+export function withChangedDetails(opened: OpenedConnection, fields: readonly ConnectionDetailField[]): OpenedConnection {
+  if (!opened.reused) return opened
+  return { ...opened, selected: { ...opened.current, ...Object.fromEntries(fields.map(field => [field, opened.selected[field]])) } }
 }
 
 export function needsDetailsConfirmation(opened: OpenedConnection): boolean {

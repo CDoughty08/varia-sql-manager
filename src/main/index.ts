@@ -59,7 +59,7 @@ import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMe
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { installPermissionHandlers } from './permissions'
-import { PopoutWindows } from './popout-windows'
+import { PopoutWindows, settledNativeTheme } from './popout-windows'
 import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
@@ -87,6 +87,7 @@ import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, tes
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
+import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type WindowPlacement } from './window-state'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -158,7 +159,8 @@ const popouts = new PopoutWindows<BrowserWindow>({
   workAreas: () => screen.getAllDisplays().map(display => display.workArea),
   zoomLevel: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getZoomLevel() : 0,
   setZoomLevel: level => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(level) },
-  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') }
+  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') },
+  parent: () => mainWindow ?? undefined
 })
 /** The window the user is working in: a focused popout, else the main window. */
 function activeWindow(): { window: BrowserWindow; activation: UserActivation } | undefined {
@@ -177,6 +179,13 @@ if (smokeProfile) {
   app.setPath('userData', smokeProfile)
   console.error(`Remote debugging is on for a packaged smoke run (${packagedSmokeVariable}=1) on its own profile; saved passwords are locked.`)
 }
+// The main window's place between runs (window-state.ts). Smoke suites open at the default place unless they ask for it
+// (VARIA_TEST_WINDOW_STATE=1), so one suite's resized window never carries into its next launch.
+const windowStateKept = process.env.VARIA_SMOKE_TEST !== '1' || (testSeams && process.env.VARIA_TEST_WINDOW_STATE === '1')
+const windowStates = new WindowStateStore(join(app.getPath('userData'), 'window-state.json'))
+// Read at once, so the first window waits for nothing more than a small file read already done.
+const windowStateRead = windowStateKept ? windowStates.load().catch(() => undefined) : Promise.resolve(undefined)
+let windowTracker = new WindowStateTracker({ platform: process.platform, save: state => windowStates.save(state) })
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
 // A packaged smoke run on its debugging port reads no file its profile names (sandbox-guard.ts): the three stores below
@@ -200,6 +209,8 @@ let workspaceSealer: ConnectionWorkspaceSealer | undefined
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
 const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
+// Smoke suites read colours and boxes as soon as a state changes, so they reduce motion under emulated media without the setting.
+const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
@@ -570,18 +581,30 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   rendererReady = false
   rendererUnresponsive = false
   const chrome = appearance.windowChrome(), controls = windowControls()
+  // A replacement window takes its predecessor's place as it is; a new one, the saved place checked against the displays now.
+  const placement = place.bounds || !windowStateKept ? undefined : restoredPlacement()
   mainWindow = new BrowserWindow({
-    title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, minWidth: 1024, minHeight: 700,
+    title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, ...placement?.bounds, minWidth: 1024, minHeight: 700,
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
     ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit'])],
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
   })
   const window = mainWindow, contents = window.webContents
-  if (place.maximized) window.maximize()
+  // Windows can size a window created on a display of another scale factor by the wrong factor; placing it again once it
+  // is on that display corrects it.
+  const placed = placement?.bounds
+  if (process.platform === 'win32' && placed?.x !== undefined && placed.y !== undefined) {
+    const actual = window.getBounds()
+    if (actual.x !== placed.x || actual.y !== placed.y || actual.width !== placed.width || actual.height !== placed.height) window.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
+  }
+  // A hidden smoke window stays hidden: maximize() would show it.
+  if (place.maximized || (placement?.maximized && process.env.VARIA_SMOKE_TEST !== '1')) window.maximize()
+  if (windowStateKept) windowTracker.track(window, placed?.x !== undefined && placed.y !== undefined ? { x: placed.x, y: placed.y, width: placed.width, height: placed.height } : undefined)
+  if (testSeams && placement) Object.assign(globalThis, { __variaWindowPlacement: placement })
   // Smoke runs on a virtual display show the window, inactive: Linux sometimes ran no animation frames in a never-shown one
   // (scripts/fixtures/xvfb.mjs).
   if (testSeams && process.env.VARIA_TEST_SHOW_WINDOW === '1') window.showInactive()
@@ -593,8 +616,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     window.on('focus', () => activate(true))
     window.on('blur', () => activate(false))
   }
-  // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
-  contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
+  // The page may open only its own popout and dialog windows: same-origin about:blank children with Varia's names, on a display.
+  contents.setWindowOpenHandler(details => popouts.open(details, { ...appearance.windowChrome(), show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
   // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
   const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
@@ -721,6 +744,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     mainWindow = null
     resetRendererState({ relaunch: process.platform === 'darwin' && !quitting })
   })
+}
+
+/** The main window's saved place (the latest this run, after a macOS reopen), checked against the displays connected now. */
+function restoredPlacement(): WindowPlacement {
+  const displays = { workAreas: screen.getAllDisplays().map(display => display.workArea), primary: screen.getPrimaryDisplay().workArea }
+  const wayland = onWayland(process.platform, { ozonePlatform: app.commandLine.getSwitchValue('ozone-platform'), ozonePlatformHint: app.commandLine.getSwitchValue('ozone-platform-hint') }, process.env)
+  return placeWindow(windowTracker.current(), displays, { canPosition: !wayland })
 }
 
 /**
@@ -867,7 +897,7 @@ app.whenReady().then(async () => {
   connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
-  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
+  appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme: settledNativeTheme(nativeTheme, popouts) })
   await appearance.initialize()
   appearance.onDidChange(applyAppearance)
   nativeTheme.on('updated', () => appearance.systemChanged())
@@ -1294,6 +1324,7 @@ app.whenReady().then(async () => {
     } catch (error) { closeApproved = false; throw error }
   })
   buildMenu()
+  windowTracker = new WindowStateTracker({ platform: process.platform, save: state => windowStates.save(state) }, await windowStateRead)
   createWindow()
   started = true
   // The full catalogue only feeds the menu, so it loads after the window is on its way.
@@ -1314,7 +1345,8 @@ app.on('will-quit', event => {
   event.preventDefault()
   // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
   app.releaseSingleInstanceLock()
-  void backend.stop().finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
+  // The window's last place is written by then too (its close started the write), within a bound of its own.
+  void Promise.all([backend.stop(), windowTracker.flush()]).finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
 })
 
 /** Main's record of a release that could not be staged or swapped in (update-staging.ts), in the profile. */

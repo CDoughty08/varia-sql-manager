@@ -5,6 +5,7 @@ import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
 import { loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
 import { codiconClass } from '../../../shared/icons'
+import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
 import { useConnectionAccent, useWorkbench } from '../core/WorkbenchContext'
@@ -36,8 +37,15 @@ export interface RowActions {
   activate(rowId: number): void
   reconnect(rowId: number): void
   remove(rowId: number): void
-  /** Fills a drag's data with the row's insert text; false cancels the drag. */
+  /** Fills a drag's data with the row's insert text, or starts moving a server row; false cancels the drag. */
   dragStart(rowId: number, transfer: DataTransfer): boolean
+  /**
+   * A drag over a row: a server being moved may drop above or below a server row, or last over the lower half of the tree's
+   * last row (`edge`: the pointer's half of the row; an expanded server's whole row is its top edge).
+   */
+  dragOver(rowId: number, edge: 'before' | 'after', event: Pick<DragEvent, 'preventDefault' | 'dataTransfer'>): void
+  /** The drag ended, dropped or not. */
+  dragEnd(): void
   /** The Rename box's Enter (`refocus`: focus returns to the tree) or blur; false keeps the box open (an invalid name). */
   commitRename(rowId: number, text: string, refocus: boolean): Promise<boolean>
   /** Escape in the Rename box, or the box going away: nothing is sent. */
@@ -77,6 +85,8 @@ export interface RowProps {
   /** Live status (ExplorerStatusService): chips at the row's end; for a database, its state in place of the listing's. */
   readonly status?: RowStatus
   readonly recovery?: { readonly label: string; run(): void }
+  /** A server being dragged would drop above or below this server row, or (after) below everything when it is the tree's last row. */
+  readonly drop?: 'before' | 'after'
 }
 
 const statusWords = { disabled: ', disabled', unavailable: ', unavailable', noAccess: ', no access', readOnly: '' } as const
@@ -273,17 +283,22 @@ export function PinnedServerRow({ node, edge, current, active, color, environmen
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery }: RowProps) {
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
+  const half = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
   if (kind !== RowKind.Node || !listed) {
     // Loading rows do nothing; the capped row's Enter opens Filter Settings, so it is not announced as unavailable.
     const inert = kind === RowKind.Loading || kind === RowKind.More
     const tone = kind === RowKind.Error || kind === RowKind.MoreError ? ' error' : kind === RowKind.More || kind === RowKind.Loading ? ' progress' : ''
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
+    // As the tree's last row it carries the line a server dragged below everything draws (drop).
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
-      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
+      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} data-drop={drop} onMouseDown={select}
+      // Not a place a server drops, except below everything when it is the tree's last row: passing over it clears the line
+      // the row above left, so releasing here moves nothing.
+      onDragOver={(event: DragEvent) => actions.dragOver(rowId, half(event), event)}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
       {!inert && recovery && <button type="button" className="oe-recovery-action" tabIndex={-1} title={`${recovery.label} (Enter)`}
         onMouseDown={event => { event.preventDefault(); event.stopPropagation(); actions.select(rowId) }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}
@@ -304,14 +319,23 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const serverWords = root && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
+  // The tree shows the peek cursor over these while Peek on Hover's modifier is held (styles.css, data-peek-armed).
+  const peekable = node.ref.type === 'object' && node.kind !== 'folder' && isPeekKind(node.kind) && !node.lost
+  // An open server's children follow its row, so a server dropped after it lands below them, not where a line under its
+  // row would show: its whole row drops above it (below it is the next server's top half, or the background below the last).
+  const edgeOf = (event: DragEvent): 'before' | 'after' => {
+    return root && expandable && node.expanded ? 'before' : half(event)
+  }
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
+    data-peekable={peekable || undefined} data-drop={drop}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
     onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
-    onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
+    onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
+    onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
     {root && <Accent color={color} />}
     {indent}
     <span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BackendHealth, BackendState, ConnectionOptions } from '../../shared/contracts'
-import type { ConnectionDetails } from '../../shared/connection-targets'
+import type { ConnectionDetailField, ConnectionDetails } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { isLiveConnection } from './services/connection-availability'
@@ -36,7 +36,7 @@ import ConnectDialog from './ConnectDialog'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
 import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
-import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, withChangedDetails, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
@@ -45,6 +45,7 @@ import EnvironmentTag from './EnvironmentTag'
 import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
+import PeekCard from './explorer/PeekCard'
 import MenuLayer from './menus/MenuLayer'
 import Toasts from './kit/Toasts'
 import { connectionDefaults } from '../../shared/connections'
@@ -85,7 +86,8 @@ export default function App() {
   const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
-  const [showAbout, setShowAbout] = useState(false)
+  // 0 while About is closed; each Help › About counts up, raising its window when it is already open.
+  const [showAbout, setShowAbout] = useState(0)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
@@ -207,14 +209,14 @@ export default function App() {
         setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true)
       }
       if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
-      if (event.type === 'help.aboutRequested') setShowAbout(true)
+      if (event.type === 'help.aboutRequested') setShowAbout(count => count + 1)
     })
     return () => subscription.dispose()
   }, [workbench, documents])
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal) {
+  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[] = []) {
     let adopted = false
     const opened = await acceptConnectionReceipt({ api: window.varia, connections: workbench.connections, info, options: chosen, details: detailsOf(chosen, preference), attempt, requestId,
       current: () => !signal.aborted && (adopted || !documents.getSnapshot().busy), explicitlyCancelled: () => signal.aborted, signal,
@@ -224,6 +226,9 @@ export default function App() {
     if (signal.aborted) { opened.association?.abandon(true); return }
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
+    // Labels the user changed in Connect are their choice already, and only those reach a reused connection: its other
+    // labels (a connection-only environment, say) stay. Without such a change, labels that differ still ask.
+    if (changedDetails.length) { await finishConnected(withChangedDetails(opened, changedDetails), 'selected'); return }
     if (needsDetailsConfirmation(opened)) { setDetailsReview(opened); return }
     await finishConnected(opened, 'current')
   }
@@ -323,9 +328,10 @@ export default function App() {
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
-    {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+    {showAbout > 0 && <AboutDialog raise={showAbout} onClose={() => setShowAbout(0)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
+    <PeekCard placement="editor" />
     <MenuLayer />
   </div>
 }

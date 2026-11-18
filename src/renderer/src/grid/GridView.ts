@@ -22,7 +22,7 @@ import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars }
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { RowSizes } from './row-sizes'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
-import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection, withinCap } from './selection'
+import { columnSelection, columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection, withinCap } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
@@ -140,6 +140,9 @@ export interface GridViewOptions {
   /** A bar behind each row number shows the row's bytes (queryResults.grid.rowSize); off by default. */
   readonly rowSize?: boolean
   onSelection(selection: GridSelection): void
+  /** The first cell became current as rows arrived: not a selection change to announce, but what follows the selection (the
+   *  column profile) should show it. */
+  onFirstCell?(): void
   /** Edit › Copy (the copy event), and a live grid's Ctrl+C (with `headers`, its Ctrl+Shift+C): runs Copy. */
   onCopy(headers?: boolean): void
   /**
@@ -168,7 +171,7 @@ export interface GridViewOptions {
   onSort?(column: number, add: boolean): void
   /** The columns with a filter of their own; their funnels show it. */
   readonly filtered?: ReadonlySet<number>
-  /** A header's funnel was clicked: the popover opens under `anchor`. Without it headers have none. */
+  /** A header's funnel was clicked: the popover opens beside `anchor`, the column's band (`filterAnchor`). Without it headers have none. */
   onFilter?(column: number, anchor: DOMRect): void
   /** The columns whose headers have a funnel, when not every column's: a live source filters only some (its facets). */
   readonly filterable?: ReadonlySet<number>
@@ -449,6 +452,18 @@ export class GridView {
 
   /** Select All (Ctrl+A and the command): an open-ended block that grows as rows stream in. */
   selectAll(): void { this.select(selectAll(this.o.entry, this.selection()?.active)) }
+  /** Selects a whole column of the result (a column profile card) and scrolls it into view, keeping the active row and
+   *  leaving the focus where it is. Transposed, the column is a drawn row. */
+  selectColumn(column: number): void {
+    if (column < 0 || column >= this.columns) return
+    // Transposed, the active row is a drawn column: one past those drawn is brought within them.
+    const kept = this.sourceSelection()?.active.row ?? 0
+    const row = this.rotated ? Math.min(kept, wire.transpose.maxRows - 1, Math.max(0, this.rows() - 1)) : kept
+    const source = columnSelection(this.o.entry, column, row)
+    this.select(this.rotated ? withinCap(rotateSelection(source)) : source)
+    if (this.rotated) this.reveal(column, -1)
+    else this.reveal(Math.min(Math.max(0, this.rows() - 1), this.viewport?.firstRow ?? row), column)
+  }
   /** The selection changed elsewhere (a command): paint it. */
   repaint(): void { this.schedule() }
   /** The active cell's box, which keyboard-opened menus open below. */
@@ -918,7 +933,7 @@ export class GridView {
     if (funnel && !this.canFilter(filterColumn)) { event.preventDefault(); return }
     if (filterColumn >= 0) {
       event.preventDefault()
-      this.o.onFilter!(filterColumn, funnel!.getBoundingClientRect())
+      this.o.onFilter!(filterColumn, this.filterAnchor(filterColumn))
       return
     }
     // A press on a header's sort button sorts; it selects nothing and starts no drag.
@@ -1505,7 +1520,7 @@ export class GridView {
     }
     // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
     // and the keys start from it and screen readers hear it. It is not announced as a selection change.
-    if (drawnRows > 0 && drawnColumns > 0 && !this.sourceSelection()) state.selection = firstCell(this.o.entry)
+    if (drawnRows > 0 && drawnColumns > 0 && !this.sourceSelection()) { state.selection = firstCell(this.o.entry); this.o.onFirstCell?.() }
     if (this.rotated) this.keepActiveDrawn()
 
     this.dragStep()
@@ -1957,16 +1972,17 @@ export class GridView {
   /** Whether a column's header has a funnel. */
   canFilter(column: number): boolean { return !!this.o.onFilter && column >= 0 && column < this.columns && (!this.filterable || this.filterable.has(column)) }
 
-  /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid);
-   *  transposed, under its name cell's right end, kept inside the rows in view. */
+  /** The band a column's funnel popover opens beside, so it covers none of the column: the column's header and drawn
+   *  cells, clipped to the grid; transposed, the column's row across the grid, kept inside the rows in view. */
   filterAnchor(column: number): DOMRect {
     const box = this.scroller.getBoundingClientRect()
     if (this.rotated) {
       const first = box.top + g.headerHeight, top = first + column * g.rowHeight - this.offsets.virtualTop
-      return new DOMRect(box.left + this.rowHeader - g.funnelWidth, Math.min(Math.max(first, box.bottom - g.rowHeight), Math.max(first, top)), g.funnelWidth, g.rowHeight)
+      return new DOMRect(box.left, Math.min(Math.max(first, box.bottom - g.rowHeight), Math.max(first, top)), box.width, g.rowHeight)
     }
-    const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.offsets.scrollLeft))
-    return new DOMRect(right - 18, box.top, 18, g.headerHeight)
+    const start = box.left + this.rowHeader, x = start + this.layout.xOf(column) - this.offsets.scrollLeft
+    const left = Math.min(box.right, Math.max(start, x)), right = Math.min(box.right, Math.max(start, x + this.layout.width(column)))
+    return new DOMRect(left, box.top, right - left, box.height)
   }
 
   /** A column's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on

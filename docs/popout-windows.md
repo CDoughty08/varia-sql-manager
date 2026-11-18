@@ -11,7 +11,8 @@ The query editor cannot (see *Limits*).
 
 ## Trust model
 
-Main denies every `window.open` and navigation except exactly one kind of child window:
+Main denies every `window.open` and navigation except exactly two kinds of child window: popouts, and the dialog windows
+described under [Dialog windows](#dialog-windows), which follow the same rules with their own name and window options.
 
 - **Only the trusted page's popouts.** `setWindowOpenHandler` on the main window answers `allow` only for `about:blank`,
   disposition `new-window`, a frame name `varia-popout-<uuid>` and features exactly `left=…,top=…,width=…,height=…` within
@@ -58,8 +59,46 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
   popout takes focus within 2 s (`restoreFocusMs`), since macOS activates it only after its animation. Search Objects'
   Reveal uses it so a popped-out Object Explorer comes forward while focus stays in the hits (`window.focus()` would take
   focus).
-- A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
-  focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
+- A dialog over the main window opened from a popout brings the main window to the front (`watchModals`); closing it
+  gives focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
+  Dialog windows (below) open in a window of their own instead.
+
+## Dialog windows
+
+Tools › Options and Help › About open in OS windows of their own (`src/renderer/src/popouts/DialogWindow.tsx`), so they
+can move off the main window, onto another display.
+
+- **Same trust model.** Each is a same-origin `about:blank` child named `varia-dialog-<kind>-<uuid>`, where the kind is
+  `options` or `about` (`dialogWindowKinds` in `src/shared/popouts.ts`), with exact bounds at least the kind's minimum
+  size on a display (`dialogRequest`). It gets the popouts' explicit preferences (no preload, sandboxed, isolated, no
+  Node, no test arguments), denies popups and navigation, has no IPC of its own and closes with the page. At most four
+  are open at once (two of a kind while one closes), and they do not count against the popout limit.
+- **Themed, like the main window.** The page draws the title bar (`DialogHeading`) in the theme's colours, dragged to
+  move the window. On Windows and Linux the window is frameless and the title bar has its own close button; macOS keeps
+  its traffic lights (`titleBarStyle: 'hidden'`) with only close enabled (`minimizable` and `maximizable` are off). Main
+  makes the window a child of the main window (`setParentWindow`), so it stays above it and closes with it.
+- **Theme changes wait for a closing window.** Electron 45 can crash when the theme source changes while it is still
+  tearing down a child window that has just closed, so main holds `nativeTheme.themeSource` changes until no child window
+  has closed in the last half second (`PopoutWindows.settled`, `settledNativeTheme`); popouts benefit too.
+- **Modeless.** The workbench keeps working in the main window while a dialog window is open. Keys pressed in the
+  dialog window are the dialog's: `modalOpen` (`core/modal.ts`) holds the workbench's keys there and not in the main
+  window. Tools › Options… while Options is open brings its window forward on the page asked for.
+- **Size.** Options opens at 940 × 680, at least 640 × 440, and can be resized; the size it was left at is kept in
+  `localStorage` (`varia.dialogWindow.options`), a cache with no IPC, as the palette's history is, and reopens within the
+  screen. About has a fixed size. A window opens centred on the main window.
+- **Closing.** The window's close button, Alt+F4 or ⌘W is the dialog's Cancel (while OK is saving, Options moves over
+  the main window until the save finishes); closing the dialog closes its window
+  and gives focus back to where it was, in the main window or the popout it opened from (or to a dialog opened over the
+  main window meanwhile). A window torn down without its `pagehide` (by the OS, or a crash) is noticed within a second,
+  as a popout's is.
+- **Their own document.** Code inside a dialog reads its element's `ownerDocument` (or `windows.activeDocument()`), never
+  the global `document`, and tests elements with `isElement` and `tagName` (`core/focus.ts`): `instanceof HTMLElement`
+  is false for another window's elements, as in popouts.
+- **Fallback.** Where main refuses the window (no display under the main window, or at the window limits), or the page runs without windows
+  (unit tests), the dialog shows over the main window as before, with its own close button.
+
+Other dialogs (Connect, object dialogs, properties) still show over the main window; they can move to dialog windows
+by adding a kind to `dialogWindowKinds` and wrapping their dialog in `DialogWindow`.
 
 ## Layout
 
@@ -71,12 +110,41 @@ panels dock back. A moved or resized window is saved within a second. The close 
 popouts the close itself takes (a quit closes every window, in any order) change nothing, unless the close is cancelled,
 when their panels dock back.
 
+## Main window place
+
+The main window reopens where it was closed: its normal bounds and whether it was maximized, kept in
+`<userData>/window-state.json` by main (`src/main/window-state.ts`). It is saved 750 ms after a move or resize settles and at
+once when the window closes, through the atomic preferences writer; a quit waits up to 2 s for that write. An invalid file
+is quarantined and the default place used; a file that cannot be read is never overwritten.
+
+- **Checked against the displays now** (`placeWindow`, in DIPs against every display's work area). A window whose title
+  bar (its top 40 px, at least 160 px wide) is still on a display reopens there, shrunk to the work areas it overlaps if it
+  no longer fits them (so one stretched across adjacent displays keeps its size), unless shrinking would leave its title
+  bar between staggered displays. One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
+  is off every work area, or that would open under the macOS menu bar, is centred on the nearest display at its saved
+  size (clamped to that work area). Sizes never go below the minimum (1024 x 700) unless the work area is smaller. With
+  nothing saved it opens at 1440 x 960, fitted to and centred on the primary display.
+- **Never minimized or full screen.** A window minimized at close reopens normal, or maximized if it was maximized
+  before; one closed in full screen reopens as it was before full screen. A maximized window keeps its normal bounds,
+  so un-maximizing goes back there.
+- **Platforms.** On Windows, a window placed on a display of another scale factor is placed again once created, as
+  Windows can size it by the wrong factor. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland session with Electron's
+  automatic platform; an X11 session that also exports `WAYLAND_DISPLAY`, as WSLg does, stays X11) a window cannot place
+  itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen reports no
+  reliable normal bounds (Windows gives the maximized rectangle), so main keeps the window's normal bounds as it goes:
+  Windows' and macOS's own while maximized, and on Linux, whose window manager may report a maximize's new size before or after
+  its state, the bounds the window last had while normal, told apart from an early maximized size by whether the next
+  change of bounds keeps the state and changes the size (the maximize's own resize).
+- **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
+- A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
+  set `VARIA_TEST_WINDOW_STATE=1`.
+
 ## Limits
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker
   plumbing to the window it was created in; moving its element to another document breaks input and measuring. Single
   documents likewise split and float within the editor area (docs/editor-groups.md) but do not pop out.
-- Dialogs and toasts render in the main window (a dialog brings it to the front).
+- Toasts, and dialogs other than Options and About, render in the main window (such a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
 - Object Explorer's status views in a minimized popout keep sampling: only the main window's minimizing is reported.
 - F10 and Alt in a popout go to the system (no menu bar there); the menu bar's access keys work only in the main window.

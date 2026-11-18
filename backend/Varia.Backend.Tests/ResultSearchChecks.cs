@@ -98,12 +98,14 @@ internal static class ResultSearchChecks
             JsonSerializer.Serialize(ResultSearcher.Search(set, pages, through, "needle", fromRow, backward, max, CancellationToken.None, null, workers, gate), HostChecks.Json);
         var different = new List<string>();
         var some = 0;
+        var viewed = new Dictionary<string, string>();
         foreach (var through in new[] { null, view })
             foreach (var backward in new[] { false, true })
                 foreach (var fromRow in new long[] { 0, 1500, 26_000, 39_999, 40_000 })
                     foreach (var max in new[] { 1, 300, ResultSearcher.MaxMatches })
                     {
                         var one = Shown(through, fromRow, backward, max, 1);
+                        if (through is not null) viewed[(backward ? "backward" : "forward") + " from " + fromRow + " max " + max] = one;
                         if (one.Contains("\"rows\":[" + "]", StringComparison.Ordinal) == false) some++;
                         foreach (var workers in new[] { 2, 7 })
                             if (Shown(through, fromRow, backward, max, workers) != one) different.Add((through is null ? "base" : "view") + (backward ? " backward" : " forward") + " from " + fromRow + " max " + max + " on " + workers);
@@ -117,6 +119,64 @@ internal static class ResultSearchChecks
         check(different.Count == 0 && some > 30 && found.Total > 5000 && gate.Busy == 0 && found.Searched == rows && stopped is null && cancelled == "cancelled",
             "a search on several threads is the one pass's: every match counted, the same run forward and backward from any row, in base order and through a view; it stops and cancels as one does: "
             + string.Join(" | ", different.Take(5)));
+
+        // Packed, the view is far from its pages' order, so the search reads the pages in order (ByPages), each run keeping
+        // the rows the outcome may take: on one thread or several, it gives what the raw pass in view order gave.
+        store.Packing = PagePacking.OnRequest;
+        set.Pack(() => true);
+        pages = set.SealedSnapshot();
+        bool far;
+        using (set.Pin()) far = set.HasPacked && !ResultSearcher.Local(pages, view.Order);
+        var packedDifferent = new List<string>();
+        foreach (var (key, one) in viewed)
+        {
+            var parts = key.Split(' ');
+            foreach (var workers in new[] { 1, 2, 7 })
+                if (Shown(view, long.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture), parts[0] == "backward", int.Parse(parts[4], System.Globalization.CultureInfo.InvariantCulture), workers) != one)
+                    packedDifferent.Add(key + " on " + workers);
+        }
+        check(far && viewed.Count == 30 && packedDifferent.Count == 0 && gate.Busy == 0 && set.HasPacked,
+            "a search through a sorted view of a packed result, read in page order on one thread or several, is the raw pass in view order's, and leaves it packed: "
+            + far + "; " + string.Join(" | ", packedDifferent.Take(5)));
+        PageOrderThreads(check);
+    }
+
+    /// <summary>A search through a view far from a packed result's pages reads every base row (ByPages), so a small filtered
+    /// view of a large result asks for threads by the base rows, not by the view's.</summary>
+    private static void PageOrderThreads(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = store.Open(store.BeginQuery("page order threads"), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var rows = 3 * ResultSearcher.MinSlice;
+        for (var i = 0; i < rows; i++)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            var scrambled = (uint)i * 2654435761u % 100_000;
+            builder.AppendText(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.AppendText("name " + scrambled.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.AppendText(i % 97 == 0 ? "needle" : "abc");
+            builder.AppendNull();
+            builder.AppendText("note");
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        // A sorted view of a few thousand rows, far fewer than a thread's run.
+        var order = ViewSorter.Build(set, pages, [new ViewKey(1, false, SortMode.Value)], [], CancellationToken.None).Order[..5000];
+        var view = store.AddView(set, order, [], false, true, 4L * order.Length, null, rows);
+        store.Packing = PagePacking.OnRequest;
+        set.Pack(() => true);
+        pages = set.SealedSnapshot();
+        bool far;
+        using (set.Pin()) far = set.HasPacked && !ResultSearcher.Local(pages, view.Order);
+        var gate = new ViewSorter.WorkerGate(() => 64);
+        SearchOutcome? found;
+        using (ViewSorter.WorkersHere(4)) found = ResultSearcher.Search(set, pages, view, "needle", 0, false, 10, CancellationToken.None, null, null, gate);
+        var expected = order.Count(row => row % 97 == 0);
+        check(far && found is not null && found.Total == expected && found.Searched == order.Length && gate.Peak == 3 && gate.Busy == 0,
+            "a search through a small sorted view of a large packed result reads its pages on threads sized by its base rows: "
+            + far + ", " + found?.Total + " of " + expected + ", " + gate.Peak + " threads");
     }
 
     private static SearchOutcome Find(ResultSetBuffer set, string text, long fromRow = 0, bool backward = false, int max = ResultSearcher.MaxMatches, ResultView? view = null) =>

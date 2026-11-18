@@ -39,11 +39,46 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   Highlights** starts again.
 - **Filter** (grid menu) keeps the selected cells' values, other values, the range from the lowest to the highest
   selected value, no NULLs in a column, or the rows that repeat in the selected columns or in every column. Values match
-  by the column's collation. Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
+  by the column's collation. A selection across columns, contiguous or Ctrl+clicked, adds one filter a column from the
+  cells selected in it, and a row must pass them all (**Filter for Selected Values** on two columns keeps the rows whose
+  values match in both). Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
   and Save Results As follow the filtered rows.
 - A column header's funnel (**Filter Column Values…**, Alt+Down in a grid) lists every distinct value with its count,
-  most frequent first or by value, as a checklist with a search, Select all, Select none and NULL as an entry; OK keeps
-  the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL.
+  most frequent first or by value, as a checklist with a search and NULL as an entry; OK keeps the ticked values. It also
+  filters by a condition: equals, does not equal, between, is NULL, is not NULL.
+- Beside the values, an **action list** changes with what you are doing, and each action shows how many values it
+  touches: **Tick all**, **Untick all** and **Invert ticks**; with a search, **Tick the matches**, **Tick only the
+  matches** (unticking every other value) and **Untick the matches**, with Tick all and Untick all apart; with two or more
+  values selected, **Tick the selected**, **Untick the selected** and **Tick only the selected**.
+- Selecting a value is not ticking it: the highlight marks the values you are about to act on, the check box what the
+  filter keeps. A click ticks a value and selects it alone; Ctrl+click (⌘-click on macOS) adds a value to the selection
+  or takes it out, Shift+click selects from the last value clicked, and Ctrl+Shift+click adds that range. Space ticks the
+  selection: if any selected value is unticked it ticks them all, otherwise it unticks them all.
+- The funnel works from the keyboard alone:
+
+  | Keys | In the values list |
+  | --- | --- |
+  | ↑ ↓, Page Up, Page Down, Home, End | Move, selecting the value |
+  | Shift with any of those, Ctrl+Shift+Home or End | Select from the anchor |
+  | Ctrl+↑, Ctrl+↓ | Move without changing the selection |
+  | Ctrl+Space | Add the value to the selection, or take it out |
+  | Ctrl+A | Select every value listed (the matches, with a search) |
+  | Space | Tick or untick the selection |
+  | ← | Go to the action list (→ comes back; Enter or Space runs an action) |
+  | ↑ on the first value, or the first action | Go back to the search |
+  | A letter or digit | Type it in the search |
+  | Enter | OK (Ctrl+Enter is OK anywhere in the funnel) |
+  | Esc | Cancel |
+
+  Down in the search goes to the values. The values list is one Tab stop, between the search and the condition.
+- The funnel opens beside its column, on the right when it fits and otherwise on the left (above or below a
+  transposed grid's row), narrower than its kept width when neither side has room for that, so it covers the values it
+  filters only when a column leaves too little room on both sides. Drag its corner grip to resize it; it stays on the
+  side it was on while you drag. The size is kept
+  for every grid as **Column filter width** and **Column filter height** in Options › Query Results › SQL Server ›
+  Results to Grid.
+- **Clear Filters** (grid menu › Filter, Ctrl+Shift+L in a grid, ⇧⌘L on macOS) takes every filter off the grid; the
+  result's caption takes them off one at a time.
 - **Search** (results toolbar, Ctrl+F in a grid) finds matching cells in every grid of the run, in memory, comparing text
   by its column's collation; Enter and Shift+Enter (F3 and Shift+F3 in a grid, ⌘G and ⇧⌘G on macOS) step through them in each grid's order.
   Its **Columns** mode searches column names instead and fades the columns that do not match.
@@ -51,6 +86,15 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in
   characters and bytes, and a histogram, computed in the backend over the rows the grid shows. A re-sort of a loaded
   result keeps it; it is computed again when the filters change, the result finishes loading or the query runs again.
+  The panel follows the grid's selection: the cards of the selected columns are tinted, the active cell's column's card
+  is shaded and scrolled into view, and a click, Enter or Space on a card selects its column in the grid. The cards are
+  one Tab stop (the active column's card), with the arrows, Home and End between them. **Selected Columns Only** (the
+  panel's filter button, the ⋯ menu's Profile Selected Columns Only, or the palette;
+  `queryResults.grid.columnProfileSelectedOnly`) lists only the selected columns' cards. Holding Ctrl (⌘ on macOS) with
+  the pointer on the panel peeks at the other list while it is held: only the selected columns, or every column when
+  Selected Columns Only is on; a strip says so, and Ctrl with another key (Ctrl+C) is not a peek. The modifier can be
+  changed to Shift in Shortcut Mapping ([gestures](gestures.md), Peek at Selected Columns). Cards move, appear and fade
+  with transform and opacity only, and not at all under reduced motion.
 - **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it
   for the bytes.
 

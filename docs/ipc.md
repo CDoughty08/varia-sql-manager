@@ -242,7 +242,7 @@ noted where it matters.
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
 | `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
 | `language.refresh` | invoke | unary | control | 30 s; on the control lane so it can cancel stale language work while the metadata slots are full |
-| `language.definition` | invoke (F12, Alt+F12) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
+| `language.definition` | invoke (F12, Alt+F12, Ctrl+hover, Ctrl+click) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
@@ -264,7 +264,7 @@ noted where it matters.
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values ([Distinct values](#distinct-values)) |
 | `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 values, optionally searched |
-| `results.distinctTick` | port | unary | results | 30 s; ticks or clears all values or a search's |
+| `results.distinctTick` | port | unary | results | 30 s; ticks or clears values, all, a search's, ranges of the list, or inverts |
 | `results.distinctClose` | port | unary | control | 10 s; releases 1 – 64 snapshots |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, no backstop: only CANCEL, disconnect, shutdown, failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -966,18 +966,18 @@ Results stay in backend memory, never on disk (`ResultStore`).
   packer asks it, never under store locks.
 - **Packing results.** A complete result of 1 MiB or more is packed when hidden for 5 s (stage 1) or shown but idle for
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
-  Zstandard level 2 bytes (a page saving under a tenth stays raw), charged at its packed size. Never a result still
-  storing, a live table, one held by a read, operation, Copy or Save, or a shown one with an open sorted or filtered
-  view. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
+  Zstandard level 2 bytes of its lengths form (a page saving under a tenth stays raw), charged at its packed size. Never a result still
+  storing, a live table, or one held by a read, operation, Copy or Save; a sorted or filtered grid does not keep its
+  result raw, and sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
-  the workers' gate (except packing for a waiting query and unpacking a shown result for its view), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
+  the workers' gate (except packing for a waiting query), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
   most operations read packed pages directly; an operation that must unpack reserves the raw size first and answers
   `TOO_LARGE` when refused. Rationale: [page-compression-findings.md](page-compression-findings.md#stage-2-as-built).
 - **Room for a query.** A query row its half or the global budget refuses waits (≤ 10 s a wait,
   `ResultStore.RoomWaitMs`; 4 waits a row, `SqlService.MaxRoomWaits`; 30 s a query, `SqlService.MaxRoomWaitMs`; never
   a live table's or a derived set's row) while the packer packs other unheld complete results of 1 MiB or more on the
-  results' workers (any query's for the global budget, only the query's own when its own half is full), except one the
-  user is working with (shown with an open view, or unpacked and still used by an operation); then it retries, or the query is truncated.
+  results' workers (any query's for the global budget, only the query's own when its own half is full), except one an
+  operation unpacked and still uses; then it retries, or the query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
   reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
@@ -1324,12 +1324,31 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   `maxMatches` by at most its last row's columns (main accepts up to `maxMatches` + `page.maxColumns`). `matchRows[k]`/`matchColumns[k]` are
   cells in row, column order; `first` counts matches before the run (or before `fromRow` when empty). `complete`: the rows searched were
   every row of a finished set; `approximate`: a truncated prefix did not match. It reserves no budget (at most 1 MiB of page layouts), except one- or two-page rooms to
-  read a packed result (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
+  read a packed result and, through a view far from a packed result's pages (a sort), the view's inverse, 4 bytes a row of the result (not of the view),
+  as it reads that result in page order instead of unpacking it (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
   close (`VIEW_NOT_FOUND`) stop it at the next checkpoint.
 - **Matching.** A cell matches when its grid text contains the text; NULL, unreadable and hidden columns never match.
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only
   locale-ignored characters (U+200B, U+00AD) matches by code point. Other columns compare display text ignoring case;
   binary matches `0x` and hex, skipped when the text is not hex.
+- **Pre-check.** A culture compare (ICU) reads text that is not ASCII at about 90 MB/s, so a character column of a
+  verified culture first folds the cell with the culture's search fold for the column's options (`SearchFold`: each
+  character mapped to one representative of the characters its collator gives the same sort key under those options,
+  built in 0.05 – 0.1 s on first use, off the search) and looks for the text's fold by code point; only a cell holding it
+  goes to the compare. The answers are the compare's, about 3.3 times sooner over SQL Server's own messages in 22
+  languages. Collation is not always per character (Japanese ー repeats the sound before it, l·l joins, ligatures and
+  presentation forms equal letter pairs), so the fold vouches only for an allowlist of characters whose collation depends
+  on no neighbour (`SearchFold.Vouched`: Latin, Greek, Cyrillic, Hebrew and Arabic letters, kana, CJK ideographs, Hangul
+  syllables, full-width forms, after NFC); a cell with any other character (Thai, Indic, ligatures, a supplementary
+  character) goes to the compare alone, and a matcher stops pre-checking once more than 60 % of its first 1,024 cells
+  pass. A fold is per option set because options are not monotonic: Estonian finds Ｚ in Z case-sensitively but not
+  case-insensitively, and ignoring accents the compare ignores case too (so those keys do). Danish, Norwegian, Hungarian
+  and Croatian collations are never pre-checked (they treat a letter as a pair of letters), nor is Thai (its compare
+  finds characters its sort keys tell apart). `SearchFoldChecks` compares every verified culture's answers with the
+  compare's over fuzzed text and known context-dependent cells under four option sets, checks that strings with the same
+  key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
+  and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
+  filter's value search uses the same matcher.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
@@ -1378,9 +1397,12 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   1 – 1,024 characters }`** answers `{ total, offset, values: [{ group, row, text, count, checked }], checked,
   nullsChecked }`; `count` order is most frequent first, ties in value order; `search` matches as [Search in
   results](#search-in-results) does, `total` then counts only the matches, and they are kept for scrolling.
-- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls? }`** sets ticks of the
-  named groups, all values (or all `search` matches), and NULL; answers `{ checked, nullsChecked }`. A frozen snapshot
-  refuses it (`INVALID_PARAMS`).
+- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls?, order?, ranges?: 1 –
+  512 [offset, count], toggle?, invert? }`** sets ticks of the named groups, all values (or all `search` matches), the
+  values at `ranges` (sorted and disjoint) of the list in `order` (searched with `search`), or flips every value (`invert`), and NULL; one of
+  those at most. `toggle` (with `ranges`) ticks them all when any, or NULL when `nulls` is given, is cleared, else clears
+  them all, NULL alike, ignoring `checked`. Answers `{ checked, nullsChecked }`. A range past the list's end or a frozen
+  snapshot is refused (`INVALID_PARAMS`).
 - **`results.distinctClose { resultId, snapshotIds: 1 – 64 }`** answers `{ closed }`; ids already gone are skipped. A
   closed snapshot asked for again answers `VIEW_NOT_FOUND`.
 - **Filter.** The first `results.view` using `{ op: 'groups', column, snapshotId }` freezes the snapshot: `in` of the
@@ -1393,7 +1415,7 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   answers (rows below 2³¹, `checked` ≤ `distinct` ≤ `rows`, `nulls` ≤ `rows`, exactly `min(count, total − offset)`
   values, at the offset asked) and closes a snapshot built after its port went.
 - **Renderer.** `ColumnFilterPopover` lists the snapshot over the rows the grid's other filters keep, as a virtualized
-  checklist with backend search, Select all / none, NULL, and custom conditions (equals, does not equal, between, is
+  checklist with backend search, an action list (every value, the matches, the selected rows as ranges), NULL, and custom conditions (equals, does not equal, between, is
   NULL, is not NULL); OK hands it to the grid as a `groups` filter in the replaced filter's place. The grid keeps the snapshot while a filter
   names it and closes it once the view it shows no longer does; a popover closed without OK closes its own. Keep Selected Rows
   (`ResultsService.keepSelectedRows`) is no column's filter, one per grid, counted among the 16; more than 4,095 rows or
@@ -1878,7 +1900,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
 { t: 'distinctRead'; rid; generation; resultId: u32; snapshotId: u32; order: 'count' | 'value'; offset; count: 1..limits.distinct.maxWindow; search? }
-{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true (search? only with all); nulls? }
+{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true | ranges? (with order) | invert?: true (search? with all or ranges; toggle? with ranges); nulls? }
 { t: 'distinctClose'; rid; generation; resultId: u32; snapshotIds: u32[1..limits.distinct.maxClose] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
@@ -2302,7 +2324,8 @@ and reports that block skipped.
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
   `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
   `VARIA_TEST_SHOW_WINDOW=1` (shows the main window inactive; the smoke fixture sets it under xvfb, where a never-shown
-  window sometimes ran no animation frames).
+  window sometimes ran no animation frames), and `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (`--varia-follow-system-motion`:
+  the renderer reduces motion whenever the emulated media asks, without the setting).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing
@@ -2368,6 +2391,12 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   (`dotnet publish -r <rid> --self-contained -c Release`). CI's Linux benchmarks publish that build as package.yml does,
   and the bench fails unless `Varia.Backend.dll`, `Microsoft.Data.SqlClient.dll` and `Microsoft.SqlServer.Smo.dll` there
   are ReadyToRun.
+- **The packed sort** stores 1,000,000 W1 rows packed (`debug.results.synthesize`'s test-only `pack`), reports the
+  result shown, sorts it three times and reads the budget: a sort reads packed pages in place, so the budget may grow
+  only by the view's order, never by an unpack ([page-compression-findings.md](page-compression-findings.md#stage-2-as-built)).
+- **The view tiles** sort 1,000,000 W1 rows stored raw, then packed, and read 300 random 128-row tiles of the view (the
+  grid's tile) through main's supervisor and the stream: the p99 of each, packed and raw. What a sorted grid on screen
+  pays for being packed.
 - **The live snapshot churn** runs main's live path with a worker stand-in that acknowledges each frame at once:
   `debug.synthetic.wide` stores 5,000 rows of 23 typed columns every 10 ms if it can, each revision owned, retired,
   forgotten and released one at a time, for 5 s. It reports revisions a second and backend gen2 collections per revision
@@ -2380,6 +2409,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 - **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
   (`backend/Varia.Backend.Tests/SearchBench.cs`): one letter over a synthetic index of 1,000,000 objects in 20 databases
   (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates.
+  Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
+  Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
+  characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits
+  below real multilingual text's.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml

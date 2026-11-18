@@ -239,6 +239,19 @@ describe('keybinding dispatch', () => {
     }
     expect(ran()).toEqual(['explorer.peek'])
   })
+  it.each(platforms)('focuses the Object Explorer search on Ctrl+F (⌘F) in the explorer pane, and leaves Ctrl+F to the editor and text fields elsewhere, on %s', platform => {
+    const { press, execute, ran, state } = service(platform, { values: { activePanel: 'explorer', explorerFocus: true } })
+    expect(press(letter('f', platform)).consumed).toBe(true)
+    expect(execute).toHaveBeenLastCalledWith('explorer.focusSearch', undefined, 'keybinding')
+    // The explorer's toolbar or search hits: still the explorer pane.
+    state.values = { activePanel: 'explorer' }
+    expect(press(letter('f', platform)).consumed).toBe(true)
+    for (const values of [{ activePanel: 'explorer', inputFocus: true, textInputFocus: true }, editorText, { activePanel: 'output' }] as Partial<ContextKeys>[]) {
+      state.values = values
+      expect(press(letter('f', platform)).consumed, JSON.stringify(values)).toBe(false)
+    }
+    expect(ran()).toEqual(['explorer.focusSearch', 'explorer.focusSearch'])
+  })
   it.each(platforms)('focuses the Options search on Ctrl+E (⌘E) over the modal Options dialog only, on %s', platform => {
     const { press, execute, ran, state } = service(platform, { modal: true, values: { optionsDialogFocus: true } })
     expect(press(letter('e', platform)).consumed).toBe(true)
@@ -472,6 +485,44 @@ const remapped = (platform: Platform) => {
   return effective.rules
 }
 const f9 = (platform: Platform) => key('F9', 'F9', { ...mod(platform), shift: true })
+
+describe('key hooks for Peek', () => {
+  it('hands every press to keyDown first, consumed or not, and a lost window focus to blur, and consumes nothing for them', () => {
+    const pressed: string[] = [], blurred = vi.fn()
+    const execute = vi.fn<CommandService['execute']>(async () => true)
+    const keybindings = new KeybindingService({
+      platform: 'win32', commands: { execute }, context: { get: () => contextRecord('win32', {}) }, modalOpen: () => false, editorHasTextFocus: () => false,
+      keyDown: event => { pressed.push(event.key + (event.repeat ? ' (repeat)' : '')) }, blur: blurred
+    })
+    const control = key('ControlLeft', 'Control')
+    keybindings.handleKeyDown(control)
+    expect(control.consumed).toBe(false)
+    keybindings.handleKeyDown(key('ControlLeft', 'Control', { ctrl: true, repeat: true }))
+    // A key a rule consumes (Ctrl+N) and one a handler already took still reach it.
+    const newQuery = letter('n', 'win32')
+    keybindings.handleKeyDown(newQuery)
+    keybindings.handleKeyDown(key('KeyA', 'a', { defaultPrevented: true }))
+    expect(newQuery.consumed).toBe(true)
+    expect(pressed).toEqual(['Control', 'Control (repeat)', 'n', 'a'])
+    const target = new EventTarget(), attached = keybindings.attach(target)
+    target.dispatchEvent(new Event('blur'))
+    expect(blurred).toHaveBeenCalledTimes(1)
+    attached.dispose()
+    target.dispatchEvent(new Event('blur'))
+    expect(blurred).toHaveBeenCalledTimes(1)
+  })
+  it('keeps dispatching when a hook throws', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const execute = vi.fn<CommandService['execute']>(async () => true)
+    const keybindings = new KeybindingService({
+      platform: 'win32', commands: { execute }, context: { get: () => contextRecord('win32', {}) }, modalOpen: () => false, editorHasTextFocus: () => false,
+      keyDown: () => { throw new Error('hook') }
+    })
+    keybindings.handleKeyDown(letter('n', 'win32'))
+    expect(execute).toHaveBeenCalledWith('file.new', undefined, 'keybinding')
+    errors.mockRestore()
+  })
+})
 
 describe('keybinding rules at run time', () => {
   it.each(platforms)('swaps every table, label and listener at once with setRules on %s', platform => {

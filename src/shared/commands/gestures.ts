@@ -121,16 +121,49 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
-  // VS Code's Ctrl+click (⌘-click on macOS); Alt for those who moved Monaco's multi-cursor click to Ctrl (textEditor.multiCursorModifier).
+  // The column profile's peek: while held over the panel, it shows the other list (only the selected columns, or every column
+  // when Selected Columns Only is on). Scoped to the panel: over the grid the same Ctrl is Add to Selection and Ctrl+C.
+  'output.profilePeekHover': {
+    title: 'Peek at Selected Columns', description: 'Shows only the selected columns\' cards in the column profile (or every column when Selected Columns Only is on) while the pointer rests on the panel.',
+    kind: 'modifier', scope: 'resultsGrid', action: 'hover', target: 'the column profile', modifiers: ['mod'],
+    // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
+    choices: [['mod'], ['shift']], keyboard: ['output.toggleProfileSelectedColumns']
+  },
+  // Object Explorer's Peek on Hover in the query editor: the same card, anchored at the name.
+  'editor.peekHover': {
+    title: 'Peek Definition on Hover', description: 'Peeks the object whose name the pointer rests on (a table, view, procedure, function and so on) in a card beside it.',
+    kind: 'modifier', scope: 'queryEditor', action: 'hover', target: 'an object name', modifiers: ['mod'],
+    // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
+    choices: [['mod'], ['shift']], keyboard: ['edit.peekDefinition']
+  },
+  // Ctrl+click (⌘-click on macOS) opens a Peek tab, as on an Object Explorer row; Alt for those who moved Monaco's multi-cursor
+  // click to Ctrl (textEditor.multiCursorModifier). The id is Go To Definition's click's, so a choice made for it carries over.
   'editor.goToDefinition': {
-    title: 'Go To Definition', description: 'Scripts the object whose name is clicked (a table, view, procedure, function, synonym or type) to a new query, as F12 does.',
+    title: 'Open Definition in Peek Tab', description: 'Opens Peek on the object whose name is clicked (a table, view, procedure, function and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'queryEditor', action: 'click', target: 'an object name', modifiers: ['mod'],
-    choices: [['mod'], ['alt']], keyboard: ['edit.goToDefinition']
+    choices: [['mod'], ['alt']], keyboard: ['edit.openPeekTab']
   },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'an object', modifiers: [], keyboard: ['explorer.copyName'],
     locked: 'Dragging is the only way to drop text; Copy Name does the same from the keyboard.'
+  },
+  'explorer.reorderServer': {
+    title: 'Reorder Servers', description: 'Dropping a server above or below another server, or below the last row, moves it where its line shows; the order is kept for the next start.',
+    kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'a server', modifiers: [], keyboard: ['explorer.moveServerUp', 'explorer.moveServerDown'],
+    locked: 'Dragging is the pointer\'s way to reorder; Move Up and Move Down in the server\'s menu do the same from the keyboard.'
+  },
+  'explorer.moveQueryToServer': {
+    title: 'Move Query to Server', description: 'Dropping a server or database on a query\'s tab or editor moves the query there, as Change Connection does; on a tab strip\'s empty space it opens a new query.',
+    // Not listed in the query editor: Insert Server Name's modifier is that drop's variant there, and the Mouse view would call a shared scope a clash.
+    kind: 'fixed', scope: 'objectExplorer', alsoIn: ['documentTabs'], action: 'drag', target: 'a server or database', modifiers: [],
+    locked: 'Dragging is the pointer\'s way to move a query; Change Connection does the same from the keyboard.'
+  },
+  'explorer.dropServerName': {
+    title: 'Insert Server Name', description: 'Holding the modifier while dropping a server or database on a query\'s editor inserts its name at the caret instead of moving the query.',
+    kind: 'modifier', scope: 'queryEditor', action: 'drag', target: 'a server or database', modifiers: ['ctrl'],
+    // macOS: ⌥, its own copy modifier while dragging (Control-drag opens the context menu there).
+    choices: [['ctrl'], ['alt'], ['shift']], darwin: { modifiers: ['alt'], choices: [['alt'], ['shift'], ['meta']] }, keyboard: ['explorer.copyName']
   },
   'dock.floatWhileDragging': {
     title: 'Float While Dragging', description: 'Holding the modifier while dragging a tab floats it instead of docking it on a guide.',

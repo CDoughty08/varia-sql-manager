@@ -232,6 +232,11 @@ export const peekLimits = {
   /** How long the pointer rests on a row with Ctrl (Cmd on macOS) held before the card opens. */
   hoverMs: 350,
   /**
+   * How long Ctrl (Cmd) pressed over a resting pointer waits before the card opens: short enough to feel immediate, long
+   * enough that a shortcut typed with the pointer on a row (Ctrl+N, Ctrl+C) reaches its second key first and peeks nothing.
+   */
+  pressMs: 150,
+  /**
    * A table's CREATE scripts the window keeps (in memory only), and their UTF-16 code units in all: a script is reused while
    * the table's modified time is the one it was made at, so peeking a table again starts no SMO job.
    */

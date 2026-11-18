@@ -1,5 +1,5 @@
 import { expect } from './smoke.mjs'
-import { documentTab, helpPage, quickInputBox } from './ui.mjs'
+import { dialogClosed, dialogWindow, documentTab, helpPage, quickInputBox } from './ui.mjs'
 
 /** Shares the updates suite's isolated app/profile; no extra CI job, server or launch. */
 export async function gettingStartedSmoke(page, menu, application) {
@@ -59,10 +59,13 @@ export async function gettingStartedSmoke(page, menu, application) {
       await expect(results.getByRole('table', { name: 'Fictional returned rows' }).getByRole('cell')).toHaveText(['20', 'Lyra', 'Open', '30', 'Orion', 'Open'])
     }
     await results.getByRole('button', { name: 'Open this Options page for Include column headers when copying or saving the results', exact: true }).click()
-    const options = page.getByRole('dialog', { name: 'Options', exact: true })
+    // Options opens in a dialog window of its own.
+    const optionsWindow = await dialogWindow(application, 'Options')
+    const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
     await expect(options).toBeVisible()
     await expect(options.getByRole('checkbox', { name: 'Include column headers when copying or saving the results', exact: true })).toBeChecked()
     await options.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await dialogClosed(optionsWindow, 'Options')
     await results.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Explore returned rows', exact: true }).click()
     await results.screenshot({ path: 'artifacts/getting-started-results.png' })
     await menu('theme.mode.light')

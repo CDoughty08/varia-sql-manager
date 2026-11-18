@@ -23,6 +23,8 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 - `npm run test:smoke`: the Electron suites (needs the Release backend and `out/` from `npm run check`, or
   `npm run build:smoke`). Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
   `npm run test:electron` runs `check` then `test:smoke`.
+- `npm run test:smoke:wsl -- <suite>...`: on Windows, the named smoke suites on Linux through WSL (`--setup` once per
+  machine). Run it before pushing a change that can behave differently on Linux; docs/testing.md has the detail.
 - `npm run backend:test`: only the .NET checks. Add `-- --live-group k/3` to `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release` for one CI live group.
 - `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` and `*-live.test.ts` need the Release backend built).
@@ -46,7 +48,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 
 Security boundary:
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, no navigation or popups (except
-  popouts, `src/main/popout-windows.ts`). It reaches the system only through `window.varia` (`src/preload/index.ts`); never
+  popouts and dialog windows, `src/main/popout-windows.ts`). It reaches the system only through `window.varia` (`src/preload/index.ts`); never
   expose generic IPC or shell APIs, and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()`).
   Built pages load only from `app://varia/`, never `file:`. Packaged builds keep the Electron fuses in `build/fuses.cjs`.
 - A backend method is added in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema

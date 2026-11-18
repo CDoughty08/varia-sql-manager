@@ -1976,7 +1976,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
     /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
-    /// reserves nothing for them; a packed result is read fused, through rooms it reserves (ResultSearcher.Search). It
+    /// reserves nothing for them; a packed result is read fused, through rooms it reserves, and through a view far from its pages' order with the view's
+    /// inverse, 4 bytes a row of the result, reserved too (ResultSearcher.Search). It
     /// stops at its next checkpoint once the result is released or the view closed.</summary>
     private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
     {
@@ -1988,12 +1989,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
         var pages = set.SealedSnapshot();
-        // A view whose order is far from its pages' (a sort) would unpack a page for most rows it reads fused, so a packed
-        // result is unpacked first then, its pages charged; in base order or near it, the search reads it fused.
-        // Counted once: after an unpack nothing is packed, so the search reads its pages as they are either way.
-        if (view is not null && set.HasPacked && !ResultSearcher.Local(pages, view.Order, token)) await Unpack(ResultSearcher.TooLarge, token, set);
+        // A packed result is read fused, never unpacked whole: in page order through a view far from its pages' (a sort),
+        // each row placed at its view position (ResultSearcher.ByPages); in base order or near it, row by row.
         var stopped = ResultSearcher.Stopped(store, set, view);
-        var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped, local: true), token), ResultSearcher.TooLarge);
+        var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token), ResultSearcher.TooLarge);
         // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
         if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
         if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
@@ -2130,17 +2129,25 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ResultsDistinctReadResult(total, args.Offset, values, ticked, nullTicked);
     }
 
-    /// <summary>results.distinctTick: ticks or clears some of a snapshot's values, every value, or those a search finds, and
-    /// NULL; refused once a filter uses the snapshot.</summary>
+    /// <summary>results.distinctTick: ticks or clears some of a snapshot's values, every value, those a search finds, or
+    /// ranges of the list in an order (a search's matches with one), or flips every value, and NULL; refused once a filter
+    /// uses the snapshot.</summary>
     private async Task<ResultsDistinctTickResult> DistinctTickAsync(ResultsDistinctTickArgs args, CancellationToken token)
     {
         var all = args.All == true;
-        if (args.ResultId == 0 || args.SnapshotId == 0 || args.All == false || (all && args.Groups is not null) || (args.Search is not null && !all)
+        var invert = args.Invert == true;
+        var ranged = args.Ranges is not null;
+        var order = args.Order switch { null => DistinctOrder.Value, "count" => DistinctOrder.Count, "value" => DistinctOrder.Value, _ => (DistinctOrder?)null };
+        var modes = (all ? 1 : 0) + (args.Groups is not null ? 1 : 0) + (ranged ? 1 : 0) + (invert ? 1 : 0);
+        if (args.ResultId == 0 || args.SnapshotId == 0 || args.All == false || args.Invert == false || args.Toggle == false || modes > 1 || order is null
+            || (args.Search is not null && !all && !ranged) || (args.Order is null) == ranged || (args.Toggle == true && !ranged)
             || args.Groups is { Length: < 1 or > ViewSorter.MaxDistinctWindow } || args.Search is { Length: < 1 or > ResultSearcher.MaxText }
-            || (!all && args.Groups is null && args.Nulls is null))
-            throw new RequestException("INVALID_PARAMS", "Tick 1 to 512 values, every value (or those a search of at most 1,024 characters finds), or NULL.");
+            || args.Ranges is { Length: < 1 or > ViewSorter.MaxDistinctWindow } || (args.Ranges?.Any(range => range is not [>= 0 and <= int.MaxValue, >= 1 and <= int.MaxValue]) ?? false)
+            || (args.Ranges is { } ranges && Enumerable.Range(1, ranges.Length - 1).Any(at => ranges[at][0] < ranges[at - 1][0] + ranges[at - 1][1]))
+            || (modes == 0 && args.Nulls is null))
+            throw new RequestException("INVALID_PARAMS", "Tick 1 to 512 values, every value (or those a search of at most 1,024 characters finds), 1 to 512 sorted, disjoint ranges of the list in an order, every value flipped, or NULL.");
         var snapshot = FindSnapshot(args.ResultId, args.SnapshotId);
-        var (ticked, nullTicked) = await Task.Run(() => snapshot.Tick(args.Checked, args.Groups, all, args.Search, args.Nulls, token), token);
+        var (ticked, nullTicked) = await Task.Run(() => snapshot.Tick(args.Checked, args.Groups, all, args.Search, args.Nulls, token, order.Value, args.Ranges, args.Toggle == true, invert), token);
         return new ResultsDistinctTickResult(ticked, nullTicked);
     }
 
@@ -2265,43 +2272,6 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
     internal const string BudgetStoppedGlobal = "The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.";
-    /// <summary>Unpacks packed results whole before an operation that reads all of them (ResultSetBuffer.UnpackAll), the
-    /// caller holding their pins: the bytes for all of them are reserved together first, so either every one is unpacked
-    /// or none is (TOO_LARGE with the operation's own sentence). A release stops it as it stops the operation
-    /// (<see cref="UntilReleased{T}"/>). Plain and view reads read packed pages as they are.</summary>
-    private Task Unpack(string tooLarge, CancellationToken token, params ResultSetBuffer[] sets) => Unpack(tooLarge, token, null, sets);
-
-    private async Task Unpack(string tooLarge, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets)
-    {
-        // Pages that packing made larger (the checks' mode packs every page) need nothing, but are unpacked all the same.
-        if (!sets.Any(set => set.HasPacked)) return;
-        var needs = sets.Select(set => set.UnpackNeed()).ToArray();
-        var total = needs.Sum();
-        // The sets of one operation share a query's budget (a diff compares results of one query).
-        if (total > 0 && !store.TryReserveWork(sets[0].Budget, total)) throw TooLarge(tooLarge);
-        // The next set to unpack, and whether its UnpackAll began (it returns its own reservation when it fails).
-        var next = 0;
-        var began = false;
-        try
-        {
-            await UntilReleased(work =>
-            {
-                for (; next < sets.Length; next++)
-                {
-                    began = true;
-                    sets[next].UnpackAll(needs[next], work);
-                    began = false;
-                }
-                return true;
-            }, token, progress, sets);
-        }
-        catch
-        {
-            for (var rest = began ? next + 1 : next; rest < sets.Length; rest++) store.Return(sets[0].Budget, needs[rest]);
-            throw;
-        }
-    }
-
     /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
     /// because the machine is short of memory, which closing results here may not cure.</summary>
     private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
@@ -2623,6 +2593,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 set.TryCommitRow();
             }
             set.Complete();
+            if (args.Pack)
+            {
+                if (store.Packing == PagePacking.Off) throw new RequestException("INVALID_PARAMS", "Page packing is off in this backend.");
+                set.Pack();
+            }
             return set.Describe();
         }
         catch

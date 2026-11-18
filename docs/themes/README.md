@@ -238,10 +238,18 @@ bidirectional-text characters are removed from names, and the window chrome only
   `tests/theme-metrics.test.ts` rejects px font sizes, radii, shadows and literal durations outside the tokens (1 px
   indicator edges excepted), glyph sizes on rules other than the icons `glyphUse` lists, and font-size literals in
   renderer code; keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`);
-  requires every looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce`
-  (which sets transitions to 0 ms); and regenerates [`metrics.md`](metrics.md) with
-  `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
-  checks never read a color partway through a transition.
+  requires every looping animation, Monaco's codicon spinners included, to stop under reduced motion (which sets
+  transitions to 0 ms); and regenerates [`metrics.md`](metrics.md) with `npx vitest run tests/theme-metrics.test.ts -u`.
+- Reduced motion is opt-in: Varia plays every animation unless Environment › General › Reduce motion when the system
+  asks (`environment.reduceMotionWithSystem`) is on and the system asks for reduced motion. The renderer then sets the
+  root class `varia-reduced-motion` (`reducedMotionClass` in metrics.ts; `src/renderer/src/services/reduced-motion.ts`),
+  which popouts and dialog windows copy from the main window; their own preference changes update it too, since a
+  minimized main window reports none. Every reduced-motion rule in `styles.css` starts with
+  `:root.varia-reduced-motion`, and no stylesheet or renderer module reads `prefers-reduced-motion` itself
+  (`tests/reduced-motion.test.ts`). Dockview's stylesheet stops tab and group-chip transitions under the media query
+  itself; Varia gives those elements none, leaves Dockview's `tabAnimation` unset and makes no tab groups, which the same
+  test checks. Smoke runs emulate reduced motion in every window and follow it without the setting
+  (`VARIA_TEST_FOLLOW_SYSTEM_MOTION`), so their checks never read a color partway through a transition.
 - Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
   UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without
   ligatures), and `tests/theme-css.test.ts` checks that `styles.css` uses them.

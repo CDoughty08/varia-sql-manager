@@ -86,5 +86,5 @@ Cancel and failure clear it.
 - A polite live region says the start ("Sorting Result 1") once the progress shows, and the end ("Sorted", "Sort
   cancelled", or the error). Percentages are not announced.
 - Focus never moves. Cancel is reachable with Tab in the toolbar, and Escape in the grid cancels, as for Copy and Save.
-- Reduced motion stops the slide and the spin (the bar becomes a static fill); forced colours draw the fill in
+- Reduced motion (Reduce motion when the system asks, while the system asks) stops the slide and the spin (the bar becomes a static fill); forced colours draw the fill in
   Highlight.

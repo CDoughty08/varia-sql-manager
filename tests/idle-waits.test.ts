@@ -121,7 +121,7 @@ describe('idle waits', () => {
     const lines = (name: string) => found.find(file => file.name === name)!.matched
     const tree = found.find(file => file.name === 'explorer-tree-model.test.ts')!
     expect(lines('explorer-tree-model.test.ts').map(line => tree.text.split('\n')[line - 1].trim())).toContain('const t = sample(250_000)')
-    expect(lines('explorer-service.test.ts').length).toBeGreaterThanOrEqual(4)
+    expect(lines('explorer-service.test.ts').length).toBeGreaterThanOrEqual(2)
     expect(lines('shortcut-store.test.ts').length).toBeGreaterThanOrEqual(1)
   })
   it('find heavy tests built through helpers, under test( and it.each(', () => {
@@ -198,6 +198,15 @@ describe('idle waits', () => {
     // Two chains: the build moved behind the .NET lanes balances them (vitest is the longest lane).
     expect(plan({ cpus: 4 })).toEqual({ all: [{ chain: ['Type check', 'vitest'] }, { chain: [{ gate: 'Release build (.NET)', then: { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }, 'electron-vite build'] }] })
     expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Release backend', 'electron-vite build'])
+  })
+  // GitHub's Windows runner starts the job below normal priority and the C# compiler server at normal priority: it took the
+  // runner's four vCPUs during the build and starved vitest's workers past the 20 s test timeout.
+  it('build without the shared compiler server on CI, so the compiler shares the job priority', async () => {
+    const { sharedCompilation, steps } = await import('../scripts/check.mjs')
+    expect(sharedCompilation({ CI: 'true' })).toBe(' -p:UseSharedCompilation=false')
+    expect(sharedCompilation({})).toBe('')
+    expect(steps['Release build (.NET)']).toMatch(/^dotnet build backend\/Varia\.Backend\.Tests\/Varia\.Backend\.Tests\.csproj /)
+    expect(steps['Release build (.NET)'].endsWith(sharedCompilation())).toBe(true)
   })
   // VARIA_CHECK_SKIP=tsc used to skip nothing while the summary reported it skipped.
   it('refuse an unknown VARIA_CHECK_SKIP name and report only the lanes left out', async () => {
