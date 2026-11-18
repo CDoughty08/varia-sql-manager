@@ -110,6 +110,7 @@ import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
+import { followReducedMotion, reducedMotionQuery } from '../services/reduced-motion'
 import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
@@ -770,6 +771,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
     blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
+    // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says.
+    followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
+      media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined }),
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the

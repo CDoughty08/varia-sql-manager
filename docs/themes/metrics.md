@@ -55,7 +55,7 @@ Offset and blur only; a rule adds its colour key, as in `box-shadow: var(--varia
 
 ## Motion
 
-One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). Under `prefers-reduced-motion: reduce`, `--varia-motion-fast` and `--varia-motion-base` are 0 ms, and every looping animation stops, Monaco's codicon spinners included.
+One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). With reduced motion on (Tools › Options › Environment › General › Reduce motion when the system asks, off by default, while the system asks for it), `--varia-motion-fast` and `--varia-motion-base` are 0 ms, and every looping animation stops, Monaco's codicon spinners included. The renderer marks it with the root class `varia-reduced-motion`; styles.css never reads `prefers-reduced-motion` itself.
 
 Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.
 

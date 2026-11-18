@@ -166,7 +166,8 @@ async function startProfile(application) {
 
 /**
  * Playwright's Electron launcher, with main's file operations traced and reported when the app is closed. Its windows match
- * `prefers-reduced-motion: reduce` (emulated) unless `motion: true` is passed: checks read colors and boxes as soon as a state
+ * `prefers-reduced-motion: reduce` (emulated), and follow it whatever Reduce motion when the system asks says
+ * (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1), unless `motion: true` is passed: checks read colors and boxes as soon as a state
  * changes, and a hover fill or a menu fading in would otherwise be caught partway (the motion tokens are 0 ms then).
  */
 export const electron = {
@@ -178,6 +179,8 @@ export const electron = {
     // queries in the next launch on the same profile; only a suite that sets VARIA_TEST_HOT_EXIT=1 gets it.
     const env = { ...(options.env ?? process.env) }
     env.VARIA_TEST_HOT_EXIT ??= '0'
+    // Varia plays animations whatever the system asks unless the user opts in; the emulated reduced motion applies only with this.
+    if (!motion) env.VARIA_TEST_FOLLOW_SYSTEM_MOTION ??= '1'
     // On a virtual display the window is shown, inactive: hidden, Linux sometimes ran none of its animation frames (xvfb.mjs).
     if (underXvfb(env)) env.VARIA_TEST_SHOW_WINDOW ??= '1'
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
