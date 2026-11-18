@@ -2112,8 +2112,9 @@ try {
   const serverOrder = async () => (await serverRows(page).evaluateAll(rows => rows.map(row => [Number(row.getAttribute('aria-posinset')), row.getAttribute('aria-label')])))
     .sort((a, b) => a[0] - b[0]).map(([, label]) => label.split(' ')[0])
   // Playwright's mouse drags in the sandboxed Windows window reach the page with dragenter but no dragover, so the drag is
-  // the platform's events dispatched where the pointer would be: hit-tested at each point, with dragleave and dragenter
-  // between elements, and a drop only where the last dragover was accepted. Held (release false), the line can be read.
+  // the platform's events dispatched where the pointer would be: hit-tested at each point, with dragenter and dragleave
+  // between elements, and a drop where the last dragover was accepted (in the dock panel, always). Held (release false),
+  // the line can be read.
   const dragServer = async (name, toY, release = true) => {
     const row = await explorerRow(page, name), box = await row.boundingBox(), x = box.x + 40, y = box.y + box.height / 2
     const points = Array.from({ length: 12 }, (_, step) => y + (toY - y) * (step + 1) / 12)
@@ -2124,8 +2125,8 @@ try {
       for (const clientY of points) {
         const target = row.ownerDocument.elementFromPoint(x, clientY) ?? row.ownerDocument.body
         if (target !== over) {
-          over.dispatchEvent(new DragEvent('dragleave', at(clientY, { relatedTarget: target })))
           target.dispatchEvent(new DragEvent('dragenter', at(clientY, { relatedTarget: over })))
+          over.dispatchEvent(new DragEvent('dragleave', at(clientY, { relatedTarget: target })))
           over = target
         }
         accepted = !target.dispatchEvent(new DragEvent('dragover', at(clientY)))
@@ -2158,11 +2159,12 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(await explorerRow(page, 'pin-f')).toHaveAttribute('aria-expanded', 'true')
   // Rows are placed by transform, so the last row is the lowest on screen, not the last in the DOM.
-  const lastChild = await tree().getByRole('treeitem').evaluateAll(rows => {
+  const lowestRow = () => tree().getByRole('treeitem').evaluateAll(rows => {
     const lowest = rows.reduce((low, row) => row.getBoundingClientRect().bottom > low.getBoundingClientRect().bottom ? row : low), box = lowest.getBoundingClientRect()
     return { level: lowest.getAttribute('aria-level'), label: lowest.getAttribute('aria-label'), y: box.y, height: box.height }
   })
-  expect(lastChild.level).toBe('2')
+  await expect.poll(async () => (await lowestRow()).level).toBe('2')
+  const lastChild = await lowestRow()
   expect(lastChild.y + lastChild.height + 30).toBeLessThan(treeBox.y + treeBox.height)
   await dragServer('pin-a', lastChild.y + lastChild.height + 20, false)
   await expect(explorerDropLine(page)).toHaveCount(1)
@@ -2176,12 +2178,26 @@ try {
   await (await explorerRow(page, 'pin-f')).click()
   await page.keyboard.press('ArrowLeft')
   await expect(await explorerRow(page, 'pin-f')).toHaveAttribute('aria-expanded', 'false')
+  // Over the scrollbar beside the rows the tree itself is under the pointer: no line shows there, so releasing moves nothing.
+  const pinE = await (await explorerRow(page, 'pin-e')).boundingBox()
+  await dragServer('pin-c', pinE.y + pinE.height * 0.75, false)
+  await expect(explorerDropLine(page)).toHaveAttribute('aria-label', /^pin-e /)
+  await tree().evaluate((tree, y) => {
+    const drag = window.__variaServerDrag, at = more => ({ clientX: drag.x, clientY: y, bubbles: true, cancelable: true, dataTransfer: drag.dataTransfer, ...more })
+    tree.dispatchEvent(new DragEvent('dragenter', at({ relatedTarget: drag.over })))
+    drag.over.dispatchEvent(new DragEvent('dragleave', at({ relatedTarget: tree })))
+    drag.accepted = !tree.dispatchEvent(new DragEvent('dragover', at()))
+    Object.assign(drag, { over: tree, y })
+  }, pinE.y + pinE.height / 2)
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  await releaseServer()
+  expect(await serverOrder()).toEqual(servers)
   // Carried out of the tree, the drag leaves no line behind, and releasing there moves nothing.
   await dragServer('pin-c', treeBox.y - 8, false)
   await expect(explorerDropLine(page)).toHaveCount(0)
   await releaseServer()
   expect(await serverOrder()).toEqual(servers)
-  console.log('Object Explorer checks: dragging a server below the last row drops it last, with its line below the last child of an expanded server; onto the top half of the first row it drops first; out of the tree it shows no line and stays.')
+  console.log('Object Explorer checks: dragging a server below the last row drops it last, with its line below the last child of an expanded server; onto the top half of the first row it drops first; over the scrollbar or out of the tree it shows no line and stays.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

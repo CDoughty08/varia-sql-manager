@@ -141,7 +141,7 @@ export const gestureCatalog = {
     locked: 'Dragging is the only way to drop text; Copy Name does the same from the keyboard.'
   },
   'explorer.reorderServer': {
-    title: 'Reorder Servers', description: 'Dropping a server above or below another server moves it there; the order is kept for the next start.',
+    title: 'Reorder Servers', description: 'Dropping a server above or below another server, or below the last row, moves it where its line shows; the order is kept for the next start.',
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'a server', modifiers: [], keyboard: ['explorer.moveServerUp', 'explorer.moveServerDown'],
     locked: 'Dragging is the pointer\'s way to reorder; Move Up and Move Down in the server\'s menu do the same from the keyboard.'
   },

@@ -269,10 +269,12 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   // The background below the last row drops a server last, and its line shows that: below the tree's last row, which is
   // the last server's last child when it is expanded. Rows mark themselves (actions.dragOver);
   // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
+  // Beside the rows, the tree itself is under the pointer only on its scrollbar, where no line would show: no drop there.
   const dragOverTree = (event: DragEvent<HTMLDivElement>) => {
     if ((event.target as Element).closest?.('[role="treeitem"]')) return
     const from = serverDragOf(event, dragging.current), last = explorer.rootIds.at(-1)
-    if (from === undefined || last === undefined) { setDropMark(undefined); return }
+    const rowsEnd = event.currentTarget.firstElementChild?.getBoundingClientRect().bottom ?? -Infinity
+    if (from === undefined || last === undefined || event.clientY < rowsEnd) { setDropMark(undefined); return }
     event.preventDefault()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
     setDropMark(mark => mark?.end && mark.rowId === last ? mark : { rowId: last, edge: 'after', end: true })

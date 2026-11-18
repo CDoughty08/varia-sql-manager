@@ -289,8 +289,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     const inert = kind === RowKind.Loading || kind === RowKind.More
     const tone = kind === RowKind.Error || kind === RowKind.MoreError ? ' error' : kind === RowKind.More || kind === RowKind.Loading ? ' progress' : ''
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
+    // As the tree's last row it carries the line a server dragged below everything draws (drop).
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
-      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}
+      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} data-drop={drop} onMouseDown={select}
       // Not a place a server drops: passing over it clears the line the row above left, so releasing here moves nothing.
       onDragOver={(event: DragEvent) => actions.dragOver(rowId, 'after', event)}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
@@ -315,7 +316,13 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
   // The tree shows the peek cursor over these while Peek on Hover's modifier is held (styles.css, data-peek-armed).
   const peekable = node.ref.type === 'object' && node.kind !== 'folder' && isPeekKind(node.kind) && !node.lost
-  const edgeOf = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
+  // An open server's children follow its row, so a server dropped after it lands below them, not where a line under its
+  // row would show: its whole row drops above it (below it is the next server's top half, or the background below the last).
+  const edgeOf = (event: DragEvent): 'before' | 'after' => {
+    if (root && expandable && node.expanded) return 'before'
+    const box = event.currentTarget.getBoundingClientRect()
+    return event.clientY < box.top + box.height / 2 ? 'before' : 'after'
+  }
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
