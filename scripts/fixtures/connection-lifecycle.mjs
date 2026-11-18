@@ -4,7 +4,7 @@ import { electron, expect } from './smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { explorerRow, explorerTree } from './explorer-tree.mjs'
+import { expandExplorerPath, explorerRow, explorerTree } from './explorer-tree.mjs'
 import {
   activeDocumentName, backendReady, documentTab, documentTabs, editorTextbox, explorerLabel, outputStatus,
   queryServer, queryStatus, resultGrid, selectOpenDocument, toolbarButton
@@ -236,6 +236,22 @@ export async function connectionLifecycle() {
     await expect(await explorerRow(page, 'Lifecycle production')).toHaveAccessibleName(/Disconnected/)
     await expect(await explorerRow(page, 'Lifecycle production')).not.toHaveAttribute('aria-expanded', 'true')
 
+    // Object Explorer's server order (a drag, then Move Up from the keyboard) and what a server showed expanded come back
+    // after the restart; a server a close left collapsed stays collapsed.
+    const names = () => explorerLabel(roots()).allTextContents()
+    const before = await names()
+    expect(before).toHaveLength(3)
+    await roots().nth(2).dragTo(roots().nth(0), { targetPosition: { x: 40, y: 3 } })
+    await expect.poll(names).toEqual([before[2], before[0], before[1]])
+    await explorerLabel(await explorerRow(page, before[1])).click()
+    await page.keyboard.press('Alt+ArrowUp')
+    const order = [before[2], before[1], before[0]]
+    await expect.poll(names).toEqual(order)
+    // Move Up greys out on the first server.
+    await explorerLabel(await explorerRow(page, order[0])).click({ button: 'right' })
+    await expect(page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Move Up' })).toBeDisabled()
+    await page.keyboard.press('Escape')
+    await expandExplorerPath(page, 'Lifecycle reader', 'Databases')
     // One remembered live server succeeds, one rejects its saved secret, and the explicit disconnect stays respected.
     const executions = (await calls()).filter(call => call.method === 'query.execute').length
     await writeFile(join(control, 'reject-passwords'), '')
@@ -243,8 +259,12 @@ export async function connectionLifecycle() {
     const saved = await readFile(join(profile, 'Session', 'session.json'), 'utf8')
     expect(saved).not.toContain(secret)
     expect(saved).not.toContain('correct-horse-marker')
+    expect(JSON.parse(saved).workspace.targets.filter(target => target.inExplorer).map(target => target.details.displayName)).toEqual(order)
     await launch()
     await expect(roots()).toHaveCount(3)
+    await expect.poll(names).toEqual(order)
+    await expect(await explorerRow(page, 'Lifecycle reader', 'Databases')).toHaveAttribute('aria-expanded', 'true')
+    await expect(await explorerRow(page, 'Lifecycle reader', 'Databases', 'System Databases')).toBeVisible()
     await expect(await explorerRow(page, 'Lifecycle production')).toHaveAccessibleName(/Disconnected/)
     await expect(await explorerRow(page, 'Lifecycle reader')).toHaveAttribute('aria-expanded', 'true')
     await expect(await explorerRow(page, 'Lifecycle retry')).not.toHaveAttribute('aria-expanded', 'true')
@@ -257,7 +277,7 @@ export async function connectionLifecycle() {
     expect(failures).toEqual([])
     await page.screenshot({ path: resolve('artifacts', 'connections-startup-recovery.png') })
     passed = true
-    console.log('Integrated connection lifecycle passed: exact reuse, changed credentials, detail choices, dirty-close cancellation, retained results, reconnect, selective close, mixed startup outcomes and no automatic user SQL.')
+    console.log('Integrated connection lifecycle passed: exact reuse, changed credentials, detail choices, dirty-close cancellation, retained results, reconnect, selective close, mixed startup outcomes, Object Explorer order and expansion kept across the restart, and no automatic user SQL.')
   } catch (error) {
     await page?.screenshot({ path: resolve('artifacts', 'connection-lifecycle-failure.png') }).catch(() => {})
     console.error(`Connection lifecycle artifacts retained in ${folder}`)

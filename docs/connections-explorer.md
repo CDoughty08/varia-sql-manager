@@ -16,6 +16,17 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   servers**. Commands act on the server right-clicked, not the selected row or active query. Only server roots are
   pinned, not databases.
 
+## Server order and expansion
+
+- Drag a server row onto another to move it above or below that server, or use **Move Up** and **Move Down**
+  (Alt+Up and Alt+Down, also on the server's context menu). Varia announces the new position. The order is the
+  connection workspace's, so it survives restarts and reloads.
+- The workspace also keeps which nodes each server had expanded, as connection-free keys (at most 128 per server, 1,024
+  characters each, 256 KiB in all), and what a server showed when it was lost or disconnected. Its next connect expands
+  just those, or nothing if it showed none. A server with no saved expansion (first connected this run, or never shown
+  connected before) expands to its folders. After updating from a version without this, servers start collapsed.
+  Collapsing a node, Collapse All or Stop while a restore is still loading ends it.
+
 ## Sessions and authentication
 
 - Connect retry settings apply to initial attempts. Once connected, idle-session recovery is off so a lost session cannot

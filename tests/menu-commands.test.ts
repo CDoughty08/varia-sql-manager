@@ -592,7 +592,7 @@ describe('Object Explorer commands', () => {
     api.push(readyBackend(2))
     const lost = on({ kind: 'server' }, 'server-b', true)
     const items = (resolved: ReturnType<typeof menus.resolve>) => resolved.map(item => item.kind === 'command' ? [item.title, item.enabled] : item.kind)
-    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Connect…', true], ['Reconnect…', true], ['Remove from Explorer', true]])
+    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Connect…', true], ['Reconnect…', true], ['Remove from Explorer', true], 'separator', ['Move Up', false], ['Move Down', false]])
     // A lost server's node acts on that server, not on the active query's lost one.
     expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
     expect(await commands.execute('connection.removeLost', lost, 'menu')).toBe(true)

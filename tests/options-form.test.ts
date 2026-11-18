@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowDisabled, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type SettingRow
+  ancestorIds, draftFrom, firstPage, followValues, pageForm, patchFrom, resetPage, rowDisabled, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type SettingRow
 } from '../src/renderer/src/settings/options-form'
 import { highlightParts, normalizeQuery, searchPages } from '../src/renderer/src/settings/search'
 import { scriptingOptionKeys } from '../src/shared/scripting/options'
@@ -101,6 +101,18 @@ describe('Options pages', () => {
     expect(pageForm('environment.general', draft, 'darwin', defs).groups.flatMap(group => group.rows.map(item => item.key))).toEqual(['environment.everywhere', 'environment.mac'])
     expect(pageForm('textEditor.transactSql.tabs', draft, 'win32').groups.map(group => group.label)).toEqual(['Tab'])
   })
+  it('lays a sectioned page out in its sections\' order, whatever the catalogue\'s, and leaves out sections with no rows', () => {
+    const page = 'queryResults.sqlServer.grid'
+    const defs = [fixture({ key: 'queryResults.plan', page, group: 'Execution plan' }), fixture({ key: 'queryResults.display', page, group: 'Grid display' }), fixture({ key: 'queryResults.display2', page, group: 'Grid display' })]
+    const groups = pageForm(page, draft, 'win32', defs).groups
+    expect(groups.map(group => group.label)).toEqual(['Grid display', 'Execution plan'])
+    expect(groups.map(group => group.rows.map(row => row.key))).toEqual([['queryResults.display', 'queryResults.display2'], ['queryResults.plan']])
+    expect(groups[0].description).toBe('How results look in the grid.')
+  })
+  it('finds settings by their section and by their full name outside it', () => {
+    expect(searchPages('limits and memory', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
+    expect(searchPages('show execution plan outline', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
+  })
   it('sets values only from a row\'s own choices, and keeps an integer field\'s text until OK checks it', () => {
     expect(set(draft, 'textEditor.sql.wordWrap', 'true')['textEditor.sql.wordWrap']).toBe(true)
     for (const [key, text] of [['textEditor.sql.wordWrap', 'True'], ['textEditor.sql.tabs', 'both'], ['textEditor.unknown', 'true']] as const) expect(set(draft, key, text), `${key} ${text}`).toBe(draft)
@@ -145,6 +157,18 @@ describe('Options OK', () => {
     next = set(next, 'textEditor.sql.wordWrap', 'false')
     next = set(next, 'queryExecution.executionTimeout', '7')
     expect(patchFrom(stored, next as SettingsValues)).toEqual({ 'textEditor.sql.wordWrap': false, 'queryExecution.executionTimeout': 7 })
+  })
+  it('follows settings changed outside Options while it is open, keeping the rows the user changed, so OK puts nothing back', () => {
+    const before = draftFrom({ ...defaultSettings })
+    let draft = set(before, 'queryExecution.executionTimeout', '7')
+    // Alt+Z in the main window turns word wrap on, and something else changes the time-out the user has edited.
+    const after = draftFrom({ ...defaultSettings, 'textEditor.sql.wordWrap': true, 'queryExecution.executionTimeout': 30 })
+    draft = followValues(draft, before, after)
+    expect(draft['textEditor.sql.wordWrap']).toBe(true)
+    expect(draft['queryExecution.executionTimeout']).toBe(7)
+    expect(patchFrom(after as SettingsValues, draft as SettingsValues)).toEqual({ 'queryExecution.executionTimeout': 7 })
+    // Nothing changed outside: the same draft comes back.
+    expect(followValues(draft, after, after)).toBe(draft)
   })
   it('notes when a change applies and whether SSMS has the option', () => {
     expect(rowNotes(settingDef('queryExecution.executionTimeout'))).toEqual(['Applies to the next execution.'])

@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -150,6 +150,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A popout window (Move into New Window): its panels' tabs over the selected panel; the OS draws the title bar. */
 .popout-body { height: 100vh; overflow: hidden; background: var(--varia-dock-background); }
 .popout-root, .popout-window { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+/* A dialog window (popouts/DialogWindow.tsx): the dialog fills it, under the page's title bar, as tall as the main window's
+   and coloured like it, with its own close button; macOS's traffic lights sit at its start. */
+.popout-body.dialog-window-body { background: var(--varia-editorWidget-background); }
+.dialog-window-root { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.dialog-window-root > .connection-modal[role="dialog"] { flex: 1; width: 100%; height: auto; max-height: none; min-height: 0; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+.dialog-titlebar { flex-shrink: 0; display: flex; align-items: center; height: env(titlebar-area-height, var(--varia-header)); padding: 0 var(--varia-space-3); background: var(--varia-titleBar-activeBackground); color: var(--varia-titleBar-activeForeground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; -webkit-app-region: drag; }
+:root[data-window-focus="inactive"] .dialog-titlebar { background: var(--varia-titleBar-inactiveBackground); color: var(--varia-titleBar-inactiveForeground); }
+.dialog-titlebar:not([data-platform="darwin"]) { height: var(--varia-header); padding-right: 0; }
+.dialog-titlebar[data-platform="darwin"] { padding-left: 80px; }
+.dialog-window-close { flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 100%; margin-left: auto; padding: 0; border: 0; background: transparent; color: inherit; -webkit-app-region: no-drag; }
+.dialog-window-close:hover { background: var(--varia-toolbar-hoverBackground); }
+.dialog-window-close:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -2px; }
+.dialog-window-close:disabled { opacity: 0.5; }
+.dialog-titlebar h2 { margin: 0; font-size: var(--varia-size-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popout-header { flex: none; display: flex; align-items: stretch; height: 28px; background: var(--varia-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--varia-editorGroup-border); }
 .popout-tabs { flex: 1; min-width: 0; display: flex; overflow: hidden; }
 .popout-tab { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0 var(--varia-space-1) 0 var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-tab-inactiveForeground); background: var(--varia-tab-inactiveBackground); border-right: 1px solid var(--varia-tab-border); cursor: default; }
@@ -414,20 +428,29 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-empty { margin: 4px 10px; color: var(--varia-descriptionForeground); }
 .options-dialog mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
 .options-page { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
-.options-heading { margin: 0; padding: 8px 10px 4px; font-size: var(--varia-size-md); font-weight: 600; color: var(--varia-settings-headerForeground); overflow-wrap: anywhere; }
-.options-note { margin: 4px 10px; line-height: 1.5; color: var(--varia-descriptionForeground); }
-.options-form { padding: 0 0 6px; }
-.options-group { margin-bottom: 6px; }
-.options-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 22px; padding: 2px 10px 2px 22px; }
+.options-heading { margin: 0; padding: 12px 16px 8px; font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); font-weight: 600; color: var(--varia-settings-headerForeground); overflow-wrap: anywhere; }
+.options-crumb { display: block; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 400; color: var(--varia-descriptionForeground); }
+.options-note { margin: 0 16px 8px; line-height: 1.5; color: var(--varia-descriptionForeground); }
+.options-form { padding: 0 16px 12px; }
+/* A section: a heading with its description over a hairline, then rows on a three-column grid (label, control, hint)
+   that every row shares through subgrid, so the controls line up down the page. */
+.options-group + .options-group { margin-top: var(--varia-space-4); }
+.options-section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding-bottom: var(--varia-space-1); margin-bottom: var(--varia-space-1); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.options-section-head .options-category { height: auto; white-space: normal; overflow-wrap: anywhere; line-height: var(--varia-line-sm); padding: 0; margin: 0; font-size: var(--varia-size-sm); }
+.options-section-description { margin: 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+.options-grid { display: grid; grid-template-columns: minmax(120px, var(--varia-optionsLabel)) minmax(96px, var(--varia-optionsControl)) minmax(0, 1fr); column-gap: var(--varia-space-3); row-gap: var(--varia-space-0); }
+.options-form-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: var(--varia-row); padding: 1px var(--varia-space-2); margin: 0 calc(-1 * var(--varia-space-2)); border-radius: var(--varia-radius-sm); }
 .options-form-row[data-focused] { background: var(--varia-list-inactiveSelectionBackground); }
 .options-form-row[data-disabled] { color: var(--varia-disabledForeground); }
-.options-check { display: flex; align-items: center; gap: 6px; }
-.options-number { display: inline-flex; align-items: center; gap: 6px; }
-.options-dialog .options-number input { width: 96px; padding: 2px 6px; }
-.options-radios { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
-.options-radios legend { float: left; margin-right: 10px; padding: 0; }
-.options-radios label { display: inline-flex; align-items: center; gap: 4px; }
-.options-field-error { flex-basis: 100%; grid-column: 1 / -1; font-size: var(--varia-size-xs); color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
+.options-label { overflow-wrap: anywhere; }
+.options-check { grid-column: 1 / 3; display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
+.options-check > span { overflow-wrap: anywhere; }
+.options-dialog .options-control { width: 100%; min-width: 0; height: 24px; }
+.options-dialog .options-control[type="number"] { padding: 2px 6px; }
+.options-hint { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+.options-radios { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; }
+.options-radios label { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.options-field-error { grid-column: 2 / -1; font-size: var(--varia-size-xs); color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .options-list { flex: 1; min-width: 0; padding: 2px 0 6px; }
 .options-category { height: 22px; line-height: 22px; padding: 0 10px; font-weight: 600; color: var(--varia-settings-headerForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .options-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 46%); align-items: center; gap: 2px 8px; min-height: 22px; padding: 0 10px 0 22px; }
@@ -2963,3 +2986,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
    the whole button, so its focus ring stays at full strength. */
 .compare-foot button[aria-disabled="true"], .compare-foot button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }
+/* Object Explorer: a server dragged to a new place shows where it drops; Peek on Hover's modifier held shows the peek cursor. */
+.explorer-row[data-drop="before"] { box-shadow: inset 0 2px 0 var(--varia-focusBorder); }
+.explorer-row[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--varia-focusBorder); }
+.explorer-tree[data-peek-armed] .explorer-row[data-peekable], .explorer-tree[data-peek-armed] .explorer-row[data-peekable] * { cursor: zoom-in; }

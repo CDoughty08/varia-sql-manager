@@ -95,7 +95,8 @@ copies kept. A critical end is not held. `session-end` asks once more for AutoRe
 ## Connections
 
 Reopened queries show their remembered server and **Disconnected**, environment still visible. The connection workspace
-restores before the queries. Automatic reconnect uses the global setting and each target's override, respects explicit
+restores before the queries, with each server's place in Object Explorer and the nodes it had expanded
+([server order and expansion](connections-explorer.md#server-order-and-expansion)). Automatic reconnect uses the global setting and each target's override, respects explicit
 Disconnect, never runs a query or opens browser sign-in. Missing credentials or a required sign-in leave the target for an
 explicit reconnect.
 

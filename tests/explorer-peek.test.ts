@@ -221,6 +221,130 @@ describe('PeekService', () => {
     mac.service.keyUp('Meta')
     expect(mac.timers.callback).toBeUndefined()
   })
+  it('peeks the row under a still pointer shortly after Ctrl goes down, and arms the peek cursor until it goes up', () => {
+    const { service, api, timers } = setup()
+    const armed: boolean[] = []
+    service.armed.subscribe(() => armed.push(service.armed.getSnapshot()))
+    // The pointer came to rest on the row without Ctrl: nothing yet.
+    service.pointer(() => node('table'), false)
+    expect(timers.callback).toBeUndefined()
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    // Pressing Ctrl with the pointer still peeks after the short press delay, not the hover delay, and without a pointer move.
+    service.keyDown('Control')
+    expect(service.armed.getSnapshot()).toBe(true)
+    expect(timers.ms).toBe(peekLimits.pressMs)
+    expect(peekLimits.pressMs).toBeLessThan(peekLimits.hoverMs)
+    timers.callback?.()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    expect(service.getSnapshot().open).toMatchObject({ rowId: 1, source: 'hover' })
+    expect(service.armed.getSnapshot()).toBe(true)
+    // Ctrl's auto-repeat asks nothing more.
+    timers.callback = undefined
+    service.keyDown('Control', true)
+    expect(timers.callback).toBeUndefined()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    // Releasing Ctrl keeps the open card, so the pointer can move into it, and drops the cursor.
+    service.keyUp('Control')
+    expect(service.getSnapshot().open).toMatchObject({ rowId: 1 })
+    expect(armed).toEqual([true, false])
+  })
+  it('does not peek on a Ctrl press away from the rows, in a chord, or for a row Peek does not describe', () => {
+    const { service, api, timers } = setup()
+    service.keyDown('Control')
+    expect(service.armed.getSnapshot()).toBe(true)
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    service.keyUp('Control')
+    service.pointer(() => node('user'), false)
+    service.keyDown('Control')
+    expect(timers.callback).toBeUndefined()
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    // A shortcut typed with the pointer resting on a row (Ctrl+N) reaches its second key before the press delay: no peek.
+    service.keyUp('Control')
+    service.pointer(() => node('table'), false)
+    service.keyDown('Control')
+    expect(timers.callback).toBeDefined()
+    service.keyDown('n')
+    expect(timers.callback).toBeUndefined()
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    service.keyUp('Control')
+    // A pointer left resting on a row while the user types elsewhere is forgotten: Ctrl held there a while (Ctrl+S in the
+    // editor) peeks nothing until the pointer moves again.
+    service.pointer(() => node('table'), false)
+    service.keyDown('s')
+    service.keyDown('Control')
+    expect(timers.callback).toBeUndefined()
+    service.keyUp('Control')
+    service.pointer(() => node('table'), false)
+    service.keyDown('Control')
+    expect(timers.callback).toBeDefined()
+    service.keyUp('Control')
+    // A pointer moving with Ctrl held waits for the hover delay; another key makes the press a chord (Ctrl+C), not a peek.
+    service.pointer(() => node('table'), true)
+    expect(timers.callback).toBeDefined()
+    service.keyDown('c')
+    expect(timers.callback).toBeUndefined()
+    // Leaving the rows forgets the row; a press then peeks nothing.
+    service.pointer(undefined)
+    service.keyUp('Control')
+    service.keyDown('Control')
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    // Losing focus drops the modifier, whose release the window would not see.
+    service.blur()
+    expect(service.armed.getSnapshot()).toBe(false)
+  })
+  it('cancels a row\'s press peek on a Ctrl+Shift chord even when the query editor\'s Peek on Hover is remapped to Shift', () => {
+    const { api } = setup()
+    let fire: (() => void) | undefined
+    const service = new PeekService({
+      timers: { setTimeout: callback => { fire = callback; return 1 }, clearTimeout: () => { fire = undefined } },
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} }, scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      gestures: { isModifierKey: (_id, key) => key === 'Control' }, hoverModifier: key => key === 'Control' || key === 'Shift'
+    })
+    service.pointer(() => node('table'), false)
+    service.keyDown('Control')
+    expect(fire).toBeDefined()
+    // Shift is the editor's modifier, but with a row's hover waiting it is part of a chord (Ctrl+Shift+N): no peek.
+    service.keyDown('Shift')
+    expect(fire).toBeUndefined()
+    expect(api.explorerPeek).not.toHaveBeenCalled()
+    service.dispose()
+    // Swapped (Object Explorer on Shift, the editor on Ctrl), nothing pending: Ctrl, the editor's, still forgets the parked
+    // row, so Ctrl+Shift+F typed in the editor never peeks it.
+    const swapped = new PeekService({
+      timers: { setTimeout: callback => { fire = callback; return 1 }, clearTimeout: () => { fire = undefined } },
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} }, scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      gestures: { isModifierKey: (_id, key) => key === 'Shift' }, hoverModifier: key => key === 'Control' || key === 'Shift'
+    })
+    swapped.pointer(() => node('table'), false)
+    swapped.keyDown('Control')
+    swapped.keyDown('Shift')
+    expect(fire).toBeUndefined()
+    swapped.dispose()
+  })
+  it('follows Peek on Hover\'s remapped modifier, and a pointer event corrects a press the window did not see', () => {
+    const { service, api } = setup()
+    let fire: (() => void) | undefined
+    const shift = new PeekService({
+      timers: { setTimeout: callback => { fire = callback; return 1 }, clearTimeout: () => { fire = undefined } },
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} }, scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      gestures: { isModifierKey: (_id, key) => key === 'Shift' }
+    })
+    shift.pointer(() => node('table'), false)
+    shift.keyDown('Control')
+    expect(fire).toBeUndefined()
+    // Ctrl was another key here, so the pointer must move again before the press counts.
+    shift.keyUp('Control')
+    shift.pointer(() => node('table'), false)
+    shift.keyDown('Shift')
+    fire?.()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    shift.dispose()
+    // Ctrl went down while another window had focus: the next move over a row shows it held.
+    service.pointer(() => node('table'), true)
+    expect(service.armed.getSnapshot()).toBe(true)
+    service.pointer(() => node('table'), false)
+    expect(service.armed.getSnapshot()).toBe(false)
+  })
   it('leaves a card the keyboard or the menu opened alone when Ctrl passes over another row', () => {
     const { service, api, timers } = setup()
     service.peek(node('table', 1), 'keyboard')

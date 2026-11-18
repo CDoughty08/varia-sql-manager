@@ -393,6 +393,8 @@ describe('menu state', () => {
       'explorer.rebuildIndex', 'explorer.stopIndexing',
       // Object Explorer's Group by Schema: its toolbar button and the palette.
       'explorer.groupBySchema',
+      // Reordering servers: the server's menu, Alt+Up/Down in the tree, dragging and the palette.
+      'explorer.moveServerUp', 'explorer.moveServerDown',
       // Focusing editor groups: keys in editor text and the palette.
       'editor.focusNextGroup', 'editor.focusPreviousGroup',
       // Tab stack height: the query tab menu and palette equivalent of Control+wheel.

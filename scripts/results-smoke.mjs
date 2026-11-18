@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
-  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -749,10 +749,12 @@ try {
   await expect(emptyStateDetail(outputEmpty(page))).toContainText('2 result sets were read and not kept.')
   await page.screenshot({ path: resolve('artifacts', 'results-discarded.png') })
   await discardItem().click()
-  const optionsDialog = page.getByRole('dialog', { name: 'Options', exact: true })
+  // Options opens in a dialog window of its own, on the setting.
+  const optionsWindow = await dialogWindow(application, 'Options')
+  const optionsDialog = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
   await expect(optionsDialog.getByRole('checkbox', { name: 'Discard results after execution', exact: true })).toBeFocused()
-  await page.keyboard.press('Escape')
-  await expect(optionsDialog).toHaveCount(0)
+  await pressToClose(optionsWindow, 'Escape')
+  await dialogClosed(optionsWindow, 'Options')
   await outputEmpty(page).getByRole('button', { name: 'Turn off Discard results', exact: true }).click()
   await expect(discardItem()).toHaveCount(0)
   await expect(outputEmpty(page).getByRole('button', { name: 'Execute again', exact: true })).toBeFocused()

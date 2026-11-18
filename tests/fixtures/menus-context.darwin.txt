@@ -185,11 +185,17 @@ explorer.context, for a server
   ---
   Copy N&ame  -+++
   ---
+  Move &Up  ⌥↑  ----
+  Move Do&wn  ⌥↓  ----
+  ---
   Re&fresh  F5  -+++
 explorer.context, for a server whose connection was lost
   &Connect…  ++++
   &Reconnect…  ++++
   Rem&ove from Explorer  +++-
+  ---
+  Move &Up  ⌥↑  ----
+  Move Do&wn  ⌥↓  ----
 explorer.context, for the Databases folder
   &Attach…  -+++
   &Restore Database…  -+++

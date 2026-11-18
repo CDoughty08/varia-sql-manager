@@ -14,10 +14,11 @@ only when a summary line stops being true.
   origin reaches every local file. Packaged builds set the fuses in `build/fuses.cjs` (flipped in afterPack, read back by
   `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
   checked.
-  The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
-  `about:blank` child named `varia-popout-<uuid>`, exact bounds on a display, no preload, sandboxed, isolated, no popups
-  or navigation of its own, closed with the page. Its content is the page's DOM through React portals, so it sends no
-  IPC, and `trusted()` still accepts only the main window's main frame.
+  The only windows the page may open are popouts and dialog windows (`src/main/popout-windows.ts`, docs/popout-windows.md):
+  same-origin `about:blank` children named `varia-popout-<uuid>` or `varia-dialog-<kind>-<uuid>` (Options, About), exact
+  bounds on a display, no preload, sandboxed, isolated, no popups or navigation of its own, closed with the page. Their
+  content is the page's DOM through React portals, so they send no IPC, and `trusted()` still accepts only the main
+  window's main frame.
 - **Backend methods.** Add one in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema in
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
@@ -536,7 +537,8 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
-  keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
+  keys only through `KeybindingService.capture`. Peek's Ctrl state comes from `KeybindingService`'s `keyDown`, `keyUp` and
+  `blur` hooks (`PeekService.keyDown`), never a listener of its own; its cursor is CSS (`data-peek-armed`). Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
 - **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
   the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its

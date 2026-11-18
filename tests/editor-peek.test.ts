@@ -112,6 +112,25 @@ describe('Peek anchored in a query editor', () => {
     service.keyUp('Shift')
     expect(timers.callback).toBeUndefined()
   })
+  it('keeps an editor hover whose modifier is remapped apart from Object Explorer\'s while it repeats, and arms only Object Explorer\'s cursor', () => {
+    const timers: { callback?: () => void } = {}
+    const service = new PeekService({
+      api: {} as never, connections: { getSnapshot: () => [], subscribe: () => () => {} },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      timers: { setTimeout: callback => { timers.callback = callback; return 1 }, clearTimeout: () => { timers.callback = undefined } },
+      newId: () => 'id', platform: 'win32',
+      gestures: { isModifierKey: (_id, key) => key === 'Control' }, hoverModifier: key => key === 'Control' || key === 'Shift'
+    })
+    service.keyDown('Shift')
+    service.hoverAt('a', () => {})
+    // Held Shift repeats: the query editor's modifier, not a typed key, so its hover keeps waiting and arms no row cursor.
+    service.keyDown('Shift', true)
+    expect(timers.callback).toBeDefined()
+    expect(service.armed.getSnapshot()).toBe(false)
+    // A typed key still ends it.
+    service.keyDown('a')
+    expect(timers.callback).toBeUndefined()
+  })
 })
 
 describe('placePeekAt', () => {
