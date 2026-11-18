@@ -1205,9 +1205,9 @@ try {
   await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
   const aliveLocal = () => page.evaluate(() => window.__variaGrid.aliveViews('local'))
   expect(await aliveLocal()).toBe(1)
-  // A table with other columns starts unsorted.
-  await rerenderLocal({ columns: [{ name: 'Name' }, { name: 'Size', kind: 'number' }], rows: [['b', '2'], ['a', '1']] })
-  await expect(local).toHaveAttribute('aria-label', 'Local list, 2 rows, 2 columns')
+  // A table with other columns starts unsorted: its third column sorted descending would put 'a' first.
+  await rerenderLocal({ columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 2 rows, 3 columns')
   await expect(gridCell(local, 0, 0)).toHaveText('b')
   await expect(local.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
   await rerenderLocal(localTable)
@@ -1257,8 +1257,11 @@ try {
   await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: 'one' })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('b')
   await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
-  // Another kept state is another grid: its own sort, not the last one's.
+  // The old columns back do not bring their sort back: the user has not sorted them since.
   await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // Another kept state is another grid: its own sort, not the last one's.
   await localSort(2, 'Sort Descending', keptGrid)
   await rerenderLocal(localTable, { keepState: 'two' })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')

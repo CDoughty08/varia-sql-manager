@@ -9,7 +9,7 @@ import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
 import { FLAG_CAPPED, FLAG_NULL, FLAG_TRUNCATED } from '../src/renderer/src/results/worker-protocol'
 import { localSaveRequestSchema } from '../src/main/validation'
-import { ResultsJobHost, writeLocalSave, type JobHostDeps } from '../src/main/results-jobs'
+import { localSaveMode, ResultsJobHost, writeLocalSave, type JobHostDeps } from '../src/main/results-jobs'
 import { BackendError } from '../src/main/backend/errors'
 import { writeBytesAtomic } from '../src/main/json-file'
 
@@ -51,7 +51,10 @@ describe('local tables', () => {
   it('copy across pages in the order shown, encoding only the pages a copy reaches', async () => {
     const long: LocalTableData = { columns: [{ name: 'n' }], rows: Array.from({ length: localSavePageRows * 3 }, (_, i) => [String(i)]) }
     const order = long.rows.map((_, i) => long.rows.length - 1 - i)
-    const copied = await localCopyText(long, [{ rows: [[localSavePageRows - 2, localSavePageRows + 1]], columns: [[0, 0]] }], { headers: false, crlf: false, order })
+    let yields = 0
+    const copied = await localCopyText(long, [{ rows: [[localSavePageRows - 2, localSavePageRows + 1]], columns: [[0, 0]] }], { headers: false, crlf: false, order, afterPage: async () => { yields++ } })
+    // A page's rows, then the next page's: a yield after each.
+    expect(yields).toBe(2)
     expect(copied.text).toBe([1, 0, -1, -2].map(k => String(long.rows.length - localSavePageRows + k)).join(String.fromCharCode(10)))
   })
 
@@ -231,6 +234,23 @@ describe('local saves in main', () => {
     expect(await refused({ isDirectory: () => false, mode: 0o444 })).toBe('Could not save the results: access to cols.txt is denied.')
     expect(await refused({ isDirectory: () => true, mode: 0o777 })).toBe('Could not save the results: cols.txt is a folder.')
     expect(await refused({ isDirectory: () => false, mode: 0o666 })).toBe('Could not save the results: cols.txt is open in another program.')
+  })
+
+  it('take a mode only off Windows, where a mode without write bits would make the file read-only', async () => {
+    const file = { isFile: () => true, isSymbolicLink: () => false, mode: 0o100600 }, link = { isFile: () => false, isSymbolicLink: () => true, mode: 0o120777 }
+    expect(localSaveMode(file, undefined)).toEqual({ mode: 0o600 })
+    expect(localSaveMode(link, { isFile: () => true, mode: 0o100444 })).toEqual({ mode: 0o444, umask: true })
+    expect(localSaveMode(link, { isFile: () => false, mode: 0o40755 })).toEqual({})
+    expect(localSaveMode(undefined, undefined)).toEqual({})
+    // On Windows the target is not read for a mode: over a read-only file the new one is writable until it replaces it.
+    const folder = await mkdtemp(join(tmpdir(), 'varia-local-win-'))
+    try {
+      const path = join(folder, 'new.csv')
+      await writeLocalSave(path, new TextEncoder().encode('new'), 'win32')
+      expect((await stat(path)).mode & 0o200).toBe(0o200)
+    } finally {
+      await rm(folder, { recursive: true, force: true })
+    }
   })
 
   it.skipIf(process.platform === 'win32')('keep the permission bits of a file they replace, as a results save does', async () => {

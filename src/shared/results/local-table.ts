@@ -98,7 +98,7 @@ const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
  * Copy of a local table's selection, as a results grid copies (tab-separated, NULL as NULL, the platform's line breaks):
  * `parts` are the grid's copy plan in the rows as shown (`order` maps a shown row to the table's).
  */
-export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[] }): Promise<{ text: string; rows: number }> {
+export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[]; afterPage?: () => Promise<void> }): Promise<{ text: string; rows: number }> {
   // Pages of the rows the copy reaches, built as it reaches them: a cell's copy encodes its page, not the table.
   const pages = new Map<number, PageView>()
   const pageAt = (row: number) => {
@@ -107,7 +107,7 @@ export async function localCopyText(table: LocalTableData, parts: readonly TextP
     if (!page) pages.set(first, page = localPage(table, o.order, first, localSavePageRows))
     return page
   }
-  const copied = await copyText({ columns: textColumns(table.columns), pageAt, available: o.order?.length ?? table.rows.length, parts, headers: o.headers, crlf: o.crlf })
+  const copied = await copyText({ columns: textColumns(table.columns), pageAt, available: o.order?.length ?? table.rows.length, parts, headers: o.headers, crlf: o.crlf }, o.afterPage)
   return { text: decoder.decode(copied.text), rows: copied.rows }
 }
 

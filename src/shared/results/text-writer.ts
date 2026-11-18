@@ -421,7 +421,7 @@ export interface CopyRequest {
 export interface CopiedText { readonly text: Uint8Array; readonly rows: number; readonly bytes: number; readonly truncatedCells: number; readonly capped: number; readonly lines: number }
 /** Copy's text for parts of a result (all of it at once; callers check its size against their limit).
  *  `transposed` writes each part as a transposed grid draws it. */
-export async function copyText({ columns, pageAt, available, parts, headers, crlf, transposed = false, headerColumn }: CopyRequest): Promise<CopiedText> {
+export async function copyText({ columns, pageAt, available, parts, headers, crlf, transposed = false, headerColumn }: CopyRequest, afterPage?: () => Promise<void>): Promise<CopiedText> {
   const plans = parts.map(part => resolvePart(part, columns.length, available))
   if (plans.some(plan => plan === undefined) || !validTurn(transposed, headerColumn, columns.length)) throw new RangeError('The copy request is invalid.')
   const writer = new TextWriter(copyOptions(headers, crlf), columns)
@@ -436,7 +436,7 @@ export async function copyText({ columns, pageAt, available, parts, headers, crl
       continue
     }
     if (headers) writer.header(plan.columns)
-    for (const [first, last] of plan.rows) await writeRows(writer, pageAt, plan.columns, first, last)
+    for (const [first, last] of plan.rows) await writeRows(writer, pageAt, plan.columns, first, last, afterPage)
   }
   writer.end()
   return { text: writer.out.bytes(), rows: transposed ? rows : writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells, capped: writer.capped, lines: transposed ? writer.columnsWritten : writer.rows }

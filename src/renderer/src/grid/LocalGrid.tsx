@@ -43,6 +43,8 @@ const maxSortKeys = 4
 const cardRows = 12
 /** An empty card's room under its header for the overlay that says so: `.rg-overlay`'s padding and a line of text. */
 const cardEmpty = 48
+/** Between a large copy's pages: the renderer paints and takes input while it formats. */
+const yieldToEvents = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 const unsorted: readonly LocalSortKey[] = []
 /** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
 const keptSorts = new WeakMap<GridViewState, { readonly columns: string; readonly keys: readonly LocalSortKey[] }>()
@@ -62,8 +64,9 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // The keys belong to the columns they were chosen for: derived in render, so the mount that a new table causes
   // already sees a table with other columns unsorted.
   const [sorted, setSorted] = useState(() => (state && keptSorts.get(state)) ?? { columns: columnsKey, keys: unsorted })
-  // A table shown unsortable (a report's rows, in order) drops any sort, there in render: it has no Clear Sort to undo one.
-  if (!sortable && sorted.keys !== unsorted) setSorted({ columns: columnsKey, keys: unsorted })
+  // A table with other columns starts unsorted, and one shown unsortable (a report's rows, in order) drops any sort: reset
+  // there in render, so the sort does not come back with the old columns, nor with sorting, unchosen.
+  if ((!sortable || sorted.columns !== columnsKey) && sorted.keys !== unsorted) setSorted({ columns: columnsKey, keys: unsorted })
   const keys = sortable && sorted.columns === columnsKey ? sorted.keys : unsorted
   const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => ({ columns: columnsKey, keys: next(current.columns === columnsKey ? current.keys : unsorted) })), [columnsKey])
   useEffect(() => { if (state) keptSorts.set(state, sorted) }, [state, sorted])
@@ -120,11 +123,14 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       columnName: column => bound.columns[column]?.name,
       canSort: column => sortable && column >= 0 && column < columns,
       canFilter: () => false, sorted: () => keys.length > 0, filtered: () => false,
+      // Copy and Save read the shown source's table and order together, never this render's table with a later order: a
+      // menu opened before a new table holds this LiveOutput.
       copy: headers => {
-        const selection = view()?.currentSelection(), parts = selection ? copyPlan(selection, columns) : []
-        if (!parts.length) return
+        const source = sourceRef.current, selection = view()?.currentSelection()
+        const parts = source && selection ? copyPlan(selection, source.table.columns.length) : []
+        if (!source || !parts.length) return
         setNotice(undefined)
-        void localCopyText(bound, parts, { headers, crlf: platform === 'win32', ...sourceRef.current?.order ? { order: sourceRef.current.order } : {} })
+        void localCopyText(source.table, parts, { headers, crlf: platform === 'win32', ...source.order ? { order: source.order } : {}, afterPage: yieldToEvents })
           .then(async copied => { const written = await window.varia.writeClipboardText(copied.text); if (!written.ok) report('copy the rows', written.error) })
           .catch(error => report('copy the rows', error))
       },
@@ -135,10 +141,11 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       filterColumn: () => {}, clearFilters: () => {},
       canSave: () => preset === 'page',
       save: () => {
-        if (preset !== 'page' || !hasRows()) return
-        const order = sourceRef.current?.order
+        const source = sourceRef.current
+        if (preset !== 'page' || !source || source.table.rows.length === 0 || source.table.columns.length === 0) return
+        const { table: shown, order } = source
         setNotice(undefined)
-        void window.varia.saveLocalResults({ suggestedName: (latest.current.suggestedName || latest.current.label || 'Results').slice(0, wire.jobs.suggestedName), columns: bound.columns.map(column => ({ name: column.name, ...column.kind ? { kind: column.kind } : {} })), rows: (order ?? bound.rows.map((_, index) => index)).map(index => [...bound.rows[index]]) })
+        void window.varia.saveLocalResults({ suggestedName: (latest.current.suggestedName || latest.current.label || 'Results').slice(0, wire.jobs.suggestedName), columns: shown.columns.map(column => ({ name: column.name, ...column.kind ? { kind: column.kind } : {} })), rows: (order ?? shown.rows.map((_, index) => index)).map(index => [...shown.rows[index]]) })
           .then(saved => {
             if (!saved.ok) report('save the rows', saved.error)
             else if (saved.value) setNotice({ text: `Saved ${formatCount(saved.value.rows)} ${plural(saved.value.rows, 'row')} to ${saved.value.fileName}.` })

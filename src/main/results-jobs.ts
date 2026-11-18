@@ -102,12 +102,20 @@ const errnoTokens: Partial<Record<string, string>> = { EACCES: 'ACCESS', EPERM: 
  * A local save's write: into the folder the dialog chose, never one recreated (a folder deleted since says so), and a
  * replaced file keeps its permission bits, as a results save's does (Unix; Windows keeps no attributes, docs/ipc.md).
  */
-export async function writeLocalSave(path: string, data: Uint8Array): Promise<void> {
-  // A file keeps its bits exactly; a symlink to a file is replaced by a file with the linked file's read and write bits,
-  // narrowed by the umask, as ResultJobs' LinkedMode does.
-  const target = await lstat(path).catch(() => undefined)
+export async function writeLocalSave(path: string, data: Uint8Array, platform: NodeJS.Platform = process.platform): Promise<void> {
+  const target = platform === 'win32' ? undefined : await lstat(path).catch(() => undefined)
   const linked = target?.isSymbolicLink() ? await stat(path).catch(() => undefined) : undefined
-  await writeBytesAtomic(path, data, { createFolder: false, ...target?.isFile() ? { mode: target.mode & 0o777 } : linked?.isFile() ? { mode: linked.mode & 0o666, umask: true } : {} })
+  await writeBytesAtomic(path, data, { createFolder: false, ...localSaveMode(target, linked) })
+}
+/**
+ * The mode a local save's file takes, off Windows only, as ResultJobs': a file keeps its bits exactly; a symlink to a
+ * file is replaced by a file with the linked file's read and write bits, narrowed by the umask (LinkedMode). Windows
+ * gets none: a mode without write bits would create a read-only file there.
+ */
+export function localSaveMode(target: { isFile(): boolean; isSymbolicLink(): boolean; mode: number } | undefined, linked: { isFile(): boolean; mode: number } | undefined): { mode?: number; umask?: boolean } {
+  if (target?.isFile()) return { mode: target.mode & 0o777 }
+  if (target?.isSymbolicLink() && linked?.isFile()) return { mode: linked.mode & 0o666, umask: true }
+  return {}
 }
 
 /** What a request of a grid drawn transposed adds to the backend's parameters. */

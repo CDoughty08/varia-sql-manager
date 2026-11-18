@@ -61,7 +61,8 @@ export async function quarantine(path: string): Promise<void> {
 
 export interface AtomicWriteOptions {
   /** POSIX permissions of the new file, set on the temporary file before it is synced and renamed into place, so its
-   *  content is never readable under the umask's default. Windows ignores it. */
+   *  content is never readable under the umask's default. Windows uses only its write bits: without them the file is
+   *  created read-only. */
   readonly mode?: number
   /** True to let the umask narrow `mode` (no exact chmod): a file taking over a symlink's linked file's bits. */
   readonly umask?: boolean
