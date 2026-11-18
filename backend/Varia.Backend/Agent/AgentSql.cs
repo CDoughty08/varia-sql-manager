@@ -117,10 +117,23 @@ internal static partial class AgentSql
             problems.Add(problem);
             return match.Value;
         });
+        // LiveSql.Lint's word list is a deny list with word boundaries that T-SQL does not share (it reads `1DELETE` as `1`
+        // and DELETE). So the rest also may not glue a word to a number, and may use no statement keyword but SELECT, WITH and
+        // DECLARE: every T-SQL statement opens with one, which makes this an allow list of statement kinds.
+        var code = Quoted().Replace(rest, " ");
+        if (GluedNumber().IsMatch(code)) problems.Add("glues a word to a number");
+        foreach (Match match in StatementKeyword().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
         problems.AddRange(LiveSql.Lint(LiveSql.UncommittedPrologue + rest));
         return problems;
     }
 
+    [GeneratedRegex(@"--[^\r\n]*|/\*[\s\S]*?\*/|N?'(?:[^']|'')*'|\[(?:[^\]]|\]\])*\]|""(?:[^""]|"""")*""", RegexOptions.CultureInvariant)]
+    private static partial Regex Quoted();
+    [GeneratedRegex(@"(?<![A-Za-z0-9_@#])[0-9][\w$.]*[A-Za-z_$]", RegexOptions.CultureInvariant)]
+    private static partial Regex GluedNumber();
+    [GeneratedRegex(@"(?<![A-Za-z0-9_@#])(?:ADD|ALTER|BACKUP|BEGIN|BREAK|BULK|CHECKPOINT|CLOSE|COMMIT|CONTINUE|CONVERSATION|CREATE|CURSOR|DBCC|DEALLOCATE|DELETE|DENY|DISABLE|DROP|ENABLE|EXEC|EXECUTE|FETCH|GET|GOTO|GRANT|IF|INSERT|INTO|KILL|LOG|MERGE|MOVE|NEXT|OPEN\w*|PRINT|RAISERROR|READTEXT|RECEIVE|RECONFIGURE|RESTORE|RETURN|REVERT|REVOKE|ROLLBACK|SAVE|SEND|SET|SETUSER|SHUTDOWN|SIGNATURE|THROW|TRUNCATE|UPDATE|UPDATETEXT|USE|WAITFOR|WHILE|WRITETEXT)(?![\w$])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StatementKeyword();
     [GeneratedRegex(@"^\s*(?:SELECT|WITH|DECLARE|EXEC)\s", RegexOptions.CultureInvariant)]
     private static partial Regex FirstKeyword();
 

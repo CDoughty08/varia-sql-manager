@@ -91,6 +91,28 @@ internal static class AgentChecks
         [
             "EXECUTE msdb.dbo.sp_help_job;",
             "msdb.dbo.sp_start_job @job_id = @job_id;",
+            "SELECT 1DELETE FROM msdb.dbo.sysjobhistory;",
+            "SELECT 0x1INSERT dbo.t VALUES (1);",
+            "SELECT 1SHUTDOWN;",
+            "SELECT 1.DELETE FROM dbo.t;",
+            "SELECT $1DELETE FROM dbo.t;",
+            "SELECT 1e1EXEC msdb.dbo.sp_start_job @job_id = @job_id;",
+            "SELECT 1e1EXEC master.dbo.xp_servicecontrol N'Stop', N'SQLServerAgent';",
+            "SELECT 1e1EXEC (N'SELECT 42');",
+            "SELECT 1; DISABLE TRIGGER ALL ON ALL SERVER;",
+            "SELECT 1; ENABLE TRIGGER ALL ON DATABASE;",
+            "SELECT 1; WRITETEXT dbo.t.c @p N'x';",
+            "SELECT 1; RECEIVE * FROM dbo.q;",
+            "SELECT 1; SEND ON CONVERSATION @h (N'x');",
+            "SELECT 1; END CONVERSATION @h;",
+            "SELECT NEXT VALUE FOR dbo.s;",
+            "SELECT 1; CHECKPOINT;",
+            "SELECT 1; SETUSER;",
+            "SELECT 1; REVERT;",
+            "SELECT 1; RAISERROR(N'x', 10, 1) WITH LOG;",
+            "SELECT 1; SET IMPLICIT_TRANSACTIONS ON;",
+            "SELECT 1; SET LOCK_TIMEOUT -1;",
+            "SELECT 1 FROM sys.objects AS o; IF 1 = 1 PRINT N'x';",
             "msdb.dbo.sp_delete_job @job_id = @job_id;",
             "master.dbo.xp_servicecontrol N'Stop', N'SQLServerAgent';",
             "sp_help_job;",
@@ -159,13 +181,14 @@ internal static class AgentChecks
         [
             ["op", "7", stale + "_op", null], ["al", "3", stale + "_al", null], ["sch", "12", stale + "_sch", null],
             ["job", "0f8fad5b-d9cb-469f-a165-70867728950e", stale + "_job", ScratchDatabase.JobMarker], ["job", "1f8fad5b-d9cb-469f-a165-70867728950e", stale + "_job", "someone's job"],
-            ["cr", "65536", stale + "_cr", null], ["px", "2", stale + "_px", null], ["px", "4", fresh + "_px", null], ["op", "9", stale + "_opx", null], ["sch", "x", stale + "_sch", null]
+            ["cr", "65536", stale + "_cr", null], ["px", "2", stale + "_px", null], ["px", "4", fresh + "_px", null], ["op", "9", stale + "_opx", null], ["sch", "x", stale + "_sch", null],
+            ["usr", "5", stale + "_lagu", null], ["usr", "6", fresh + "_lagu", null], ["usr", "8", "VariaScratch_user", null]
         ];
         var ran = new List<string>();
         Task<SqlRun> Run(string sql, string database)
         {
             if (sql == ScratchDatabase.StaleAgentSql) return Task.FromResult(new SqlRun("completed", null, [[.. rows]]));
-            if (database == "msdb" && (sql.StartsWith("EXEC msdb.dbo.sp_delete_", StringComparison.Ordinal) || sql.StartsWith("DROP CREDENTIAL", StringComparison.Ordinal))) ran.Add(sql);
+            if (database == "msdb" && (sql.StartsWith("EXEC msdb.dbo.sp_delete_", StringComparison.Ordinal) || sql.StartsWith("DROP CREDENTIAL", StringComparison.Ordinal) || sql.StartsWith("DROP USER", StringComparison.Ordinal))) ran.Add(sql);
             return Task.FromResult(new SqlRun("completed", null, [[]]));
         }
         await ScratchDatabase.SweepAsync(Run, _ => { });
@@ -173,8 +196,8 @@ internal static class AgentChecks
                 "EXEC msdb.dbo.sp_delete_proxy @proxy_id = 2;", "DROP CREDENTIAL [" + stale + "_cr];",
                 "EXEC msdb.dbo.sp_delete_job @job_id = '0f8fad5b-d9cb-469f-a165-70867728950e', @delete_history = 1, @delete_unused_schedule = 1;",
                 "EXEC msdb.dbo.sp_delete_schedule @schedule_id = 12, @force_delete = 1;", "EXEC msdb.dbo.sp_delete_alert @name = N'" + stale + "_al';",
-                "EXEC msdb.dbo.sp_delete_operator @name = N'" + stale + "_op';"]),
-            "the sweep drops stale scratch Agent objects proxies first, then credentials, marked jobs, schedules, alerts and operators, and leaves fresh ones, unmarked jobs, "
+                "EXEC msdb.dbo.sp_delete_operator @name = N'" + stale + "_op';", "DROP USER [" + stale + "_lagu];"]),
+            "the sweep drops stale scratch Agent objects proxies first, then credentials, marked jobs, schedules, alerts and operators, then stale scratch logins' msdb users, and leaves fresh ones, unmarked jobs, "
             + "names that only look like a run's and rows whose id does not parse: " + string.Join(" | ", ran));
     }
 
@@ -215,6 +238,10 @@ internal static class AgentChecks
         try { await reader.ReadAsync(null, null, [AgentSql.Jobs with { Id = "other" }], Value, CancellationToken.None); }
         catch (RequestException error) when (error.Code == "BACKEND_ERROR") { unchecked_ = true; }
         check(lost && unchecked_, "a lost connection is thrown for the caller to handle, and a statement that is not one of AgentSql.All never runs (BACKEND_ERROR)");
+        var unknownPrologue = false;
+        try { await reader.ReadAsync(null, "SET NOCOUNT ON;\n", [AgentSql.Jobs], Value, CancellationToken.None); }
+        catch (RequestException error) when (error.Code == "BACKEND_ERROR") { unknownPrologue = true; }
+        check(unknownPrologue, "an Agent read after a prologue that is not one of AgentSql.Callers' never runs (BACKEND_ERROR)");
         var (shaped, shapeErrors) = await new AgentReader
         {
             TestRun = (statement, _, _) => statement.Id == "errorLogs" ? throw new AgentShapeException("The Agent read errorLogs returned the columns A without Date.")
@@ -224,9 +251,9 @@ internal static class AgentChecks
             "a result set without a declared column fails that statement alone as BACKEND_ERROR, and the statements after it still run");
         check(AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(300, 297)).Code == "PERMISSION_DENIED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.")).Code == "BLOCKED"
-            && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(50000, 1, 16, "server", "other")).Code == "SQL_ERROR"
+            && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(14234, 1, 16, "server", "The specified '@owner_login_name' is invalid.")) is { Code: "SQL_ERROR", Number: 14234, Message: AgentReader.FailedMessage }
             && AgentReader.Classify(AgentSql.Job, ConnectionFailureChecks.Sql(14262, 1, 16, "server", "The specified @job_id ('x') does not exist.")) is { Code: "NOT_FOUND", Message: AgentReader.GoneMessage }
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal \"p\" is not able to access the database \"msdb\".")) is { Code: "PERMISSION_DENIED", Message: AgentReader.RefusedMessage },
-            "the reader keeps the live classification for everything else: 300 then 297 (server state on 2022 and later) is PERMISSION_DENIED, a lock wait BLOCKED, the rest SQL_ERROR; a job gone since the listing (14262) is NOT_FOUND and no msdb access (916) PERMISSION_DENIED, neither quoting msdb's text");
+            "the reader keeps the live classification for everything else: 300 then 297 (server state on 2022 and later) is PERMISSION_DENIED, a lock wait BLOCKED, the rest SQL_ERROR with a fixed sentence (msdb's texts quote their arguments); a job gone since the listing (14262) is NOT_FOUND and no msdb access (916) PERMISSION_DENIED, neither quoting msdb's text");
     }
 }

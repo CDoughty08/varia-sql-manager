@@ -32,6 +32,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
     public const string RefusedMessage = "This login may not read this part of SQL Server Agent.";
     public const string MissingMessage = "This server's SQL Server Agent does not offer this read.";
     public const string GoneMessage = "This SQL Server Agent object no longer exists.";
+    public const string FailedMessage = "SQL Server could not complete this SQL Server Agent read.";
 
     private readonly AgentCatalog catalog = catalog ?? AgentCatalog.Current;
 
@@ -48,6 +49,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         foreach (var statement in statements)
         {
             if (!AgentSql.Known(statement)) throw new RequestException("BACKEND_ERROR", "An Agent read ran a statement the lint never checked.");
+            if (!AgentSql.Callers.Any(caller => caller.Prologue == prologue)) throw new RequestException("BACKEND_ERROR", "An Agent read ran after a prologue the lint never checked.");
             var cap = (int)catalog.Limit(statement.Cap);
             var arguments = statement.Parameters.ToDictionary(parameter => parameter.Name, parameter => values(statement, parameter), StringComparer.Ordinal);
             try
@@ -89,6 +91,8 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             "PERMISSION_DENIED" => RefusedMessage,
             "NOT_SUPPORTED" => MissingMessage,
             "NOT_FOUND" => GoneMessage,
+            // msdb's texts quote their arguments (ids, names), so a plain failure keeps its number and a fixed sentence.
+            "SQL_ERROR" => FailedMessage,
             _ => LiveErrors.From(statement.Id, error).Message
         };
         return new(statement.Id, code, number, message);

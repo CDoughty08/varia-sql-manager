@@ -35,7 +35,17 @@ internal sealed partial class ScratchDatabase
         + "UNION ALL SELECT N'job', CONVERT(nvarchar(36), j.job_id), j.name, j.description FROM msdb.dbo.sysjobs AS j WHERE j.name LIKE N'VariaScratch[_]%'\n"
         + "UNION ALL SELECT N'sch', CONVERT(nvarchar(36), s.schedule_id), s.name, NULL FROM msdb.dbo.sysschedules AS s WHERE s.name LIKE N'VariaScratch[_]%'\n"
         + "UNION ALL SELECT N'al', CONVERT(nvarchar(36), a.id), a.name, NULL FROM msdb.dbo.sysalerts AS a WHERE a.name LIKE N'VariaScratch[_]%'\n"
-        + "UNION ALL SELECT N'op', CONVERT(nvarchar(36), o.id), o.name, NULL FROM msdb.dbo.sysoperators AS o WHERE o.name LIKE N'VariaScratch[_]%';";
+        + "UNION ALL SELECT N'op', CONVERT(nvarchar(36), o.id), o.name, NULL FROM msdb.dbo.sysoperators AS o WHERE o.name LIKE N'VariaScratch[_]%'\n"
+        + "UNION ALL SELECT N'usr', CONVERT(nvarchar(36), u.principal_id), u.name, NULL FROM msdb.sys.database_principals AS u WHERE u.name LIKE N'VariaScratch[_]%' AND u.type = 'S';";
+
+    [GeneratedRegex(@"^VariaScratch_(\d{14})_[0-9a-f]{8}_")]
+    private static partial Regex RunPrefix();
+
+    /// <summary>Whether an msdb user is a scratch login's (an Agent role check maps one there) made more than 6 hours before
+    /// <paramref name="now"/>, by its prefix's timestamp: msdb is a system database, so no scratch database's drop takes it.</summary>
+    internal static bool StaleMsdbUser(string name, DateTime now) => SweepableLogin(name) && RunPrefix().Match(name) is { Success: true } match
+        && DateTime.TryParseExact(match.Groups[1].Value, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var created)
+        && created < now.AddHours(-6);
 
     /// <summary>The statement that drops one stale scratch Agent object, or null when its id does not parse.</summary>
     internal static string? DropAgentSql(string kind, string id, string name) => kind switch
@@ -62,5 +72,10 @@ internal sealed partial class ScratchDatabase
                     log("Dropping stale scratch Agent object " + row[2]);
                     await run(drop, "msdb");
                 }
+        foreach (var row in found.Sets[0].Where(row => row[0] == "usr" && row[2] is { } name && StaleMsdbUser(name, now)))
+        {
+            log("Dropping stale scratch msdb user " + row[2]);
+            await run("DROP USER " + Bracket(row[2]!) + ";", "msdb");
+        }
     }
 }
