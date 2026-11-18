@@ -1176,6 +1176,15 @@ try {
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(tree()).toBeFocused()
+  // Ctrl+F (⌘F) in the tree does the same; in the query editor it stays Monaco's Find. (Escape above cleared the box.)
+  await searchBox().fill('Order')
+  await tree().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F' : 'Control+F')
+  await expect(searchBox()).toBeFocused()
+  expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
   if (process.platform !== 'darwin') {
     // The palette's Search in Object Explorer focuses the box.
     await page.keyboard.press('F1')
