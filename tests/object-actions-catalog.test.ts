@@ -480,7 +480,7 @@ describe('object action catalogue', () => {
       files: 1_024, filegroups: 256, logins: 1_024, collations: 8_192, statements: 512, scriptChars: 1_000_000, detachFiles: 256, filePath: 260 })
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
-    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
+    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
       'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY'])
     // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
     expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
@@ -488,6 +488,8 @@ describe('object action catalogue', () => {
   })
   it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
     const backend = ['ActionService.cs', 'ActionErrors.cs', 'ServerFiles.cs', 'RestoreDescribe.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
+      // UNSUPPORTED_PROVIDER comes from SqlService.DispatchAsync's provider check, before ActionService sees the request.
+      + readFileSync(join('backend', 'Varia.Backend', 'SqlService.cs'), 'utf8')
     // Each code appears as a C# string literal: ActionErrors.Numbers, an Error(...) or Create(...) call, or (AUTH_*) the sign-in's codes.
     expect(actionErrorCodes.filter(code => !backend.includes(`"${code}"`))).toEqual([])
   })

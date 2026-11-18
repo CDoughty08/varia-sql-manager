@@ -113,7 +113,8 @@ export class ConnectionOpenService {
       const { nonInteractive: _nonInteractive, ...comparisonOptions } = request.params as ConnectionOptions & { nonInteractive?: boolean }
       const result = await this.reuse.connect({
         targetId: request.context!.targetId!, generation, options: comparisonOptions,
-        expectedPrincipal: request.context?.expectedPrincipal, credentialIntent: request.context?.credentialIntent,
+        // prepare() refused a principal of another provider or mode, so only SQL Server's reaches here.
+        expectedPrincipal: request.context?.expectedPrincipal?.provider === 'sqlserver' ? request.context.expectedPrincipal : undefined, credentialIntent: request.context?.credentialIntent,
         forceAuthenticate: request.requireFreshAuthentication,
         signal: active.controller.signal
       }, async signal => {

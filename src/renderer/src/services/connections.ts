@@ -1,5 +1,5 @@
 import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
-import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
+import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, isBigQueryTarget, isSqlServerTarget, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
 import { SnapshotStore } from '../core/store'
 import { ConnectionTargetService, type ConnectionCompletion, type ConnectionCredentialIntent, type ConnectionOperation } from './connection-targets'
 import type { ConnectionBindingsChanged } from '../../../shared/connection-bindings'
@@ -132,7 +132,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     const accepted = this.connectionTargets.applyBindings(update)
     for (const change of accepted) {
       const info = this.metadata.get(change.targetId)
-      if (info?.id === change.handle.id && info.generation === change.handle.generation)
+      if (info?.id === change.handle.id && info.generation === change.handle.generation && !isBigQueryTarget(change.options))
         this.metadata.set(change.targetId, { ...info, database: change.options.database || info.database, authentication: change.authentication })
     }
     if (accepted.length) this.refresh()
@@ -282,7 +282,8 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   private refresh(): void {
     const targets = this.connectionTargets.getSnapshot(), ids = new Set(targets.map(target => target.id))
     for (const id of this.targetStates.keys()) if (!ids.has(id)) { this.targetStates.delete(id); this.targetEpochs.delete(id); this.metadata.delete(id) }
-    const adopted = targets.map(target => {
+    // BigQuery targets stay in the workspace untouched; the workbench opens them from the BigQuery lanes on.
+    const adopted = targets.filter(isSqlServerTarget).map(target => {
       const { details: _details, ...state } = target, encoded = JSON.stringify(state)
       if (this.targetStates.get(target.id) !== encoded) { this.targetStates.set(target.id, encoded); this.targetEpochs.set(target.id, ++this.targetRevision) }
       const info = this.metadata.get(target.id) ?? this.legacy.find(connection => connection.targetId === target.id), lifecycle = target.lifecycle

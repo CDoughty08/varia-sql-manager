@@ -316,9 +316,9 @@ internal static class ResultDiffer
         if (leftTotal > int.MaxValue / 2 || rightTotal > int.MaxValue / 2 || leftTotal + rightTotal > Array.MaxLength)
             throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
         var leftHasher = new CellHasher(left.Columns, left.Wires);
-        // The second result's shared columns hash by the first's type and collation, so equal values hash alike in both.
+        // The second result's shared columns hash by the first's type, kind and collation, so equal values hash alike in both.
         var compared = right.Columns.ToArray();
-        foreach (var (l, r) in pairs) compared[r] = compared[r] with { DataType = left.Columns[l].DataType, Collation = left.Columns[l].Collation };
+        foreach (var (l, r) in pairs) compared[r] = compared[r] with { DataType = left.Columns[l].DataType, SortKind = left.Columns[l].SortKind, Collation = left.Columns[l].Collation };
         var rightHasher = new CellHasher(compared, right.Wires);
         var leftIds = new long[leftTotal];
         var rightIds = new long[rightTotal];

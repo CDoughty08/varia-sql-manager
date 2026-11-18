@@ -7,28 +7,38 @@ import { recoveryCapMessage, recoveryLimits, type RecoveryEntry, type RecoveryWr
 import { quarantine, readJsonFile, writeBytesAtomic } from './json-file'
 import type { SettingsStore } from './settings-store'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
+import { providerIds } from '../shared/providers'
 
 const fits = (value: { kind: DocumentKind; text: string }) => value.text.length <= fileKinds[value.kind].maxChars
 const eol = z.enum(['crlf', 'lf'])
 const name = z.string().min(1).max(recoveryLimits.nameChars)
 const server = z.string().min(1).max(recoveryLimits.serverChars)
-const database = z.string().min(1).max(recoveryLimits.databaseChars)
+const database = z.string().min(1).max(recoveryLimits.datasetChars)
+const provider = z.enum(providerIds)
+/** SQL Server's 128 characters, and BigQuery's 1,024 for a dataset on BigQuery records only. */
+const databaseFits = (value: { provider?: string; database?: string }) => value.provider === 'bigquery' || (value.database ?? '').length <= recoveryLimits.databaseChars
 // Lower-case, as crypto.randomUUID() makes them: a record has one file name, so the caps, the list and the purge all see it.
 const recordId = z.uuid().regex(/^[0-9a-f-]{36}$/, 'An AutoRecover id is a lower-case uuid.')
 /** varia:recovery-write: the query's text, at most its kind's limit, and what the dialog shows about it. */
 export const recoveryWriteSchema = z.object({
-  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), text: z.string().max(maxDocumentCharacters)
-}).strict().refine(fits, 'The query is too large for AutoRecover.')
+  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), provider: provider.optional(), text: z.string().max(maxDocumentCharacters)
+}).strict().refine(fits, 'The query is too large for AutoRecover.').refine(databaseFits, 'A database name has at most 128 characters.')
 export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).max(recoveryLimits.discardIds) }).strict()
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 
-/** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it. */
-const recordSchema = z.object({
-  version: z.literal(1), id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
+/** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it.
+ *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider; a version 1 record (0.9.0's `AutoRecover/`) reads as
+ *  version 2, SQL Server's. */
+const recordFields = {
+  id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
   savedAt: z.iso.datetime(), text: z.string().max(maxDocumentCharacters)
-}).strict().refine(fits)
-export type RecoveryRecord = z.infer<typeof recordSchema>
+}
+const v1RecordSchema = z.object({ ...recordFields, version: z.literal(1), database: z.string().min(1).max(recoveryLimits.databaseChars).optional() }).strict().refine(fits)
+const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), provider: provider.optional() }).strict().refine(fits).refine(databaseFits)
+export const recoveryRecordSchema = z.union([v2RecordSchema, v1RecordSchema.transform(record => ({ ...record, version: 2 as const }))])
+const recordSchema = recoveryRecordSchema
+export type RecoveryRecord = z.infer<typeof v2RecordSchema>
 
 // In any case: this version names records only in lower case, but one in upper case (written by hand, or by a build
 // before that rule) still counts against the caps and is purged; `list` quarantines it rather than offer it.
@@ -52,7 +62,7 @@ interface RecordFile { readonly id: string; readonly file: string; readonly cano
 interface Listed { readonly size: number; readonly mtimeMs: number; readonly entry: RecoveryEntry; readonly owner: RecoveryRecord['owner'] }
 
 /**
- * `<userData>/AutoRecover/`: a copy of each query with unsaved changes, kept until the query is saved, closed or
+ * `<userData>/WorkbenchAutoRecover/` (0.9.0's `AutoRecover/`, migrated at startup by profile-migration.ts): a copy of each query with unsaved changes, kept until the query is saved, closed or
  * discarded, so a crash, a kill or a power loss does not lose it. The folder is 0700 and each record 0600 on POSIX
  * (Windows' user profile is the user's alone), and each is written atomically. Records hold the query's text and what
  * the Recover dialog shows (name, original path, server, database), never results, connections or credentials.
@@ -124,9 +134,10 @@ export class RecoveryStore {
       if (mine !== undefined && mine !== generation) throw new Error('This AutoRecover copy belongs to an earlier window.')
       if (mine === undefined && await stat(this.path(request.id)).then(() => true, () => false)) throw new Error('This AutoRecover copy belongs to an earlier window.')
       const record: RecoveryRecord = {
-        version: 1, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
+        version: 2, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
         ...request.path && request.path.length <= recoveryLimits.pathChars ? { path: request.path } : {}, eol: request.eol,
-        ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, savedAt: this.now().toISOString(), text: request.text
+        ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, ...request.provider ? { provider: request.provider } : {},
+        savedAt: this.now().toISOString(), text: request.text
       }
       const bytes = Buffer.from(JSON.stringify(record) + '\n')
       if (bytes.length > recoveryLimits.recordBytes) throw new Error('The query is too large for AutoRecover.')

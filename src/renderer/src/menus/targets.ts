@@ -166,6 +166,8 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
+    // Every Object Explorer server is SQL Server's until BigQuery's Explorer (docs/bigquery-plan.md, BQ-5).
+    explorerProvider: target?.kind === 'explorer' && target.node ? 'sqlserver' : '',
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,

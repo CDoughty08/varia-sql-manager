@@ -128,7 +128,7 @@ describe('Set Connection Environment', () => {
   it('labels an adopted target without editing its saved profile or a different target', async () => {
     const connections = new ConnectionService(), targetId = crypto.randomUUID(), handle = crypto.randomUUID()
     const attempt = connections.beginConnect(base, 1, targetId)!
-    expect(connections.accept(connectionInfo(handle), base, targetId, { principal: { provider: 'sqlServer', authentication: 'windows', id: 'CONTOSO\\reader' } }, attempt).status).toBe('accepted')
+    expect(connections.accept(connectionInfo(handle), base, targetId, { principal: { provider: 'sqlserver', authentication: 'windows', id: 'CONTOSO\\reader' } }, attempt).status).toBe('accepted')
     connections.add(connectionInfo('other'), base)
     const setEnvironment = vi.fn(async () => { throw new Error('The profile must stay unchanged.') })
     expect(await applyEnvironment({ connections, setEnvironment }, handle, 'Production')).toEqual({ ok: true, environment: 'Production' })

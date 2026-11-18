@@ -1,4 +1,4 @@
-import { commandDescriptor, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
+import { commandAllowsProvider, commandDescriptor, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import { compileWhen, evaluateWhen } from '../../../shared/commands/when'
 import { onUnexpectedError } from './errors'
@@ -60,8 +60,10 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
     const handler = this.handlers.get(id)
     if (!handler) return false
     try {
-      const { precondition } = commandDescriptor(id)
-      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), this.stateFor(args))) return false
+      const { precondition } = commandDescriptor(id), state = this.stateFor(args)
+      // A command for another engine than the document's (or the Explorer selection's) is unavailable (`providers`).
+      if (!commandAllowsProvider(id, state)) return false
+      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), state)) return false
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }
   }

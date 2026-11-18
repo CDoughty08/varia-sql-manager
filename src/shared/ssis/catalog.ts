@@ -388,6 +388,8 @@ export const operationTiles: readonly OperationTile[] = [
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
 export const ssisErrorRetryable = {
   CATALOG_MISSING: false,
+  /** The connection's engine has no SSIS Catalog (src/shared/providers.ts). */
+  UNSUPPORTED_PROVIDER: false,
   NO_DB_ACCESS: false,
   /** The catalog's database exists but is offline, restoring, recovering or single-user in use: it can come back. */
   DATABASE_UNAVAILABLE: true,

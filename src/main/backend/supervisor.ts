@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
-import { deadlineFor } from '../../shared/ipc/methods'
+import { deadlineFor, methodAllows, requestProvider } from '../../shared/ipc/methods'
+import type { ProviderId } from '../../shared/providers'
 import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
 import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
@@ -94,6 +95,8 @@ export class BackendSupervisor {
   private readonly waiting: Waiter[] = []
   /** Connection ids by generation; a loss moves them to `lost`, which is bounded and oldest-first. */
   private readonly live = new Map<string, number>()
+  /** Each live connection's provider, from the options its connect sent (absent: SQL Server). */
+  private readonly providers = new Map<string, ProviderId>()
   private readonly lost = new Set<string>()
   /** Query session ids by the generation their last script ran on. */
   private readonly sessions = new Map<string, number>()
@@ -164,6 +167,9 @@ export class BackendSupervisor {
   get readyGeneration(): number | undefined { return this.connection?.isReady ? this.connection.generation : undefined }
 
   async request<M extends BackendMethod>(method: M, params: BackendMethods[M]['params'], o: RequestOptions = {}): Promise<BackendMethods[M]['result']> {
+    // A connection of another engine never reaches a method that does not serve it, nor starts a backend for it; C# checks
+    // again (DispatchAsync).
+    if (!methodAllows(method, requestProvider(method, params, id => this.providers.get(id)))) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedProvider)
     this.start()
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']
@@ -293,8 +299,10 @@ export class BackendSupervisor {
       const parsed = connectResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
       // The generation may have ended between the answer and this continuation.
-      if (this.connection === connection && !connection.lost) this.live.set(parsed.data.id, connection.generation)
-      else this.markLost(parsed.data.id)
+      if (this.connection === connection && !connection.lost) {
+        this.live.set(parsed.data.id, connection.generation)
+        this.providers.set(parsed.data.id, requestProvider(method, params, () => undefined) ?? 'sqlserver')
+      } else this.markLost(parsed.data.id)
       return { ...parsed.data, generation: connection.generation }
     }
     // The summary's descriptors name results this generation holds, and its budget's seq counts in this generation; main
@@ -314,7 +322,7 @@ export class BackendSupervisor {
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
       return parsed.data
     }
-    if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) this.live.delete(id) }
+    if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) { this.live.delete(id); this.providers.delete(id) } }
     if (method === 'query.session.close') { const id = idOf(params, 'sessionId'); if (id !== undefined) this.sessions.delete(id) }
     return result
   }
@@ -382,6 +390,7 @@ export class BackendSupervisor {
     for (const [id, generation] of this.live) {
       if (generation !== connection.generation) continue
       this.live.delete(id)
+      this.providers.delete(id)
       this.markLost(id)
       connections++
     }

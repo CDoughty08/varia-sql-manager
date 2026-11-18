@@ -5,7 +5,7 @@ import { connectionTargetOptions, type ConnectionWorkspace } from '../src/shared
 import type { ConnectionOptions } from '../src/shared/contracts'
 
 const options: ConnectionOptions = { server: 'server', database: 'Sales', authentication: 'sql', username: 'reader', trustServerCertificate: false }
-const principal = { provider: 'sqlServer', authentication: 'sql', id: 'actual-reader' } as const
+const principal = { provider: 'sqlserver', authentication: 'sql', id: 'actual-reader' } as const
 function fixture() {
   const id = randomUUID(), credential = { profileId: randomUUID(), revision: randomUUID() }
   const target = { id, options: connectionTargetOptions(options), details: { autoReconnect: 'inherit' as const }, expectedPrincipal: principal, credential, inExplorer: true, resumeWanted: true }

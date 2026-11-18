@@ -8,7 +8,8 @@ import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
 import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
-import type { AuthenticationMode } from './auth'
+import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
+import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
@@ -31,7 +32,8 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
-import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult, LanguageDefinition } from './language-service'
+import type { SortKind } from './results/sort-kind'
+import type { LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult, LanguageDefinition } from './language-service'
 
 /** The longest text `writeClipboardText` takes (main checks it): 8 Mi characters. */
 export const maxClipboardText = 8_388_608
@@ -65,7 +67,9 @@ export interface AdvancedConnectionOptions {
   userInstance: boolean
 }
 
+/** SQL Server's branch of the connection options union; a missing `provider` means SQL Server, so 0.9.0 files read unchanged. */
 export interface ConnectionOptions {
+  provider?: 'sqlserver'
   server: string
   database: string
   /** src/shared/auth.ts lists the types and what each needs. */
@@ -83,6 +87,28 @@ export interface ConnectionOptions {
 }
 
 /**
+ * BigQuery's branch of the connection options union (src/shared/connections.ts has its rules). `keyFile` is an opaque
+ * reference (a pick token or the saved profile's id): only main knows the path. No backend method accepts it yet: each
+ * answers UNSUPPORTED_PROVIDER until a BigQuery lane declares it.
+ */
+export interface BigQueryConnectionOptions {
+  provider: 'bigquery'
+  project: string
+  location?: string
+  dataset?: string
+  extraProjects?: string[]
+  authentication: BigQueryAuthenticationMode
+  keyFile?: string
+  impersonateServiceAccount?: string
+  maximumBytesBilled?: number
+  displayName?: string
+  color?: string
+  environment?: string
+}
+/** Connection options of any provider, discriminated on `provider` (missing: SQL Server). */
+export type ProviderConnectionOptions = ConnectionOptions | BigQueryConnectionOptions
+
+/**
  * `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it.
  * `productVersion` (≤ 32 characters), `login` (≤ 128), `engineEdition` and `linux` (SQL Server on Linux) come from the
  * server profile probed at connect, and are absent when the probe failed.
@@ -94,8 +120,8 @@ export interface ConnectionInfo {
   credentialUpdated?: true
   /** Main's authoritative reuse coordinator selects this durable target; the backend never supplies it. */
   targetId?: string
-  /** Older SQL Server connections omit this. Language features default those connections to sqlserver. */
-  providerId?: DatabaseProviderId
+  /** The connection's engine, from the backend. An older backend omits it: such a connection is SQL Server. */
+  providerId?: ProviderId
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
   /** Set by main: the saved entry's environment label, which a connect without one kept. */
   environment?: string
@@ -151,6 +177,8 @@ export interface ResultColumn {
   nullable: boolean
   /** char, varchar, text, nchar, nvarchar and ntext: the collation SqlClient read from the result's metadata, when it could. */
   collation?: ResultCollation
+  /** How its values compare (docs/ipc.md, Column sort kinds). The backend always sends it; read it only through `sortKindOf`. */
+  sortKind?: SortKind
 }
 /**
  * A character column's collation (docs/ipc.md, Cell lengths): its Windows locale id, SQL sort id (non-zero for SQL_
@@ -463,7 +491,7 @@ export interface ExplorerNode {
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
 // NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED'] as const
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }

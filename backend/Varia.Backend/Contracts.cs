@@ -17,9 +17,10 @@ internal sealed record AdvancedConnectionOptions(
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
 /// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect. PrincipalId is
-/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.</summary>
+/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.
+/// ProviderId is the connection's engine (Providers).</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0, string ProviderId = Providers.SqlServer);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);
@@ -45,9 +46,13 @@ internal sealed record SessionArgs(string SessionId, string? Transaction = null)
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
-/// (xml, json, plan), CLR UDTs and vectors.</summary>
+/// (xml, json, plan), CLR UDTs and vectors. SortKind is how its values compare (Results.ColumnTypes), set from DataType
+/// whoever builds the column; a provider with another type system sets it when it does.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true,
-    ResultCollation? Collation = null);
+    ResultCollation? Collation = null)
+{
+    public string SortKind { get; init; } = Results.ColumnTypes.SortKindOf(DataType);
+}
 /// <summary>A char, varchar, text, nchar, nvarchar or ntext column's collation as SqlClient read it from the result's
 /// metadata (SqlClientCollation): its Windows locale id, SQL sort id (non-zero for SQL_ collations), the code page SqlClient
 /// decodes char and varchar with (0 for UTF-8), whether it is a _UTF8 collation, and its comparison flags, SqlCompareOptions'
