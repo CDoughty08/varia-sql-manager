@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
+- **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\. Unchecking Remember password and saving forgets the saved password, as Connect does\.
+
 ### Changes to everyday use
 
 - **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
@@ -11,6 +16,7 @@
 
 ### Fixes
 
+- **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
 - **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.

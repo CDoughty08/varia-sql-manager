@@ -30,7 +30,9 @@ only when a summary line stops being true.
     `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
-    for a matching binding. Remember password is disabled where safeStorage is unavailable, Linux's backend is
+    for a matching binding. Save remembers a typed password only when a `connections.databases` check with `remember`
+    just signed in with it: main keeps a keyed hash of that password per binding for a minute (never the password), and
+    Save without a match saves nothing. Remember password is disabled where safeStorage is unavailable, Linux's backend is
     `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key; the tags are not yet confirmed on a Linux desktop).
   - Entra tokens stay in backend memory for its lifetime (MSAL and Azure.Identity through Varia's
     `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main

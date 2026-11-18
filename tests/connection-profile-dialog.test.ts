@@ -288,23 +288,23 @@ describe('Reset and the form environment', () => {
   })
 })
 
+const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+  if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
+  const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
+  await act(async () => {
+    if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
+    else field.value = value
+    field.dispatchEvent(new Event(field instanceof HTMLInputElement ? 'input' : 'change', { bubbles: true }))
+  })
+}
+const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
+const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
 describe('saving connection details', () => {
   const live = (options: ConnectionOptions, details = detailsOf(options, 'off')) => (workbench: ReturnType<typeof workbenchFixture>) => {
     const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'windows' as const, id: 'sid:fixture' } }
     const attempt = workbench.connections.beginConnect(options, 1, id(50), details)!
     workbench.connections.accept({ id: id(100), targetId: id(50), generation: 1, server: options.server, database: options.database, serverVersion: '17', authentication }, options, id(50), authentication, attempt)
   }
-  const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
-    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
-    const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
-    await act(async () => {
-      if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
-      else field.value = value
-      field.dispatchEvent(new Event(field instanceof HTMLInputElement ? 'input' : 'change', { bubbles: true }))
-    })
-  }
-  const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
-  const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
 
   it('applies a saved name, color and environment to the live Explorer connection at once', async () => {
     const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], beforeRender: live(saved.options) })
@@ -588,5 +588,173 @@ describe('changed details on a reused connection', () => {
   })
   it('leaves a new connection with every selected detail', () => {
     expect(withChangedDetails(opened(false), ['displayName']).selected).toEqual(opened(false).selected)
+  })
+})
+
+describe('Save and Test Connection', () => {
+  const sqlProfile = (): ConnectionProfile => ({ ...profile('Sql profile', 7), options: { ...connectionDefaults('win32'), server: 'server-7', displayName: 'Sql profile', authentication: 'sql', username: 'reader' } })
+  const type = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+    const field = view.host.querySelector<HTMLInputElement>(selector)!
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })) })
+  }
+  const discover = (answer: Awaited<ReturnType<VariaApi['discoverDatabases']>>) => {
+    const fn = vi.fn<VariaApi['discoverDatabases']>(async () => answer)
+    ;(window as unknown as { varia: VariaApi }).varia.discoverDatabases = fn
+    return fn
+  }
+  const text = (view: Awaited<ReturnType<typeof mount>>) => view.host.textContent ?? ''
+  const remember = (view: Awaited<ReturnType<typeof mount>>) => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(box => box.parentElement?.textContent === 'Remember password')!
+
+  it('checks a typed password with the server before Save remembers it, and saves nothing when the check fails', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    expect(remember(view).checked).toBe(true)
+    await type(view, '#connect-password', 'new-secret')
+    expect(text(view)).toContain('Save checks this password with the server, then remembers it.')
+    const failing = discover({ ok: false, error: 'Login failed.', code: 'SQL_ERROR', details: { number: 18456, state: 8, class: 14 } })
+    view.saveConnectionProfile.mockClear()
+    await act(async () => view.button('Save').click())
+    expect(failing).toHaveBeenCalledWith(expect.objectContaining({ password: 'new-secret' }), expect.objectContaining({ remember: true }))
+    expect(view.saveConnectionProfile).not.toHaveBeenCalled()
+    expect(text(view)).toContain('Login failed.')
+    const passing = discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: true } }))
+    await act(async () => view.button('Save').click())
+    expect(passing).toHaveBeenCalledOnce()
+    expect(view.saveConnectionProfile).toHaveBeenCalledWith(expect.objectContaining({ id: saved.id, saved: true, rememberPassword: true, options: expect.objectContaining({ password: 'new-secret' }) }))
+    expect(text(view)).toContain('Saved to History. The new password is remembered.')
+    expect(view.host.querySelector<HTMLInputElement>('#connect-password')!.value).toBe('')
+  })
+
+  it('forgets the saved password when Remember password is unchecked and saved, as Connect does', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await act(async () => remember(view).click())
+    expect(text(view)).toContain('Save or Connect forgets the saved password.')
+    await type(view, '#connect-password', 'typed')
+    expect(text(view)).toContain('Save keeps the settings and forgets the saved password; it does not keep this one either.')
+    const check = discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [], passwordForgotten: true } }))
+    await act(async () => view.button('Save').click())
+    expect(check).not.toHaveBeenCalled()
+    expect(view.saveConnectionProfile).toHaveBeenCalledWith(expect.objectContaining({ id: saved.id, forgetPassword: true }))
+    expect(view.saveConnectionProfile.mock.calls.at(-1)?.[0]).not.toHaveProperty('rememberPassword')
+    expect(text(view)).toContain('The saved password was forgotten, and the typed one was not kept.')
+  })
+
+  it('says Object Explorer connections using the old password will need the new one', async () => {
+    const saved = sqlProfile(), targetId = id(60)
+    const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'sid:reader' }, credential: { profileId: saved.id, revision: id(61) } }
+    const view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id], beforeRender: workbench => {
+      const attempt = workbench.connections.beginConnect(saved.options, 1, targetId, detailsOf(saved.options, 'inherit'))!
+      workbench.connections.accept({ id: id(62), targetId, generation: 1, server: saved.options.server, database: '', serverVersion: '17', authentication }, saved.options, targetId, authentication, attempt)
+    } })
+    await view.choose('Sql profile')
+    await type(view, '#connect-password', 'new-secret')
+    expect(text(view)).toContain('If it differs from the saved one, Object Explorer connections that use the saved one will need the new password entered when they next connect.')
+    // After Save, the notice says they need it only when main replaced the password.
+    discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: true } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Object Explorer connections that used the old one will need it entered when they next connect.')
+    await type(view, '#connect-password', 'new-secret')
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: false } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Saved to History. The password is remembered.')
+    expect(text(view)).not.toContain('will need it entered')
+  })
+
+  it("closes on the close prompt's Save when Remember password was the user's choice", async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Sql profile')
+    await pick(view, '#connect-name', 'Renamed')
+    await type(view, '#connect-password', 'typed')
+    await act(async () => view.button('Cancel').click())
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ displayName: 'Renamed' }) }))
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it("says when saving other certificate settings forgot the remembered password, and the close prompt's Save stays open", async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await act(async () => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(box => box.parentElement?.textContent === 'Trust server certificate')!.click())
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [] } }))
+    await act(async () => view.button('Cancel').click())
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ trustServerCertificate: true }) }))
+    expect(text(view)).toContain('The saved password was for the old settings, so it was forgotten')
+    expect(view.closed).not.toHaveBeenCalled()
+  })
+
+  it('waits for a running Load databases before Test Connection signs in, and Stop ends both', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    let answer!: (value: Awaited<ReturnType<VariaApi['discoverDatabases']>>) => void
+    const calls = vi.fn<VariaApi['discoverDatabases']>(() => new Promise(resolve => { answer = resolve }))
+    ;(window as unknown as { varia: VariaApi }).varia.discoverDatabases = calls
+    await act(async () => view.button('Load databases').click())
+    await act(async () => view.button('Test Connection').click())
+    expect(calls).toHaveBeenCalledOnce()
+    // Load databases finds the remembered password rejected: the form forgets it, and Test does not sign in again
+    // without one (another failed login would count toward a lockout policy).
+    await act(async () => answer({ ok: false, error: 'Login failed.', code: 'SQL_ERROR', passwordForgotten: true }))
+    expect(calls).toHaveBeenCalledOnce()
+    expect(remember(view).checked).toBe(false)
+    expect(text(view)).toContain('The saved password was rejected, so it has been removed. Enter the password.')
+    // With a typed password, Test signs in once Load databases has finished.
+    await type(view, '#connect-password', 'typed')
+    await act(async () => view.button('Load databases').click())
+    await act(async () => view.button('Test Connection').click())
+    expect(calls).toHaveBeenCalledTimes(2)
+    await act(async () => answer({ ok: true, value: [] }))
+    expect(calls).toHaveBeenCalledTimes(3)
+    expect(calls.mock.calls[2][0]).toMatchObject({ password: 'typed' })
+    await act(async () => answer({ ok: true, value: [] }))
+    expect(text(view)).toContain('Connected to server-7')
+    // Stop while Test waits cancels the Load databases quietly and sends no Test.
+    await act(async () => view.button('Load databases').click())
+    const loading = calls.mock.calls[3][1]?.requestId
+    await act(async () => view.button('Test Connection').click())
+    await act(async () => view.button('Stop').click())
+    expect(view.api.cancelConnectionRequests).toHaveBeenCalledWith([loading])
+    await act(async () => answer({ ok: false, error: 'Cancelled.', code: 'CANCELLED' }))
+    expect(calls).toHaveBeenCalledTimes(4)
+    expect(text(view)).toContain('Test cancelled.')
+    expect(text(view)).not.toContain('Could not load databases')
+  })
+
+  it('says a remembered password was forgotten only when the saved settings changed', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await pick(view, '#connect-name', 'Renamed')
+    // Storage unavailable after the dialog loaded lists no passwords; the settings are the same, so none was forgotten.
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [] } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Saved to History.')
+    expect(text(view)).not.toContain('was for the old')
+  })
+
+  it('offers to trust the certificate and test again after a failed test, without connecting', async () => {
+    const view = await mount()
+    await type(view, '#connect-server', 'cert-server')
+    const failing = discover({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-server', reason: 'certificate' } })
+    await act(async () => view.button('Test Connection').click())
+    expect(failing).toHaveBeenCalledOnce()
+    const passing = discover({ ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] })
+    await act(async () => view.button('Trust server certificate and test').click())
+    expect(passing).toHaveBeenCalledWith(expect.objectContaining({ trustServerCertificate: true }), expect.anything())
+    expect(view.api.connect).not.toHaveBeenCalled()
+    expect(text(view)).toContain('Connected to cert-server')
+  })
+
+  it('tests again with the password remembered for the trusted settings after Trust server certificate', async () => {
+    const trusted = { ...sqlProfile(), options: { ...sqlProfile().options, trustServerCertificate: true } }
+    const view = await mount(undefined, { profiles: [trusted], savedPasswords: [trusted.id], initial: { ...trusted.options, displayName: '', trustServerCertificate: false } })
+    discover({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'server-7', reason: 'certificate' } })
+    await act(async () => view.button('Test Connection').click())
+    const passing = discover({ ok: true, value: [] })
+    await act(async () => view.button('Trust server certificate and test').click())
+    expect(passing).toHaveBeenCalledWith(expect.objectContaining({ trustServerCertificate: true, password: '' }), expect.objectContaining({ profileId: trusted.id }))
   })
 })
