@@ -72,7 +72,9 @@ describe('comparison gutter', () => {
     expect(diffGutter(' ', '1204', '12000').name).toBe('Unchanged; row 1,204 in the old result, row 12,000 in the new result')
   })
   it('names a comparison\'s inputs as they were compared, and sizes the number for the larger', () => {
-    const sets = [{ key: 'a', descriptor: { rowsStored: 12 } }, { key: 'b', descriptor: { rowsStored: 30_000 } }] as never
+    // The handles' counts, not the descriptors' (an entry keeps the one it opened with, before any row was stored).
+    const set = (key: string, rows: number) => ({ key, descriptor: { rowsStored: 0 }, handle: { getSnapshot: () => ({ rowsStored: rows }) } })
+    const sets = [set('a', 12), set('b', 30_000)] as never
     expect(diffSidesOf({ left: 'a', right: 'b', leftNumber: 1, rightNumber: 2, leftName: 'Open orders' }, sets)).toEqual({ old: 'Open orders', new: 'Result 2', rows: 30_000 })
     expect(diffSidesOf({ left: 'a', right: 'gone', leftNumber: 1, rightNumber: 2 }, sets).rows).toBe(12)
     // The inputs' rows when compared still size the numbers once both are closed.

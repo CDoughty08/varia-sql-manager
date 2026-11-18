@@ -346,7 +346,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const info: CompareInfo = {
         left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate,
-        inputRows: Math.max(from.descriptor.rowsStored, to.descriptor.rowsStored)
+        // The handles' counts: an entry keeps the descriptor it opened with, before any row was stored.
+        inputRows: Math.max(from.handle.getSnapshot().rowsStored, to.handle.getSnapshot().rowsStored)
       }
       // Only diffs some run still shows are kept; this one is kept until its run publishes it.
       this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })
