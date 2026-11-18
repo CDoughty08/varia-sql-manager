@@ -532,6 +532,8 @@ describe('column filter popover', () => {
     try {
       act(() => view.valueList().focus())
       view.key(view.valueList(), 'ArrowLeft')
+      // Arriving shows the highlighted action; the arrows keep it shown.
+      expect(shown.at(-1)).toBe('Tick all (10,000)')
       view.key(actionsOf(view), 'End')
       expect(shown.at(-1)).toBe('Invert ticks')
     } finally { Element.prototype.scrollIntoView = own }

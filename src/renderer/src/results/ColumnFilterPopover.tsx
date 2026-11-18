@@ -646,12 +646,14 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (acting) runAt(actHere) }
     else if (typed(event)) { event.preventDefault(); typeIntoSearch(event.key) }
   }
-  // The highlighted action stays in view as the arrows move it (the focus stays on the list, which does not scroll itself).
-  useLayoutEffect(() => {
+  /** Scrolls the highlighted action into view while the action list has the focus (it stays on the list, which does not
+   *  scroll for its active descendant): as the arrows move it, and when the focus arrives on it. */
+  const showAction = () => {
     const box = actionsBox.current
     if (!box || box.ownerDocument.activeElement !== box) return
     box.ownerDocument.getElementById(`${rowId}-act-${actHere}`)?.scrollIntoView?.({ block: 'nearest' })
-  }, [actHere, rowId])
+  }
+  useLayoutEffect(showAction, [actHere, rowId])
   useLayoutEffect(() => {
     if (!caretToEnd.current) return
     caretToEnd.current = false
@@ -685,7 +687,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     <div className="column-filter-body">
     {/* Reached with Left from the values (no Tab stop of its own, so Tab still goes from the search to the values). */}
     <div ref={actionsBox} className="column-filter-actionlist" role="listbox" aria-label="Actions" tabIndex={-1} aria-disabled={!acting || undefined}
-      aria-activedescendant={actionList.length ? `${rowId}-act-${actHere}` : undefined} onKeyDown={actionsKeyDown}>
+      aria-activedescendant={actionList.length ? `${rowId}-act-${actHere}` : undefined} onKeyDown={actionsKeyDown} onFocus={showAction}>
       {(() => {
         let at = -1
         return actionGroups.map((group, index) => <div key={group.label ?? 'every'} role="group" aria-label={group.label} className="column-filter-actiongroup">

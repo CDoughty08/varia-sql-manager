@@ -200,9 +200,9 @@ export interface PopoverPlace {
 
 /**
  * Where the funnel's popover opens beside its column (`band`: the column's header and drawn cells, or a rotated grid's
- * row), so it never covers the values it filters: to the column's right when it fits there, else to its left, else below
- * or above the band (a rotated grid's row, or a column as wide as the window), else narrower on the roomier side that
- * takes the smallest popover, else over the column at its right end as a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
+ * row), so it never covers the values it filters: to the column's right when it fits there, else to its left, else
+ * narrower on the roomier side that takes the smallest popover, else below or above the band (a rotated grid's row, or a
+ * column as wide as the window), else over the column at its right end as a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
  * `height` is the remembered height, or `popoverNaturalHeight` when it sizes to its contents.
  */
 export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number }; side?: PopoverPlace['side'] }): PopoverPlace {
@@ -226,13 +226,9 @@ export function popoverPlace(o: { band: { left: number; right: number; top: numb
   }
   if (view.width - edge - (band.right + gap) >= width) return beside(band.right + gap, 'right')
   if (band.left - gap - edge >= width) return beside(band.left - gap - width, 'left')
-  const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
-  const below = view.height - edge - (band.bottom + gap), above = band.top - gap - edge
-  const fits = Math.min(height, popoverBounds.minHeight)
-  if (below >= fits && (below >= height || below >= above)) return { side: 'below', left, top: band.bottom + gap, width, maxHeight: below }
-  if (above >= fits) return { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: above }
   // Too wide for either side at its remembered width: narrower, beside the column on the roomier side that takes the
-  // smallest popover, rather than over the values it filters.
+  // smallest popover, rather than above or below the grid (over the editor) or over the values it filters. A rotated
+  // grid's row or a column as wide as the window leaves no such side.
   const roomRight = popoverRoom(band, view, 'right').width, roomLeft = popoverRoom(band, view, 'left').width
   const sides = (['right', 'left'] as const).filter(side => keepsSide(band, view, side))
   if (sides.length) {
@@ -240,6 +236,11 @@ export function popoverPlace(o: { band: { left: number; right: number; top: numb
     width = Math.min(width, side === 'right' ? roomRight : roomLeft)
     return side === 'right' ? beside(band.right + gap, 'right') : beside(band.left - gap - width, 'left')
   }
+  const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
+  const below = view.height - edge - (band.bottom + gap), above = band.top - gap - edge
+  const fits = Math.min(height, popoverBounds.minHeight)
+  if (below >= fits && (below >= height || below >= above)) return { side: 'below', left, top: band.bottom + gap, width, maxHeight: below }
+  if (above >= fits) return { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: above }
   // Nowhere clear of the column: over it, under its header, at its right end.
   const top = Math.max(edge, Math.min(band.top + gap, view.height - edge - height))
   return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top), over: true }

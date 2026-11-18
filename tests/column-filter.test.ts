@@ -169,6 +169,8 @@ describe('column filter', () => {
     const tall = { left: 400, right: 500, top: 100, bottom: 760 }, small = { width: 1024, height: 768 }
     expect(popoverPlace({ band: tall, width: 600, height: 420, view: small })).toEqual({ side: 'right', left: 502, top: 100, width: 514, maxHeight: 660 })
     expect(popoverPlace({ band: { left: 600, right: 700, top: 100, bottom: 760 }, width: 700, height: 420, view: small })).toMatchObject({ side: 'left', left: 8, width: 590 })
+    // A results pane under the editor leaves room above the grid: beside the column all the same, not over the editor.
+    expect(popoverPlace({ band: { left: 600, right: 700, top: 450, bottom: 880 }, width: 900, height: 420, view: { width: 1400, height: 900 } })).toMatchObject({ side: 'right', left: 702, width: 690 })
     // Only a column with no room for the smallest popover on either side is covered, and that placement is marked, so a
     // resize keeps no side (it would jump beside the column at the first move).
     expect(popoverPlace({ band: { left: 100, right: 950, top: 100, bottom: 760 }, width: 600, height: 420, view: small })).toMatchObject({ side: 'right', left: 350, over: true })
