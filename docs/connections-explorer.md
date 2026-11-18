@@ -66,7 +66,7 @@ form is locked, the button reads Stop, and Escape or Cancel stops the test witho
 close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
 For a connection that is not saved yet, they ask **Save *name* to History?** (the server when it has no name) once
 the user has changed the form (server, login, settings or labels), no saved entry already has its settings, and Save is
-available (a server and authentication filled in); a Save that then fails, such as for a blank Custom environment label, shows why and keeps the dialog open. Removing the entry the form edits, or a typed password alone, does not ask.
+available (a server and authentication filled in); a Save that then fails (such as for a blank Custom environment label), or that saves but could not keep or forget a password as asked, says so and keeps the dialog open. Removing the entry the form edits, or a typed password alone, does not ask.
 Focus stays in the dialog: a press on its text focuses the dialog, and a button that saving disables or Remove takes
 away gives focus back to the dialog (then to that button once it is enabled), so Escape and Tab always reach it.
 

@@ -769,12 +769,14 @@ describe('closing with a new, unsaved connection', () => {
     await type(view, '#connect-server', 'fresh')
     await act(async () => view.button('Cancel').click())
     expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
     // Several entries share these settings and the empty labels name none of them: their Save would overwrite one.
     const first = profile('First alias', 1), second = { ...profile('Second alias', 2), options: { ...first.options, displayName: 'Second alias' } }
     view = await mount(undefined, { profiles: [first, second] })
     await type(view, '#connect-server', first.options.server)
     await act(async () => view.button('Cancel').click())
     expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
   })
 
   it('does not offer to save back an entry the user removed while editing it', async () => {
