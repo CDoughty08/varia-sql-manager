@@ -808,8 +808,14 @@ try {
   await page.keyboard.up(peekKey)
   await expect(peekRow).toHaveCSS('cursor', 'default')
   await expect(peekCard).toBeVisible()
+  // A hovered card never takes focus, so a row hovered while typing in a query leaves focus in the editor: Esc there closes
+  // the card too.
+  const queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
+  await queryText.focus()
+  await expect(peekCard).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
+  await expect(queryText).toBeFocused()
   // 8c. View Dependencies: the menu opens Object Dependencies on the table. Its tree reads the root's level at once and a node's
   // only when it expands, marks the table met again below its view as a cycle, and the other choice starts again from the root.
   await peekRow.click({ button: 'right' })
@@ -1166,6 +1172,15 @@ try {
   // Search in Object Explorer's key, from the tree, selects the box's text, so typing replaces it.
   await tree().focus()
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F')
+  await expect(searchBox()).toBeFocused()
+  expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  // Ctrl+F (⌘F) in the tree does the same; in the query editor it stays Monaco's Find. (Escape above cleared the box.)
+  await searchBox().fill('Order')
+  await tree().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F' : 'Control+F')
   await expect(searchBox()).toBeFocused()
   expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
   await page.keyboard.press('Escape')
