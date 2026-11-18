@@ -1,13 +1,13 @@
-import { chmod, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { decodePage, encodePage } from '../src/shared/ipc/wire/pages'
-import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localSavePageRows, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localSavePageChars, localSavePageRows, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
 import { exportText } from '../src/shared/results/text-writer'
 import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
-import { FLAG_CAPPED, FLAG_NULL } from '../src/renderer/src/results/worker-protocol'
+import { FLAG_CAPPED, FLAG_NULL, FLAG_TRUNCATED } from '../src/renderer/src/results/worker-protocol'
 import { localSaveRequestSchema } from '../src/main/validation'
 import { ResultsJobHost, writeLocalSave, type JobHostDeps } from '../src/main/results-jobs'
 import { BackendError } from '../src/main/backend/errors'
@@ -48,6 +48,13 @@ describe('local tables', () => {
     expect(copied.rows).toBe(4)
   })
 
+  it('copy across pages in the order shown, encoding only the pages a copy reaches', async () => {
+    const long: LocalTableData = { columns: [{ name: 'n' }], rows: Array.from({ length: localSavePageRows * 3 }, (_, i) => [String(i)]) }
+    const order = long.rows.map((_, i) => long.rows.length - 1 - i)
+    const copied = await localCopyText(long, [{ rows: [[localSavePageRows - 2, localSavePageRows + 1]], columns: [[0, 0]] }], { headers: false, crlf: false, order })
+    expect(copied.text).toBe([1, 0, -1, -2].map(k => String(long.rows.length - localSavePageRows + k)).join(String.fromCharCode(10)))
+  })
+
   it('copy in the order shown, and only the parts selected', async () => {
     const order = sortOrder(table, [{ column: 1, descending: false }])!
     const copied = await localCopyText(table, [{ rows: [[0, 1]], columns: [[0, 0]] }, { rows: [[3, 3]], columns: [[1, 1]] }], { headers: false, crlf: true, order })
@@ -77,6 +84,11 @@ describe('local tables', () => {
       expect(paged.data).toEqual(whole.out.bytes())
       expect(yields).toBe(3)
     }
+    // A page of long cells ends at its character budget, not its row count.
+    const heavy: LocalTableData = { columns: [{ name: 'a' }], rows: Array.from({ length: 100 }, () => ['x'.repeat(4000)]) }
+    let heavyYields = 0
+    await localExportBytes(heavy, { format: 'csv', headers: false, nullText: 'NULL' }, async () => { heavyYields++ })
+    expect(heavyYields).toBe(Math.ceil(100 / Math.ceil(localSavePageChars / 4000)))
   })
 
   it('sort stably: NULL first, numbers by value, text by the locale with digits as numbers', () => {
@@ -113,6 +125,15 @@ describe('local tables', () => {
     expect(widths[1]).toBe(5)
     expect(widths[2]).toBeGreaterThanOrEqual('line break'.length)
     expect(localDescriptor(table).columns.map(column => column.dataType)).toEqual(['nvarchar', 'decimal', 'nvarchar'])
+    // A cell cut to the bound is flagged truncated wherever a sort shows it; a row past the text bound takes its cuts with it.
+    const cutting = boundTable({ columns: [{ name: 'a' }, { name: 'b' }], rows: [['short', 'z'], ['x'.repeat(localTableLimits.cellChars + 1), 'y']] })
+    expect([...cutting.cut]).toEqual([2])
+    const sortedCut = new LocalSource(cutting, [1, 0], cutting.cutCells, cutting.cut).peekWindow(0, 2, { colStart: 0, colEnd: 2 })
+    expect(Array.from(sortedCut.flags, flag => flag & FLAG_TRUNCATED)).toEqual([FLAG_TRUNCATED, 0, 0, 0])
+    const dropped = boundTable({ columns: [{ name: 'a' }], rows: [...Array.from({ length: 1048 }, () => ['y'.repeat(localTableLimits.cellChars)]), ['z'.repeat(localTableLimits.cellChars + 10)]] })
+    expect(dropped.truncatedRows).toBe(1)
+    expect(dropped.cutCells).toBe(0)
+    expect(dropped.cut.size).toBe(0)
   })
 })
 
@@ -220,6 +241,14 @@ describe('local saves in main', () => {
       await chmod(path, 0o600)
       await writeLocalSave(path, new TextEncoder().encode('new'))
       expect((await stat(path)).mode & 0o777).toBe(0o600)
+      // A symlink to a private file becomes a file no wider than the linked one's bits.
+      const linked = join(folder, 'private.csv'), link = join(folder, 'link.csv')
+      await writeFile(linked, 'old')
+      await chmod(linked, 0o600)
+      await symlink(linked, link)
+      await writeLocalSave(link, new TextEncoder().encode('new'))
+      expect((await lstat(link)).isFile()).toBe(true)
+      expect((await stat(link)).mode & 0o077).toBe(0)
     } finally {
       await rm(folder, { recursive: true, force: true })
     }

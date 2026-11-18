@@ -1241,6 +1241,9 @@ try {
   // A cell cut to the bound says so in the strip, and the card makes room for the strip under its rows.
   await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
   await expect(localGridFrame(page, 'Local cut').locator(gridPart.strip)).toHaveText('1 value was cut to 4,000 characters.')
+  // ...and the cut cell is read out as truncated, as a results grid's.
+  await gridCell(localGrid(page, 'Local cut'), 0, 0).click()
+  await expect.poll(() => localGrid(page, 'Local cut').evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label') ?? '')).toMatch(/, truncated$/)
   expect(await bottomOf(gridCell(localGrid(page, 'Local cut'), 1, 0))).toBeLessThanOrEqual(await localGridFrame(page, 'Local cut').locator(gridPart.strip).evaluate(element => element.getBoundingClientRect().top) + 0.5)
   // An owner's kept state keeps its sort across a remount, but only for the columns it was chosen for.
   await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
@@ -1261,10 +1264,24 @@ try {
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
   await rerenderLocal(localTable, { keepState: 'one' })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
-  // A table shown unsortable drops the sort: it offers no Clear Sort to undo one.
+  // A table shown unsortable drops the sort: it offers no Clear Sort to undo one, nor sort buttons; sortable again, it
+  // starts unsorted.
   await rerenderLocal(localTable, { keepState: 'one', sortable: false })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
   await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await expect(keptGrid.locator(gridPart.sortButton)).toHaveCount(0)
+  await rerenderLocal(localTable, { keepState: 'one', sortable: true })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  // A header wide enough for its sort button sorts by value from it, then descending.
+  await mountLocal({ columns: [{ name: 'Name of the object shown' }, { name: 'Row count of the table', kind: 'number' }], rows: [['Orders', '1,200'], ['customers', '80'], ['Order Lines', '9000']] }, { label: 'Local header', preset: 'card' })
+  const headerGrid = localGrid(page, 'Local header'), rowsHeader = headerGrid.getByRole('columnheader', { name: 'Row count of the table', exact: true })
+  await rowsHeader.hover()
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('customers')
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'descending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('Order Lines')
   await page.evaluate(() => window.__variaGrid.unmountLocal())
   await expect(page.locator(part.localGrid)).toHaveCount(0)
   expect(await aliveLocal()).toBe(0)

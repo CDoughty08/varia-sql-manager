@@ -62,13 +62,11 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // The keys belong to the columns they were chosen for: derived in render, so the mount that a new table causes
   // already sees a table with other columns unsorted.
   const [sorted, setSorted] = useState(() => (state && keptSorts.get(state)) ?? { columns: columnsKey, keys: unsorted })
-  // A table shown unsortable (a report's rows, in order) drops any sort: it has no Clear Sort to undo one.
+  // A table shown unsortable (a report's rows, in order) drops any sort, there in render: it has no Clear Sort to undo one.
+  if (!sortable && sorted.keys !== unsorted) setSorted({ columns: columnsKey, keys: unsorted })
   const keys = sortable && sorted.columns === columnsKey ? sorted.keys : unsorted
-  const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => {
-    const keys = next(current.columns === columnsKey ? current.keys : unsorted)
-    if (state) keptSorts.set(state, { columns: columnsKey, keys })
-    return { columns: columnsKey, keys }
-  }), [columnsKey, state])
+  const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => ({ columns: columnsKey, keys: next(current.columns === columnsKey ? current.keys : unsorted) })), [columnsKey])
+  useEffect(() => { if (state) keptSorts.set(state, sorted) }, [state, sorted])
   // A copy's or save's notice belongs to the table it was for: a new table shows its own strip (its truncation) again.
   const [noticed, setNoticed] = useState<{ readonly bound: typeof bound; readonly text: string; readonly error?: boolean }>()
   const notice = noticed?.bound === bound ? noticed : undefined
@@ -83,7 +81,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   /** The keys the current source was sorted by. */
   const sourceKeys = useRef(keys)
   const mount = (create: (spec: GridSpec) => GridView) => {
-    const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells)
+    const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells, bound.cut)
     sourceKeys.current = keys
     // A new view reports only a change of width: it starts narrow.
     setWide(false)
@@ -104,7 +102,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     if (!view || !old || sourceKeys.current === keys) return
     const order = sortOrder(bound, keys)
     sourceKeys.current = keys
-    const next = new LocalSource(bound, order, bound.cutCells), place = new Int32Array(rows)
+    const next = new LocalSource(bound, order, bound.cutCells, bound.cut), place = new Int32Array(rows)
     for (let row = 0; row < rows; row++) place[next.rowOf(row)] = row
     sourceRef.current = next
     view.swap(next, localDescriptor(bound, bound.cutCells), row => row >= 0 && row < rows ? place[old.rowOf(row)] : -1)
@@ -160,7 +158,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
   // than it and for its strip.
   const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
-  return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}`} mount={mount} onApi={onApi} contents="rows"
+  return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}

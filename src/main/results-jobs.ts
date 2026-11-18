@@ -103,8 +103,11 @@ const errnoTokens: Partial<Record<string, string>> = { EACCES: 'ACCESS', EPERM: 
  * replaced file keeps its permission bits, as a results save's does (Unix; Windows keeps no attributes, docs/ipc.md).
  */
 export async function writeLocalSave(path: string, data: Uint8Array): Promise<void> {
+  // A file keeps its bits exactly; a symlink to a file is replaced by a file with the linked file's read and write bits,
+  // narrowed by the umask, as ResultJobs' LinkedMode does.
   const target = await lstat(path).catch(() => undefined)
-  await writeBytesAtomic(path, data, { createFolder: false, ...target?.isFile() ? { mode: target.mode & 0o777 } : {} })
+  const linked = target?.isSymbolicLink() ? await stat(path).catch(() => undefined) : undefined
+  await writeBytesAtomic(path, data, { createFolder: false, ...target?.isFile() ? { mode: target.mode & 0o777 } : linked?.isFile() ? { mode: linked.mode & 0o666, umask: true } : {} })
 }
 
 /** What a request of a grid drawn transposed adds to the backend's parameters. */

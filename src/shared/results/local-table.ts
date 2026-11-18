@@ -41,24 +41,26 @@ export function localSaveBytes(table: LocalTableData): number {
  * and 4 Mi characters in all, every row as wide as the columns (missing cells are NULL). `truncated` counts what was left
  * out: rows past the bounds, and cells cut.
  */
-export function boundTable(data: LocalTableData): LocalTableData & { readonly truncatedRows: number; readonly cutCells: number } {
+export function boundTable(data: LocalTableData): LocalTableData & { readonly truncatedRows: number; readonly cutCells: number; readonly cut: ReadonlySet<number> } {
   const columns = data.columns.slice(0, localTableLimits.columns).map(column => ({ ...column, name: column.name.slice(0, localTableLimits.nameChars) }))
   const rows: LocalCell[][] = []
   let chars = 0, cutCells = 0
+  // The cells cut, by row * columns + column of the rows kept: drawn and read out as truncated.
+  const cut = new Set<number>()
   for (const source of data.rows) {
     if (rows.length === localTableLimits.rows) break
     const row: LocalCell[] = []
     let rowChars = 0
     for (let column = 0; column < columns.length; column++) {
       const value = source[column] ?? null
-      if (value !== null && value.length > localTableLimits.cellChars) { cutCells++; row.push(value.slice(0, localTableLimits.cellChars)) } else row.push(value)
+      if (value !== null && value.length > localTableLimits.cellChars) { cutCells++; cut.add(rows.length * columns.length + column); row.push(value.slice(0, localTableLimits.cellChars)) } else row.push(value)
       rowChars += row[column]?.length ?? 0
     }
-    if (chars + rowChars > localTableLimits.textChars) break
+    if (chars + rowChars > localTableLimits.textChars) { for (let column = 0; column < columns.length; column++) if (cut.delete(rows.length * columns.length + column)) cutCells--; break }
     chars += rowChars
     rows.push(row)
   }
-  return { columns, rows, truncatedRows: data.rows.length - rows.length, cutCells }
+  return { columns, rows, truncatedRows: data.rows.length - rows.length, cutCells, cut }
 }
 
 const encoder = new TextEncoder()
@@ -97,18 +99,36 @@ const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
  * `parts` are the grid's copy plan in the rows as shown (`order` maps a shown row to the table's).
  */
 export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[] }): Promise<{ text: string; rows: number }> {
-  const page = localPage(table, o.order)
-  const copied = await copyText({ columns: textColumns(table.columns), pageAt: () => page, available: page.rowCount, parts, headers: o.headers, crlf: o.crlf })
+  // Pages of the rows the copy reaches, built as it reaches them: a cell's copy encodes its page, not the table.
+  const pages = new Map<number, PageView>()
+  const pageAt = (row: number) => {
+    const first = row - row % localSavePageRows
+    let page = pages.get(first)
+    if (!page) pages.set(first, page = localPage(table, o.order, first, localSavePageRows))
+    return page
+  }
+  const copied = await copyText({ columns: textColumns(table.columns), pageAt, available: o.order?.length ?? table.rows.length, parts, headers: o.headers, crlf: o.crlf })
   return { text: decoder.decode(copied.text), rows: copied.rows }
 }
 
 /** Save Results As of a whole local table in the rows' order, as a results grid saves (a BOM and CRLF for CSV and TSV). */
-/** Rows a save formats between yields: main stays responsive while it writes a large table. */
+/** Rows, and cell characters, a save formats between yields: main stays responsive while it writes a large table. */
 export const localSavePageRows = 512
+export const localSavePageChars = 64 * 1024
+/** The rows of the save page from `first`: up to `localSavePageRows`, ending once its text passes `localSavePageChars`. */
+function savePageRows(table: LocalTableData, first: number): number {
+  let rows = 0, chars = 0
+  while (first + rows < table.rows.length && rows < localSavePageRows && chars < localSavePageChars) {
+    for (const cell of table.rows[first + rows]) chars += cell?.length ?? 0
+    rows++
+  }
+  return rows
+}
 export async function localExportBytes(table: LocalTableData, o: { format: TextFormat; headers: boolean; nullText: 'empty' | 'NULL' }, afterPage?: () => Promise<void>): Promise<{ data: Uint8Array; rows: number }> {
   // A page at a time, each built when the writer reaches it, with `afterPage` (main's yield) between them.
   let page: PageView | undefined
-  const pageAt = (row: number) => page && row >= page.firstRow && row < page.firstRow + page.rowCount ? page : page = localPage(table, undefined, row - row % localSavePageRows, localSavePageRows)
+  // The writer asks for rows in order, each page from the first row the last one left.
+  const pageAt = (row: number) => page && row >= page.firstRow && row < page.firstRow + page.rowCount ? page : page = localPage(table, undefined, row, savePageRows(table, row))
   const writer = await exportText({ columns: textColumns(table.columns), pageAt, rows: table.rows.length, format: o.format, headers: o.headers, nullText: o.nullText }, afterPage)
   return { data: writer.out.bytes(), rows: writer.rows }
 }

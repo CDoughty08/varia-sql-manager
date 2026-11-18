@@ -63,6 +63,8 @@ export interface AtomicWriteOptions {
   /** POSIX permissions of the new file, set on the temporary file before it is synced and renamed into place, so its
    *  content is never readable under the umask's default. Windows ignores it. */
   readonly mode?: number
+  /** True to let the umask narrow `mode` (no exact chmod): a file taking over a symlink's linked file's bits. */
+  readonly umask?: boolean
   /** False to fail (ENOENT) when the folder is missing rather than create it: a file the user chose in a dialog. */
   readonly createFolder?: boolean
 }
@@ -80,7 +82,7 @@ export async function writeBytesAtomic(path: string, bytes: Uint8Array, options:
     const file = await open(temporary, 'wx', options.mode ?? 0o666)
     try {
       // Before any content: open's mode is masked by the umask, chmod's is not.
-      if (options.mode !== undefined && posix) await file.chmod(options.mode)
+      if (options.mode !== undefined && posix && !options.umask) await file.chmod(options.mode)
       await file.writeFile(bytes)
       await file.sync()
     } finally { await file.close() }

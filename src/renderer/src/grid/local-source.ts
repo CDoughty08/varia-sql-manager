@@ -6,7 +6,7 @@ import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { LocalCell, LocalTableData } from '../../../shared/results/local-table'
 import type { ResultSnapshot, RowWindow, WindowOptions, WindowShape } from '../results/ResultClient'
-import { FLAG_CAPPED, FLAG_NULL } from '../results/worker-protocol'
+import { FLAG_CAPPED, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
 import { gridLimits as g } from './constants'
 import type { GridSource } from './GridView'
 import { displayColumns } from './measure'
@@ -57,8 +57,11 @@ export class LocalSource implements GridSource {
   readonly order: readonly number[] | undefined
   private readonly snapshot: ResultSnapshot
   private readonly windows = new Map<string, RowWindow>()
-  constructor(table: LocalTableData, order?: readonly number[], truncatedCells = 0) {
+  /** Cells cut to the bound (boundTable's `cut`, by table row * columns + column): drawn and read out as truncated. */
+  private readonly cut: ReadonlySet<number> | undefined
+  constructor(table: LocalTableData, order?: readonly number[], truncatedCells = 0, cut?: ReadonlySet<number>) {
     this.table = table
+    this.cut = cut?.size ? cut : undefined
     this.order = order
     const rows = table.rows.length
     this.snapshot = { rowsRead: rows, rowsStored: rows, rowsAvailable: rows, bytesStored: 0, truncatedCells, state: 'complete', incomplete: false }
@@ -97,13 +100,13 @@ export class LocalSource implements GridSource {
     if (cached) return cached
     const width = colEnd - colStart, text = new Array<string>(rows * width), flags = new Uint8Array(rows * width)
     for (let r = 0; r < rows; r++) {
-      const cells = this.table.rows[this.rowOf(from + r)]
+      const at = this.rowOf(from + r), cells = this.table.rows[at]
       for (let column = colStart; column < colEnd; column++) {
         const index = r * width + column - colStart, value = cells[column] ?? null
         if (value === null) { text[index] = ''; flags[index] = FLAG_NULL; continue }
         const cut = value.length > maxCellChars, shown = cut ? value.slice(0, maxCellChars) : value
         text[index] = display ? displayText(shown) : shown
-        flags[index] = cut ? FLAG_CAPPED : 0
+        flags[index] = (cut ? FLAG_CAPPED : 0) | (this.cut?.has(at * columns + column) ? FLAG_TRUNCATED : 0)
       }
     }
     const window: RowWindow = { first: from, count: rows, colStart, colEnd, text, flags }
