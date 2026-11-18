@@ -83,14 +83,14 @@ const dropsPassword = 'Save keeps the settings, not this password. Check Remembe
 const forgetsTyped = 'Save keeps the settings and forgets the saved password; it does not keep this one either.'
 /** The key a Load databases result belongs to: the form without its database and labels. */
 /** Object Explorer targets that reconnect with the remembered password for this login: Save cannot replace it under them. */
-const inUseNote = 'Save checks this password with the server, then remembers it. Object Explorer connections that use the old one will need the new password entered when they next connect.'
+const inUseNote = 'Save checks this password with the server, then remembers it. If it differs from the saved one, Object Explorer connections that use the saved one will need the new password entered when they next connect.'
 const databasesKey = (from: ConnectionOptions) => JSON.stringify({ ...from, database: '', displayName: '', color: '', environment: '' })
 const trustLabel = 'Trust server certificate and connect'
 /** Strict encryption validates the certificate whatever Trust server certificate says, so the dialog can only explain. */
 const strictCertificate = "Strict encryption always validates the server's certificate. Install a certificate this computer trusts, set Host Name in Certificate to the name the certificate was issued for, or choose Mandatory encryption and Trust server certificate."
 /** A pinned certificate or name is a check the person chose: trusting would skip it, so the dialog only explains. */
 const pinnedCertificate = "The server's certificate did not match the Server Certificate or the Host Name in Certificate set for this connection, so it was not trusted. Check that this is the server you meant and that those settings are current; Trust server certificate would skip that check."
-const trustNeedsPassword = 'Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then connect.'
+const trustNeedsPassword = (action = 'connect') => `Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then ${action}.`
 // Custom Properties starts collapsed; once opened it stays open for this window's later Connect dialogs.
 let customPropertiesOpen = false
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
@@ -474,7 +474,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (!value || !alive.current) return !!value
     if (value.passwordSaved) {
       setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false
-      setNotice(inUse ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
+      setNotice(inUse && value.passwordReplaced ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
     } else if (rememberPassword) setNotice('Saved to History, but the password could not be remembered.')
     else if (forgetPassword) { rememberEdited.current = false; setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.') }
     else if (typed) setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.')
@@ -626,7 +626,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     setOptions(next)
     // Main fills a remembered password in only for the certificate settings it was saved with.
     if (usesPassword(next.authentication) && !next.password && match && rememberedProfile(library.profiles, savedIds, next, selectedId)?.id !== match.id) {
-      setError(''); setNotice(trustNeedsPassword)
+      setError(''); setNotice(trustNeedsPassword(kind === 'test' ? 'test the connection' : kind === 'save' ? 'save' : 'connect'))
       dialog.current?.querySelector<HTMLInputElement>('#connect-password')?.focus()
       return
     }

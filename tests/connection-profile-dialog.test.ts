@@ -651,7 +651,7 @@ describe('Save and Test Connection', () => {
     } })
     await view.choose('Sql profile')
     await type(view, '#connect-password', 'new-secret')
-    expect(text(view)).toContain('Object Explorer connections that use the old one will need the new password entered when they next connect.')
+    expect(text(view)).toContain('If it differs from the saved one, Object Explorer connections that use the saved one will need the new password entered when they next connect.')
   })
 
   it('offers to trust the certificate and test again after a failed test, without connecting', async () => {
