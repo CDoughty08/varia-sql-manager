@@ -26,7 +26,7 @@ internal static class FindBench
         }
         var info = CultureInfo.GetCultureInfo(1033).CompareInfo;
         var options = CompareOptions.IgnoreCase | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth;
-        var fold = SearchFold.Ready(1033);
+        var fold = SearchFold.Ready(1033, options);
         const string text = "zorbiquax";
         var scratch = new ResultSearcher.Scratch();
         double Time(SearchFold? with)

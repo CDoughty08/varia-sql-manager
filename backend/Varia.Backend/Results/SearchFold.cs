@@ -4,9 +4,9 @@ using System.Text;
 
 namespace Varia.Backend.Results;
 
-/// <summary>A culture's search fold: every UTF-16 code unit mapped to the representative of the code units the culture's
-/// collator gives the same sort key under its loosest options (case, accents, kana type and width ignored), with empty keys
-/// dropped. A cell a culture compare finds the text in then holds the text's fold, folded, as an ordinal substring, so an
+/// <summary>A culture's search fold for one set of compare options: every vouched UTF-16 code unit mapped to the
+/// representative of the code units the culture's collator gives the same sort key under those options (and ignoring case
+/// when they ignore accents, as the compare's IndexOf then does), with empty keys dropped. A cell a culture compare finds the text in then holds the text's fold, folded, as an ordinal substring, so an
 /// ordinal search of the folds rules most cells out before the culture compare, which stays the judge
 /// (<see cref="ResultSearcher.MatcherFor"/>). Built from the collator, never by hand: a hand-written fold misses ß, æ,
 /// final sigma, kana, Arabic-Indic digits and more. Only for the cultures <see cref="Verified"/> lists, and only for text
@@ -15,38 +15,42 @@ namespace Varia.Backend.Results;
 /// character sends its cell to the culture compare alone.</summary>
 internal sealed class SearchFold
 {
-    internal const CompareOptions Loosest = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth;
-
     /// <summary>The cultures (LCIDs) whose fold SearchFoldChecks verifies (its differential and key-class checks, and longer
     /// out-of-tree runs of both, found no difference): Latin1_General and SQL_Latin1_General collations are 1033. Danish,
     /// Norwegian, Hungarian and Croatian are not: their collations treat a letter as a pair of letters (å as aa, dž) in ways a
-    /// per-character fold cannot follow, and the long run finds misses.</summary>
+    /// per-character fold cannot follow, and the long run finds misses. Nor is Thai: its compare finds ӽ in ӿ though their sort
+    /// keys differ.</summary>
     internal static readonly int[] Verified =
     [
         1025, 1026, 1028, 1029, 1031, 1032, 1033, 1034, 1035, 1036, 1037, 1039, 1040, 1041, 1042, 1043, 1045, 1046, 1048, 1049,
-        1051, 1052, 1053, 1054, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
+        1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
-    private static readonly ConcurrentDictionary<int, Lazy<Task<SearchFold>>> folds = new();
+    private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
-    /// <summary>The fold for a culture once it is built, else null (and the build started on the thread pool, so a search
-    /// never waits for it: until it is ready the culture compare runs alone). Null for a culture that is not verified.</summary>
-    public static SearchFold? For(int lcid)
+    /// <summary>The fold for a culture and compare options once it is built, else null (and the build started on the thread
+    /// pool, so a search never waits for it: until it is ready the culture compare runs alone). Null for a culture that is
+    /// not verified. A fold is per option set because the options are not monotonic: Estonian finds Ｚ in Z case-sensitively
+    /// but not case-insensitively, so a fold built from one option set's keys can rule out another's match.</summary>
+    public static SearchFold? For(int lcid, CompareOptions options)
     {
         if (Array.IndexOf(Verified, lcid) < 0) return null;
-        var build = folds.GetOrAdd(lcid, culture => new Lazy<Task<SearchFold>>(() => Task.Run(() => Build(culture)))).Value;
+        var build = Lazy(lcid, options).Value;
         return build.IsCompletedSuccessfully ? build.Result : null;
     }
 
-    /// <summary>The fold for a culture, waiting for its build (the checks and benchmarks).</summary>
-    internal static SearchFold Ready(int lcid)
+    /// <summary>The fold for a culture and options, waiting for its build (the checks and benchmarks).</summary>
+    internal static SearchFold Ready(int lcid, CompareOptions options)
     {
         if (Array.IndexOf(Verified, lcid) < 0) throw new ArgumentOutOfRangeException(nameof(lcid), "The culture's fold is not verified.");
-        return folds.GetOrAdd(lcid, culture => new Lazy<Task<SearchFold>>(() => Task.Run(() => Build(culture)))).Value.GetAwaiter().GetResult();
+        return Lazy(lcid, options).Value.GetAwaiter().GetResult();
     }
 
+    private static Lazy<Task<SearchFold>> Lazy(int lcid, CompareOptions options) =>
+        folds.GetOrAdd((lcid, options), key => new Lazy<Task<SearchFold>>(() => Task.Run(() => Build(key.Lcid, key.Options))));
+
     /// <summary>Builds any culture's fold, verified or not (the differential check measures unverified ones).</summary>
-    internal static SearchFold Build(int lcid) => new(CultureInfo.GetCultureInfo(lcid).CompareInfo);
+    internal static SearchFold Build(int lcid, CompareOptions options) => new(CultureInfo.GetCultureInfo(lcid).CompareInfo, options);
 
     // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss) or none.
     private readonly char[] single = new char[65536];
@@ -59,37 +63,42 @@ internal sealed class SearchFold
     // The ASCII range's folds, for the UTF-8 fast path: a byte below 0x80 is its character.
     private readonly string[] ascii = new string[128];
 
-    private SearchFold(CompareInfo info)
+    private SearchFold(CompareInfo info, CompareOptions options)
     {
-        var emptyKey = Key(info, "");
+        // Ignoring accents, the compare's IndexOf ignores case too (it finds n in N) though its sort keys keep case, so the
+        // keys then ignore case as well.
+        var keyed = (options & CompareOptions.IgnoreNonSpace) != 0 ? options | CompareOptions.IgnoreCase : options;
+        string Key(string text) => Convert.ToBase64String(info.GetSortKey(text, keyed).KeyData);
+        var emptyKey = Key("");
         var japanese = info.LCID == 1041;
-        // A group's representative: a one to three letter ASCII string with its key if there is one (ß to ss, ﬃ to ffi),
-        // else the compatibility decomposition of its lowest code unit, folded, when that has the key (℃ to °c), else the
-        // lowest code unit. Every member of a group maps to the same representative, so a cell and a text folded agree.
+        // Which code units the fold vouches for here, and their keys (others' keys only when a decomposition needs them).
+        var vouched = new bool[65536];
+        for (var c = 0; c < 65536; c++) vouched[c] = Vouched((char)c) && !(japanese && Repeating((char)c)) && Stable((char)c);
+        var keys = new string?[65536];
+        string KeyOf(char c) => keys[c] ??= Key(c.ToString());
+        // A group's representative: a one or two letter ASCII string with its key if there is one (ß to ss, æ to ae), else
+        // the compatibility decomposition of its lowest vouched code unit, folded, when that has the key, else that code unit.
+        // Every member of a group maps to the same representative, so a cell and a text folded agree. (No vouched code unit
+        // has the key of three ASCII letters.)
         var asciiKeys = new Dictionary<string, string>();
         void Candidate(string s)
         {
-            var key = Key(info, s);
+            var key = Key(s);
             if (key != emptyKey) asciiKeys.TryAdd(key, s);
         }
         for (var c = 0x20; c < 0x7F; c++) Candidate(char.ToLowerInvariant((char)c).ToString());
         for (var a = 'a'; a <= 'z'; a++) for (var b = 'a'; b <= 'z'; b++) Candidate(new string([a, b]));
-        for (var a = 'a'; a <= 'z'; a++) for (var b = 'a'; b <= 'z'; b++) for (var c = 'a'; c <= 'z'; c++) Candidate(new string([a, b, c]));
-        var keys = new string[65536];
         var lowest = new Dictionary<string, char>();
         for (var c = 0; c < 65536; c++)
-        {
-            if (char.IsSurrogate((char)c)) continue;
-            var key = keys[c] = Key(info, ((char)c).ToString());
-            if (key != emptyKey) lowest.TryAdd(key, (char)c);
-        }
+            if (vouched[c] && KeyOf((char)c) is var key && key != emptyKey) lowest.TryAdd(key, (char)c);
         var representatives = new Dictionary<string, string>();
-        string Representative(string key, int depth)
+        string Representative(char unit, int depth)
         {
+            var key = KeyOf(unit);
             if (key == emptyKey) return "";
             if (asciiKeys.TryGetValue(key, out var plain)) return plain;
             if (representatives.TryGetValue(key, out var known)) return known;
-            var low = lowest[key].ToString();
+            var low = (lowest.TryGetValue(key, out var first) ? first : unit).ToString();
             var chosen = low;
             if (depth < 4)
             {
@@ -101,8 +110,8 @@ internal sealed class SearchFold
                 {
                     var composed = new StringBuilder();
                     foreach (var part in decomposed)
-                        if (!char.IsSurrogate(part)) composed.Append(Representative(keys[part], depth + 1));
-                    if (composed.Length > 0 && Key(info, composed.ToString()) == key) chosen = composed.ToString();
+                        if (!char.IsSurrogate(part)) composed.Append(Representative(part, depth + 1));
+                    if (composed.Length > 0 && Key(composed.ToString()) == key) chosen = composed.ToString();
                 }
             }
             representatives[key] = chosen;
@@ -112,13 +121,13 @@ internal sealed class SearchFold
         {
             var unit = (char)c;
             if (c is >= 0x300 and <= 0x36F) kinds[c] = Accent;
-            if (!Vouched(unit) || (japanese && Repeating(unit)) || !Stable(unit))
+            if (!vouched[c])
             {
                 single[c] = Multiple;
                 continue;
             }
             kinds[c] = Plain;
-            var fold = Representative(keys[c], 0);
+            var fold = Representative(unit, 0);
             if (fold.Length == 1 && fold[0] != Multiple) single[c] = fold[0];
             else
             {
@@ -134,8 +143,6 @@ internal sealed class SearchFold
         try { return c.ToString().IsNormalized(NormalizationForm.FormC); }
         catch (ArgumentException) { return false; }
     }
-
-    private static string Key(CompareInfo info, string text) => Convert.ToBase64String(info.GetSortKey(text, Loosest).KeyData);
 
     /// <summary>The code units the fold vouches for, whose collation in the verified cultures depends on no neighbour (the
     /// key-class scan in SearchFoldChecks finds no two strings of them alike to the compare and folded apart): tab, line

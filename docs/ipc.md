@@ -1331,19 +1331,22 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   locale-ignored characters (U+200B, U+00AD) matches by code point. Other columns compare display text ignoring case;
   binary matches `0x` and hex, skipped when the text is not hex.
 - **Pre-check.** A culture compare (ICU) reads text that is not ASCII at about 90 MB/s, so a character column of a
-  verified culture first folds the cell with the culture's search fold (`SearchFold`: each character mapped to one
-  representative of the characters its collator treats alike under its loosest options, built from the collator's sort
-  keys in 0.05 – 0.3 s on first use, off the search) and looks for the text's fold by code point; only a cell holding it
-  goes to the compare. The answers are the compare's, about 3.5 times sooner over SQL Server's own messages in 22
+  verified culture first folds the cell with the culture's search fold for the column's options (`SearchFold`: each
+  character mapped to one representative of the characters its collator gives the same sort key under those options,
+  built in about 50 ms on first use, off the search) and looks for the text's fold by code point; only a cell holding it
+  goes to the compare. The answers are the compare's, about 3.3 times sooner over SQL Server's own messages in 22
   languages. Collation is not always per character (Japanese ー repeats the sound before it, l·l joins, ligatures and
   presentation forms equal letter pairs), so the fold vouches only for an allowlist of characters whose collation depends
   on no neighbour (`SearchFold.Vouched`: Latin, Greek, Cyrillic, Hebrew and Arabic letters, kana, CJK ideographs, Hangul
   syllables, full-width forms, after NFC); a cell with any other character (Thai, Indic, ligatures, a supplementary
   character) goes to the compare alone, and a matcher stops pre-checking once more than 60 % of its first 1,024 cells
-  pass. Danish, Norwegian, Hungarian and Croatian collations are never pre-checked: they treat a letter as a pair of
-  letters in ways a per-character fold cannot follow. `SearchFoldChecks` compares every verified culture's answers with
-  the compare's over fuzzed text and known context-dependent cells, and checks that strings the loosest compare finds
-  equal fold alike. The column filter's value search uses the same matcher.
+  pass. A fold is per option set because options are not monotonic: Estonian finds Ｚ in Z case-sensitively but not
+  case-insensitively, and ignoring accents the compare ignores case too (so those keys do). Danish, Norwegian, Hungarian
+  and Croatian collations are never pre-checked (they treat a letter as a pair of letters), nor is Thai (its compare
+  finds characters its sort keys tell apart). `SearchFoldChecks` compares every verified culture's answers with the
+  compare's over fuzzed text and known context-dependent cells under four option sets, checks that strings with the same
+  key fold alike, and asks the compare itself about pairs of characters under all sixteen option sets. The column
+  filter's value search uses the same matcher.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a

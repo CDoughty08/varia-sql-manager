@@ -4,7 +4,7 @@
 
 ### Changes to everyday use
 
-- **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a case- or accent-insensitive column about three times faster, finding exactly what they found before.
+- **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a column with a linguistic (not binary) collation about three times faster, finding exactly what they found before.
 
 ## [0.9.1] - 2026-11-16
 

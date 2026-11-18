@@ -204,7 +204,7 @@ internal static class ResultSearcher
             // Text of only ignorable characters (U+200B, U+00AD) is found at 0 in every string by a culture compare: it is
             // looked for as it is written instead.
             if (ViewSorter.Culture(collation) is { } culture && culture.Info.Compare(text, string.Empty, culture.Options) != 0)
-                return new CultureMatcher(text, culture.Info, culture.Options, SearchFold.For(collation.Lcid));
+                return new CultureMatcher(text, culture.Info, culture.Options, SearchFold.For(collation.Lcid, culture.Options));
             return new OrdinalMatcher(text, (collation.Options & 1) != 0 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         return new OrdinalMatcher(text, StringComparison.OrdinalIgnoreCase);
@@ -249,7 +249,7 @@ internal static class ResultSearcher
 
     /// <summary>A culture compare (ICU), about 90 MB/s on text that is not ASCII. With the culture's fold, a cell whose fold
     /// does not hold the text's fold as an ordinal substring cannot hold the text, so it is ruled out without the compare
-    /// (about 3.5 times faster over SQL Server's messages in 22 languages); the compare judges the rest. A cell the fold cannot vouch for goes
+    /// (about 3.3 times faster over SQL Server's messages in 22 languages); the compare judges the rest. A cell the fold cannot vouch for goes
     /// to the compare alone. When most cells pass the pre-check anyway (a common word), it only adds work, so after
     /// <see cref="PrecheckSample"/> cells the matcher stops pre-checking if more than <see cref="PrecheckKeep"/> of them
     /// passed.</summary>
