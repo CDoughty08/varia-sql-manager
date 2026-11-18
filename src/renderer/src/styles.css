@@ -1,7 +1,7 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
-:root.varia-reduced-motion { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-move: 180ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root.varia-reduced-motion { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; --varia-motion-move: 0ms; }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
    shadow of the find and hover widgets. */
@@ -955,8 +955,24 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); }
 .profile-note { flex-shrink: 0; padding: 4px 8px; color: var(--varia-descriptionForeground); }
 .profile-note.error { color: var(--varia-errorForeground); }
-.profile-cards { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
-.profile-card { margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+.profile-strip { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 2px 8px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); animation: varia-appear var(--varia-motion-move) var(--varia-motion-ease); }
+.profile-strip > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-strip.peek { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
+.profile-strip-action { flex-shrink: 0; padding: 0 6px; font-size: inherit; line-height: 16px; }
+/* Positioned, so a card's offsetTop is its place in the scroll (revealCard) and the ghosts of leaving cards scroll with it.
+   The scrollbar's gutter is kept, so cards keep their width as a filtered list starts or stops overflowing. */
+.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 6px; }
+.profile-ghosts { position: absolute; inset: 0 0 auto 0; height: 0; pointer-events: none; }
+.profile-card-ghost { position: absolute; margin: 0; }
+.profile-card { position: relative; isolation: isolate; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+.profile-card:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; }
+/* The selection's highlight is colour only: the same 1px border recoloured with a tint behind (selected), and a shade for the
+   active cell's column (current), each an overlay layer cross-faded by opacity, so the compositor animates it. */
+.profile-card::before, .profile-card::after { content: ''; position: absolute; inset: -1px; z-index: -1; border-radius: var(--varia-radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--varia-motion-move) var(--varia-motion-ease); }
+.profile-card::before { border: 1px solid var(--varia-focusBorder); background: var(--varia-resultsGrid-selectionBackground); }
+.profile-card::after { background: var(--varia-resultsGrid-headerSelectionBackground); }
+.profile-card.selected::before { opacity: 1; }
+.profile-card.current::after { opacity: 0.6; }
 .profile-card-title { display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
 .profile-card-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-foreground); }
 .profile-card-title span, .profile-caption, .profile-pending { color: var(--varia-descriptionForeground); white-space: nowrap; }
@@ -967,6 +983,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-histogram { display: flex; align-items: flex-end; gap: 1px; height: 26px; margin-top: 5px; border-bottom: 1px solid var(--varia-panel-border); }
 .profile-histogram i { flex: 1; background: var(--varia-charts-blue); }
 @media (forced-colors: active) { .profile-histogram i { background: CanvasText; forced-color-adjust: none; } }
+@media (forced-colors: active) { .profile-card::before { border-color: Highlight; } }
 .rs-content { position: relative; width: 100%; }
 .rs-item { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; min-height: 0; }
 /* A set's caption (gridLimits.captionHeight): Collapse and its name, rows and columns, its batch, and Save Results As. */

@@ -57,3 +57,22 @@ export function chunked<T>(items: readonly T[], size: number): T[][] {
   for (let at = 0; at < items.length; at += size) parts.push(items.slice(at, at + size))
   return parts
 }
+
+/** The cards the panel lists: every profiled column, or (`only`) those the grid's selection covers, in result order. */
+export interface ProfileList { readonly columns: readonly number[]; readonly only: boolean }
+/**
+ * What the panel lists: Selected Columns Only (`selectedOnly`) lists the selected columns, and a peek (the gesture's
+ * modifier held over the panel) shows the other list for as long as it is held.
+ */
+export function profileList(columns: readonly number[], selected: ReadonlySet<number>, selectedOnly: boolean, peeking: boolean): ProfileList {
+  const only = selectedOnly !== peeking
+  return { columns: only ? columns.filter(column => selected.has(column)) : columns, only }
+}
+
+/** The strip under the panel's head while it lists fewer than every column or peeks, or undefined. */
+export function profileStrip(list: ProfileList, total: number, peeking: boolean): string | undefined {
+  const count = list.columns.length
+  if (peeking) return list.only ? `Peeking at ${count === 0 ? 'no' : formatCount(count)} selected ${count === 1 ? 'column' : 'columns'} · release to show all` : `Peeking at all ${formatCount(total)} columns · release to go back`
+  if (!list.only) return undefined
+  return count === 0 ? 'No columns selected' : `${formatCount(count)} of ${formatCount(total)} ${total === 1 ? 'column' : 'columns'}`
+}

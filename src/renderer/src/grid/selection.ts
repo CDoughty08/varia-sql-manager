@@ -103,6 +103,20 @@ export function select(current: GridSelection | undefined, hit: GridHit, options
   return single(entry, kindOf(hit), cell)
 }
 
+/** A whole column selected from the outside (a column profile card): its cell in `row` is the active one. */
+export const columnSelection = (entry: string, column: number, row = 0): GridSelection => single(entry, 'columns', { row, column })
+/**
+ * The columns a selection covers, whatever rows it spans (a row or Select All covers every column), in a result of
+ * `columns` columns: what the column profile highlights and, with Selected Columns Only, lists.
+ */
+export function selectedColumns(selection: GridSelection | undefined, columns: number): ReadonlySet<number> {
+  const covered = new Set<number>()
+  if (!selection) return covered
+  // One row is enough to resolve a block's columns: rows do not bound them.
+  for (const range of resolveBlocks(selection, 1, columns)) for (let column = range.left; column <= range.right; column++) covered.add(column)
+  return covered
+}
+
 /** Whether `hit` is already selected by some block: the cell, or the whole row, column, or grid. */
 function covers(selection: GridSelection, hit: GridHit, rows: number, columns: number): boolean {
   return resolveBlocks(selection, rows, columns).some(range => {

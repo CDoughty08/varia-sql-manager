@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (348)
+## Commands (349)
 
 ### File
 
@@ -206,6 +206,7 @@ keys it uses are listed below.
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
+| Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
 | Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
 | Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
@@ -1035,6 +1036,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `2_view` | **T**ransposed | `output.transpose` | Always |
 | `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
 | `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
+| `3_show` | Profile Selected Columns **O**nly | `output.toggleProfileSelectedColumns` | Always |
 | `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |
 | `4_text` | **S**how Spaces and Tabs | `output.showSpaces` | Always |
 | `4_text` | Show All **W**hite Space | `output.showAllWhitespace` | Always |
@@ -1042,7 +1044,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
-## Context keys (160)
+## Context keys (161)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1133,6 +1135,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
 | `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
+| `resultsProfileSelectedOnly` | boolean | state | The column profile lists only the selected columns (Column Profile: Selected Columns Only). |
 | `resultsGridTransposed` | boolean | state | The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is. |
 | `resultsTabs` | boolean | state | Results show as tabs, one at a time, rather than stacked (Show Results as Tabs). |
 | `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |

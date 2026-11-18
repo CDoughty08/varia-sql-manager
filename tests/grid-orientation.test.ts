@@ -7,7 +7,7 @@ import { GridData } from '../src/renderer/src/grid/data'
 import { GridView, transposedLabel, withinCap } from '../src/renderer/src/grid/GridView'
 import { ColumnLayout, frozenColumn, hitTest } from '../src/renderer/src/grid/layout'
 import { cellKey } from '../src/renderer/src/grid/marks'
-import { rotateSelection, type GridSelection } from '../src/renderer/src/grid/selection'
+import { columnSelection, rotateSelection, type GridSelection } from '../src/renderer/src/grid/selection'
 import { planTiles, tileRequest, transposedTiles } from '../src/renderer/src/grid/tiles'
 import { maxWidthOverrides, UniformLayout } from '../src/renderer/src/grid/uniform-layout'
 import { outputTarget } from '../src/renderer/src/menus/targets'
@@ -734,5 +734,25 @@ describe('a grid transposed', () => {
     back.view.fitRow(3)
     expect(back.measure).not.toHaveBeenCalled()
     back.view.dispose()
+  })
+})
+
+describe('selecting a column from outside the grid', () => {
+  it('selects the whole column in the result\'s columns, keeping the active row, and brings a transposed one within the rows drawn', async () => {
+    const table = mount({ rows: 50, columns: 6, transposed: false, state: { ...freshState(), selection: cells([7, 1]) } })
+    await table.frame()
+    table.view.selectColumn(4)
+    expect(table.state.selection).toEqual(columnSelection('e1', 4, 7))
+    expect(table.onSelection).toHaveBeenLastCalledWith(columnSelection('e1', 4, 7))
+    // A column the grid does not have changes nothing.
+    table.view.selectColumn(6)
+    expect(table.state.selection).toEqual(columnSelection('e1', 4, 7))
+    table.view.dispose()
+    // Transposed, the active row is a drawn column: one past the result's rows is brought within them.
+    const turned = mount({ rows: 50, columns: 6, state: { ...freshState(), selection: cells([99, 1]) } })
+    await turned.frame()
+    turned.view.selectColumn(2)
+    expect(turned.state.selection).toEqual(columnSelection('e1', 2, 49))
+    turned.view.dispose()
   })
 })

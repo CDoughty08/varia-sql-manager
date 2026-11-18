@@ -86,6 +86,15 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in
   characters and bytes, and a histogram, computed in the backend over the rows the grid shows. A re-sort of a loaded
   result keeps it; it is computed again when the filters change, the result finishes loading or the query runs again.
+  The panel follows the grid's selection: the cards of the selected columns are tinted, the active cell's column's card
+  is shaded and scrolled into view, and a click, Enter or Space on a card selects its column in the grid. The cards are
+  one Tab stop (the active column's card), with the arrows, Home and End between them. **Selected Columns Only** (the
+  panel's filter button, the ⋯ menu's Profile Selected Columns Only, or the palette;
+  `queryResults.grid.columnProfileSelectedOnly`) lists only the selected columns' cards. Holding Ctrl (⌘ on macOS) with
+  the pointer on the panel peeks at the other list while it is held: only the selected columns, or every column when
+  Selected Columns Only is on; a strip says so, and Ctrl with another key (Ctrl+C) is not a peek. The modifier can be
+  changed to Shift in Shortcut Mapping ([gestures](gestures.md), Peek at Selected Columns). Cards move, appear and fade
+  with transform and opacity only, and not at all under reduced motion.
 - **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it
   for the bytes.
 

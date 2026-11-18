@@ -113,6 +113,8 @@ describe('GestureService', () => {
       'editor.goToDefinition': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with the editor's Peek: Ctrl+hover (⌘+hover) on a name opens Peek's card there, as on an explorer row.
       'editor.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with the column profile's peek: Ctrl+hover (⌘+hover) on the panel shows only the selected columns while held.
+      'output.profilePeekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // macOS: ⌘, since Control+press is a right-click there (the tab's menu opened instead of the drag starting).
       'dock.floatWhileDragging': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'dock.dragFloatingTitleBar': event => !!event.shiftKey,

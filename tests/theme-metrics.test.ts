@@ -156,15 +156,15 @@ describe('metric tokens', () => {
     const timed = all.filter(({ property }) => /^(?:transition|animation)(?:-[a-z-]+)?$/.test(property) && property !== 'animation-name')
     expect(timed.filter(({ value }) => /\d(?:ms|s)\b/.test(value)).map(({ where }) => where), 'use var(--varia-motion-*)').toEqual([])
     const loops = timed.filter(({ value }) => /\binfinite\b/.test(value))
-    // Transitions run once and use fast or base, which reduced motion sets to 0, in every rule but the ones that turn
+    // Transitions run once and use fast, base or move, which reduced motion sets to 0, in every rule but the ones that turn
     // motion off; loops use their own periods.
-    expect(timed.filter(({ value, selector }) => !reduced(selector) && value !== 'none' && !loops.some(loop => loop.value === value) && !/var\(--varia-motion-(?:fast|base)\)/.test(value)).map(({ where }) => where)).toEqual([])
+    expect(timed.filter(({ value, selector }) => !reduced(selector) && value !== 'none' && !loops.some(loop => loop.value === value) && !/var\(--varia-motion-(?:fast|base|move)\)/.test(value)).map(({ where }) => where)).toEqual([])
     expect(loops.filter(({ value }) => !/var\(--varia-motion-(?:spin|pulse)\)/.test(value)).map(({ where }) => where)).toEqual([])
     const stopped = (selector: string) => rules.some((rule: CssRule) => reduced(rule.selector) && parts(rule.selector).map(unreduced).includes(selector)
       && rule.declarations.some(({ property, value }) => property === 'animation' && value === 'none'))
     expect(loops.length).toBeGreaterThan(0)
     expect(loops.filter(({ selector }) => !stopped(selector)).map(({ where }) => where), 'a looping animation needs animation: none under :root.varia-reduced-motion').toEqual([])
-    expect(reducedMotion).toEqual(['fast', 'base'])
+    expect(reducedMotion).toEqual(['fast', 'base', 'move'])
     // Hover fills and surfaces that appear use the motion (the 80/120 ms of the design language).
     const uses = (selector: string, token: string) => all.some(entry => entry.selector === selector && !entry.at.length && /^(?:transition|animation)$/.test(entry.property) && entry.value.includes(`var(--varia-motion-${token})`))
     for (const selector of ['button:hover:not(:disabled)', '.explorer-row:hover']) expect(uses(selector, 'fast'), selector).toBe(true)

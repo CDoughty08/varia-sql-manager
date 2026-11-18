@@ -36,6 +36,11 @@ export const queryResultsSettings = [
     description: 'A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column\'s collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too.'
   },
   {
+    key: 'queryResults.grid.columnProfileSelectedOnly', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Show only the selected columns in the column profile', type: 'boolean', default: false, varia: true,
+    keywords: ['profile', 'selected', 'selection', 'columns', 'filter', 'peek'],
+    description: 'The column profile panel lists only the columns the grid\'s selection covers, following it as it changes, instead of every column. Either way the cards of the selected columns are highlighted, and holding Ctrl (⌘ on macOS) with the pointer over the panel shows the other list for as long as it is held. The panel\'s Selected Columns Only button changes this too.'
+  },
+  {
     key: 'queryResults.grid.filterPopupWidth', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Column filter width', title: 'Column filter popup width', type: 'integer', min: 340, max: 900, default: 440, unit: 'px', varia: true,
     keywords: ['filter', 'funnel', 'popup', 'popover', 'size', 'resize', 'width'],
     description: 'The width of the column filter that a header\'s funnel or Filter Column Values opens. Dragging the filter\'s corner grip sets it. The filter shrinks to fit a small window.'

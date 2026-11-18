@@ -1691,6 +1691,20 @@ try {
   await expect.poll(() => profileFigures(profileCard(page, 'id'))).toMatchObject({ NULLs: '0', Distinct: '100 · unique', Min: '0', Max: '99' })
   await expect.poll(() => profileFigures(profileCard(page, 'score'))).toMatchObject({ NULLs: '20 (20%)' })
   expect(await profileFigures(profileCard(page, 'name'))).toHaveProperty('Length')
+  // The panel follows the grid's selection: a cell marks its column's card, Selected Columns Only lists just that card
+  // (Show all lists every one again), and a click on a card selects its column in the grid.
+  await gridCell(anyResultGrid(page), 0, 1).click()
+  await expect(profileCard(page, 'name')).toHaveAttribute('aria-current', 'true')
+  const selectedOnly = columnProfile(page).getByRole('button', { name: 'Selected Columns Only', exact: true })
+  await selectedOnly.click()
+  await expect(selectedOnly).toHaveAttribute('aria-pressed', 'true')
+  await expect(columnProfile(page).getByRole('region')).toHaveCount(1)
+  await columnProfile(page).getByRole('button', { name: 'Show all', exact: true }).click()
+  await expect(selectedOnly).toHaveAttribute('aria-pressed', 'false')
+  await expect(columnProfile(page).getByRole('region')).toHaveCount(liveColumns.length)
+  await profileCard(page, 'id').click()
+  await expect(profileCard(page, 'id')).toHaveAttribute('aria-current', 'true')
+  await expect(profileCard(page, 'name')).not.toHaveAttribute('aria-current', 'true')
   // Running again with the panel open replaces the run's grids rather than leaving the last run's beside them.
   await run('-- varia-fake: sets=W1*100')
   await settled()

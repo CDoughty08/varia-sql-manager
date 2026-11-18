@@ -50,21 +50,24 @@ export const shadows = {
 
 /**
  * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
- * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
- * reduced motion (`reducedMotionClass` on the root) sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners
- * and the live dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
+ * by `:hover` rules so that selection and other state changes are instant, 120 ms for menus, popovers and dialogs,
+ * and 180 ms for list items moving to a new place, in or out (the column profile's cards, which follow the grid's
+ * selection, and their highlight), animating only transform and opacity; reduced motion (`reducedMotionClass` on the
+ * root) sets all three to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live dot) have their own
+ * periods and stop under reduced motion through `animation: none`. `delay` holds a loading
  * placeholder back (as an animation delay) and is not motion, so reduced motion leaves it alone.
  */
 export const motion = {
   fast: { ms: 80, use: 'Hover and pressed fills.' },
   base: { ms: 120, use: 'Menus, popovers and dialogs appearing.' },
+  move: { ms: 180, use: 'List items moving to a new place, in or out, and highlights that follow a selection there (the column profile\'s cards); transform and opacity only.' },
   spin: { ms: 1500, use: 'One turn of a loading spinner (a loop).' },
   pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' },
   delay: { ms: 300, use: 'The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it.' }
 } as const
 export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
-export const reducedMotion = ['fast', 'base'] as const satisfies readonly (keyof typeof motion)[]
+export const reducedMotion = ['fast', 'base', 'move'] as const satisfies readonly (keyof typeof motion)[]
 /**
  * The root class that turns reduced motion on. The renderer sets it only while the user follows the system's preference
  * (`environment.reduceMotionWithSystem`) and the system asks for reduced motion, so by default every animation plays.
