@@ -526,4 +526,13 @@ describe('Save with a checked password', () => {
     expect(await savedPasswords.get(id, empty)).toBeUndefined()
     await expect(library.save({ options, rememberPassword: true, forgetPassword: true })).rejects.toThrow()
   })
+  it('reports a Forget that unavailable secret storage could not do, keeping the password', async () => {
+    const { connections, savedPasswords, remembered } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const id = await remembered()
+    vi.spyOn(savedPasswords, 'storageAvailable').mockResolvedValueOnce(false)
+    const saved = await library.save({ id, options: empty, saved: true, forgetPassword: true })
+    expect(saved).toMatchObject({ passwordForgotten: false })
+    expect(await savedPasswords.get(id, empty)).toBe(marker)
+  })
 })

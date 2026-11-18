@@ -426,6 +426,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
    */
   async function check(labelled: ConnectionOptions, kind: 'test' | 'save'): Promise<DatabaseInfo[] | undefined> {
     const requestId = crypto.randomUUID()
+    // One sign-in at a time: a Load databases still running would sign in again and could overwrite the list after.
+    dbRequest.current++; cancelDatabases(); setDbBusy(false)
     testRequest.current = requestId
     setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice || current === saveCancelledNotice ? '' : current)
@@ -458,8 +460,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     setTested({ text: `Connected to ${labelled.server}${login ? ` as ${login}` : ''}. ${visible}`, ...missing ? { warning: `${database} is not among the databases this login can see.` } : {} })
   }
   /** Save: settings and labels to History. A typed password with Remember password checked is checked with the server
-   *  first and remembered; if the check fails nothing is saved. */
-  async function save(chosen: ConnectionOptions = options): Promise<boolean> {
+   *  first and remembered; if the check fails nothing is saved. Resolves 'saved', 'warned' when the settings were saved
+   *  but a password was not kept or not forgotten as asked (the notice says so), or false when nothing was saved. */
+  async function save(chosen: ConnectionOptions = options): Promise<'saved' | 'warned' | false> {
     if (locked || !loaded) return false
     const labelled = labelledOptions(chosen)
     if (!labelled) return false
@@ -471,15 +474,21 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const inUse = rememberPassword && passwordInUse(labelled)
     if (rememberPassword && !await check(labelled, 'save')) return false
     const value = await saveProfile(undefined, undefined, undefined, { labelled, rememberPassword, forgetPassword })
-    if (!value || !alive.current) return !!value
+    if (!value || !alive.current) return value ? 'saved' : false
     if (value.passwordSaved) {
       setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false
-      setNotice(inUse && value.passwordReplaced ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
-    } else if (rememberPassword) setNotice('Saved to History, but the password could not be remembered.')
-    else if (forgetPassword) { rememberEdited.current = false; setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.') }
-    else if (typed) setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.')
-    else setNotice('Saved to History.')
-    return true
+      setNotice(!value.passwordReplaced ? 'Saved to History. The password is remembered.' : inUse ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
+      return 'saved'
+    }
+    if (rememberPassword) { setNotice('Saved to History, but the password could not be remembered.'); return 'warned' }
+    if (forgetPassword) {
+      rememberEdited.current = false
+      setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.')
+      return value.passwordForgotten && !typed ? 'saved' : 'warned'
+    }
+    if (typed) { setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.'); return 'warned' }
+    setNotice('Saved to History.')
+    return 'saved'
   }
   /** After Connect: the edited Name, Color, Environment and Reconnect on startup in History (main's reuse of a live
    *  connection records none), and on that entry's other Explorer connections. A failure leaves the connection alone. */
@@ -623,6 +632,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
    *  person would, and runs the same action again with it. */
   function trustAndRetry(kind?: 'test' | 'save') {
     const next = { ...options, trustServerCertificate: true }
+    markEdited()
     setOptions(next)
     // Main fills a remembered password in only for the certificate settings it was saved with.
     if (usesPassword(next.authentication) && !next.password && match && rememberedProfile(library.profiles, savedIds, next, selectedId)?.id !== match.id) {
@@ -769,7 +779,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       </div>
     </form></div>
     {confirmClose && <SubDialog title={confirmClose.target ? `Save changes to ${confirmClose.target.options.displayName || confirmClose.target.options.server}?` : `Save ${options.displayName || options.server} to History?`} okLabel="Save" alternative={{ label: "Don't Save", run: () => { setConfirmClose(undefined); onClose() } }}
-      onOk={() => { setConfirmClose(undefined); void save().then(saved => { if (saved) onClose() }) }} onCancel={() => setConfirmClose(undefined)}>
+      onOk={() => { setConfirmClose(undefined); void save().then(saved => { if (saved === 'saved') onClose() }) }} onCancel={() => setConfirmClose(undefined)}>
       <p>{confirmClose.target ? 'You changed this saved connection. Save the changes to History and its Object Explorer connections before closing?' : 'This connection is not saved. Save it to History before closing?'}</p>
     </SubDialog>}
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}

@@ -288,23 +288,23 @@ describe('Reset and the form environment', () => {
   })
 })
 
+const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+  if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
+  const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
+  await act(async () => {
+    if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
+    else field.value = value
+    field.dispatchEvent(new Event(field instanceof HTMLInputElement ? 'input' : 'change', { bubbles: true }))
+  })
+}
+const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
+const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
 describe('saving connection details', () => {
   const live = (options: ConnectionOptions, details = detailsOf(options, 'off')) => (workbench: ReturnType<typeof workbenchFixture>) => {
     const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'windows' as const, id: 'sid:fixture' } }
     const attempt = workbench.connections.beginConnect(options, 1, id(50), details)!
     workbench.connections.accept({ id: id(100), targetId: id(50), generation: 1, server: options.server, database: options.database, serverVersion: '17', authentication }, options, id(50), authentication, attempt)
   }
-  const pick = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
-    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
-    const field = view.host.querySelector<HTMLSelectElement | HTMLInputElement>(selector)!
-    await act(async () => {
-      if (field instanceof HTMLInputElement) Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value)
-      else field.value = value
-      field.dispatchEvent(new Event(field instanceof HTMLInputElement ? 'input' : 'change', { bubbles: true }))
-    })
-  }
-  const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
-  const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
 
   it('applies a saved name, color and environment to the live Explorer connection at once', async () => {
     const saved = profile('Off profile', 1, 'off'), view = await mount(undefined, { profiles: [saved], beforeRender: live(saved.options) })
@@ -618,7 +618,7 @@ describe('Save and Test Connection', () => {
     expect(view.saveConnectionProfile).not.toHaveBeenCalled()
     expect(text(view)).toContain('Login failed.')
     const passing = discover({ ok: true, value: [] })
-    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true } }))
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: true } }))
     await act(async () => view.button('Save').click())
     expect(passing).toHaveBeenCalledOnce()
     expect(view.saveConnectionProfile).toHaveBeenCalledWith(expect.objectContaining({ id: saved.id, saved: true, rememberPassword: true, options: expect.objectContaining({ password: 'new-secret' }) }))
@@ -652,6 +652,28 @@ describe('Save and Test Connection', () => {
     await view.choose('Sql profile')
     await type(view, '#connect-password', 'new-secret')
     expect(text(view)).toContain('If it differs from the saved one, Object Explorer connections that use the saved one will need the new password entered when they next connect.')
+    // After Save, the notice says they need it only when main replaced the password.
+    discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: true } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Object Explorer connections that used the old one will need it entered when they next connect.')
+    await type(view, '#connect-password', 'new-secret')
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true, passwordReplaced: false } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Saved to History. The password is remembered.')
+    expect(text(view)).not.toContain('will need it entered')
+  })
+
+  it("keeps the dialog open when the close prompt's Save could not keep the typed password", async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved] })
+    await view.choose('Sql profile')
+    await pick(view, '#connect-name', 'Renamed')
+    await type(view, '#connect-password', 'typed')
+    await act(async () => view.button('Cancel').click())
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ displayName: 'Renamed' }) }))
+    expect(view.closed).not.toHaveBeenCalled()
+    expect(text(view)).toContain('The password was not kept')
   })
 
   it('offers to trust the certificate and test again after a failed test, without connecting', async () => {
@@ -687,6 +709,17 @@ describe('closing with a new, unsaved connection', () => {
     await act(async () => view.button('Cancel').click())
     await act(async () => promptButton("Don't Save").click())
     expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it('asks after Trust server certificate changed an opened form the user did not otherwise edit', async () => {
+    const view = await mount(undefined, { initial: { ...connectionDefaults('win32'), server: 'cert-server' } })
+    const varia = (window as unknown as { varia: VariaApi }).varia
+    varia.discoverDatabases = vi.fn<VariaApi['discoverDatabases']>(async () => ({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-server', reason: 'certificate' } }))
+    await act(async () => view.button('Test Connection').click())
+    varia.discoverDatabases = vi.fn<VariaApi['discoverDatabases']>(async () => ({ ok: true, value: [] }))
+    await act(async () => view.button('Trust server certificate and test').click())
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save cert-server to History?')
   })
 
   it('does not ask for a typed password alone, a form typed back to how it opened, or settings a saved entry has', async () => {

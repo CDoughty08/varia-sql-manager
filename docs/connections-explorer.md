@@ -56,7 +56,8 @@ and saving forgets the saved password, as Connect does. Without Remember passwor
 Password says which applies.
 
 **Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
-the same path and limits as Load databases. It saves nothing and opens no session or Explorer node. A pass reports the
+the same path and limits as Load databases, so like Load databases it signs in to the login's default database rather
+than Database Name; it stops a Load databases still running. It saves nothing and opens no session or Explorer node. A pass reports the
 server, the login and how many databases it sees, fills the Database Name list, and warns when the typed database is
 not among them; a failure shows the same error, details and Copy details as a failed Connect, and its certificate fix trusts the
 certificate and tests again rather than connecting. While it runs the
