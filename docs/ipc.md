@@ -1495,7 +1495,15 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   so the dialog's overwrite confirmation stays valid), ownership is checked again, and only the file name
   returns (`EXPORT_FAILED` tokens become sentences naming only it). `varia:results-job-cancel` sends CANCEL reason 1; a
   reload or closed window, reason 3. Dialogs are shown one at a time (`src/main/dialog-queue.ts`). Paths come only from
-  the dialog and reach only the backend.
+  the dialog and never reach the renderer.
+- **Local saves (`ResultsJobHost.saveLocal`).** `varia:results-save-local { suggestedName ≤ 128, columns, rows }` saves a
+  table the renderer holds (a local grid's): `trusted()`, strictly validated (1 – 64 columns, names ≤ 128, ≤ 10,000
+  rectangular rows, cells NULL or ≤ 4,000 characters, ≤ 4 Mi characters in all), refused `TOO_LARGE` before the dialog
+  when its file could pass 64 MiB (`localSaveBytes`), and sharing `JOB_BUSY` with results saves. Main formats it with
+  the TypeScript writer a page at a time, yielding between pages, and writes a temporary file renamed over the target
+  (`writeLocalSave`): a deleted folder is never recreated (`NOT_FOUND`), and a replaced file keeps its Unix permission
+  bits; on Windows it keeps no attributes or ACLs (Node has no `File.Replace`). Failures use the results save's tokens;
+  a Windows rename refused over a held file is `IN_USE`, over a read-only one `ACCESS`, over a folder `IS_DIRECTORY`.
 
 ## Live subscriptions
 

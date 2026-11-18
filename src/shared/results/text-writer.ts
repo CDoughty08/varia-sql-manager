@@ -14,6 +14,9 @@ const NAME_FIELD = 'Column'
 const FIELD_NAME_CHARS = 128
 const encoder = new TextEncoder()
 const bytes = (text: string): Uint8Array => encoder.encode(text)
+const literals = new Map<string, Uint8Array>()
+/** A literal's bytes, encoded once: quotes, separators and escapes are written per cell, some per byte. */
+const literal = (text: string): Uint8Array => { let encoded = literals.get(text); if (!encoded) literals.set(text, encoded = encoder.encode(text)); return encoded }
 const numberTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
 const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
 // A JSON number keeps its digits through a double (how most readers parse one) at 15 significant digits or fewer.
@@ -148,7 +151,7 @@ function tsvText(out: ChunkedBytes, text: Uint8Array, clipboard: boolean | undef
     const value = text[i]
     if (value !== B.tab && value !== B.lf && value !== B.cr && !(clipboard && value === 0)) continue
     out.write(text.subarray(start, i))
-    out.write(bytes(' '))
+    out.write(literal(' '))
     if (value === B.cr && text[i + 1] === B.lf) i++
     start = i + 1
   }
@@ -158,39 +161,39 @@ function tsvText(out: ChunkedBytes, text: Uint8Array, clipboard: boolean | undef
 /** RFC 4180: quoted only when needed, or when empty so '' differs from NULL. */
 function csvField(out: ChunkedBytes, text: Uint8Array): void {
   if (text.length > 0 && !text.some(value => value === B.comma || value === B.quote || value === B.cr || value === B.lf)) { out.write(text); return }
-  out.write(bytes('"'))
+  out.write(literal('"'))
   let start = 0
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== B.quote) continue
     out.write(text.subarray(start, i + 1))
-    out.write(bytes('"'))
+    out.write(literal('"'))
     start = i + 1
   }
   out.write(text.subarray(start))
-  out.write(bytes('"'))
+  out.write(literal('"'))
 }
 
 const escapes: Readonly<Record<number, string>> = { [B.quote]: '\\"', [B.backslash]: '\\\\', [B.lf]: '\\n', [B.cr]: '\\r', [B.tab]: '\\t', 8: '\\b', 12: '\\f' }
 /** Quote, backslash, C0, U+2028 and U+2029 escaped; everything else raw UTF-8. */
 function jsonString(out: ChunkedBytes, text: Uint8Array): void {
-  out.write(bytes('"'))
+  out.write(literal('"'))
   let start = 0
   for (let i = 0; i < text.length; i++) {
     const value = text[i]
     if (value === 0xe2 && text[i + 1] === 0x80 && (text[i + 2] === 0xa8 || text[i + 2] === 0xa9)) {
       out.write(text.subarray(start, i))
-      out.write(bytes(text[i + 2] === 0xa8 ? '\\u2028' : '\\u2029'))
+      out.write(literal(text[i + 2] === 0xa8 ? '\\u2028' : '\\u2029'))
       i += 2
       start = i + 1
       continue
     }
     if (value >= 0x20 && value !== B.quote && value !== B.backslash) continue
     out.write(text.subarray(start, i))
-    out.write(bytes(escapes[value] ?? '\\u00' + value.toString(16).toUpperCase().padStart(2, '0')))
+    out.write(literal(escapes[value] ?? '\\u00' + value.toString(16).toUpperCase().padStart(2, '0')))
     start = i + 1
   }
   out.write(text.subarray(start))
-  out.write(bytes('"'))
+  out.write(literal('"'))
 }
 
 function hex(out: ChunkedBytes, data: Uint8Array): void {
@@ -227,8 +230,8 @@ export class TextWriter {
   }
   get bytes(): number { return this.out.length }
   begin(): void {
-    if (this.options.bom) this.out.write(bytes('﻿'))
-    if (this.options.format === 'json') this.out.write(bytes('['))
+    if (this.options.bom) this.out.write(literal('﻿'))
+    if (this.options.format === 'json') this.out.write(literal('['))
   }
   header(selected: readonly number[]): void {
     if (this.options.format === 'json' || !this.options.headers) return
@@ -244,14 +247,14 @@ export class TextWriter {
   /** One row of a decoded page (wire/pages.ts PageView). */
   row(page: PageView, row: number, selected: readonly number[]): void {
     if (this.options.format === 'json') {
-      this.out.write(bytes(this.records === 0 ? '\n{' : ',\n{'))
+      this.out.write(literal(this.records === 0 ? '\n{' : ',\n{'))
       selected.forEach((column, i) => {
-        if (i > 0) this.out.write(bytes(','))
+        if (i > 0) this.out.write(literal(','))
         this.out.write(this.keys![column])
-        this.out.write(bytes(':'))
+        this.out.write(literal(':'))
         this.cell(page, row, column)
       })
-      this.out.write(bytes('}'))
+      this.out.write(literal('}'))
       this.records++
     } else {
       this.beginLine()
@@ -277,9 +280,9 @@ export class TextWriter {
     this.field = 0
     const name = bytes(this.columns[column].name === '' ? NO_COLUMN_NAME : this.columns[column].name)
     if (this.options.format === 'json') {
-      this.out.write(bytes(this.records === 0 ? '\n{' : ',\n{'))
+      this.out.write(literal(this.records === 0 ? '\n{' : ',\n{'))
       this.out.write(this.fieldKeys[0])
-      this.out.write(bytes(':'))
+      this.out.write(literal(':'))
       jsonString(this.out, name)
       return
     }
@@ -289,29 +292,29 @@ export class TextWriter {
   /** The line's next field: the column's value for one source row; JSON writes every value as text, NULL as null. */
   columnCell(page: PageView, row: number, column: number): void {
     if (this.options.format === 'json') {
-      this.out.write(bytes(','))
+      this.out.write(literal(','))
       this.out.write(this.fieldKeys[this.field + 1])
-      this.out.write(bytes(':'))
+      this.out.write(literal(':'))
     } else if (this.field > 0 || this.options.headers) this.out.write(this.separator)
     this.field++
     this.cell(page, row, column, false)
   }
   endColumn(): void {
-    if (this.options.format === 'json') { this.out.write(bytes('}')); this.records++ } else this.endLine()
+    if (this.options.format === 'json') { this.out.write(literal('}')); this.records++ } else this.endLine()
     this.columnsWritten++
   }
   text(name: Uint8Array): void {
     if (this.options.format === 'csv') csvField(this.out, name)
     else tsvText(this.out, name, this.options.clipboard)
   }
-  end(): void { if (this.options.format === 'json') this.out.write(bytes(this.records === 0 ? ']\n' : '\n]\n')) }
+  end(): void { if (this.options.format === 'json') this.out.write(literal(this.records === 0 ? ']\n' : '\n]\n')) }
   private beginLine(): void { if (!this.options.trailingEol && this.lines > 0) this.out.write(this.eol) }
   private endLine(): void { if (this.options.trailingEol) this.out.write(this.eol); this.lines++ }
   private cell(page: PageView, row: number, column: number, typed = true): void {
     const chunk: ColumnView = page.columns[column]
     if (chunk.validity !== undefined && !bit(chunk.validity, row)) {
-      if (this.options.format === 'json') this.out.write(bytes('null'))
-      else if (!this.options.nullAsEmpty) this.out.write(bytes('NULL'))
+      if (this.options.format === 'json') this.out.write(literal('null'))
+      else if (!this.options.nullAsEmpty) this.out.write(literal('NULL'))
       return
     }
     if (bit(chunk.truncated, row)) this.truncatedCells++
@@ -319,16 +322,16 @@ export class TextWriter {
     const json = this.options.format === 'json'
     switch (this.kinds[column] === 'binary' || typed ? this.kinds[column] : 'text') {
       case 'binary':
-        if (json) this.out.write(bytes('"'))
-        this.out.write(bytes('0x'))
+        if (json) this.out.write(literal('"'))
+        this.out.write(literal('0x'))
         hex(this.out, value)
-        if (json) this.out.write(bytes('"'))
+        if (json) this.out.write(literal('"'))
         return
       case 'number':
         if (json && value.length <= 64 && jsonNumber.test(String.fromCharCode(...value)) && keepsValue(String.fromCharCode(...value))) { this.out.write(value); return }
         break
       case 'bit':
-        if (json && value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(bytes(value[0] === 49 ? 'true' : 'false')); return }
+        if (json && value.length === 1 && (value[0] === 48 || value[0] === 49)) { this.out.write(literal(value[0] === 49 ? 'true' : 'false')); return }
         break
     }
     if (this.options.format === 'tsv') tsvText(this.out, value, this.options.clipboard)

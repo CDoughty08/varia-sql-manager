@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { rm, stat } from 'node:fs/promises'
+import { lstat, rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { z } from 'zod'
 import type { ResultsCopyParams, ResultsExportParams, ResultsFormat, ResultsJobProgress, ResultsJobResult, SavedLocalResults, SavedResults } from '../shared/contracts'
@@ -87,6 +87,8 @@ export interface JobHostDeps {
   exportHeaders(): Promise<boolean>
   platform: NodeJS.Platform
   now?: () => number
+  /** stat of a local save's target after a refused replace, replaced in tests. */
+  statTarget?: (path: string) => Promise<{ isDirectory(): boolean; mode: number }>
   /** writeBytesAtomic (a local table's save), replaced in tests. */
   writeFile?: (path: string, data: Uint8Array) => Promise<void>
   /** removeExportLeftovers, replaced in tests. */
@@ -95,6 +97,15 @@ export interface JobHostDeps {
 
 /** A failed local save's error code as the backend's EXPORT_FAILED tokens name it. */
 const errnoTokens: Partial<Record<string, string>> = { EACCES: 'ACCESS', EPERM: 'ACCESS', ENOSPC: 'DISK_FULL', EBUSY: 'IN_USE', ENOENT: 'NOT_FOUND', EISDIR: 'IS_DIRECTORY' }
+
+/**
+ * A local save's write: into the folder the dialog chose, never one recreated (a folder deleted since says so), and a
+ * replaced file keeps its permission bits, as a results save's does (Unix; Windows keeps no attributes, docs/ipc.md).
+ */
+export async function writeLocalSave(path: string, data: Uint8Array): Promise<void> {
+  const target = await lstat(path).catch(() => undefined)
+  await writeBytesAtomic(path, data, { createFolder: false, ...target?.isFile() ? { mode: target.mode & 0o777 } : {} })
+}
 
 /** What a request of a grid drawn transposed adds to the backend's parameters. */
 const turnedParams = (request: { transposed?: boolean; headerColumn?: number }): { transposed?: true; headerColumn?: number } =>
@@ -234,21 +245,24 @@ export class ResultsJobHost {
   }
 
   /**
+   * Why a local save's write failed, as a results save says it: Windows refuses to replace a file another program holds,
+   * a read-only file or a folder with EPERM, EACCES or EBUSY at the rename (writeBytesAtomic marks it), where the backend
+   * says IN_USE, ACCESS or IS_DIRECTORY.
+   */
+  private async writeFailure(error: unknown, path: string): Promise<string> {
+    const { code, replacing } = error as NodeJS.ErrnoException & { replacing?: boolean }
+    if (replacing && this.deps.platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY')) {
+      const found = await (this.deps.statTarget ?? stat)(path).catch(() => undefined)
+      // Node reports Windows' read-only attribute as a mode without the owner's write bit.
+      return found?.isDirectory() ? 'IS_DIRECTORY' : found && (found.mode & 0o200) === 0 ? 'ACCESS' : 'IN_USE'
+    }
+    return errnoTokens[code ?? ''] ?? 'IO'
+  }
+  /**
    * Save Results As of a local table (a Peek list, a Properties table): the same dialog, folder and format memory as a
    * results grid's save, and the same text, written here by the TypeScript twin of ResultTextWriter from the rows the
    * renderer holds; a temporary file renamed over the target, so a failed write leaves no partial file.
    */
-  /**
-   * Why a local save's write failed, as a results save says it: Windows refuses to replace a file another program holds,
-   * or a folder, with EPERM, EACCES or EBUSY at the rename (writeBytesAtomic marks it), where the backend says IN_USE or
-   * IS_DIRECTORY.
-   */
-  private async writeFailure(error: unknown, path: string): Promise<string> {
-    const { code, replacing } = error as NodeJS.ErrnoException & { replacing?: boolean }
-    if (replacing && this.deps.platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'))
-      return (await stat(path).then(found => found.isDirectory(), () => false)) ? 'IS_DIRECTORY' : 'IN_USE'
-    return errnoTokens[code ?? ''] ?? 'IO'
-  }
   async saveLocal(value: unknown): Promise<SavedLocalResults | null> {
     const parsed = localSaveRequestSchema.safeParse(value)
     if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
@@ -263,9 +277,8 @@ export class ResultsJobHost {
       if (!chosen) return null
       const { path, format } = chosen
       fileName = basename(path)
-      const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] })
-      // Into the folder the dialog chose, never one recreated: a folder deleted since then says so.
-      try { await (this.deps.writeFile ?? ((target: string, bytes: Uint8Array) => writeBytesAtomic(target, bytes, { createFolder: false })))(path, data) } catch (error) {
+      const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] }, () => new Promise(resolve => setImmediate(resolve)))
+      try { await (this.deps.writeFile ?? writeLocalSave)(path, data) } catch (error) {
         throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(await this.writeFailure(error, path), fileName))
       }
       this.lastDir = dirname(path)

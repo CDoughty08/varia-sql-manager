@@ -1198,7 +1198,7 @@ try {
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe(['Order Lines', 'Orders', 'customers'].join(eol))
   // A new table with the same columns keeps the sort, and its old view is disposed: one view left, none after unmount.
-  const rerenderLocal = table => page.evaluate(value => window.__variaGrid.rerenderLocal(value), table)
+  const rerenderLocal = (table, patch) => page.evaluate(([value, options]) => window.__variaGrid.rerenderLocal(value, options), [table, patch])
   await rerenderLocal({ ...localTable, rows: [...localTable.rows, ['Archive', 'table', '20000', null]] })
   await expect(local).toHaveAttribute('aria-label', 'Local list, 4 rows, 4 columns')
   await expect(gridCell(local, 0, 0)).toHaveText('Archive')
@@ -1236,19 +1236,34 @@ try {
   // An empty table says so in its owner's words.
   await mountLocal({ columns: localTable.columns, rows: [] }, { label: 'Local empty', preset: 'card', empty: 'No predicates apply.' })
   await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
-  // The card has room for it: the overlay ends inside the card.
-  expect(await bottomOf(localGridFrame(page, 'Local empty').locator(gridPart.overlay))).toBeLessThanOrEqual(await bottomOf(localGridFrame(page, 'Local empty')) + 0.5)
+  // The card has room for it: its text fits the overlay, which ends at the card's bottom.
+  expect(await localGridFrame(page, 'Local empty').locator(gridPart.overlay).evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true)
+  // A cell cut to the bound says so in the strip, and the card makes room for the strip under its rows.
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
+  await expect(localGridFrame(page, 'Local cut').locator(gridPart.strip)).toHaveText('1 value was cut to 4,000 characters.')
+  expect(await bottomOf(gridCell(localGrid(page, 'Local cut'), 1, 0))).toBeLessThanOrEqual(await localGridFrame(page, 'Local cut').locator(gridPart.strip).evaluate(element => element.getBoundingClientRect().top) + 0.5)
   // An owner's kept state keeps its sort across a remount, but only for the columns it was chosen for.
-  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: true })
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
   const keptGrid = localGrid(page, 'Local kept')
   await localSort(2, 'Sort Descending', keptGrid)
-  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: true })
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
   await expect(keptGrid.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
   const otherColumns = { columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] }
   await rerenderLocal(otherColumns)
-  await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: true })
+  await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: 'one' })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('b')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // Another kept state is another grid: its own sort, not the last one's.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await localSort(2, 'Sort Descending', keptGrid)
+  await rerenderLocal(localTable, { keepState: 'two' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await rerenderLocal(localTable, { keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  // A table shown unsortable drops the sort: it offers no Clear Sort to undo one.
+  await rerenderLocal(localTable, { keepState: 'one', sortable: false })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
   await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
   await page.evaluate(() => window.__variaGrid.unmountLocal())
   await expect(page.locator(part.localGrid)).toHaveCount(0)

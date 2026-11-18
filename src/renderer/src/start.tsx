@@ -67,7 +67,7 @@ export async function start(root: Root): Promise<void> {
         setScrollCap: (px?: number) => stats?.setScrollCap(px),
         // A local grid over a table in renderer memory, as a Peek list or a Properties page shows one (results-smoke.mjs).
         mountLocal: (table: Parameters<typeof mountTestLocalGrid>[1], o: Parameters<typeof mountTestLocalGrid>[2]) => mountTestLocalGrid(workbench, table, o),
-        rerenderLocal: (table: Parameters<typeof rerenderTestLocalGrid>[0]) => rerenderTestLocalGrid(table),
+        rerenderLocal: (table: Parameters<typeof rerenderTestLocalGrid>[0], patch?: Parameters<typeof rerenderTestLocalGrid>[1]) => rerenderTestLocalGrid(table, patch),
         unmountLocal: () => unmountTestLocalGrid(),
         // Grid views not yet disposed with this entry ('local' for local grids): one per mounted grid, none left after.
         aliveViews: (entry: string) => GridView.alive.get(entry) ?? 0,

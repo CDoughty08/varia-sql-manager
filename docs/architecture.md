@@ -261,8 +261,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `ResultHandle`); `LocalSource` (`grid/local-source.ts`) serves the table from memory, and a sort is a new source the
     grid swaps in. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
     built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
-    with its own source (view `live`, `LiveOutput`); a `card` has no Save. A save is refused before its dialog when its
-    file could pass `saveBytes` (`localSaveBytes`), and never recreates a deleted folder. `LocalGrid` disposes the view it
+    with its own source (view `live`, `LiveOutput`); a `card` has no Save. Its strip says what the bounds left out (rows
+    past the first, cells cut). A save is refused before its dialog when its file could pass `saveBytes`
+    (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
     mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
   (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens

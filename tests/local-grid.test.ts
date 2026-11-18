@@ -1,14 +1,15 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { decodePage, encodePage } from '../src/shared/ipc/wire/pages'
-import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localSavePageRows, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { exportText } from '../src/shared/results/text-writer'
 import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
 import { FLAG_CAPPED, FLAG_NULL } from '../src/renderer/src/results/worker-protocol'
 import { localSaveRequestSchema } from '../src/main/validation'
-import { ResultsJobHost, type JobHostDeps } from '../src/main/results-jobs'
+import { ResultsJobHost, writeLocalSave, type JobHostDeps } from '../src/main/results-jobs'
 import { BackendError } from '../src/main/backend/errors'
 import { writeBytesAtomic } from '../src/main/json-file'
 
@@ -64,6 +65,18 @@ describe('local tables', () => {
     expect(decode(tsv.data)).toBe('﻿Orders\t1,200\tNULL\r\ncustomers\t80\ttab here\r\nOrder Lines\t9000\ta,"b"\r\norder\tNULL\tline break\r\n')
     const json = JSON.parse(decode((await localExportBytes(table, { format: 'json', headers: true, nullText: 'NULL' })).data))
     expect(json).toEqual([{ Name: 'Orders', Rows: '1,200', Note: null }, { Name: 'customers', Rows: 80, Note: 'tab\there' }, { Name: 'Order Lines', Rows: 9000, Note: 'a,"b"' }, { Name: 'order', Rows: null, Note: 'line\r\nbreak' }])
+  })
+
+  it('save a page at a time, yielding between pages, and write what one page would', async () => {
+    const long: LocalTableData = { columns: [{ name: 'Name' }, { name: 'n', kind: 'number' }], rows: Array.from({ length: localSavePageRows * 2 + 7 }, (_, i) => [i % 5 ? `row "${i}"` : null, String(i)]) }
+    for (const format of ['csv', 'tsv', 'json'] as const) {
+      let yields = 0
+      const paged = await localExportBytes(long, { format, headers: true, nullText: 'NULL' }, async () => { yields++ })
+      const page = localPage(long)
+      const whole = await exportText({ columns: textColumns(long.columns), pageAt: () => page, rows: page.rowCount, format, headers: true, nullText: 'NULL' })
+      expect(paged.data).toEqual(whole.out.bytes())
+      expect(yields).toBe(3)
+    }
   })
 
   it('sort stably: NULL first, numbers by value, text by the locale with digits as numbers', () => {
@@ -192,5 +205,23 @@ describe('local saves in main', () => {
     expect(await held('win32', true)).toBe('Could not save the results: cols.txt is open in another program.')
     expect(await held('win32', false)).toBe('Could not save the results: access to cols.txt is denied.')
     expect(await held('linux', true)).toBe('Could not save the results: access to cols.txt is denied.')
+    // Refused over a read-only file it is denied, over a folder it is a folder, as a results save says.
+    const refused = (found: { isDirectory(): boolean; mode: number }) => host({ platform: 'win32', statTarget: async () => found, writeFile: async () => { throw Object.assign(new Error('refused'), { code: 'EPERM', replacing: true }) } }).jobs.saveLocal(request).catch((value: Error) => value.message)
+    expect(await refused({ isDirectory: () => false, mode: 0o444 })).toBe('Could not save the results: access to cols.txt is denied.')
+    expect(await refused({ isDirectory: () => true, mode: 0o777 })).toBe('Could not save the results: cols.txt is a folder.')
+    expect(await refused({ isDirectory: () => false, mode: 0o666 })).toBe('Could not save the results: cols.txt is open in another program.')
+  })
+
+  it.skipIf(process.platform === 'win32')('keep the permission bits of a file they replace, as a results save does', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'varia-local-mode-'))
+    try {
+      const path = join(folder, 'cols.csv')
+      await writeFile(path, 'old')
+      await chmod(path, 0o600)
+      await writeLocalSave(path, new TextEncoder().encode('new'))
+      expect((await stat(path)).mode & 0o777).toBe(0o600)
+    } finally {
+      await rm(folder, { recursive: true, force: true })
+    }
   })
 })

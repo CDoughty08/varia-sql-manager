@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
-import { boundTable, localCopyText, type LocalTableData } from '../../../shared/results/local-table'
+import { boundTable, localCopyText, localTableLimits, type LocalTableData } from '../../../shared/results/local-table'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { registerLiveOutput, type LiveOutput } from '../menus/targets'
@@ -10,6 +10,7 @@ import { gridLimits as g } from './constants'
 import GridShell, { GridErrorBoundary, instanceKey, type GridShellApi, type GridSpec } from './GridShell'
 import type { GridView, HeaderSortKey } from './GridView'
 import { localDescriptor, LocalSource, sortOrder, type LocalSortKey } from './local-source'
+import { scrollbarSize } from './scrollbar'
 import { copyPlan } from './selection'
 import { cycleSortKeys, sortKeysBy } from './sort-keys'
 
@@ -40,8 +41,6 @@ export interface LocalGridProps {
 /** The most keys a local table sorts by, as a results view's. */
 const maxSortKeys = 4
 const cardRows = 12
-/** A horizontal scroll bar's allowance under a card's rows, when its columns are wider than the card. */
-const cardScrollbar = 12
 /** An empty card's room under its header for the overlay that says so: `.rg-overlay`'s padding and a line of text. */
 const cardEmpty = 48
 const unsorted: readonly LocalSortKey[] = []
@@ -63,7 +62,8 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // The keys belong to the columns they were chosen for: derived in render, so the mount that a new table causes
   // already sees a table with other columns unsorted.
   const [sorted, setSorted] = useState(() => (state && keptSorts.get(state)) ?? { columns: columnsKey, keys: unsorted })
-  const keys = sorted.columns === columnsKey ? sorted.keys : unsorted
+  // A table shown unsortable (a report's rows, in order) drops any sort: it has no Clear Sort to undo one.
+  const keys = sortable && sorted.columns === columnsKey ? sorted.keys : unsorted
   const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => {
     const keys = next(current.columns === columnsKey ? current.keys : unsorted)
     if (state) keptSorts.set(state, { columns: columnsKey, keys })
@@ -153,19 +153,24 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   useEffect(() => root ? registerLiveOutput(root, output) : undefined, [output, root])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const headerSort = useMemo<HeaderSortKey[]>(() => keys.map(key => ({ column: key.column, descending: key.descending })), [keys])
-  const truncated = bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined
-  // A card is as tall as its header and rows, up to `maxRows`, with room for a scroll bar under columns wider than it.
-  const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? cardScrollbar : 0)) + 2 : undefined
+  // What the bounds left out is shown, as a results grid shows truncated values: rows past the first, and cut cells.
+  const cut = bound.cutCells > 0 ? `${formatCount(bound.cutCells)} ${bound.cutCells === 1 ? 'value was' : 'values were'} cut to ${formatCount(localTableLimits.cellChars)} characters.` : undefined
+  const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, cut].filter(Boolean).join(' ') || undefined
+  const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
+  // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
+  // than it and for its strip.
+  const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
   return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.
     gone={rows === 0 ? empty ?? 'No rows.' : undefined}
-    strip={notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined} />
+    strip={strip} />
 }
 
 /** A local table's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export function LocalGrid(props: LocalGridProps) {
-  return <GridErrorBoundary contents="rows" frameProps={{ className: 'local-grid', 'data-local-grid': props.preset }}><LocalGridBody {...props} /></GridErrorBoundary>
+  // Another kept state is another grid: its sort, selection and scroll come back together.
+  return <GridErrorBoundary contents="rows" frameProps={{ className: 'local-grid', 'data-local-grid': props.preset }}><LocalGridBody key={props.state ? instanceKey(props.state) : 'own'} {...props} /></GridErrorBoundary>
 }

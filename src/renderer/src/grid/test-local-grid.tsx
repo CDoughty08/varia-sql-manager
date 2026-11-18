@@ -9,12 +9,13 @@ import { LocalGrid, type LocalGridPreset } from './LocalGrid'
 
 export interface TestLocalGridOptions {
   readonly label: string; readonly preset: LocalGridPreset; readonly empty?: string; readonly suggestedName?: string; readonly sortable?: boolean
-  /** Keeps one view state across mounts, as an owner that remounts its grid (a tab switch) does. */
-  readonly keepState?: boolean
+  /** The name of a view state kept across mounts, as an owner that remounts its grid (a tab switch) keeps one per tab. */
+  readonly keepState?: string
 }
-let keptState: GridViewState | undefined
+const keptStates = new Map<string, GridViewState>()
+const keptState = (name: string): GridViewState => { let state = keptStates.get(name); if (!state) keptStates.set(name, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }); return state }
 
-const props = ({ keepState, ...o }: TestLocalGridOptions) => keepState ? { ...o, state: keptState ??= { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false } } : o
+const props = ({ keepState, ...o }: TestLocalGridOptions) => keepState ? { ...o, state: keptState(keepState) } : o
 let mounted: { root: Root; host: HTMLElement; workbench: Workbench; o: TestLocalGridOptions } | undefined
 export function mountTestLocalGrid(workbench: Workbench, table: LocalTableData, o: TestLocalGridOptions): void {
   unmountTestLocalGrid()
@@ -26,9 +27,10 @@ export function mountTestLocalGrid(workbench: Workbench, table: LocalTableData, 
   root.render(<WorkbenchProvider workbench={workbench}><LocalGrid table={table} {...props(o)} /></WorkbenchProvider>)
   mounted = { root, host, workbench, o }
 }
-/** The mounted grid given a new table, as an owner renders one: the same component, not a new mount. */
-export function rerenderTestLocalGrid(table: LocalTableData): void {
+/** The mounted grid given a new table (and options), as an owner renders one: the same component, not a new mount. */
+export function rerenderTestLocalGrid(table: LocalTableData, patch: Partial<TestLocalGridOptions> = {}): void {
   if (!mounted) return
+  mounted.o = { ...mounted.o, ...patch }
   mounted.root.render(<WorkbenchProvider workbench={mounted.workbench}><LocalGrid table={table} {...props(mounted.o)} /></WorkbenchProvider>)
 }
 export function unmountTestLocalGrid(): void {

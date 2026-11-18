@@ -9,19 +9,10 @@ import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { stackReveals } from './result-picker'
+import { scrollbarSize } from './scrollbar'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
-let scrollbar: number | undefined
-/** The platform's scroll bar thickness (classic scroll bars take room; overlay ones take none). */
-export function scrollbarSize(): number {
-  if (scrollbar !== undefined) return scrollbar
-  const probe = document.createElement('div')
-  probe.style.cssText = 'position:absolute;top:-1000px;width:100px;height:100px;overflow:scroll'
-  document.body.append(probe)
-  scrollbar = probe.offsetHeight - probe.clientHeight
-  probe.remove()
-  return scrollbar
-}
+export { scrollbarSize }
 
 /**
  * Each set's height sized to its rows once it has them all (`contentHeight`), undefined while it streams. A horizontal scroll

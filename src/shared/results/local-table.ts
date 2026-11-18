@@ -66,14 +66,14 @@ const encoder = new TextEncoder()
 export const textColumns = (columns: readonly LocalColumn[]): TextColumn[] => columns.map(column => ({ name: column.name, dataType: column.kind === 'number' ? 'decimal' : 'nvarchar', wire: 'text' }))
 
 /** One page over every row, as a decoded result page holds them (pages.ts ColumnView), in the order given. */
-export function localPage(table: LocalTableData, order?: readonly number[]): PageView {
-  const count = order?.length ?? table.rows.length
+export function localPage(table: LocalTableData, order?: readonly number[], first = 0, rows?: number): PageView {
+  const count = Math.max(0, Math.min(rows ?? Number.MAX_SAFE_INTEGER, (order?.length ?? table.rows.length) - first))
   let byteLength = 0
   const columns = table.columns.map((_, column) => {
     const parts: Uint8Array[] = [], offsets = new Uint32Array(count + 1), validity = new Uint8Array(Math.ceil(count / 8))
     let at = 0
     for (let index = 0; index < count; index++) {
-      const value = table.rows[order ? order[index] : index][column] ?? null
+      const value = table.rows[order ? order[first + index] : first + index][column] ?? null
       if (value !== null) {
         validity[index >>> 3] |= 1 << (index & 7)
         const data = encoder.encode(value)
@@ -88,7 +88,7 @@ export function localPage(table: LocalTableData, order?: readonly number[]): Pag
     byteLength += at
     return { wire: 'text' as const, validity, offsets, data, truncated: undefined, errors: undefined }
   })
-  return { resultId: 0, firstRow: 0, rowCount: count, columns, byteLength }
+  return { resultId: 0, firstRow: first, rowCount: count, columns, byteLength }
 }
 
 const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
@@ -103,8 +103,12 @@ export async function localCopyText(table: LocalTableData, parts: readonly TextP
 }
 
 /** Save Results As of a whole local table in the rows' order, as a results grid saves (a BOM and CRLF for CSV and TSV). */
-export async function localExportBytes(table: LocalTableData, o: { format: TextFormat; headers: boolean; nullText: 'empty' | 'NULL' }): Promise<{ data: Uint8Array; rows: number }> {
-  const page = localPage(table)
-  const writer = await exportText({ columns: textColumns(table.columns), pageAt: () => page, rows: page.rowCount, format: o.format, headers: o.headers, nullText: o.nullText })
+/** Rows a save formats between yields: main stays responsive while it writes a large table. */
+export const localSavePageRows = 512
+export async function localExportBytes(table: LocalTableData, o: { format: TextFormat; headers: boolean; nullText: 'empty' | 'NULL' }, afterPage?: () => Promise<void>): Promise<{ data: Uint8Array; rows: number }> {
+  // A page at a time, each built when the writer reaches it, with `afterPage` (main's yield) between them.
+  let page: PageView | undefined
+  const pageAt = (row: number) => page && row >= page.firstRow && row < page.firstRow + page.rowCount ? page : page = localPage(table, undefined, row - row % localSavePageRows, localSavePageRows)
+  const writer = await exportText({ columns: textColumns(table.columns), pageAt, rows: table.rows.length, format: o.format, headers: o.headers, nullText: o.nullText }, afterPage)
   return { data: writer.out.bytes(), rows: writer.rows }
 }
