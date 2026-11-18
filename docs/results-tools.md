@@ -305,8 +305,9 @@ A [named result](#named-results) shows its name wherever an unnamed one says "Re
 | Column Profile, splitter, plans | "Resize Open orders, Result 2", "Open orders, Result 2, plan 1"; a Pivot or comparison by its own name ("Resize Differences: Open orders → Result 3"). |
 | Memory details | "Query 3 · Open orders · Result 2"; narrow panels cut the query part first. |
 
-- Tabs showing a query-given name (or a Pivot or comparison made from one) are at most `--varia-resultTab` wide
-  (docs/themes/metrics.md) with an ellipsis; such a caption's name gives way before its facts. Tooltips keep the whole name.
+- Tabs showing a query-given name (or a Pivot made from one) are at most `--varia-resultTab` wide
+  (docs/themes/metrics.md) with an ellipsis; such a caption's name gives way before its facts. A comparison's tab is not
+  capped: its sides are shortened in the middle instead. Tooltips keep the whole name.
 - Two results of one name keep it, with numbers in lists, tooltips and accessible names ("Totals · Result 2"); things named
   after one add the number: "Pivot of Totals (Result 5)", "Differences: Totals (Result 2) → Orders".
 - A Pivot's or comparison's title is fixed when made.

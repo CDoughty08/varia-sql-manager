@@ -1001,9 +1001,9 @@ describe('named results as tabs', () => {
     draw()
     expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Open ord…quarter → Result 2'])
     expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', `Differences: ${long} → Result 2`])
-    // Only a tab that shows a name the query gave is capped and may end in an ellipsis (the fixture's comparison is made from
-    // Result 1, named here); the rest are laid out as before.
-    expect(all('.rt-tab').map(element => element.dataset.named ?? null)).toEqual(['true', null, 'true', 'true'])
+    // Only a result's tab that shows a name the query gave is capped and may end in an ellipsis; the rest are laid out as
+    // before. A comparison made from it is not capped: its sides are shortened in the middle, and a cap would cut the new one.
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null)).toEqual(['true', null, 'true', null])
     // The name is the tab's text alone: the tab's widest is a theme metric and the text ends in an ellipsis there.
     expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
     expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
@@ -1079,7 +1079,7 @@ describe('a named result\'s Pivot as tabs', () => {
 })
 
 describe('a comparison of named results as tabs', () => {
-  it('cap a comparison made from a named result, with its whole title in the tooltip, and leave one of unnamed results as it was', () => {
+  it('label a comparison made from a named result by its sides, uncapped, with its whole title in the tooltip', () => {
     const { results, draw, resultTabs, all } = fixture(['Open orders'])
     const [, two, three] = results.getSnapshot().t1.sets
     results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', [two.descriptor, three.descriptor].map(set => `${set.generation}:${set.resultId}`))
@@ -1089,7 +1089,7 @@ describe('a comparison of named results as tabs', () => {
     expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Open orders → Result 2', 'Result 2 → Result 3'])
     expect(tabs.map(button => button.getAttribute('aria-label')).slice(-2)).toEqual(['Differences: Open orders → Result 2', 'Differences: Result 2 → Result 3'])
     expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Open orders → Result 2', 'Differences: Result 2 → Result 3'])
-    expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual(['true', null])
+    expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual([null, null])
   })
 
   it('label a comparison\'s tab "old → new" with each side shortened in the middle, and name it in full', () => {

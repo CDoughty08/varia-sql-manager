@@ -386,7 +386,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
         // A named result's tooltip has its whole name (the tab may cut it short) and its number; a comparison's, its full name
         // ("Differences: Result 1 → Result 3"), as its tab shows only "old → new".
-        const tip = [item.number ? `${item.name} · ${item.number}` : item.named || item.short ? item.name : '', batch].filter(Boolean).join(' · ')
+        const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : '', batch].filter(Boolean).join(' · ')
         // A named result's accessible name carries its number too, so a screen reader tells two of one name apart; a
         // comparison's is its full name.
         const spoken = item.number ? `${item.name}, ${item.number}` : item.name

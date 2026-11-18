@@ -1034,7 +1034,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
 .rt-tab[data-selected] > [role="tab"] { font-weight: 600; }
 /* A tab that shows a name the query gave ends it in an ellipsis at its widest (--varia-resultTab); its tooltip has it
-   whole. An unnamed result's or comparison's tab is as wide as its words, as before. */
+   whole. An unnamed result's tab is as wide as its words, as before, and so is a comparison's, whose sides are shortened
+   in the middle instead. */
 .rt-tab[data-named] { max-width: var(--varia-resultTab); }
 .rt-tab .rt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rt-tab > [role="tab"] > .codicon, .rt-tab > .rt-close { flex: none; }
