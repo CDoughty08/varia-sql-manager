@@ -450,7 +450,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
         // would only add a failed login (lockout policies). The notice asks for the password.
         if (rejections.current !== rejected && !labelled.password) return undefined
       }
-      const result = await window.varia.discoverDatabases(labelled, { ...match ? { profileId: match.id } : {}, requestId, ...kind === 'save' ? { remember: true } : {} })
+      // The entry remembered for these settings, not the form's as rendered: a certificate retry changes them in the same
+      // click, and a stale id would sign in with no password.
+      const saved = rememberedProfile(library.profiles, savedIds, labelled, selectedId)
+      const result = await window.varia.discoverDatabases(labelled, { ...saved ? { profileId: saved.id } : {}, requestId, ...kind === 'save' ? { remember: true } : {} })
       if (!alive.current) return undefined
       if (result.ok) return result.value
       if (result.code === 'CANCELLED') { setNotice(kind === 'save' ? saveCancelledNotice : testCancelledNotice); return undefined }

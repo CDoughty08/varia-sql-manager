@@ -747,4 +747,14 @@ describe('Save and Test Connection', () => {
     expect(view.api.connect).not.toHaveBeenCalled()
     expect(text(view)).toContain('Connected to cert-server')
   })
+
+  it('tests again with the password remembered for the trusted settings after Trust server certificate', async () => {
+    const trusted = { ...sqlProfile(), options: { ...sqlProfile().options, trustServerCertificate: true } }
+    const view = await mount(undefined, { profiles: [trusted], savedPasswords: [trusted.id], initial: { ...trusted.options, displayName: '', trustServerCertificate: false } })
+    discover({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'server-7', reason: 'certificate' } })
+    await act(async () => view.button('Test Connection').click())
+    const passing = discover({ ok: true, value: [] })
+    await act(async () => view.button('Trust server certificate and test').click())
+    expect(passing).toHaveBeenCalledWith(expect.objectContaining({ trustServerCertificate: true, password: '' }), expect.objectContaining({ profileId: trusted.id }))
+  })
 })
