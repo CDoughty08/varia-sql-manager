@@ -452,6 +452,20 @@ describe('Save with a checked password', () => {
     expect(saved.library.profiles[0].lastConnected).toBeUndefined()
     expect((await library.remove(saved.library.profiles[0].id)).library.profiles).toEqual([])
   })
+  it('stops marking an entry saved once it connects, and never marks a recent one', async () => {
+    const { connections, savedPasswords, request } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const server = { ...options, server: 'saved-then-connected' }
+    expect((await library.save({ options: server, saved: true })).library.profiles[0].saved).toBe(true)
+    await request('connections.connect', server, {}, () => ({ ok: true, value: info() }))
+    let profile = (await connections.load()).library.profiles.find(item => item.options.server === server.server)!
+    expect(profile).toMatchObject({ lastConnected: expect.any(String) })
+    expect(profile.saved).toBeUndefined()
+    // Saving the recent entry again does not pin it: it ages out of the 30 recent ones like any other.
+    await library.save({ id: profile.id, options: server, saved: true })
+    profile = (await connections.load()).library.profiles.find(item => item.id === profile.id)!
+    expect(profile.saved).toBeUndefined()
+  })
   it('remembers only the password a check just signed in with, once', async () => {
     const { directory, connections, savedPasswords, request } = await setup()
     const library = connectionLibrary({ connections, savedPasswords })

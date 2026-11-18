@@ -553,6 +553,13 @@ try {
   await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
   expect(await connects()).toBe(connectsBefore)
   expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'test-server')).toBe(false)
+  // Connect drops the report: it is not about this attempt, which here fails.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to server-down\b/)).toBeVisible()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Server unavailable.')
+  await expect(dialog.getByText(/^Connected to server-down\b/)).toHaveCount(0)
   // A changed form drops the report; a failed test shows Connect's error with its details.
   await dialog.getByLabel('Server Name', { exact: true }).fill('db-error')
   await expect(dialog.getByText(/^Connected to test-server/)).toHaveCount(0)
@@ -570,6 +577,13 @@ try {
   await expect(dialog.getByText('Test cancelled.', { exact: true })).toBeVisible()
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
+  // Cancel stops a running test too, as Stop does while connecting; it neither closes the dialog nor asks to save.
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeEnabled()
+  await expect(dialog).toBeVisible()
+  await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
   await dialog.getByLabel('Database Name', { exact: true }).fill(databaseBefore)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   // A failure shows above the footer: Connect and Cancel stay where they were before it.
