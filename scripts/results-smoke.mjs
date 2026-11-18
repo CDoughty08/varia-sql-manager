@@ -2085,14 +2085,15 @@ try {
   const towards = grip.x > funnelBox.x + funnelBox.width / 2 ? 1 : -1
   await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
   await page.mouse.down()
-  await page.mouse.move(grip.x + grip.width / 2 + 40 * towards, grip.y + grip.height / 2 + 30, { steps: 4 })
+  // Narrower, which always fits: a drag never grows it past the room on its side, which a small window may not have.
+  await page.mouse.move(grip.x + grip.width / 2 - 40 * towards, grip.y + grip.height / 2 + 30, { steps: 4 })
   await page.mouse.up()
-  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) + 40)
+  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) - 40)
   await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(funnel('name')).toHaveCount(0)
   await header('name').hover()
   await header('name').locator(gridPart.funnelButton).click()
-  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) + 40)
+  await expect.poll(async () => Math.round((await funnel('name').boundingBox()).width)).toBe(Math.round(funnelBox.width) - 40)
   if (!await across(await funnel('name').boundingBox())) throw new Error('The resized funnel popover covers its column.')
   await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(funnel('name')).toHaveCount(0)
