@@ -381,7 +381,7 @@ describe('main connection ownership', () => {
     const session: SessionInput = { documents: [], activeIndex: -1, workspace: { version: 1, targets: [{ id: first.targetId, options: connectionTargetOptions(options), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal, credential: before.authentication!.credential! }] } }
     await checkpoint.write(session, 7)
     const writing = deferred<void>(), entered = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
-    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; await save(...args) })
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; return save(...args) })
     const ticket = service.beginBindingMutation(passwordMutation(before.id))!
     const settling = service.finishBindingMutation(ticket, mutationResult(before.id, 1, { passwordChanged: true }))
     await entered.promise
@@ -415,7 +415,7 @@ describe('main connection ownership', () => {
     const before = connected.value as ConnectionInfo, previous = before.authentication!.credential!
     await service.accept(first.requestId)
     const writing = deferred<void>(), entered = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
-    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; await save(...args) })
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; return save(...args) })
     const settling = service.finishBindingMutation(service.beginBindingMutation(passwordMutation(before.id))!, mutationResult(before.id, 1, { passwordChanged: true }))
     await entered.promise
     expect(authentication.resolve(first.targetId)?.credential).toBeUndefined()
@@ -635,7 +635,7 @@ describe('main connection ownership', () => {
     const session: SessionInput = { documents: [], activeIndex: -1, workspace: { version: 1, targets: [{ id: first.targetId, options: connectionTargetOptions(options), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal, credential }] } }
     await checkpoint.write(session, 7)
     const writing = deferred<void>(), entered = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
-    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; await save(...args) })
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; return save(...args) })
     const update = request({ targetId: first.targetId, expectedPrincipal: principal, credential, credentialIntent: 'update-credentials', credentialPolicy: 'remember' })
     const pending = service.connect({ ...options, password: 'new-secret' }, update)
     await entered.promise
@@ -798,7 +798,7 @@ describe('main connection ownership', () => {
   it('waits for authenticated storage settlement and unaccepted transport cleanup after returning CANCELLED', async () => {
     const { service, request, savedPasswords, close } = await fixture()
     const writing = deferred<void>(), saving = deferred<void>(), ending = deferred<void>(), closing = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
-    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { saving.resolve(); await writing.promise; await save(...args) })
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { saving.resolve(); await writing.promise; return save(...args) })
     close.mockImplementationOnce(async () => { closing.resolve(); await ending.promise; return { disconnected: true } })
     const context = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, context)
     await saving.promise
@@ -823,7 +823,7 @@ describe('main connection ownership', () => {
     if (!initial.ok) throw initial.error
     await service.accept(first.requestId)
     const writing = deferred<void>(), entered = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
-    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; await save(...args) })
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; return save(...args) })
     const update = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, update)
     await entered.promise
     let acknowledged = false

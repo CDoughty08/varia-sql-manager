@@ -302,6 +302,33 @@ export function revealPinnedScroll(layout: RowLayout, index: number, scrollTop: 
   return low === scrollTop ? undefined : low
 }
 
+/**
+ * After an expand: the scroll offset that shows as many of row `parent`'s rows (through `last`) as fit without moving
+ * `parent` under the top overlays, or undefined when nothing needs to move. It only scrolls down: an expanded row's
+ * children are below it.
+ */
+export function revealChildrenScroll(layout: RowLayout, parent: number, last: number, scrollTop: number, viewport: number, topLimit: number, bottomLimit: number): number | undefined {
+  if (parent < 0 || last <= parent || last >= layout.count || viewport <= 0) return undefined
+  const toLast = revealPinnedScroll(layout, last, scrollTop, viewport, topLimit, bottomLimit)
+  if (toLast === undefined || toLast <= scrollTop) return undefined
+  // The offset that puts the parent just under the top overlays, worked out as if it were out of view.
+  const parentFirst = revealPinnedScroll(layout, parent, Number.MAX_SAFE_INTEGER, viewport, topLimit, bottomLimit, true) ?? toLast
+  const destination = Math.min(toLast, parentFirst)
+  return destination > scrollTop ? destination : undefined
+}
+
+/** The last row below row `index` (its expanded subtree), or `index` itself when nothing is below it. */
+export function lastDescendant(rows: VisibleRows, index: number): number {
+  let last = index
+  while (last + 1 < rows.count && rows.levels[last + 1] > rows.levels[index]) last++
+  return last
+}
+
+/** Row `index` shows what its expand listed below it: a child or its error row, not the Loading row (or nothing) of rows rendered before its page. */
+export function childrenShown(rows: VisibleRows, index: number): boolean {
+  return index >= 0 && index + 1 < rows.count && rows.levels[index + 1] > rows.levels[index] && rows.kinds[index + 1] !== RowKind.Loading
+}
+
 /** The rows to render, `[first, end)`: the viewport plus `overscan` rows on each side. */
 export function computeWindow(scrollTop: number, viewport: number, count: number, rowHeight: number = explorerLimits.rowHeight, overscan: number = explorerLimits.overscan): [number, number] {
   if (count <= 0 || rowHeight <= 0) return [0, 0]

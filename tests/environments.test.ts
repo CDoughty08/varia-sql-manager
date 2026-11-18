@@ -80,7 +80,7 @@ describe('environment in the connection options', () => {
   it('keeps a saved label when a connect does not carry one, unless the user set the form\'s Environment', async () => {
     const { path, store } = await tempStore()
     await store.save({ options: { ...base, environment: 'Production' }, favorite: true })
-    const deps: ConnectionRequestDeps = { connections: store, authentication: new ConnectionAuthenticationGuard(), savedPasswords: { storageAvailable: async () => true, get: async () => undefined, getReferenced: async () => undefined, reference: async () => undefined, set: async () => {}, forget: async () => {}, forgetCredentials: async () => {}, forgetRejected: async () => {}, reconcile: async () => ({ ids: [] }) } }
+    const deps: ConnectionRequestDeps = { connections: store, authentication: new ConnectionAuthenticationGuard(), savedPasswords: { storageAvailable: async () => true, get: async () => undefined, getReferenced: async () => undefined, reference: async () => undefined, set: async () => true, forget: async () => {}, forgetCredentials: async () => {}, forgetRejected: async () => {}, reconcile: async () => ({ ids: [] }) } }
     const connect = async (options: ConnectionOptions, context?: unknown) => {
       const info: ConnectionInfo = { id: crypto.randomUUID(), server: options.server, database: options.database, serverVersion: '17.0', generation: 1 }
       const settled = await settle(await prepare('connections.connect', validateRequest('connections.connect', options), context, deps), { ok: true, value: info }, deps)
@@ -149,7 +149,7 @@ describe('Set Connection Environment', () => {
   /** main's side as `window.varia.setConnectionEnvironment` reaches it, over a real connections.json. */
   async function mainSide() {
     const store = await tempStore()
-    const library = connectionLibrary({ connections: store.store, savedPasswords: { reconcile: async () => ({ ids: [] }), forget: async () => {}, state: async () => ({ available: true }) } })
+    const library = connectionLibrary({ connections: store.store, savedPasswords: { reconcile: async () => ({ ids: [] }), forget: async () => {}, set: async () => true, forgetCredentials: async () => {}, storageAvailable: async () => true, state: async () => ({ available: true }) } })
     const setEnvironment = vi.fn(async (input: unknown) => { try { return { ok: true as const, value: await library.setEnvironment(input) } } catch (error) { return { ok: false as const, error: (error as Error).message } } })
     return { ...store, setEnvironment }
   }

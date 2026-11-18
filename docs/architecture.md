@@ -30,7 +30,9 @@ only when a summary line stops being true.
     `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
-    for a matching binding. Remember password is disabled where safeStorage is unavailable, Linux's backend is
+    for a matching binding. Save remembers a typed password only when a `connections.databases` check with `remember`
+    just signed in with it: main keeps a keyed hash of that password per binding for a minute (never the password), and
+    Save without a match saves nothing. Remember password is disabled where safeStorage is unavailable, Linux's backend is
     `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key; the tags are not yet confirmed on a Linux desktop).
   - Entra tokens stay in backend memory for its lifetime (MSAL and Azure.Identity through Varia's
     `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main
@@ -534,7 +536,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
   the role, custom menus and the palette run it through `varia:run-role`. Varia's two-part chords are `bridge`
-  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
+  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. The one other Monaco rule is
+  Escape closing Peek's card (`registerPeekCardEscape`), while a query editor's `variaPeekCard` key is set (never in Peek's
+  own editor); an added rule outranks Monaco's defaults, so its clause steps aside for each Monaco widget that takes Escape
+  (`monacoEscapeContextKeys`, pinned by `tests/monaco-keybindings.test.ts`). User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
   keys only through `KeybindingService.capture`. Peek's Ctrl state, and the column profile's (`ProfilePeekService`), comes from
