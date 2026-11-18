@@ -246,6 +246,8 @@ internal sealed class ResultJobs(ResultStore store)
         try
         {
             CheckHeaderColumn(set, args.HeaderColumn);
+            // A diff's rows are entries with their markers (SavedColumns): turned, they would make no sense as columns.
+            if (args.Transposed && set.Kind == "diff") throw new RequestException("INVALID_PARAMS", "A comparison cannot be saved transposed.");
             if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Save the results after this result set finishes loading.");
             var source = SourceOf(set, args.ResultId, args.ViewId);
             // A view sorted while rows were still arriving lacks the later ones; the grid sorts again once they are in.
@@ -258,7 +260,7 @@ internal sealed class ResultJobs(ResultStore store)
             temporary = Path.Combine(directory, ".varia-" + args.TemporaryId + ".tmp");
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
-            int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
+            int[] all = SavedColumns(set);
             // A JSON object always names its column and its fields; a line without headers has only its rows' values.
             var named = args.Headers || format == TextFormat.Json;
             using var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named, token) : null;
@@ -384,6 +386,18 @@ internal sealed class ResultJobs(ResultStore store)
         && !path.StartsWith(@"\\.\", StringComparison.Ordinal) && !path.StartsWith(@"\\?\", StringComparison.Ordinal)
         && !path.StartsWith("//./", StringComparison.Ordinal) && !path.StartsWith("//?/", StringComparison.Ordinal);
 
+    /// <summary>The columns Save writes: the visible ones, and for a diff its marker and row numbers first ("Change", "Old row",
+    /// "New row"), decided here from the result's kind so that no renderer flag or dialog choice is needed. Copy never writes
+    /// them (<see cref="Resolve"/>).</summary>
+    internal static int[] SavedColumns(ResultSetBuffer set)
+    {
+        var columns = set.Columns;
+        IEnumerable<int> visible = Enumerable.Range(0, columns.Count).Where(column => !ResultTextWriter.Hidden(columns[column]));
+        if (set.Kind != "diff") return [.. visible];
+        int Role(string role) => Enumerable.Range(0, columns.Count).First(column => columns[column].Role == role);
+        return [Role("mark"), Role("leftRow"), Role("rightRow"), .. visible];
+    }
+
     /// <summary>A header column names a transposed job's fields, so only such a job has one.</summary>
     private static bool ValidTurn(bool transposed, int? headerColumn) => headerColumn is null || transposed && headerColumn is >= 0 and < PageBuilder.MaxColumns;
 
@@ -407,7 +421,7 @@ internal sealed class ResultJobs(ResultStore store)
         new(set, viewId is { } id ? store.FindView(resultId, id) ?? throw new RequestException("VIEW_NOT_FOUND", "This sorted view was closed. Sort the results again.") : null);
 
     /// <summary>Validates a part (1 to 64 ascending, disjoint ranges of each kind) and clamps its rows to the rows stored
-    /// now: open-ended blocks end at the last available row. Hidden columns (a live table's row tone) are left out.</summary>
+    /// now: open-ended blocks end at the last available row. Hidden columns (a tone, a diff's suffix) are left out.</summary>
     private static Plan Resolve(CopyPartArgs part, IReadOnlyList<ResultColumn> columnList, long available)
     {
         static bool Valid<T>(T[][]? ranges, long max) where T : struct, IConvertible

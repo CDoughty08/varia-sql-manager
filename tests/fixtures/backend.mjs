@@ -79,7 +79,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
 import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
-import { copyText, exportText, validTurn } from './backend/text-writer.mjs'
+import { copyText, exportText, isHidden, validTurn } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { sameName } from '../../src/shared/ordinal-casing.ts'
@@ -656,6 +656,15 @@ function identityHash(text) {
 }
 function buildIdentity(result, by, column) {
   const rows = available(result)
+  // A diff's rows are told apart by entry (RowIdentity.Entries): its (input, row) pairs, the lower input id first.
+  if (result.kind === 'diff' && result.inputs) {
+    const at = role => result.columns.findIndex(item => item.role === role)
+    const left = at('leftRow'), right = at('rightRow'), [low, high] = result.inputs.left < result.inputs.right ? [left, right] : [right, left]
+    const number = (row, c) => { const cell = result.rowAt(row)[c]; return cell === null || cell === undefined ? '0' : String(cell) }
+    const ids = Array.from({ length: rows }, (_, row) => identityHash(`e${Math.min(result.inputs.left, result.inputs.right)}:${number(row, low)}|${Math.max(result.inputs.left, result.inputs.right)}:${number(row, high)}`))
+    const entries = ids.filter((value, row) => row === 0 || value !== ids[row - 1])
+    return { column: -1, ids, unique: new Set(entries).size === entries.length }
+  }
   const textOf = (row, at) => {
     const cell = result.rowAt(row)[at], value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
     return value === null || value === undefined ? null : value instanceof Uint8Array ? Buffer.from(value).toString('hex') : String(value).replace(/ +$/, '').toLowerCase()
@@ -683,7 +692,7 @@ function buildIdentity(result, by, column) {
 // text equal case-insensitively without trailing spaces is a soft difference (the real backend's collation-aware
 // comparison is checked by its own checks), numbers compare by value.
 function buildDiff(left, right, exact, context) {
-  const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => item.role !== 'tone')
+  const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => !isHidden(item))
   const used = new Set(), pairs = []
   for (const { item, at } of visible(left)) {
     // ResultDiffer.Pairs: the same name by OrdinalIgnoreCase and the same wire (tests/fixtures/compare-pairing).
@@ -738,17 +747,19 @@ function buildDiff(left, right, exact, context) {
   const plain = entry => entry.kind === 'same' && entry.cells.length === 0
   const shown = entries.map(entry => context < 0 || !plain(entry))
   if (context >= 0) entries.forEach((entry, k) => { if (!plain(entry)) for (let d = 1; d <= context; d++) { if (k - d >= 0 && plain(entries[k - d])) shown[k - d] = true; if (k + d < entries.length && plain(entries[k + d])) shown[k + d] = true } })
-  const tone = (kind, cells) => [kind, ...cells.map(cell => cell < 0 ? '~' + (~cell + 3) : String(cell + 3))].join(' ')
-  const rowOf = (result, row, side, marker, r1, r2, toneText) => [marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), ...pairs.map(pair => result.rowAt(row)[pair[side]]), toneText]
+  // Cells by pair index (the data column's); the marker, both row numbers and the tone are a hidden suffix.
+  const tone = (kind, cells) => [kind, ...cells.map(cell => cell < 0 ? '~' + ~cell : String(cell))].join(' ')
+  const rowOf = (result, row, side, marker, r1, r2, toneText) => [...pairs.map(pair => result.rowAt(row)[pair[side]]), marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), toneText]
   const rows = []
   entries.forEach((entry, k) => {
     if (!shown[k]) return
     if (entry.kind === 'same') rows.push(rowOf(right, entry.right, 1, ' ', entry.left, entry.right, entry.cells.length ? tone('same', entry.cells) : null))
     else if (entry.kind === 'added') rows.push(rowOf(right, entry.right, 1, '+', -1, entry.right, 'added'))
     else if (entry.kind === 'removed') rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, 'removed'))
-    else rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, tone('removed', entry.cells)), rowOf(right, entry.right, 1, '+', -1, entry.right, tone('added', entry.cells)))
+    else rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, entry.right, tone('removed', entry.cells)), rowOf(right, entry.right, 1, '+', entry.left, entry.right, tone('added', entry.cells)))
   })
-  const columns = [{ ...column('Change', 'nvarchar(1)'), maxLength: 1 }, column('R1', 'bigint'), column('R2', 'bigint'), ...pairs.map(pair => right.columns[pair[1]]), { ...column('', 'nvarchar(400)'), role: 'tone', maxLength: 400 }]
+  const columns = [...pairs.map(pair => right.columns[pair[1]]), { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
+    { ...column('', 'nvarchar(500)'), role: 'tone', maxLength: 500 }]
   const count = kind => entries.filter(entry => entry.kind === kind).length
   const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
   return {
@@ -1043,6 +1054,7 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
   const result = sourceOf(id, resultId, viewId)
   if (!result) return
   if (!validTurn(transposed, headerColumn, result.columns.length)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
+  if (transposed && result.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'A comparison cannot be saved transposed.')
   if (!(result.sealed ?? result.complete)) return fail(id, 'RESULT_OPEN', result.sealed === false ? 'Save the results after they are sorted again.' : 'Save the results after this result set finishes loading.')
   if (!await access(dirname(path)).then(() => true, () => false)) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
   if (await stat(path).then(entry => entry.isDirectory(), () => false)) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
@@ -1050,7 +1062,7 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
   const file = await open(temporary, 'wx')
   let last = Date.now()
   try {
-    const writer = await exportText({ columns: result.columns, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText, transposed, headerColumn }, async writer => {
+    const writer = await exportText({ columns: result.columns, kind: result.kind, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText, transposed, headerColumn }, async writer => {
       for (const chunk of writer.out.take()) await file.write(chunk)
       // Transposed, progress counts lines (source columns) of their total.
       if (Date.now() - last >= 250) { last = Date.now(); write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: transposed ? writer.columnsWritten : writer.rows, rowsTotal: transposed ? result.columns.length : result.read, bytes: writer.bytes }) }
@@ -1876,6 +1888,8 @@ async function workbench(id, method, params, credit) {
     case 'results.identify': {
       const result = stored.get(params.resultId)
       if (!result) return missing(id, params.resultId)
+      if (params.column !== undefined && isHidden(result.columns[params.column])) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
+      if (result.kind === 'diff' && params.by === 'column') return fail(id, 'INVALID_PARAMS', "A comparison's rows are told apart by their entries, not by a column.")
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Highlight rows after this result set finishes loading.')
       result.identity = buildIdentity(result, params.by, params.column)
       return respond(id, { column: result.identity.column, unique: result.identity.unique, approximate: false, rows: result.identity.ids.length })
@@ -1910,6 +1924,7 @@ async function workbench(id, method, params, credit) {
       const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)
       if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
       const result = storeResult(diff.set, right.index)
+      result.inputs = { left: params.left, right: params.right }
       const { set: _set, ...counts } = diff
       return respond(id, { descriptor: describe(result), ...counts, approximate: false })
     }

@@ -1850,7 +1850,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         for (var i = 0; i < keys.Length; i++)
         {
             var sort = args.Sort[i];
-            if (sort.Column < 0 || sort.Column >= set.Columns.Count || Array.FindIndex(args.Sort, 0, i, other => other.Column == sort.Column) >= 0)
+            if (!Shown(set, sort.Column) || Array.FindIndex(args.Sort, 0, i, other => other.Column == sort.Column) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each sort key needs a distinct column of the result.");
             keys[i] = new ViewKey(sort.Column, sort.Descending, sort.Mode switch
             {
@@ -1899,6 +1899,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
+    /// <summary>A column a request may name: one of the result's, and not hidden (ResultTextWriter.Hidden: a tone, a diff's
+    /// marker, row numbers or previous values).</summary>
+    private static bool Shown(ResultSetBuffer set, int column) => column >= 0 && column < set.Columns.Count && !ResultTextWriter.Hidden(set.Columns[column]);
+
     /// <summary>A view request's filters, checked against the result; cells name positions in the result or a view of it.</summary>
     private ViewFilter[] ViewFilters(ResultsViewArgs args, ResultSetBuffer set)
     {
@@ -1912,14 +1916,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null
                     || filter.Columns is not { Length: >= 1 } || filter.Columns.Length > columns
-                    || filter.Columns.Any(column => column < 0 || column >= columns) || filter.Columns.Distinct().Count() != filter.Columns.Length)
+                    || filter.Columns.Any(column => !Shown(set, column)) || filter.Columns.Distinct().Count() != filter.Columns.Length)
                     throw new RequestException("INVALID_PARAMS", "A duplicates filter needs distinct columns of the result.");
                 filters[i] = new ViewFilter(FilterOp.Duplicates, -1, null, false, null, filter.Columns);
                 continue;
             }
             if (filter.Op == "groups")
             {
-                if (filter.Column is not { } listed || filter.SnapshotId is not { } snapshotId || snapshotId == 0 || filter.Rows is not null || filter.Nulls is not null
+                if (filter.Column is not { } listed || !Shown(set, listed) || filter.SnapshotId is not { } snapshotId || snapshotId == 0 || filter.Rows is not null || filter.Nulls is not null
                     || filter.Cells is not null || filter.Columns is not null)
                     throw new RequestException("INVALID_PARAMS", "A groups filter needs a column and a value list of it.");
                 var snapshot = store.FindSnapshot(args.ResultId, snapshotId) ?? throw SnapshotClosed();
@@ -1945,7 +1949,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 "between" => FilterOp.Between,
                 _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates, groups or keepRows.")
             };
-            if (filter.Column is not { } column || column < 0 || column >= columns || filter.Columns is not null
+            if (filter.Column is not { } column || !Shown(set, column) || filter.Columns is not null
                 || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
                 || filter.Rows is { Length: > ViewSorter.MaxFilterValues })
                 throw new RequestException("INVALID_PARAMS", "A filter needs a column of the result and either up to 4,096 rows or the selected cells.");
@@ -2009,7 +2013,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Up to 32 columns are profiled at a time.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         for (var i = 0; i < args.Columns.Length; i++)
-            if (args.Columns[i] < 0 || args.Columns[i] >= set.Columns.Count || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
+            if (!Shown(set, args.Columns[i]) || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
@@ -2071,7 +2075,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        if (args.Column < 0 || args.Column >= set.Columns.Count)
+        if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
@@ -2173,8 +2177,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || by is null || (by == IdentityBy.Column) != args.Column.HasValue)
             throw new RequestException("INVALID_PARAMS", "Rows are told apart by auto, column (with a column) or row.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        if (args.Column is { } column && (column < 0 || column >= set.Columns.Count))
+        if (args.Column is { } column && !Shown(set, column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
+        // A diff's rows are told apart only by their entries (RowIdentity.Entries): no column of it is a key.
+        if (set.Kind == "diff" && by == IdentityBy.Column)
+            throw new RequestException("INVALID_PARAMS", "A comparison's rows are told apart by their entries, not by a column.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
         using var pin = set.Pin();
         // A packed result is read fused (RowIdentity.Build).
@@ -2339,6 +2346,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model), derived: true)
                 ?? throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+            set.DiffInputs = (args.Left, args.Right);
             void Release()
             {
                 if (store.Release([set.ResultId]) > 0) ReportMemory();
@@ -2451,8 +2459,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// values whose aggregates suit their columns (SUM and AVG only of numbers).</summary>
     private static PivotSpec PivotSpecOf(ResultsPivotArgs args, ResultSetBuffer set)
     {
-        var count = set.Columns.Count;
-        bool Shown(int column) => column >= 0 && column < count && !ResultTextWriter.Hidden(set.Columns[column]);
+        bool Shown(int column) => SqlService.Shown(set, column);
         for (var i = 0; i < args.Rows.Length; i++)
             if (!Shown(args.Rows[i]) || Array.IndexOf(args.Rows, args.Rows[i], 0, i) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each row column must be a distinct column of the result.");

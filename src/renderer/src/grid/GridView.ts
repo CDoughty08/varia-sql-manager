@@ -28,6 +28,8 @@ import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
 import { tableTiles, tileKey, transposedTiles, type TileShape } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
+import { diffGutter, type DiffSides } from './diff-gutter'
+import { diffSuffixOf, visibleColumnCount, type DiffSuffix } from './hidden-columns'
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 
@@ -64,7 +66,7 @@ interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: n
  */
 interface RowSlot {
   /** `size` is what the mark's row-size bar shows ('' for none), so it is written only when it changes. */
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text } & NameParts
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text; readonly diffMark?: Text } & NameParts
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
@@ -77,6 +79,9 @@ interface RowSlot {
   cellMarks: ReadonlyMap<number, number> | undefined
   /** 0 for none, else 1 + the highlight's index in highlightColors. */
   highlight: number
+  /** A comparison row's gutter as last drawn: the suffix cells it was drawn from ('' while they load), and its name. */
+  gutterKey: string
+  gutter: string
 }
 /** What shows a row-size bar (a row's number). `size` is what the bar shows now. */
 interface SizeMark { readonly el: HTMLElement; size: string }
@@ -165,6 +170,8 @@ export interface GridViewOptions {
   onViewport?(viewport: GridViewport): void
   /** What a screen reader hears for a toned row's active cell ("blocked"); nothing when it returns undefined. */
   toneLabel?(tone: LiveTone): string | undefined
+  /** A comparison's inputs as its gutter names them (diff-gutter.ts), and the larger one's row count. */
+  readonly diffSides?: DiffSides
   /** The columns the grid is sorted by, in order; their headers show it. */
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
@@ -234,9 +241,11 @@ export class GridView {
   private readonly bandsEl: HTMLDivElement | undefined
   private bands: BandSlot[] = []
   private lastFirstColumn = 0
-  /** The columns shown: all but a live table's hidden tone column (its last, at `tone`; -1 when it has none). */
+  /** The columns shown: all but the hidden suffix (hidden-columns.ts): a live table's tone column (its last, at `tone`; -1
+   *  when it has none), or a comparison's marker, row numbers and tone (`diff`), which its row header draws as a gutter. */
   private readonly columns: number
   private readonly tone: number
+  private readonly diff: DiffSuffix | undefined
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
   /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
@@ -334,7 +343,11 @@ export class GridView {
     this.handle = o.handle
     this.descriptor = o.descriptor
     this.tone = toneColumnOf(o.descriptor)
-    this.columns = o.descriptor.columns.length - (this.tone >= 0 ? 1 : 0)
+    this.columns = visibleColumnCount(o.descriptor)
+    this.diff = o.transposed ? undefined : diffSuffixOf(o.descriptor)
+    // The gutter's look (styles.css): a comparison's row headers draw its kind bar and mark.
+    if (this.diff) o.root.dataset.gutter = 'diff'
+    else delete o.root.dataset.gutter
     this.resultCount = o.resultCount
     // A follow-tail grid built over a kept state that had left the tail opens where it was, not at the newest rows.
     this.atEnd = o.state.following ?? true
@@ -586,7 +599,7 @@ export class GridView {
    */
   swap(handle: ResultHandle, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
     if (this.disposed) return
-    if (toneColumnOf(descriptor) !== this.tone || descriptor.columns.length !== this.descriptor.columns.length) throw new Error('A swapped result must have the grid\'s columns.')
+    if (toneColumnOf(descriptor) !== this.tone || visibleColumnCount(descriptor) !== this.columns || descriptor.columns.length !== this.descriptor.columns.length) throw new Error('A swapped result must have the grid\'s columns.')
     const state = this.o.state
     this.fitting?.abort()
     this.fitting = undefined
@@ -679,7 +692,7 @@ export class GridView {
   private drawnColumns(rows = this.rows()): number { return this.rotated ? Math.min(rows, wire.transpose.maxRows) : this.columns }
   private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
   private dataFor(handle: ResultHandle): GridData {
-    return new GridData({ handle, columns: this.columns, tone: this.tone, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
+    return new GridData({ handle, columns: this.columns, tone: this.tone, suffix: this.columns, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
     return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
@@ -1229,13 +1242,20 @@ export class GridView {
     el.append(header)
     let mark: RowSlot['mark']
     if (withCells) {
-      mark = this.rotated ? this.nameMark() : { el: doc.createElement('div'), text: doc.createTextNode(''), size: '' }
+      mark = this.rotated ? this.nameMark() : { el: doc.createElement('div'), text: doc.createTextNode(''), size: '', ...this.diff ? { diffMark: doc.createTextNode('') } : {} }
       mark.el.className = 'rg-rn'
       mark.el.style.display = 'none'
+      if (mark.diffMark) {
+        // A comparison's gutter: its kind's bar (CSS), its mark and its row's number in its own input.
+        const glyph = doc.createElement('span')
+        glyph.className = 'rg-dm'
+        glyph.append(mark.diffMark)
+        mark.el.append(glyph)
+      }
       if (!this.rotated) mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined, gutterKey: '', gutter: '' }
     this.slots.set(el, { row: slot })
     // The active cell's spare slot and the row's number (a transposed grid's name cell) name their row too, for menu
     // targets and a name cell's buttons.
@@ -1470,7 +1490,8 @@ export class GridView {
     // Then writes: sizes, scroll offsets, the row container.
     this.resizeStep()
     // A name column sized in a wider pane still leaves a drawn column in view in this one; the saved width is kept.
-    const rowHeader = this.rotated ? Math.min(this.nameWidth, Math.max(g.nameColumnMinWidth, width - g.columnMinWidth)) : rowHeaderWidth(rows, this.charWidth)
+    const rowHeader = this.rotated ? Math.min(this.nameWidth, Math.max(g.nameColumnMinWidth, width - g.columnMinWidth)) : this.diff ? rowHeaderWidth(Math.max(rows, this.o.diffSides?.rows ?? 0), this.charWidth) + Math.ceil(this.charWidth) + g.diffGutterChrome
+      : rowHeaderWidth(rows, this.charWidth)
     let columnsMoved = false
     if (rowHeader !== this.rowHeader) {
       this.rowHeader = rowHeader
@@ -1694,6 +1715,7 @@ export class GridView {
           if (this.rotated && this.hovered === slot.mark.el) { this.hovered.removeAttribute('title'); this.hovered = undefined }
         }
         slot.el.setAttribute('aria-rowindex', String(row + 2))
+        slot.gutterKey = '\0'
         for (const cell of slot.cells) cell.column = -1
         slot.pin.column = -1
       }
@@ -1709,6 +1731,7 @@ export class GridView {
       slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
       slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
     }
+    if (this.diff && slot.mark?.diffMark) this.paintGutter(slot, row, tile)
     // A transposed row is a column, which no highlight names: a highlighted row tints its drawn column (paintBands).
     const odd = row % 2 === 1, tone = slot.toneOf, highlight = this.rotated ? 0 : colorAt(this.highlights, row)
     if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
@@ -1723,7 +1746,7 @@ export class GridView {
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
     if (headerSel !== slot.headerSel || tone !== slot.tone || highlight !== slot.highlight) { slot.headerSel = headerSel; if (slot.mark && !this.rotated) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone][highlight] }
-    if (slot.mark) { if (this.rotated) this.paintName(slot.mark, slot.header, row, headerSel); else this.paintSize(slot.mark, row) }
+    if (slot.mark) { if (this.rotated) this.paintName(slot.mark, slot.header, row, headerSel); else this.paintSize(slot.mark, row, slot.gutter) }
     slot.tone = tone
     slot.highlight = highlight
     let activeCell: CellSlot | undefined
@@ -1746,10 +1769,10 @@ export class GridView {
    * (data-large, which CSS draws in the warning colour), the number in italics when its size is an estimate, and the exact bytes in its tooltip. Written
    * only when what it shows changes; a row whose size is not read yet shows none.
    */
-  private paintSize(mark: SizeMark, row: number): void {
+  private paintSize(mark: SizeMark, row: number, gutter = ''): void {
     const size = this.sizes?.get(row)
     const share = size ? Math.round(size.share * 1000) / 1000 : 0
-    const key = size ? `${row}|${share}|${size.large ? 1 : 0}|${size.estimated ? 1 : 0}|${size.bytes}` : ''
+    const key = (size ? `${row}|${share}|${size.large ? 1 : 0}|${size.estimated ? 1 : 0}|${size.bytes}` : '') + (gutter ? '|' + gutter : '')
     if (key === mark.size) return
     mark.size = key
     // The tooltip is the bar's from here on (or gone with it): a hover that wrote one on this element no longer owns it.
@@ -1759,14 +1782,16 @@ export class GridView {
       style.removeProperty('--rg-rs')
       delete mark.el.dataset.large
       style.fontStyle = ''
-      mark.el.removeAttribute('title')
+      if (gutter) mark.el.title = gutter
+      else mark.el.removeAttribute('title')
       return
     }
     style.setProperty('--rg-rs', String(share))
     if (size.large) mark.el.dataset.large = ''
     else delete mark.el.dataset.large
     style.fontStyle = size.estimated ? 'italic' : ''
-    mark.el.title = `Row ${formatCount(row + 1)}: ${size.estimated ? 'about ' : ''}${formatCount(size.bytes)} ${plural(size.bytes, 'byte')} (the sum of DATALENGTH over its columns)`
+    const bytes = `Row ${formatCount(row + 1)}: ${size.estimated ? 'about ' : ''}${formatCount(size.bytes)} ${plural(size.bytes, 'byte')} (the sum of DATALENGTH over its columns)`
+    mark.el.title = gutter ? gutter + '\n' + bytes : bytes
   }
 
   /** A transposed row's name cell: its column's sort button (with aria-sort on `header`, the row's own header) and funnel,
@@ -1811,10 +1836,30 @@ export class GridView {
   private toneOf(row: number, tile: (row: number, column: number) => RowWindow | null): string {
     if (this.muted.has(row)) return 'muted'
     if (this.tone < 0) return ''
-    const window = tile(row, this.tone)
-    if (!window || row - window.first >= window.count || this.tone >= window.colEnd) return ''
-    const index = (row - window.first) * (window.colEnd - window.colStart) + this.tone - window.colStart
-    return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? '' : window.text[index]
+    return this.hiddenText(row, this.tone, tile) ?? ''
+  }
+
+  /** A hidden suffix cell's text: null for NULL, undefined while its tile is not read. */
+  private hiddenText(row: number, column: number, tile: (row: number, column: number) => RowWindow | null): string | null | undefined {
+    const window = tile(row, column)
+    if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return undefined
+    const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart
+    return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? null : window.text[index]
+  }
+
+  /** A comparison row's gutter (diff-gutter.ts): its mark, its number in its own input, and its name on the row header
+   *  (and in the tooltip), from its marker and row number cells; blank until their tiles are read. */
+  private paintGutter(slot: RowSlot, row: number, tile: (row: number, column: number) => RowWindow | null): void {
+    const diff = this.diff!, mark = this.hiddenText(row, diff.mark, tile), left = this.hiddenText(row, diff.leftRow, tile), right = this.hiddenText(row, diff.rightRow, tile)
+    const loaded = mark !== undefined && left !== undefined && right !== undefined
+    const key = loaded ? `${mark}|${left}|${right}` : ''
+    if (key === slot.gutterKey) return
+    slot.gutterKey = key
+    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides) : undefined
+    slot.mark!.diffMark!.nodeValue = gutter?.mark ?? ''
+    slot.mark!.text.nodeValue = gutter?.number ?? ''
+    slot.number.nodeValue = gutter?.name ?? 'Loading'
+    slot.gutter = gutter?.name ?? ''
   }
 
   private paintCell(cell: CellSlot, row: number, column: number, ranges: readonly CellRange[], active: { row: number; column: number } | undefined,

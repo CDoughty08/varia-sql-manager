@@ -449,8 +449,8 @@ internal static class ResultSearchChecks
         var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId });
         var added = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "added", fromRow = 0, maxMatches = 100 });
         var three = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "3", fromRow = 0, maxMatches = 100 });
-        var tone = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
-        check(tone >= 0 && diff.Added == 1 && added.Total == 0 && three.Total == 2 && three.MatchColumns.All(column => column != tone),
-            "a search of a diff result skips its hidden tone column: \"added\" matches nothing and a digit only the grid's cells, R2 and id (" + added.Total + ", " + three.Total + ")");
+        var hidden = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
+        check(hidden == 2 && diff.Added == 1 && added.Total == 0 && three.Total == 1 && three.MatchColumns.All(column => column < hidden),
+            "a search of a diff result skips its hidden suffix (marker, row numbers, tone): \"added\" matches nothing and a digit only the data cell, not the row number (" + added.Total + ", " + three.Total + ")");
     }
 }

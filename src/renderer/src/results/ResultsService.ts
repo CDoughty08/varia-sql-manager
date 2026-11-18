@@ -18,6 +18,7 @@ import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansServic
 import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
+import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -442,15 +443,13 @@ const discardedSets = (run: Pick<Run, 'discard' | 'summary'>): number => run.dis
 const truncatedClause = (cells: number): string => cells > 0 ? ` ${formatCount(cells)} ${cells === 1 ? 'value was' : 'values were'} truncated.` : ''
 /** What a transposed copy or save left out: the rows past those a transposed grid draws. */
 const cappedClause = (rows: number): string => rows > 0 ? ` ${formatCount(rows)} ${rows === 1 ? 'row' : 'rows'} past the first ${formatCount(wire.transpose.maxRows)} ${rows === 1 ? 'was' : 'were'} left out; filter the results to copy or save others.` : ''
-/** The last column when it is a row tone (a comparison's, a live table's): never shown as a column, and -1 without one. */
-const toneColumn = (descriptor: Pick<ResultDescriptor, 'columns'>): number => { const last = descriptor.columns.length - 1; return last >= 1 && descriptor.columns[last].role === 'tone' ? last : -1 }
 /**
  * How a view is drawn transposed, and so how its Copy and Save are written: undefined for a table, else the column whose
- * values head the drawn columns (when it is one of the result's shown columns). A result with a tone column (a comparison)
- * is never drawn transposed.
+ * values head the drawn columns (when it is one of the result's shown columns). A result with hidden columns (a
+ * comparison, a toned live table) is never drawn transposed.
  */
 export function transposedView(state: Pick<GridViewState, 'orientation' | 'headerColumn'> | undefined, descriptor: Pick<ResultDescriptor, 'columns'>): { headerColumn?: number } | undefined {
-  if (state?.orientation !== 'transposed' || toneColumn(descriptor) >= 0) return undefined
+  if (state?.orientation !== 'transposed' || visibleColumnCount(descriptor) < descriptor.columns.length) return undefined
   const header = state.headerColumn
   return header !== undefined && Number.isInteger(header) && header >= 0 && header < descriptor.columns.length ? { headerColumn: header } : {}
 }
@@ -878,7 +877,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
   canFitColumn(tabId: string, key: EntryKey, column: number): boolean {
     const set = this.entry(this.runs.get(tabId), key), state = set?.handle.getSnapshot().state
-    return !!set && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+    return !!set && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column])
       && state !== 'released' && state !== 'lost' && this.controllers.has(set.key)
   }
   fitColumn(tabId: string, key: EntryKey, column: number): void {
@@ -1200,10 +1199,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return true
   }
 
-  /** Whether a grid's column can open the funnel's popover: a result's own column (not a diff's tone) on a mounted grid. */
+  /** Whether a grid's column can open the funnel's popover: a result's own column (not a hidden one) on a mounted grid. */
   canFilterColumn(tabId: string, key: EntryKey, column: number): boolean {
     const set = this.entry(this.runs.get(tabId), key)
-    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column])
       && !!this.controllers.get(set.key)?.filterColumn
   }
 
@@ -1730,8 +1729,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const byColumn = new Map<number, [number, number][]>()
     for (const block of resolveBlocks(selection, rows, count))
       for (let column = block.left; column <= block.right; column++) {
-        // A diff's hidden tone column (its last) is not one of the rows' values.
-        if (names[column]?.role === 'tone') continue
+        // A hidden column (a tone, a diff's suffix) is not one of the rows' values.
+        if (isHiddenColumn(names[column])) continue
         const runs = byColumn.get(column) ?? []
         runs.push([block.top, block.bottom - block.top + 1])
         byColumn.set(column, runs)
@@ -1758,14 +1757,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), set = this.entry(run, key)
     if (!run || !set || !this.filterable(set)) return undefined
     const columns = set.descriptor.columns.length
-    // A diff's hidden tone column (its last) is not one of the rows' values.
-    const shownColumns = set.descriptor.columns.flatMap((item, column) => item.role === 'tone' ? [] : [column])
+    // A hidden column (a tone, a diff's suffix) is not one of the rows' values.
+    const shownColumns = set.descriptor.columns.flatMap((item, column) => isHiddenColumn(item) ? [] : [column])
     if (allColumns) return shownColumns.length > 0 ? shownColumns : undefined
     const selection = this.selection(tabId, set.key)
     if (!selection) return undefined
     const shown = run.held.get(set.key)?.shown ?? set.handle
     const picked = new Set<number>()
-    for (const block of resolveBlocks(selection, shown.getSnapshot().rowsAvailable, columns)) for (let column = block.left; column <= block.right; column++) if (set.descriptor.columns[column]?.role !== 'tone') picked.add(column)
+    for (const block of resolveBlocks(selection, shown.getSnapshot().rowsAvailable, columns)) for (let column = block.left; column <= block.right; column++) if (!isHiddenColumn(set.descriptor.columns[column])) picked.add(column)
     return picked.size > 0 ? [...picked].sort((a, b) => a - b) : undefined
   }
 
@@ -2084,10 +2083,10 @@ export function carriedState(state: GridViewState, moved: ReadonlyMap<number, nu
 }
 /** A focused grid drawn transposed (`ResultsService.turned`): its entry and the column that heads its drawn columns. */
 export interface FocusedOrientation { readonly entry: EntryKey; readonly headerColumn?: number }
-/** An entry whose view can be drawn transposed (`turnableKinds`, and no tone column whatever its kind). */
-const turnable = (set: ResultSetEntry): boolean => turnableKinds.has(set.descriptor.kind) && !set.descriptor.columns.some(column => column.role === 'tone')
+/** An entry whose view can be drawn transposed: its descriptor's kind (`turnableKinds`; never a comparison). */
+const turnable = (set: ResultSetEntry): boolean => turnableKinds.has(set.descriptor.kind)
 /** A column that can head a transposed view's drawn columns: one of the result's own. */
-const headerable = (set: ResultSetEntry, column: number): boolean => Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+const headerable = (set: ResultSetEntry, column: number): boolean => Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && !isHiddenColumn(set.descriptor.columns[column])
 /** What the toolbar says when Find Next lands on a match in a row a transposed grid does not draw. */
 export const beyondCapText = (row: number): string =>
   `The match is in row ${formatCount(row + 1)}, and a transposed grid draws only the first ${formatCount(wire.transpose.maxRows)} rows. Filter the rows, or turn Transposed off, to see it.`
@@ -2133,7 +2132,7 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
 
 /** A resolved filter's words, with the texts of its rows' values where it names them (one value, or Between's two). */
 export function filterLabel(filter: ResolvedViewFilter, columns: readonly ResultColumn[], texts: readonly (string | undefined)[] = []): string {
-  if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => column.role !== 'tone').length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
+  if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => !isHiddenColumn(column)).length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
   if (filter.op === 'keepRows') return keptLabel(filter.rows.length)
   const name = columnName(columns, filter.column)
   if (filter.op === 'between') return texts[0] && texts[1] ? `${name} between ${texts[0]} and ${texts[1]}` : `${name} between 2 values`

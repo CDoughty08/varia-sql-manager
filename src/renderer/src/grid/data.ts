@@ -22,7 +22,9 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * above and below are read, and the worker prefetches pages 2 views either way. A failed read marks its tile until Retry.
  * A read refused while main's results port is full is tried again shortly, not marked. The active cell's tile is read
  * even when the cell is scrolled out of view, so its label has its text. A live table's row tone (a hidden last column,
- * `tone`) is read with the rows it colours: each row tile of the frame also reads the tile column that holds it.
+ * `tone`) is read with the rows it colours: each row tile of the frame also reads the tile column that holds it. A
+ * comparison's whole hidden suffix (its marker, row numbers and tone, which the row header draws) is read the same way: the
+ * tile columns from the suffix's first column to the tone, which can be two.
  * A tile is read again only from where its rows end: when its rows' pages do not fit the worker's cache together (large
  * XML or JSON values), the worker answers with the rows it holds, and the tile's next part starts after them at once.
  */
@@ -34,6 +36,8 @@ export class GridData {
   private readonly shape: TileShape
   /** The hidden tone column (the result's last), or -1; tiles end at it rather than at `columns`. */
   private readonly tone: number
+  /** The first column of the hidden suffix read with every row tile (a comparison's marker), or the tone column. */
+  private readonly suffix: number
   /** A column whose tile is read with every row tile of the frame, wherever the view's columns are (as the tone column's
    *  is): a transposed grid's header column. */
   also: number | undefined
@@ -61,10 +65,11 @@ export class GridData {
   private prefetched = ''
   private disposed = false
 
-  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; shape?: TileShape; also?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
+  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; suffix?: number; shape?: TileShape; also?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
     this.handle = o.handle
     this.columns = o.columns
     this.tone = o.tone ?? -1
+    this.suffix = Math.min(o.suffix ?? this.tone, this.tone)
     this.shape = o.shape ?? tableTiles
     this.also = o.also
     this.clientInflight = o.clientInflight
@@ -186,10 +191,14 @@ export class GridData {
     return false
   }
 
-  /** The tiles a range shows, centre first, with the tile that holds each row tile's tone. */
+  /** The tiles a range shows, centre first, with the tiles that hold each row tile's hidden suffix (its tone, a comparison's
+   *  marker and row numbers too). */
   plan(range: VisibleRange, rows: number): number[] {
     const plan = planTiles(range, rows, this.columns, this.shape)
-    if (this.tone >= 0) for (const key of [...plan]) { const tone = this.toneTile(tileRowOf(key) * this.shape.rows)!; if (!plan.includes(tone)) plan.push(tone) }
+    if (this.tone >= 0) {
+      const first = Math.floor(this.suffix / this.shape.columns), last = Math.floor(this.tone / this.shape.columns)
+      for (const key of [...plan]) for (let column = first; column <= last; column++) { const tile = tileKey(tileRowOf(key), column); if (!plan.includes(tile)) plan.push(tile) }
+    }
     if (this.also !== undefined && this.also >= 0 && this.also < this.columns) {
       const columnTile = Math.floor(this.also / this.shape.columns)
       for (const key of [...plan]) { const also = tileKey(tileRowOf(key), columnTile); if (!plan.includes(also)) plan.push(also) }

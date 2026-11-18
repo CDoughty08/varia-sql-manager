@@ -126,6 +126,9 @@ internal sealed class ResultSetBuffer
     public string Kind { get; }
     /// <summary>The query's name for this set (a #Name marker, ResultNames.cs); null when it has none.</summary>
     public string? ResultName { get; init; }
+    /// <summary>A diff's two input results (results.diff), recorded when it is written: its row identity (results.identify)
+    /// hashes each entry's (input, row) pairs, ordered by input result id.</summary>
+    public (uint Left, uint Right)? DiffInputs { get; set; }
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
     /// <summary>Each column's byte rule (ColumnPlan's; a live table's text counts as UTF-16).</summary>

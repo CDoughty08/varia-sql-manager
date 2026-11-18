@@ -527,16 +527,22 @@ describe('ResultsSearchService', () => {
     expect(search().revealEntry).toBeUndefined()
     expect(service.pendingReveal('t1', first.key)).toBe(false)
   })
-  it('never matches or counts a diff\'s or live table\'s hidden tone column in a column-name search', () => {
+  it('never matches or counts a comparison\'s hidden suffix or a live table\'s tone column in a column-name search', () => {
     const { service, set, show, search } = fixture()
-    const diff = set(0, ['id', 'note', 'tone'], [])
-    ;(diff.descriptor.columns as ResultColumn[])[2] = { ...column('tone'), dataType: 'nvarchar', role: 'tone' }
+    const diff = set(0, ['id', 'note', 'Change', 'Old row', 'New row', 'tone'], [])
+    const columns = diff.descriptor.columns as ResultColumn[]
+    columns[2] = { ...column('Change'), role: 'mark' }
+    columns[3] = { ...column('Old row'), role: 'leftRow' }
+    columns[4] = { ...column('New row'), role: 'rightRow' }
+    columns[5] = { ...column('tone'), dataType: 'nvarchar', role: 'tone' }
     show([diff])
     service.setMode('t1', 'columns')
     service.setText('t1', 'o', true)
     expect(search()).toMatchObject({ total: 1, columns: 2 })
-    expect([...search().marks.get('e1')!.columns!]).toEqual([0, 1, 0])
-    service.setText('t1', 'tone', true)
-    expect(searchCount(search(), String)).toBe('0 of 2 columns')
+    expect([...search().marks.get('e1')!.columns!]).toEqual([0, 1, 0, 0, 0, 0])
+    for (const text of ['tone', 'row', 'change']) {
+      service.setText('t1', text, true)
+      expect(searchCount(search(), String), text).toBe('0 of 2 columns')
+    }
   })
 })

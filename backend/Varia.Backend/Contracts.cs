@@ -45,9 +45,10 @@ internal sealed record SessionArgs(string SessionId, string? Transaction = null)
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
-/// (xml, json, plan), CLR UDTs and vectors.</summary>
+/// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
+/// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true,
-    ResultCollation? Collation = null);
+    ResultCollation? Collation = null, int? Of = null);
 /// <summary>A char, varchar, text, nchar, nvarchar or ntext column's collation as SqlClient read it from the result's
 /// metadata (SqlClientCollation): its Windows locale id, SQL sort id (non-zero for SQL_ collations), the code page SqlClient
 /// decodes char and varchar with (0 for UTF-8), whether it is a _UTF8 collation, and its comparison flags, SqlCompareOptions'

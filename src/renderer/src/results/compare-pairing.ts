@@ -1,5 +1,6 @@
 import type { ResultColumn } from '../../../shared/contracts'
 import { sameName } from '../../../shared/ordinal-casing'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 export { sameName }
 
@@ -16,7 +17,7 @@ export interface ColumnPairing {
 
 type PairableColumn = Pick<ResultColumn, 'name' | 'wire' | 'role'> & Partial<Pick<ResultColumn, 'dataType'>>
 
-const hidden = (column: PairableColumn) => column.role === 'tone'
+const hidden = (column: PairableColumn) => isHiddenColumn(column)
 
 /**
  * The backend's pairing (ResultDiffer.Pairs), copied for the Compare popover: each visible column of the old side, in order,

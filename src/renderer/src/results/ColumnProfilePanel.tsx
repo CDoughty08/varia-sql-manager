@@ -10,6 +10,7 @@ import { entryOf, filtersIdentity, resultTitle, type EntryKey, type ResultSetEnt
 import { chunked, histogramCaptions, histogramHeights, profileLines, profileList, profileStrip, rowSizeText } from './profile-format'
 import { measureCards, playCardMoves, revealCard, type CardPlace } from './profile-motion'
 import { formatCount, plural } from './status'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 interface Profiled { readonly profile: ColumnProfile; readonly rows: number }
 
@@ -109,7 +110,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   // chunk's new figures arrive, rather than going back to "Profiling…".
   const latest = useRef(profiles)
   latest.current = profiles
-  const columns = entry ? entry.descriptor.columns.flatMap((column, at) => column.role === 'tone' ? [] : [at]) : []
+  const columns = entry ? entry.descriptor.columns.flatMap((column, at) => isHiddenColumn(column) ? [] : [at]) : []
   const columnKey = columns.join(',')
   const held = snapshot && snapshot.state !== 'released' && snapshot.state !== 'lost'
   const { filters, settled } = profiledRows(snapshot, view)

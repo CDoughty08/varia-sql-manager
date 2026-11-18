@@ -252,7 +252,7 @@ internal static class ResultDiffer
     public const int CellChunk = 1 << 16;
 
     /// <summary>The most shared columns a diff compares: the unified result adds a marker, two row numbers and a tone.</summary>
-    public const int MaxPairs = PageBuilder.MaxColumns - 4;
+    public const int MaxPairs = PageBuilder.MaxColumns - UnifiedDiff.SuffixColumns;
 
     /// <summary>What results.diff answers (TOO_LARGE) when the budget has no room for its working memory, the rooms a packed
     /// result is read through, or unpacking its first result.</summary>
@@ -661,13 +661,15 @@ internal static class ResultDiffer
 
 /// <summary>Renders a diff as a result (results.diff), unified like git: each entry of the model in order, a changed one
 /// as its first result's row (−) then its second's (+), and only <c>context</c> unchanged rows around each change (all of
-/// them with <c>context</c> -1). Its columns are a marker ("Change": " ", "−" or "+"), each row's number in the first result ("R1")
-/// and the second ("R2"), the shared columns (the second result's names and types), and a hidden tone column: "added" or
-/// "removed" ("same" for an unchanged row with soft differences), then the differing cells as column indexes, a soft one with
-/// a leading "~". Each data cell's bytes are its source cell's, so the row-size bar sums the values shown, not the marker,
-/// row numbers or tone. Rows stop at the first one refused, and the set then says why it was truncated: a full budget never
-/// stops between a changed row's two halves, though a page sealed under low system memory can. results.diff refuses a
-/// diff cut short either way whole (SqlService.DiffAsync).</summary>
+/// them with <c>context</c> -1). Its columns are the shared columns (the second result's names and types), then a hidden
+/// suffix: the marker ("Change", role mark: " ", "−" or "+"), the entry's row in the first result ("Old row", role leftRow)
+/// and in the second ("New row", role rightRow), 1-based and NULL where it has none (both halves of a changed entry carry
+/// both), and the tone (role tone): "added" or "removed" ("same" for an unchanged row with soft differences), then the
+/// differing cells as pair indexes (which are the data columns' indexes), a soft one with a leading "~". The suffix is not
+/// data: the grid draws it in the row header, and only Save writes it (ResultJobs). Each data cell's bytes are its source
+/// cell's, so the row-size bar sums the values shown, not the suffix. Rows stop at the first one refused, and the set then
+/// says why it was truncated: a full budget never stops between a changed row's two halves, though a page sealed under low
+/// system memory can. results.diff refuses a diff cut short either way whole (SqlService.DiffAsync).</summary>
 internal static class UnifiedDiff
 {
     public const string Removed = "−", Added = "+";
@@ -677,20 +679,23 @@ internal static class UnifiedDiff
     /// that differs everywhere short; a tone that would still be longer stops at a whole entry and ends with "…".</summary>
     public const int MaxToneChars = 500;
 
+    /// <summary>Hidden suffix columns after the data columns: marker, the two row numbers and the tone.</summary>
+    public const int SuffixColumns = 4;
+
     public static IReadOnlyList<ResultColumn> Columns(ResultSetBuffer right, DiffModel model) =>
     [
-        new("Change", "nvarchar(1)", "text", MaxLength: 1),
-        new("R1", "bigint", "text"),
-        new("R2", "bigint", "text"),
         .. model.Pairs.Select(pair => right.Columns[pair.Right]),
+        new("Change", "nvarchar(1)", "text", Role: "mark", MaxLength: 1),
+        new("Old row", "bigint", "text", Role: "leftRow"),
+        new("New row", "bigint", "text", Role: "rightRow"),
         new("", "nvarchar(" + MaxToneChars.ToString(CultureInfo.InvariantCulture) + ")", "text", Role: "tone", MaxLength: MaxToneChars)
     ];
 
     public static IReadOnlyList<WireKind> Wires(ResultSetBuffer right, DiffModel model) =>
-        [WireKind.Text, WireKind.Text, WireKind.Text, .. model.Pairs.Select(pair => right.Wires[pair.Right]), WireKind.Text];
+        [.. model.Pairs.Select(pair => right.Wires[pair.Right]), WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text];
 
     public static IReadOnlyList<ColumnLength> Lengths(ResultSetBuffer right, DiffModel model) =>
-        [ColumnLength.Utf16, ColumnLength.Utf16, ColumnLength.Utf16, .. model.Pairs.Select(pair => right.Lengths[pair.Right]), ColumnLength.Utf16];
+        [.. model.Pairs.Select(pair => right.Lengths[pair.Right]), ColumnLength.Utf16, ColumnLength.Utf16, ColumnLength.Utf16, ColumnLength.Utf16];
 
     /// <summary>The entries the unified result shows: every change, and up to <paramref name="context"/> unchanged entries on
     /// each side of one (all with -1).</summary>
@@ -776,7 +781,7 @@ internal static class UnifiedDiff
         }
     }
 
-    /// <summary>The tone text: the kind, then the differing cells' column numbers in order, each run of adjacent columns of
+    /// <summary>The tone text: the kind, then the differing cells' pair indexes in order, each run of adjacent columns of
     /// one kind (changed, or soft with "~") as "first-last", cut at a whole entry with " …" past <see cref="MaxToneChars"/>.</summary>
     internal static string Tone(System.Text.StringBuilder tone, string kind, ReadOnlySpan<int> cells)
     {
@@ -789,16 +794,15 @@ internal static class UnifiedDiff
             var last = first;
             var j = i + 1;
             while (j < cells.Length && cells[j] < 0 == soft && (soft ? ~cells[j] : cells[j]) == last + 1) { last++; j++; }
-            // Data columns follow the marker and the two row numbers.
             var length = 0;
             entry[length++] = ' ';
             if (soft) entry[length++] = '~';
-            (first + 3).TryFormat(entry[length..], out var written, provider: CultureInfo.InvariantCulture);
+            first.TryFormat(entry[length..], out var written, provider: CultureInfo.InvariantCulture);
             length += written;
             if (last > first)
             {
                 entry[length++] = '-';
-                (last + 3).TryFormat(entry[length..], out written, provider: CultureInfo.InvariantCulture);
+                last.TryFormat(entry[length..], out written, provider: CultureInfo.InvariantCulture);
                 length += written;
             }
             if (tone.Length + length > MaxToneChars - 2) { tone.Append(" …"); break; }
@@ -826,8 +830,9 @@ internal static class UnifiedDiff
             set.CountRow();
             return false;
         }
-        return Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, removedTone)
-            && Row(set, sides.Right, entry.Right, Added, -1, entry.Right, addedTone);
+        // Both halves carry both row numbers: the gutter draws each half's own side.
+        return Row(set, sides.Left, entry.Left, Removed, entry.Left, entry.Right, removedTone)
+            && Row(set, sides.Right, entry.Right, Added, entry.Left, entry.Right, addedTone);
     }
 
     /// <summary>At most what one row of the unified result stores: its cells' bytes, the marker, row numbers and tone, each
@@ -844,16 +849,13 @@ internal static class UnifiedDiff
         return bytes + (4L + PageLengths.CellBytes) * (side.Pairs.Length + 4) + 4;
     }
 
-    /// <summary>Copies one source row's shared cells behind its marker and row numbers, each measured with its source cell's
-    /// characters and bytes; false once the set stores no more.</summary>
+    /// <summary>Copies one source row's shared cells, each measured with its source cell's characters and bytes, then its
+    /// marker, row numbers and tone (not measured); false once the set stores no more.</summary>
     private static bool Row(ResultSetBuffer set, Side side, int row, string marker, int leftRow, int rightRow, string? tone)
     {
         set.CountRow();
         var builder = set.BeginRow();
         if (builder is null) return false;
-        builder.AppendText(marker);
-        Number(builder, leftRow);
-        Number(builder, rightRow);
         var view = side.Access.At(row, out var at, out var lengths);
         var truncated = 0;
         for (var p = 0; p < side.Pairs.Length; p++)
@@ -876,6 +878,9 @@ internal static class UnifiedDiff
             // Kept beside the page when the unified column's own rule would not give the source's size again.
             builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
+        builder.AppendText(marker);
+        Number(builder, leftRow);
+        Number(builder, rightRow);
         if (tone is null) builder.AppendNull();
         else builder.AppendText(tone);
         return set.TryCommitRow(truncated);

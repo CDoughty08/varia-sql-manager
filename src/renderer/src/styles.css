@@ -1193,6 +1193,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
 .rg-row.tone-added .rg-c.is-chg.is-null, .rg-row.tone-removed .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
 .rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
+/* A comparison's gutter (GridView.paintGutter): a 3 px kind bar on the left, the mark, then the row's number in its own input. */
+.rg[data-gutter='diff'] .rg-rn { display: flex; justify-content: space-between; gap: 6px; padding-left: 9px; }
+.rg[data-gutter='diff'] .rg-rn.tone-added { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground); }
+.rg[data-gutter='diff'] .rg-rn.tone-removed { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.rg-dm { flex: none; font-weight: 600; }
 .rg-rn.tone-added:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffAddedBackground), var(--varia-resultsGrid-diffAddedBackground)); }
 .rg-rn.tone-removed:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffRemovedBackground), var(--varia-resultsGrid-diffRemovedBackground)); }
 /* Highlighted rows (grid/highlights.ts): the row takes its colour over the stripe; its number keeps the header under it. */
