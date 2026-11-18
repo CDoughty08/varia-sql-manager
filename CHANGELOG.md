@@ -5,6 +5,8 @@
 ### Changes to everyday use
 
 - **The window reopens where you left it:** Varia's main window opens at the position and size it was closed at, maximized if it was. If that place is no longer on a screen (a monitor was disconnected, or a display's resolution, scale or arrangement changed), it opens on the nearest display instead, fitted to it; a window closed minimized or in full screen reopens as a normal (or maximized) window. On Linux under Wayland only the size and maximized state come back.
+- **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
+- **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child; it never opens a System folder. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
 - **Ctrl+F in Object Explorer:** With focus in Object Explorer, Ctrl+F (Cmd+F on macOS) jumps to its search box, as Ctrl+Shift+F does. In the query editor Ctrl+F is still Find.
 - **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
 
@@ -12,6 +14,7 @@
 
 - **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
 - **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
+- **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, instead of cancelling the move. The drop line always shows where the server lands: below the tree's last row, and above an expanded server rather than under its name, and it no longer lingers over loading and error rows.
 
 ## [0.9.1] - 2026-11-16
 

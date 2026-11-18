@@ -220,6 +220,9 @@ export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | '
  * collapsed nodes are evicted, least recently used first. A response for a node that was refreshed, filtered, evicted
  * or removed meanwhile is dropped by its generation.
  */
+/** The System folders listed first in Databases, Tables, Views and Stored Procedures, which an auto-expand never walks into. */
+const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(['systemDatabases', 'systemTables', 'systemViews', 'systemStoredProcedures'])
+
 export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements Disposable {
   private readonly connections: ExplorerServiceOptions['connections']
   private readonly events: ExplorerServiceOptions['events']
@@ -267,6 +270,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   /** The node `seek` walks towards, re-tried as each page arrives. */
   private seeking?: Seeking
+  /**
+   * The user's last expand (`open`): the node whose children the tree scrolls into view and, with `chain`, the node an
+   * auto-expand has reached, walking on through only children as their pages arrive. `selected` is the row it last
+   * selected (or the selection it started from): another selection, a collapse, Stop or a refresh ends it. `held` once
+   * the user scrolls or clicks: the tree stops following it, and the walk's end is selected without scrolling to it.
+   */
+  private opened?: { id: number; readonly chain: boolean; readonly start: number; selected: number | undefined; held?: boolean }
   private readonly unsubscribe: () => void
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
@@ -336,10 +346,46 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (root) this.endRestore(root.id)
     // A reveal walking through this node would expand it again when its next page lands: the user's collapse ends it.
     if (this.seekWalk().includes(node.id)) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
+    // So does an expand walking through it, whose aborted load never settles to end it.
+    if (this.opened && this.within(this.opened.id, id)) this.opened = undefined
     if (this.selected !== undefined && this.selected !== id && this.within(rowOwner(this.selected), id)) this.selected = id
     this.invalidate()
   }
   toggle(id: number): void { if (this.nodes.get(id)?.expanded) this.collapse(id); else this.expand(id) }
+  /**
+   * The user's expand (a click, Right, Enter or Numpad +): expands the node and, with `chain` (Auto-expand single
+   * children), every only child below it that can expand, down to the first node with more than one child, loading each
+   * level as it goes. That node is then selected, as if the user had walked down to it. The tree keeps the children of
+   * the node reached in view (`opening`).
+   */
+  open(id: number, chain = false): void {
+    const node = this.nodes.get(id)
+    if (!node || !node.hasChildren || node.lost || !this.attached(node)) return
+    this.opened = { id, chain, start: id, selected: this.selected }
+    this.expand(id)
+    this.advanceOpen()
+  }
+  /** Toggles as the user's own click does: an expand is `open`. */
+  toggleOpen(id: number, chain = false): void { if (this.nodes.get(id)?.expanded) this.close(id); else this.open(id, chain) }
+  /** The user's collapse (a chevron, Enter, Left or Numpad -): it ends the user's expand wherever that was walking. */
+  close(id: number): void { this.opened = undefined; this.collapse(id) }
+  /**
+   * The node whose children the tree keeps in view after the user's expand, while its first page is still to come or an
+   * auto-expand still walks (`settled` false). Undefined once the user does anything else.
+   */
+  get opening(): { readonly id: number; readonly settled: boolean } | undefined {
+    const opened = this.opened, node = opened && this.nodes.get(opened.id)
+    if (!opened || opened.held || !node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) return undefined
+    return { id: opened.id, settled: !opened.chain && node.load !== 'none' && node.load !== 'loading' }
+  }
+  /** The tree has shown the opened node's children: it stops following them. */
+  endOpening(): void { if (this.opened && !this.opened.chain) this.opened = undefined }
+  /** The user scrolled or clicked: the tree stops following the expand; an auto-expand still walking selects its end without scrolling there. */
+  holdOpening(): void { if (this.opened) this.opened.held = true }
+  /** The user clicked a row: the expand ends, even when the row was selected already (a chevron's click selects nothing). */
+  endOpen(): void { this.opened = undefined }
+  /** Auto-expand single children was turned off: a walk still waiting for a level stops where it is. */
+  stopChain(): void { if (this.opened?.chain) this.opened = { ...this.opened, chain: false } }
 
   /** `*`: expands every collapsed sibling; at most 50 of those that need a query are loaded, the rest are skipped. */
   expandSiblings(id: number): { expanded: number; queued: number; skipped: number } {
@@ -357,6 +403,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A reveal past its server node walks through a node this collapses (see collapse).
     if (this.seekWalk().some(id => !roots.has(id))) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     this.abortWithin(undefined, 'collapse', task => !roots.has(task.nodeId))
+    this.opened = undefined
     // A root page still loading would otherwise restore below the servers again (see collapse).
     for (const id of roots) this.endRestore(id)
     for (const node of this.nodes.values()) if (node.expanded && node.parent !== 0) { node.expanded = false; node.rev++ }
@@ -375,6 +422,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * page arrives; rows that are still there keep their node, expansion and selection, and expanded nodes below reload too.
    */
   refresh(id?: number): void {
+    this.opened = undefined
     if (id === undefined) { for (const root of [...this.roots]) this.reconcileNode(this.nodes.get(root), { deep: true }); this.invalidate(); return }
     let node = this.nodes.get(rowOwner(id))
     if (node && node.kind !== 'folder' && !node.hasChildren && node.parent) node = this.nodes.get(node.parent)
@@ -408,6 +456,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
   stop(): void {
     this.pendingSelect = undefined
+    this.opened = undefined
     this.endSeek({ ok: false, message: 'Stopped.', cancelled: true })
     for (const [id, running] of [...this.running]) { this.running.delete(id); this.loader.abort(running.task); this.reverted(id, running, 'stop') }
     for (const id of this.stalled) {
@@ -471,6 +520,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.selected === id && !reveal) return
     // A selection the user made wins over one a reconcile still waits to make.
     this.pendingSelect = undefined
+    // It also ends the user's expand: coming back to the row later does not start it again.
+    if (this.opened && this.opened.selected !== id) this.opened = undefined
     this.selected = id
     if (reveal) this.reveals++
     this.evictable = true
@@ -972,6 +1023,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A row lost already (a reconnect under a new handle) has nothing showing: what it showed before stays remembered.
     if (root.targetId && !root.lost) this.remembered.set(root.targetId, this.expandedKeys(root))
     this.restoring.delete(root.id)
+    // An expand on this server ends: its aborted load never settles, and the reconnect's own expand is not the user's.
+    if (this.opened && this.within(this.opened.id, root.id)) this.opened = undefined
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
     Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined, note: undefined })
@@ -1060,6 +1113,37 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   // Loading
 
+  /** A node whose listing came back empty and closed: nothing to follow, and a reconcile that opens it again later (Varia's own DDL) is not the user's expand. */
+  private forgetOpened(node: TreeNode): void { if (this.opened?.id === node.id && !this.opened.chain) this.opened = undefined }
+  /** Walks an auto-expand on from the node it has reached once that node's children are in. */
+  private advanceOpen(): void {
+    const opened = this.opened
+    if (!opened?.chain) return
+    for (;;) {
+      const node = this.nodes.get(opened.id)
+      if (!node || !this.attached(node) || this.selected !== opened.selected) { this.opened = undefined; return }
+      // A level the walk expanded that came back empty collapses (`firstPage`): it is where the walk ends.
+      if (!node.expanded) { if (node.hasChildren || node.id === opened.start) { this.opened = undefined; return } break }
+      // Wait for the first page; a folder with more pages to come has more than one child.
+      if (node.load === 'none' || node.load === 'loading') return
+      const children = node.children ?? [], only = children.length === 1 && !node.cursor ? children[0] : undefined
+      // A folder listing only its System folder (Views in a database without views) ends there: system objects are not what the user came for.
+      if (!only || node.load === 'error' || !only.hasChildren || only.lost || (only.folder !== undefined && systemFolders.has(only.folder))) break
+      opened.id = only.id
+      this.expand(only.id)
+    }
+    // The walk ends here: the node reached is selected if the walk went below the node the user expanded.
+    const end = opened.id
+    this.opened = { ...opened, chain: false }
+    if (end !== opened.start) {
+      // The walk's own selection, recorded first: any other one ends the walk (select).
+      this.opened.selected = end
+      this.select(end, { reveal: !opened.held })
+    }
+    // Nothing is left to follow below a level that came back empty, or once the user scrolled away.
+    if (opened.held || !this.nodes.get(end)?.expanded) this.opened = undefined
+    this.invalidate()
+  }
   private ensureLoading(node: TreeNode, priority: LoadPriority): void {
     if (!node.expanded || this.running.has(node.id)) return
     if (node.load === 'none' || node.load === 'loading') { const state = this.state(node); this.loadFirst(node, state.pendingMode ?? 'keep', priority, !!state.deep) }
@@ -1167,6 +1251,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.enforceBudget()
     this.invalidate()
     this.advanceSeek()
+    if (this.opened?.chain) this.advanceOpen()
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
     const truncated = this.replaceChildren(node, wires)
@@ -1177,6 +1262,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
+      this.forgetOpened(node)
       this.announce(`${node.label}: no items`)
     } else if (cursor && total !== undefined) this.announce(`${node.label}: loaded ${count(node.children!.length)} of ${count(total)}`)
     if (!truncated) this.capOrContinue(node)
@@ -1203,6 +1289,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
+      this.forgetOpened(node)
       this.announce(`${node.label}: no items`)
     }
     if (!truncated) this.capOrContinue(node)
