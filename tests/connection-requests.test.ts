@@ -489,4 +489,36 @@ describe('Save with a checked password', () => {
     expect(await readFile(join(directory, 'connections.json'), 'utf8')).not.toContain(marker)
     await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
   })
+  it('refuses a check for other login settings, an expired check, and reports a password it could not store', async () => {
+    const { connections, savedPasswords, request } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const ok = () => ({ ok: true as const, value: [{ name: 'master' }] })
+    // The same password checked for another server or login is not proof for these.
+    await request('connections.databases', { ...options, server: 'elsewhere' }, { remember: true }, ok)
+    await request('connections.databases', { ...options, username: 'someone-else' }, { remember: true }, ok)
+    await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    // A check older than a minute has expired.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      await request('connections.databases', options, { remember: true }, ok)
+      vi.setSystemTime(Date.now() + 61_000)
+      await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    } finally { vi.useRealTimers() }
+    // Storage that fails keeps the saved settings and says the password was not remembered.
+    await request('connections.databases', options, { remember: true }, ok)
+    vi.spyOn(savedPasswords, 'set').mockRejectedValueOnce(new Error('no keyring'))
+    const kept = await library.save({ options, saved: true, rememberPassword: true })
+    expect(kept).toMatchObject({ passwordSaved: false, savedPasswords: [] })
+    expect(kept.library.profiles).toMatchObject([{ saved: true, options: { server: options.server } }])
+  })
+  it('forgets the remembered password when Save is asked to', async () => {
+    const { connections, savedPasswords, remembered } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const id = await remembered()
+    expect(await savedPasswords.get(id, empty)).toBe(marker)
+    const saved = await library.save({ id, options: empty, saved: true, forgetPassword: true })
+    expect(saved).toMatchObject({ passwordForgotten: true, savedPasswords: [] })
+    expect(await savedPasswords.get(id, empty)).toBeUndefined()
+    await expect(library.save({ options, rememberPassword: true, forgetPassword: true })).rejects.toThrow()
+  })
 })
