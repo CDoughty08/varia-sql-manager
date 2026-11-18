@@ -86,7 +86,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
 .profile-strip .link { color: var(--textAccent); text-decoration: underline; text-underline-offset: 2px; }
 /* Motion: only transform and opacity animate (compositor-only). Colour changes are cross-fades of overlay layers. */
 :root { --ease: cubic-bezier(.2, 0, 0, 1); --dur: 180ms; }
-.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px; scroll-behavior: smooth; }
+.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 6px; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { .profile-cards { scroll-behavior: auto; } :root { --dur: 0ms; } }
 .profile-card { position: relative; isolation: isolate; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
 /* The highlight is colour only: the same 1px border, recoloured, and a tint behind the content, both cross-faded. */

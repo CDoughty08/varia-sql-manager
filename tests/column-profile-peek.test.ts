@@ -2,6 +2,7 @@
 // The column profile's peek at the selected columns: which columns a selection covers, what the panel lists with Selected
 // Columns Only and while peeking, and the peek's modifier as Object Explorer's Peek on Hover reads it (pointer on the
 // panel, the press delay, a chord, release and blur).
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { GestureService } from '../src/renderer/src/core/gestures'
 import { columnSelection, selectAll, selectedColumns, type GridSelection } from '../src/renderer/src/grid/selection'
@@ -46,6 +47,12 @@ describe('column profile selection', () => {
 })
 
 describe('profile card motion', () => {
+  it('keeps the list\'s scrollbar gutter, so cards keep their width as a filtered list starts or stops overflowing', () => {
+    const rule = /\.profile-cards \{([^}]*)\}/.exec(readFileSync('src/renderer/src/styles.css', 'utf8'))?.[1] ?? ''
+    expect(rule).toContain('overflow: auto')
+    expect(rule).toContain('scrollbar-gutter: stable')
+  })
+
   it('moves, fades in and fades out the cards with transform and opacity only, never layout properties', () => {
     const played: { target: Element; frames: Keyframe[]; options: unknown }[] = []
     const animate = vi.spyOn(HTMLElement.prototype, 'animate').mockImplementation(function (this: HTMLElement, frames, options) {

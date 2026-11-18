@@ -961,8 +961,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-strip > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-strip.peek { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .profile-strip-action { flex-shrink: 0; padding: 0 6px; font-size: inherit; line-height: 16px; }
-/* Positioned, so a card's offsetTop is its place in the scroll (revealCard) and the ghosts of leaving cards scroll with it. */
-.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px; }
+/* Positioned, so a card's offsetTop is its place in the scroll (revealCard) and the ghosts of leaving cards scroll with it.
+   The scrollbar's gutter is kept, so cards keep their width as a filtered list starts or stops overflowing. */
+.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 6px; }
 .profile-ghosts { position: absolute; inset: 0 0 auto 0; height: 0; pointer-events: none; }
 .profile-card-ghost { position: absolute; margin: 0; }
 .profile-card { position: relative; isolation: isolate; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
