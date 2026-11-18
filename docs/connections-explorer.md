@@ -27,6 +27,17 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   just those, or nothing if it showed none. A server with no saved expansion (first connected this run, or never shown
   connected before) expands to its folders. After updating from a version without this, servers start collapsed.
   Collapsing a node, Collapse All or Stop while a restore is still loading ends it.
+- Expanding a node yourself (a click on its chevron, a double-click, Right, Enter or Numpad +) scrolls down to show as
+  many of its children as fit, as they arrive, without scrolling the node itself out of view. Scrolling or clicking in
+  the tree, clicking, selecting or collapsing a row, or switching to another query tab (or away from one) stops it.
+- With **Auto-expand single children** (Tools › Options › Environment › Object Explorer, on by default), an expanded
+  node whose only child can expand keeps expanding, level by level as each loads, down to the first node with more than
+  one child (or none, or a single leaf, or a listing that failed), which is then selected, so Down goes to its first
+  child; if you scrolled or switched query tabs meanwhile, it is selected without scrolling back to it. It never opens a
+  System folder: Views in a database without views stops at Views. Clicking, selecting or collapsing a row, Collapse
+  All, Stop, Refresh or turning the setting off while a level loads stops it; scrolling, or clicking elsewhere in the
+  tree, only keeps it from scrolling there. Restoring a server's expansion, `*` and Refresh never
+  auto-expand.
 
 ## Sessions and authentication
 

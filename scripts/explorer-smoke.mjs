@@ -2219,6 +2219,123 @@ try {
   expect(await serverOrder()).toEqual(servers)
   console.log('Object Explorer checks: dragging a server below the last row drops it last, with its line below the last child of an expanded server, and over the lower half of the last row when the tree fills its pane; onto the top half of the first row it drops first; over the scrollbar or out of the tree it shows no line and stays.')
 
+  // 13c. Expanding a row low in the view scrolls its children in as they arrive, as far as keeps the row itself in view.
+  await toolbarButton('Collapse All').click()
+  await tree().focus()
+  await press('Home', 'pin-a')
+  for (let server = 0; server < 6; server++) { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown') }
+  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData')
+  await select('pin-f', 'Databases', 'AppData', 'Tables')
+  const treeTop = (await tree().boundingBox()).y, scrolledFrom = await tree().evaluate(element => element.scrollTop)
+  const tablesTop = async () => (await (await explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables')).boundingBox()).y - treeTop
+  expect(await tablesTop()).toBeGreaterThan(200)
+  await press('ArrowRight', 'Tables')
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeGreaterThan(scrolledFrom)
+  // Tables ends just under the pinned server headers above it, with its tables below it.
+  const above = page.getByRole('group', { name: 'Servers above', exact: true })
+  await expect(above).toBeVisible()
+  const aboveBottom = async () => { const box = await above.boundingBox(); return box.y + box.height - treeTop }
+  await expect.poll(async () => Math.round(await aboveBottom() - await tablesTop())).toBeGreaterThanOrEqual(-22)
+  expect(await tablesTop()).toBeGreaterThanOrEqual(Math.floor(await aboveBottom()))
+  await expect(explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables', 'dbo.table10')).resolves.toBeTruthy()
+  console.log('Object Explorer checks: expanding a row low in the view scrolls its children into view and keeps the row in view.')
+
+  // 13d. Auto-expand single children. Stored Procedures lists only System Stored Procedures, which it leaves closed.
+  const procedures = ['pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures']
+  // pin-f's own query tab is active, whichever an earlier step left, so switching to pin-a's below is a switch.
+  await selectOpenDocument(page, pinQueries[5])
+  await expandExplorerPath(page, ...procedures.slice(0, -1))
+  await selectRevealed(...procedures)
+  await press('ArrowRight', 'Stored Procedures')
+  await expect(await revealExplorerRow(page, ...procedures, 'System Stored Procedures')).toHaveAttribute('aria-expanded', 'false')
+  // A procedure's only folder, Parameters, is walked into and selected, the active descendant following, though it
+  // collapses again with nothing in it.
+  await setStub({ procedures: 1 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_ShipOrders')
+  await press('ArrowRight', 'Parameters')
+  await expect(await revealExplorerRow(page, ...procedures, 'dbo.usp_ShipOrders')).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(async () => (await active())?.expanded).not.toBe('true')
+  await expect(tree()).toBeFocused()
+  // Enter expands as Right does.
+  await setStub({ procedures: 3 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_2')
+  await press('Enter', 'Parameters')
+  // Switching query tabs while Parameters loads follows the other server, and the walk's end, selected when it arrives,
+  // does not scroll the tree back.
+  await setStub({ procedures: 2, holdParameters: true })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_1')
+  await page.keyboard.press('ArrowRight')
+  const heldParameters = () => application.evaluate(() => { const stub = globalThis.variaStub; return stub.calls.filter(call => call.method === 'explorer.children' && call.params.node.folder === 'parameters').map(call => call.params.requestId).findLast(id => stub.held.has(id)) ?? null })
+  await expect.poll(heldParameters).not.toBeNull()
+  const expandedAt = await tree().evaluate(element => element.scrollTop)
+  await selectOpenDocument(page, pinQueries[0])
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(expandedAt)
+  const followedTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(followedTo)
+  // Wheeling the tree while Parameters loads keeps it where the wheel left it too.
+  const heldThen = async (ready, act) => {
+    await setStub({ procedures: 5, holdParameters: true })
+    await selectRevealed(...procedures)
+    await page.keyboard.press('F5')
+    await selectRevealed(...procedures, ready)
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(heldParameters).not.toBeNull()
+    await act()
+    await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  }
+  let wheeledTo
+  await heldThen('dbo.usp_3', async () => {
+    const box = await tree().boundingBox()
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    const before = await tree().evaluate(element => element.scrollTop)
+    // Far enough that Parameters, below, is out of view: a reveal of the walk's end would have to scroll back.
+    await page.mouse.wheel(0, -2000)
+    await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(before)
+    wheeledTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  })
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(wheeledTo)
+  // Turning the setting off while Parameters loads stops the walk where it is: the procedure stays selected.
+  const setAutoExpand = async value => expect((await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.autoExpandSingleChild': value }), value)).ok).toBe(true)
+  // Main sends the change before it answers, and the tree stops the walk as the change commits: the page released next comes after.
+  await heldThen('dbo.usp_4', () => setAutoExpand(false))
+  await expect.poll(async () => (await active())?.label).toBe('dbo.usp_4')
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_4', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_4')
+  await setAutoExpand(true)
+  // A chevron click, a double-click and Numpad + walk on as Right does.
+  await setStub({ procedures: 10, holdParameters: false })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  const procedure = name => revealExplorerRow(page, ...procedures, name)
+  await (await procedure('dbo.usp_5')).locator(part.explorerTwistie).click()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await (await procedure('dbo.usp_6')).locator(part.explorerRowText).first().dblclick()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await selectRevealed(...procedures, 'dbo.usp_7')
+  await press('NumpadAdd', 'Parameters')
+  // Clicking the selected row while a chevron's walk waits stops it: the row stays selected.
+  // Both rows are found first: the tree changes under a scan while the walk waits.
+  await selectRevealed(...procedures, 'dbo.usp_8')
+  const [clicked, chevron] = [await procedure('dbo.usp_8'), await procedure('dbo.usp_9')]
+  await setStub({ holdParameters: true })
+  await chevron.locator(part.explorerTwistie).click()
+  await expect.poll(heldParameters).not.toBeNull()
+  await clicked.locator(part.explorerRowText).first().click()
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_9', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_8')
+  await setStub({ holdParameters: false, procedures: 0 })
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, by Right, Enter, Numpad +, chevron and double-click; switching query tabs or wheeling meanwhile keeps the tree where it was put, and clicking a row or turning the setting off stops it.')
+
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
     await application.close()

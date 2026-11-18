@@ -12,7 +12,7 @@ import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
 import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
-import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
+import { childrenShown, lastDescendant, layoutWindow, pinnedServerBands, renderedIndices, revealChildrenScroll, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -37,7 +37,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const { 'objectExplorer.pinnedServerHeadersTop': topLimit, 'objectExplorer.pinnedServerHeadersBottom': bottomLimit,
-    'objectExplorer.followActiveQuery': follow } = useServiceSnapshot(settings).values
+    'objectExplorer.followActiveQuery': follow, 'objectExplorer.autoExpandSingleChild': autoExpand } = useServiceSnapshot(settings).values
   const renaming = useServiceSnapshot(explorer.renaming)
   const element = useRef<HTMLDivElement | null>(null)
   const frame = useRef<HTMLDivElement | null>(null)
@@ -168,6 +168,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     })
   }, [ensureVisible, measure, menuTargets, releaseFollow])
 
+  // Another query tab is where the user went: an expand still loading neither scrolls the tree back nor reveals its end.
+  // Only a switch counts, not the tab's connection dropping or coming back, nor the tree mounting.
+  const heldForQuery = useRef(activeQueryId)
+  useLayoutEffect(() => {
+    if (heldForQuery.current === activeQueryId) return
+    heldForQuery.current = activeQueryId
+    explorer.holdOpening()
+  }, [explorer, activeQueryId])
   useLayoutEffect(() => {
     if (!activeQueryId || !activeConnectionId) { followed.current = undefined; return }
     if (!follow) { followed.current = { query: activeQueryId, connection: activeConnectionId }; return }
@@ -198,6 +206,23 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     reveal.current = undefined
     if (id !== undefined) { releaseFollow(); ensureVisible(rows, rowIndex(rows, id)) }
   })
+  // After the user's expand, the children come into view as they arrive, as far as they fit below the expanded row (the
+  // node an auto-expand reached). Scrolling or clicking elsewhere stops it; so does selecting another row (the service).
+  useLayoutEffect(() => {
+    const opening = explorer.opening
+    if (!opening) return
+    const tree = element.current, index = rowIndex(rows, opening.id)
+    if (!tree || index < 0) return
+    const last = lastDescendant(rows, index)
+    const destination = revealChildrenScroll(layout, index, last, tree.scrollTop, tree.clientHeight, topLimit, bottomLimit)
+    if (destination !== undefined) { releaseFollow(); tree.scrollTop = destination; measure() }
+    // The service is ahead of the rows rendered: its page may be in while the rows still show the loading row. An error
+    // row is what the expand shows, and ends it too.
+    if (opening.settled && childrenShown(rows, index)) explorer.endOpening()
+  })
+  const holdOpening = useCallback(() => explorer.holdOpening(), [explorer])
+  // A layout effect: the walk stops as the change commits, before a page that arrives after it can walk on.
+  useLayoutEffect(() => { if (!autoExpand) explorer.stopChain() }, [explorer, autoExpand])
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
@@ -210,8 +235,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
-    select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
-    toggle: rowId => explorer.toggle(rowId),
+    select: rowId => { explorer.endOpen(); explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
+    toggle: rowId => explorer.toggleOpen(rowId, autoExpand),
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
@@ -269,7 +294,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (peek.getSnapshot().open?.source === 'hover') peek.close()
       run('explorer.openPeekTab', rowId)
     }
-  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
+  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark, autoExpand])
   // The background below the last row drops a server last, and its line shows that: below the tree's last row, which is
   // the last server's last child when it is expanded. Rows mark themselves (actions.dragOver);
   // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
@@ -308,9 +333,9 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
         else { reveal.current = id; explorer.select(id) }
         return
       }
-      case 'expand': explorer.expand(action.id); return
-      case 'collapse': explorer.collapse(action.id); return
-      case 'toggle': explorer.toggle(action.id); return
+      case 'expand': explorer.open(action.id, autoExpand); return
+      case 'collapse': explorer.close(action.id); return
+      case 'toggle': explorer.toggleOpen(action.id, autoExpand); return
       case 'expandSiblings': explorer.expandSiblings(action.id); return
       case 'retry': explorer.retry(action.id); return
       case 'continue': explorer.continueLoading(action.id); return
@@ -379,7 +404,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     }} />
   }
   return <div ref={frame} className="explorer-tree-frame" style={{ '--explorer-tree-height': `${bands.height}px`, '--explorer-tree-width': `${view.width}px`, '--explorer-scrollbar-height': `${view.scrollbar}px` } as CSSProperties}
-    onPointerDownCapture={releaseFollow} onWheelCapture={releaseFollow} onKeyDownCapture={releaseFollow}
+    onPointerDownCapture={() => { releaseFollow(); holdOpening() }} onWheelCapture={() => { releaseFollow(); holdOpening() }} onKeyDownCapture={releaseFollow}
     onFocusCapture={event => { focusedPin.current = event.target.closest('.explorer-pin-band') ? event.target : undefined }}
     onBlurCapture={event => {
       if (event.relatedTarget && event.relatedTarget !== event.currentTarget.ownerDocument.body) focusedPin.current = undefined

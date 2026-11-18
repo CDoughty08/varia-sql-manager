@@ -43,6 +43,11 @@ export const objectExplorerSettings = [
     description: 'When switching query tabs, bring the server into view if its header is off-screen.'
   },
   {
+    key: 'objectExplorer.autoExpandSingleChild', page: 'environment.objectExplorer', label: 'Auto-expand single children',
+    type: 'boolean', default: true, varia: true, keywords: ['expand', 'tree', 'folders', 'chain', 'only child'],
+    description: 'When you expand a node whose only child can expand too, keep expanding down to the first node with more than one child, and select it. Each level loads as it goes; selecting another row stops it.'
+  },
+  {
     key: 'objectExplorer.pinnedServerHeadersTop', page: 'environment.objectExplorer', label: 'Pinned server headers at top',
     type: 'integer', min: 0, max: 10, default: 2, varia: true, keywords: ['sticky', 'servers', 'scroll'],
     description: 'Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers.'
