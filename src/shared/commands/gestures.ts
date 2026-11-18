@@ -147,7 +147,8 @@ export const gestureCatalog = {
   },
   'explorer.moveQueryToServer': {
     title: 'Move Query to Server', description: 'Dropping a server or database on a query\'s tab or editor moves the query there, as Change Connection does; on a tab strip\'s empty space it opens a new query.',
-    kind: 'fixed', scope: 'objectExplorer', alsoIn: ['documentTabs', 'queryEditor'], action: 'drag', target: 'a server or database', modifiers: [],
+    // Not listed in the query editor: Insert Server Name's modifier is that drop's variant there, and the Mouse view would call a shared scope a clash.
+    kind: 'fixed', scope: 'objectExplorer', alsoIn: ['documentTabs'], action: 'drag', target: 'a server or database', modifiers: [],
     locked: 'Dragging is the pointer\'s way to move a query; Change Connection does the same from the keyboard.'
   },
   'explorer.dropServerName': {

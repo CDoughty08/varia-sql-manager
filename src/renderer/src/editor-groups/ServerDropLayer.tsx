@@ -127,7 +127,7 @@ function DropCard({ hover, drag, mode }: { hover: DropHover; drag: ServerDrag; m
     </>
   }
   const insert = gestures.modifiers('explorer.dropServerName') ? gestures.phrase('explorer.dropServerName') : undefined
-  const hint = mode === 'plate' && insert ? `${insert[0].toUpperCase()}${insert.slice(1)} to insert the name instead` : undefined
+  const hint = mode === 'plate' && insert ? `${insert[0].toUpperCase()}${insert.slice(1)} to insert the name instead.` : undefined
   return <div className={mode === 'plate' ? 'server-drop-plate' : 'server-drop-card'} role="status" aria-label="Server drop" data-refused={!hover.verdict.accept || undefined}>
     {mode === 'plate' && <span className="server-drop-plug" aria-hidden="true"><Icon name={!hover.verdict.accept ? 'circle-slash' : drag.database ? 'database' : 'server'} /></span>}
     <div className="server-drop-title">{title}</div>
