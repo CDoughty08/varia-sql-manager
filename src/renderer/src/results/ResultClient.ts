@@ -517,7 +517,7 @@ export class ResultClient implements Disposable {
         const groups = o.groups, ranges = o.ranges
         const index = (value: number, min: number) => Number.isInteger(value) && value >= min && value <= 2 ** 31 - 1
         if ((groups && (groups.length < 1 || groups.length > wire.distinct.maxWindow || groups.some(group => !index(group, 0))))
-          || (ranges && (ranges.length < 1 || ranges.length > wire.distinct.maxWindow || ranges.some(([offset, count]) => !index(offset, 0) || !index(count, 1))))
+          || (ranges && (ranges.length < 1 || ranges.length > wire.distinct.maxWindow || ranges.some(([offset, count], at) => !index(offset, 0) || !index(count, 1) || (at > 0 && offset < ranges[at - 1][0] + ranges[at - 1][1]))))
           || [o.all, groups, ranges, o.invert].filter(Boolean).length > 1 || (o.search !== undefined && !o.all && !ranges) || (o.order === undefined) !== (ranges === undefined)
           || (o.toggle && !ranges) || (!o.all && !groups && !ranges && !o.invert && o.nulls === undefined))
           throw new ResultError('INVALID_PARAMS', 'Tick 1 to 512 values, every value, 1 to 512 ranges of the list, every value flipped, or NULL.')

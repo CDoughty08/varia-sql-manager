@@ -1380,7 +1380,7 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   results](#search-in-results) does, `total` then counts only the matches, and they are kept for scrolling.
 - **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls?, order?, ranges?: 1 –
   512 [offset, count], toggle?, invert? }`** sets ticks of the named groups, all values (or all `search` matches), the
-  values at `ranges` of the list in `order` (searched with `search`), or flips every value (`invert`), and NULL; one of
+  values at `ranges` (sorted and disjoint) of the list in `order` (searched with `search`), or flips every value (`invert`), and NULL; one of
   those at most. `toggle` (with `ranges`) ticks them all when any, or NULL when `nulls` is given, is cleared, else clears
   them all, NULL alike, ignoring `checked`. Answers `{ checked, nullsChecked }`. A range past the list's end or a frozen
   snapshot is refused (`INVALID_PARAMS`).

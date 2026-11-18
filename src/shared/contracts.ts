@@ -403,7 +403,7 @@ export interface ResultsDistinctReadResult { total: number; offset: number; valu
  *  clears, ignoring `checked`; or `invert`, which flips every value. `nulls` sets NULL's tick. */
 export interface ResultsDistinctTickParams {
   resultId: number; snapshotId: number; checked: boolean; groups?: number[]; all?: true; search?: string; nulls?: boolean
-  order?: 'count' | 'value'; ranges?: [offset: number, count: number][]; toggle?: true; invert?: true
+  order?: 'count' | 'value'; /** Sorted and disjoint. */ ranges?: [offset: number, count: number][]; toggle?: true; invert?: true
 }
 export interface ResultsDistinctTickResult { checked: number; nullsChecked: boolean }
 export interface ResultsDistinctCloseParams { resultId: number; snapshotIds: number[] }

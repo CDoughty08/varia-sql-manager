@@ -181,6 +181,16 @@ export const popoverNaturalHeight = 420
 /** Room kept between the popover and the window's edges, and between it and the column. */
 const edge = 8, gap = 2
 
+/** The room beside the band on `side`, between the band and the window's edges. */
+export function popoverRoom(band: { left: number; right: number; top: number; bottom: number }, view: { width: number; height: number }, side: 'right' | 'left' | 'below' | 'above'): { width: number; height: number } {
+  switch (side) {
+    case 'right': return { width: view.width - edge - (band.right + gap), height: view.height - 2 * edge }
+    case 'left': return { width: band.left - gap - edge, height: view.height - 2 * edge }
+    case 'below': return { width: view.width - 2 * edge, height: view.height - edge - (band.bottom + gap) }
+    case 'above': return { width: view.width - 2 * edge, height: band.top - gap - edge }
+  }
+}
+
 /** Where the popover opens: `top` or `bottom` (from the window's bottom edge), its width, and the height it may take. */
 export interface PopoverPlace { readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number }
 
@@ -191,13 +201,24 @@ export interface PopoverPlace { readonly side: 'right' | 'left' | 'below' | 'abo
  * a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
  * `height` is the remembered height, or `popoverNaturalHeight` when it sizes to its contents.
  */
-export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number } }): PopoverPlace {
+export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number }; side?: PopoverPlace['side'] }): PopoverPlace {
   const { band, view } = o
-  const width = Math.max(Math.min(popoverBounds.minWidth, view.width - 2 * edge), Math.min(o.width, view.width - 2 * edge))
-  const height = Math.min(o.height, view.height - 2 * edge)
+  let width = Math.max(Math.min(popoverBounds.minWidth, view.width - 2 * edge), Math.min(o.width, view.width - 2 * edge))
+  let height = Math.min(o.height, view.height - 2 * edge)
   const beside = (left: number, side: 'right' | 'left'): PopoverPlace => {
     const top = Math.max(edge, Math.min(band.top, view.height - edge - height))
     return { side, left, top, width, maxHeight: Math.max(0, view.height - edge - top) }
+  }
+  // A side kept (`popoverSide`, while and after its grip is dragged) holds whatever size fits there, so the popover never
+  // jumps across the column as it grows or shrinks.
+  if (o.side && keepsSide(band, view, o.side)) {
+    const room = popoverRoom(band, view, o.side)
+    width = Math.min(width, room.width)
+    height = Math.min(height, room.height)
+    if (o.side === 'right') return beside(band.right + gap, 'right')
+    if (o.side === 'left') return beside(band.left - gap - width, 'left')
+    const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
+    return o.side === 'below' ? { side: 'below', left, top: band.bottom + gap, width, maxHeight: room.height } : { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: room.height }
   }
   if (view.width - edge - (band.right + gap) >= width) return beside(band.right + gap, 'right')
   if (band.left - gap - edge >= width) return beside(band.left - gap - width, 'left')
@@ -209,6 +230,13 @@ export function popoverPlace(o: { band: { left: number; right: number; top: numb
   // Nowhere clear of the column: over it, under its header, at its right end.
   const top = Math.max(edge, Math.min(band.top + gap, view.height - edge - height))
   return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top) }
+}
+
+/** Whether the popover can stay on `side` of the band: the room there takes its smallest size. The last resort over the
+ *  column, which reports `right`, cannot be kept. */
+export function keepsSide(band: { left: number; right: number; top: number; bottom: number }, view: { width: number; height: number }, side: PopoverPlace['side']): boolean {
+  const room = popoverRoom(band, view, side)
+  return room.width >= Math.min(popoverBounds.minWidth, view.width - 2 * edge) && room.height >= Math.min(popoverBounds.minHeight, view.height - 2 * edge)
 }
 
 /** A remembered popover size held within `popoverBounds` and the window; a height of 0 sizes it to its contents. */

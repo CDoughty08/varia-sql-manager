@@ -7,7 +7,7 @@ import { scrollCap } from '../grid/scroll'
 import { trapFocus } from '../trap-focus'
 import { useWorkbench } from '../core/WorkbenchContext'
 import type { GestureEvent } from '../core/gestures'
-import { addRange, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, isSelected, listWindow, maxListSpace, popoverNaturalHeight, popoverPlace, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow, type ChecklistAction, type ColumnCondition, type RowSelection } from './column-filter'
+import { addRange, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, isSelected, keepsSide, listWindow, maxListSpace, popoverNaturalHeight, popoverPlace, popoverRoom, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow, type ChecklistAction, type ColumnCondition, type PopoverPlace, type RowSelection } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -132,6 +132,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   const [sized, setSizedState] = useState<ColumnFilterSize>(size), sizedNow = useRef(size)
   const setSized = (next: ColumnFilterSize) => { sizedNow.current = next; setSizedState(next) }
   const resizing = useRef<{ x: number; y: number; width: number; height: number } | undefined>(undefined)
+  /** The side a drag of the grip started on, kept from then on so the popover never jumps across the column as it grows. */
+  const keptSide = useRef<PopoverPlace['side'] | undefined>(undefined)
   useEffect(() => { if (!resizing.current) { sizedNow.current = size; setSizedState(size) } }, [size.width, size.height])
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
   const [order, setOrder] = useState<'count' | 'value'>('count')
@@ -362,25 +364,27 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
       moveTo(row)
       if (row < nullRows) return toggleNull()
       const value = blocks.current.get(Math.floor((row - nullRows) / blockSize))?.[(row - nullRows) % blockSize]
-      if (value) toggle(value)
-      return
+      if (value) return toggle(value)
+      // Not read yet (End, then Space before its block arrives): the backend decides, and the rows are read again.
+      return send({ checked: true, order, ...needle ? { search: needle } : {}, ranges: [[row - nullRows, 1]], toggle: true }, true)
     }
+    // The selected values read so far: how many, and how many are ticked.
+    let seen = 0, seenTicked = 0
+    for (const [block, values] of blocks.current) values.forEach((value, at) => {
+      if (!isSelected(chosen, nullRows + block * blockSize + at)) return
+      seen++
+      if (value.checked) seenTicked++
+    })
+    const values = ranges.reduce((sum, [, count]) => sum + count, 0), allSeen = seen === values
     let on = checked
-    if (on === undefined) {
-      let seen = 0, unticked = nulls && !ticksNow.current.nullChecked
-      for (const [block, values] of blocks.current) values.forEach((value, at) => {
-        if (!isSelected(chosen, nullRows + block * blockSize + at)) return
-        seen++
-        if (!value.checked) unticked = true
-      })
-      const values = ranges.reduce((sum, [, count]) => sum + count, 0)
-      on = unticked ? true : seen === values ? false : undefined
-    }
+    if (on === undefined) on = (nulls && !ticksNow.current.nullChecked) || seenTicked < seen ? true : allSeen ? false : undefined
     const where = { order, ...needle ? { search: needle } : {} }
     if (on === undefined) return send({ checked: true, ...where, ranges, toggle: true, ...nulls ? { nulls: true } : {} }, true)
     const set = on
     patch((_, row) => isSelected(chosen, row) ? set : undefined)
-    if (nulls) setTicks({ ...ticksNow.current, nullChecked: set })
+    // The note's count moves at once when every selected value was read; otherwise the answer sets it.
+    const now = ticksNow.current
+    setTicks({ checked: allSeen ? now.checked + (set ? seen - seenTicked : -seenTicked) : now.checked, nullChecked: nulls ? set : now.nullChecked })
     if (ranges.length) send({ checked: set, ...where, ranges, ...nulls ? { nulls: set } : {} })
     else if (nulls) send({ checked: set, nulls: set })
   }
@@ -404,7 +408,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     if (action.kind === 'selected') return tickSelection(action.checked)
     if (!needle) return
     patch(() => action.checked)
-    if (showNull) setTicks({ ...ticksNow.current, nullChecked: action.checked })
+    // After unticking everything, the matches are exactly what is ticked; otherwise the answer sets the count.
+    setTicks({ checked: action.only && total !== undefined ? total : ticksNow.current.checked, nullChecked: showNull ? action.checked : ticksNow.current.nullChecked })
     send({ checked: action.checked, all: true, search: needle, ...showNull ? { nulls: action.checked } : {} })
   }
 
@@ -501,7 +506,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   // Beside the column, not over it (popoverPlace), at its remembered size; measured in the grid's own window.
   const view = grid.ownerDocument.defaultView ?? window, screen = { width: view.innerWidth, height: view.innerHeight }
   const box = clampPopoverSize(sized, screen)
-  const at = popoverPlace({ band: anchor, width: box.width, height: box.height || popoverNaturalHeight, view: screen })
+  const at = popoverPlace({ band: anchor, width: box.width, height: box.height || popoverNaturalHeight, view: screen, ...keptSide.current ? { side: keptSide.current } : {} })
   const place = { left: at.left, width: at.width, maxHeight: at.maxHeight, ...at.top !== undefined ? { top: at.top } : { bottom: at.bottom }, ...box.height ? { height: Math.min(box.height, at.maxHeight) } : {} }
   // The grip sits at the corner away from the column (and from the band above it), so dragging it never covers the column.
   const gripX = at.side === 'left' ? -1 : 1, gripY = at.side === 'above' ? -1 : 1
@@ -511,10 +516,15 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     event.currentTarget.setPointerCapture(event.pointerId)
     const shown = card.current.getBoundingClientRect()
     resizing.current = { x: event.clientX, y: event.clientY, width: shown.width, height: shown.height }
+    if (keepsSide(anchor, screen, at.side)) keptSide.current = at.side
   }
   const gripMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const start = resizing.current
-    if (start) setSized(clampPopoverSize({ width: start.width + (event.clientX - start.x) * gripX, height: Math.max(1, start.height + (event.clientY - start.y) * gripY) }, screen))
+    if (!start) return
+    // Within the room on its side, so the size saved is the size shown.
+    const room = keptSide.current ? popoverRoom(anchor, screen, keptSide.current) : screen
+    const next = clampPopoverSize({ width: start.width + (event.clientX - start.x) * gripX, height: Math.max(1, start.height + (event.clientY - start.y) * gripY) }, screen)
+    setSized({ width: Math.min(next.width, Math.floor(room.width)), height: Math.min(next.height, Math.floor(room.height)) })
   }
   const gripUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!resizing.current) return

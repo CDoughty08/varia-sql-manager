@@ -141,10 +141,14 @@ export class SettingsService extends SnapshotStore<SettingsSnapshot> implements 
    * this session only, and the first such failure is reported.
    */
   async choose<K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void> {
-    try { await this.update({ [key]: value } as SettingsPatch) }
+    await this.chooseAll({ [key]: value } as SettingsPatch)
+  }
+  /** Sets several settings in one save, as `choose` sets one (a resize's width and height land together). */
+  async chooseAll(patch: SettingsPatch): Promise<void> {
+    try { await this.update(patch) }
     catch (error) {
       if (this.disposed) return
-      this.session.set(key, value)
+      for (const [key, value] of Object.entries(patch)) this.session.set(key as SettingKey, value as SettingValue<SettingKey>)
       this.accept(undefined)
       if (!this.toggleWarned) {
         this.toggleWarned = true

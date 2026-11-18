@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addRange, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, conditionFilter, isNotNullFilter, isSelected, listWindow, maxListSpace, maxSelectionRanges, popoverPlace, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow } from '../src/renderer/src/results/column-filter'
+import { addRange, keepsSide, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, conditionFilter, isNotNullFilter, isSelected, listWindow, maxListSpace, maxSelectionRanges, popoverPlace, popoverRoom, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -151,6 +151,21 @@ describe('column filter', () => {
     expect(popoverPlace({ band: { left: 0, right: 1200, top: 0, bottom: 800 }, width: 400, height: 420, view }).left).toBe(792)
     // A window narrower than the popover: it shrinks to fit.
     expect(popoverPlace({ band: { left: 0, right: 100, top: 0, bottom: 300 }, width: 600, height: 420, view: { width: 400, height: 300 } }).width).toBe(384)
+  })
+  it('keeps the side a resize started on, holding the popover to the room there instead of jumping across the column', () => {
+    const view = { width: 1600, height: 800 }, band = { left: 900, right: 1100, top: 100, bottom: 780 }
+    // 490 px on the right: 500 wide would move it left, unless the side is kept.
+    expect(popoverPlace({ band, width: 500, height: 420, view }).side).toBe('left')
+    expect(popoverRoom(band, view, 'right')).toEqual({ width: 490, height: 784 })
+    expect(popoverPlace({ band, width: 500, height: 420, view, side: 'right' })).toMatchObject({ side: 'right', left: 1102, width: 490 })
+    // Kept on the left, a narrow popover that would fit on the right stays left, its right edge by the column.
+    expect(popoverPlace({ band, width: 400, height: 420, view, side: 'left' })).toMatchObject({ side: 'left', left: 498, width: 400 })
+    // Below a band, the height is held to the room below.
+    const row = { left: 0, right: 1600, top: 300, bottom: 320 }
+    expect(popoverPlace({ band: row, width: 400, height: 700, view, side: 'below' })).toMatchObject({ side: 'below', top: 322, maxHeight: 470 })
+    // A side with no room for the smallest popover is not kept (the last resort over the column).
+    expect(keepsSide({ left: 0, right: 1600, top: 0, bottom: 800 }, view, 'right')).toBe(false)
+    expect(popoverPlace({ band: { left: 0, right: 1600, top: 0, bottom: 800 }, width: 400, height: 420, view, side: 'right' }).left).toBe(1192)
   })
   it('keeps a remembered popover size within its bounds and the window', () => {
     expect(clampPopoverSize({ width: 100, height: 100 }, { width: 1200, height: 800 })).toEqual({ width: 340, height: 240 })

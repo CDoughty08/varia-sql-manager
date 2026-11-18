@@ -380,6 +380,8 @@ describe('column filter popover', () => {
       expect(actionNames(view)).toEqual(['Tick the matches (10,000)', 'Tick only the matches (10,000)', 'Untick the matches (10,000)', 'Tick all (10,000)', 'Untick all (10,000)'])
       runAction(view, 'Untick the matches (10,000)')
       runAction(view, 'Tick only the matches (10,000)')
+      // Only the matches are ticked now, before any answer.
+      expect(view.dialog().textContent).toContain('10,000 ticked.')
       await answerTicks(view)
       expect(tickCalls(view).slice(2)).toEqual([{ checked: false, all: true, search: 'v' }, { checked: false, all: true }, { checked: true, all: true, search: 'v' }])
       view.unmount()
@@ -480,6 +482,47 @@ describe('column filter popover', () => {
     expect(selectedRows(view)).toEqual(['1'])
     expect(tickCalls(view).at(-1)).toEqual({ checked: true, groups: [0] })
     view.unmount()
+  })
+
+  it('keeps the side its grip drag started on, holding the width to the room there', async () => {
+    // happy-dom's window is 1024 × 768: a column from 500 to 600 leaves 414 px on its right and 490 on its left.
+    const resized = vi.fn()
+    const view = fixture({ anchor: rect(500, 50, 100, 600), size: { width: 400, height: 400 }, onResized: resized })
+    await view.settle()
+    expect(view.dialog().dataset.side).toBe('right')
+    const grip = view.dialog().querySelector('.column-filter-grip') as HTMLElement
+    view.dialog().getBoundingClientRect = () => rect(602, 50, 400, 400)
+    const pointer = (type: string, x: number, y: number) => act(() => { grip.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y })) })
+    pointer('pointerdown', 1000, 450)
+    // Wider than the room on the right: it stays there at the room's width, never flipping to the left and back.
+    for (const x of [1060, 1061, 1062]) {
+      pointer('pointermove', x, 450)
+      expect([view.dialog().dataset.side, view.dialog().style.width]).toEqual(['right', '414px'])
+    }
+    pointer('pointerup', 1062, 450)
+    expect(resized).toHaveBeenCalledWith({ width: 414, height: 400 })
+    view.unmount()
+  })
+
+  it('ticks a single selected row not read yet through the backend, and moves the count at once when it can', async () => {
+    const view = fixture()
+    await view.settle()
+    act(() => view.valueList().focus())
+    view.hold(true)
+    view.key(view.valueList(), 'End')
+    view.key(view.valueList(), ' ')
+    await answerTicks(view)
+    expect(tickCalls(view)).toEqual([{ checked: true, order: 'count', ranges: [[distinct - 1, 1]], toggle: true }])
+    view.hold(false)
+    view.unmount()
+    // Every selected value read: Space unticks them and the note says so before the backend answers.
+    const counted = fixture()
+    await counted.settle()
+    act(() => counted.valueList().focus())
+    press(counted.valueList(), 'ArrowDown', { shiftKey: true })
+    press(counted.valueList(), ' ')
+    expect(counted.dialog().textContent).toContain('9,998 ticked, 2 selected.')
+    counted.unmount()
   })
 
   it('applies OK with Ctrl+Enter from the search', async () => {

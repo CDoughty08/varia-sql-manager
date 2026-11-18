@@ -2144,8 +2144,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             || (args.Search is not null && !all && !ranged) || (args.Order is null) == ranged || (args.Toggle == true && !ranged)
             || args.Groups is { Length: < 1 or > ViewSorter.MaxDistinctWindow } || args.Search is { Length: < 1 or > ResultSearcher.MaxText }
             || args.Ranges is { Length: < 1 or > ViewSorter.MaxDistinctWindow } || (args.Ranges?.Any(range => range is not [>= 0 and <= int.MaxValue, >= 1 and <= int.MaxValue]) ?? false)
+            || (args.Ranges is { } ranges && Enumerable.Range(1, ranges.Length - 1).Any(at => ranges[at][0] < ranges[at - 1][0] + ranges[at - 1][1]))
             || (modes == 0 && args.Nulls is null))
-            throw new RequestException("INVALID_PARAMS", "Tick 1 to 512 values, every value (or those a search of at most 1,024 characters finds), 1 to 512 ranges of the list in an order, every value flipped, or NULL.");
+            throw new RequestException("INVALID_PARAMS", "Tick 1 to 512 values, every value (or those a search of at most 1,024 characters finds), 1 to 512 sorted, disjoint ranges of the list in an order, every value flipped, or NULL.");
         var snapshot = FindSnapshot(args.ResultId, args.SnapshotId);
         var (ticked, nullTicked) = await Task.Run(() => snapshot.Tick(args.Checked, args.Groups, all, args.Search, args.Nulls, token, order.Value, args.Ranges, args.Toggle == true, invert), token);
         return new ResultsDistinctTickResult(ticked, nullTicked);

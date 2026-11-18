@@ -258,11 +258,13 @@ internal static class DistinctChecks
             Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, ranges = new[] { new long[] { 0, 1 } } }),
             Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", toggle = true }),
             Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, invert = true, all = true }),
-            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 0 } } })
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 0 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 2 }, new long[] { 0, 2 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 1, 1 }, new long[] { 0, 1 } } })
         });
         check(second is { Checked: 1, NullsChecked: true } && toggledOn is { Checked: 2, NullsChecked: true } && toggledOff is { Checked: 0, NullsChecked: false } && inverted is { Checked: 2, NullsChecked: false }
-            && rangeCodes == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS",
-            "results.distinctTick ticks ranges of a list in an order, toggles them with NULL (any cleared ticks all, else clears all), inverts, and refuses ranges past the end, without an order, a toggle without ranges and two modes");
+            && rangeCodes == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS",
+            "results.distinctTick ticks ranges of a list in an order, toggles them with NULL (any cleared ticks all, else clears all), inverts, and refuses ranges past the end, without an order, empty, overlapping or out of order, a toggle without ranges and two modes");
         Call<ResultsDistinctCloseResult>("results.distinctClose", new { resultId = set.ResultId, snapshotIds = new[] { ranged.SnapshotId } });
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "groups", column = 0, snapshotId = opened.SnapshotId } } });
         check(view.Rows == 3 && view.Filters is [{ Op: "groups", Column: 0, SnapshotId: var id, Keep: true, Values: 1, Row: 1, Nulls: false, Rows: null }] && id == opened.SnapshotId,
