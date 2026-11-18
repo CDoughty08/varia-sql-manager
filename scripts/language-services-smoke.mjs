@@ -250,7 +250,7 @@ try {
   console.log('Language checks: F12 scripts the object under the caret to a new query tab, and an unknown name only shows a status notice.')
 
   // Peek from the editor, as from an Object Explorer row: Ctrl+hover (⌘ on macOS) on a name opens Peek's card beside it without
-  // taking focus, a press elsewhere closes it, Alt+F12 opens it at the caret with focus (Esc returns to the editor), and
+  // taking focus, a press elsewhere or Esc closes it, Alt+F12 opens it at the caret with focus (Esc returns to the editor), and
   // Ctrl+click opens a Peek tab.
   await setText(page, page, 'SELECT * FROM dbo.Orders')
   const card = peekCard(page, 'dbo.Orders'), queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
@@ -268,6 +268,26 @@ try {
   await expect.poll(async () => (await calls()).filter(call => call.method === 'explorer.peek').at(-1)?.params.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.mouse.click(orders.x + 200, orders.y)
   await expect(card).toBeHidden()
+  // Esc in the editor closes a hovered card too, though focus never left the text, once Monaco's own widgets have had it:
+  // the first Esc closes the suggestions, the second the card.
+  await page.mouse.move(orders.x, orders.y)
+  await page.keyboard.down(mod)
+  await page.mouse.move(orders.x + 1, orders.y)
+  await expect(card).toBeVisible()
+  await page.keyboard.up(mod)
+  await expect(queryText).toBeFocused()
+  // After "SELECT ", where every suggestion fits (moving the caret leaves the card open).
+  await page.keyboard.press('Home')
+  for (let step = 0; step < 'SELECT '.length; step++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionWidget(page)).toBeVisible()
+  await expect(card).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(suggestionWidget(page)).toBeHidden()
+  await expect(card).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(card).toBeHidden()
+  await expect(queryText).toBeFocused()
   await page.keyboard.press('End')
   await page.keyboard.press('Alt+F12')
   await expect(card).toBeFocused()
