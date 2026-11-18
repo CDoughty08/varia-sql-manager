@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealChildrenScroll, revealPinnedScroll, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  childrenShown, computeWindow, flatten, lastDescendant, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealChildrenScroll, revealPinnedScroll, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
@@ -253,6 +253,20 @@ describe('pinned server bands', () => {
     expect(revealChildrenScroll(few, 10, few.count - 1, short, 230, 2, 2)).toBeUndefined()
     expect(revealChildrenScroll(layout, 10, 10, 0, viewport, 2, 2)).toBeUndefined()
     expect(revealChildrenScroll(layout, 1, 2, 100, viewport, 2, 2)).toBeUndefined()
+  })
+  it('knows when an expanded row shows what its expand listed, and where its rows end', () => {
+    const rows = (levels: number[], kinds: number[]): VisibleRows => ({ count: levels.length, ids: Int32Array.from(levels, (_, i) => kinds[i] === RowKind.Node ? i + 1 : -(i + 1)), kinds: Uint8Array.from(kinds), levels: Uint8Array.from(levels), posinset: new Int32Array(levels.length), setsize: new Int32Array(levels.length), nodes: [] })
+    const { Node, Loading, Error } = RowKind
+    // Its first page not yet rendered: the Loading row, or nothing below it.
+    expect(childrenShown(rows([1, 2, 1], [Node, Loading, Node]), 0)).toBe(false)
+    expect(childrenShown(rows([1, 1], [Node, Node]), 0)).toBe(false)
+    expect(childrenShown(rows([1], [Node]), 0)).toBe(false)
+    // Its children, or the error row of a listing that failed (old rows may follow it).
+    expect(childrenShown(rows([1, 2, 2, 1], [Node, Node, Node, Node]), 0)).toBe(true)
+    expect(childrenShown(rows([1, 2, 2, 1], [Node, Error, Node, Node]), 0)).toBe(true)
+    expect(lastDescendant(rows([1, 2, 3, 2, 1], [Node, Node, Node, Node, Node]), 0)).toBe(3)
+    expect(lastDescendant(rows([1, 1], [Node, Node]), 0)).toBe(0)
+    expect(lastDescendant(rows([1, 2], [Node, Node]), 0)).toBe(1)
   })
   it('reveals every row clear of the destination overlays, including real server headers', () => {
     const layout = layoutFor([1, ...Array<number>(8).fill(2), 1, 1, ...Array<number>(10).fill(2), 1, ...Array<number>(30).fill(2), 1])

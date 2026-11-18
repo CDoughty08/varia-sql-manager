@@ -270,10 +270,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /**
    * The user's last expand (`open`): the node whose children the tree scrolls into view and, with `chain`, the node an
    * auto-expand has reached, walking on through only children as their pages arrive. `selected` is the row it last
-   * selected (or the selection it started from): another selection, a collapse or a refresh ends it.
+   * selected (or the selection it started from): another selection, a collapse, Stop or a refresh ends it. `held` once
+   * the user scrolls or clicks: the tree stops following it, and the walk's end is selected without scrolling to it.
    */
-  private opened?: { id: number; readonly chain: boolean; readonly start: number; selected: number | undefined; readonly seq: number }
-  private opens = 0
+  private opened?: { id: number; readonly chain: boolean; readonly start: number; selected: number | undefined; held?: boolean }
   private readonly unsubscribe: () => void
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
@@ -343,6 +343,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (root) this.endRestore(root.id)
     // A reveal walking through this node would expand it again when its next page lands: the user's collapse ends it.
     if (this.seekWalk().includes(node.id)) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
+    // So does an expand walking through it, whose aborted load never settles to end it.
+    if (this.opened && this.within(this.opened.id, id)) this.opened = undefined
     if (this.selected !== undefined && this.selected !== id && this.within(rowOwner(this.selected), id)) this.selected = id
     this.invalidate()
   }
@@ -356,7 +358,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   open(id: number, chain = false): void {
     const node = this.nodes.get(id)
     if (!node || !node.hasChildren || node.lost || !this.attached(node)) return
-    this.opened = { id, chain, start: id, selected: this.selected, seq: ++this.opens }
+    this.opened = { id, chain, start: id, selected: this.selected }
     this.expand(id)
     this.advanceOpen()
   }
@@ -366,13 +368,17 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * The node whose children the tree keeps in view after the user's expand, while its first page is still to come or an
    * auto-expand still walks (`settled` false). Undefined once the user does anything else.
    */
-  get opening(): { readonly id: number; readonly settled: boolean; readonly seq: number } | undefined {
+  get opening(): { readonly id: number; readonly settled: boolean } | undefined {
     const opened = this.opened, node = opened && this.nodes.get(opened.id)
-    if (!opened || !node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) return undefined
-    return { id: opened.id, settled: !opened.chain && node.load !== 'none' && node.load !== 'loading', seq: opened.seq }
+    if (!opened || opened.held || !node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) return undefined
+    return { id: opened.id, settled: !opened.chain && node.load !== 'none' && node.load !== 'loading' }
   }
   /** The tree has shown the opened node's children: it stops following them. */
   endOpening(): void { if (this.opened && !this.opened.chain) this.opened = undefined }
+  /** The user scrolled or clicked: the tree stops following the expand; an auto-expand still walking selects its end without scrolling there. */
+  holdOpening(): void { if (this.opened) this.opened.held = true }
+  /** Auto-expand single children was turned off: a walk still waiting for a level stops where it is. */
+  stopChain(): void { if (this.opened?.chain) this.opened = { ...this.opened, chain: false } }
 
   /** `*`: expands every collapsed sibling; at most 50 of those that need a query are loaded, the rest are skipped. */
   expandSiblings(id: number): { expanded: number; queued: number; skipped: number } {
@@ -390,6 +396,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A reveal past its server node walks through a node this collapses (see collapse).
     if (this.seekWalk().some(id => !roots.has(id))) this.endSeek({ ok: false, message: 'Collapsed.', cancelled: true })
     this.abortWithin(undefined, 'collapse', task => !roots.has(task.nodeId))
+    this.opened = undefined
     // A root page still loading would otherwise restore below the servers again (see collapse).
     for (const id of roots) this.endRestore(id)
     for (const node of this.nodes.values()) if (node.expanded && node.parent !== 0) { node.expanded = false; node.rev++ }
@@ -408,6 +415,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * page arrives; rows that are still there keep their node, expansion and selection, and expanded nodes below reload too.
    */
   refresh(id?: number): void {
+    this.opened = undefined
     if (id === undefined) { for (const root of [...this.roots]) this.reconcileNode(this.nodes.get(root), { deep: true }); this.invalidate(); return }
     let node = this.nodes.get(rowOwner(id))
     if (node && node.kind !== 'folder' && !node.hasChildren && node.parent) node = this.nodes.get(node.parent)
@@ -441,6 +449,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
   stop(): void {
     this.pendingSelect = undefined
+    this.opened = undefined
     this.endSeek({ ok: false, message: 'Stopped.', cancelled: true })
     for (const [id, running] of [...this.running]) { this.running.delete(id); this.loader.abort(running.task); this.reverted(id, running, 'stop') }
     for (const id of this.stalled) {
@@ -1099,7 +1108,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!opened?.chain) return
     for (;;) {
       const node = this.nodes.get(opened.id)
-      if (!node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) { this.opened = undefined; return }
+      if (!node || !this.attached(node) || this.selected !== opened.selected) { this.opened = undefined; return }
+      // A level the walk expanded that came back empty collapses (`firstPage`): it is where the walk ends.
+      if (!node.expanded) { if (node.hasChildren || node.id === opened.start) { this.opened = undefined; return } break }
       // Wait for the first page; a folder with more pages to come has more than one child.
       if (node.load === 'none' || node.load === 'loading') return
       const children = node.children ?? [], only = children.length === 1 && !node.cursor ? children[0] : undefined
@@ -1111,7 +1122,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const end = opened.id
     this.opened = { ...opened, chain: false }
     if (end !== opened.start) {
-      this.select(end, { reveal: true })
+      this.select(end, { reveal: !opened.held })
       this.opened.selected = end
     }
     this.invalidate()

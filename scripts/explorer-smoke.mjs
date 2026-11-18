@@ -2114,6 +2114,16 @@ try {
   await expect(explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables', 'dbo.table10')).resolves.toBeTruthy()
   console.log('Object Explorer checks: expanding a row low in the view scrolls its children into view and keeps the row in view.')
 
+  // 13d. Auto-expand single children: Stored Procedures lists only System Stored Procedures, which the stub lists empty. Right
+  // walks on to it and selects it, the active descendant following, though it collapses again with nothing in it.
+  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData', 'Programmability')
+  await selectRevealed('pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures')
+  await press('ArrowRight', 'System Stored Procedures')
+  await expect(await revealExplorerRow(page, 'pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures')).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(async () => (await active())?.expanded).not.toBe('true')
+  await expect(tree()).toBeFocused()
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end.')
+
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
     await application.close()

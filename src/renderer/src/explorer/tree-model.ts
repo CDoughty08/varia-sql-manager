@@ -317,6 +317,18 @@ export function revealChildrenScroll(layout: RowLayout, parent: number, last: nu
   return destination > scrollTop ? destination : undefined
 }
 
+/** The last row below row `index` (its expanded subtree), or `index` itself when nothing is below it. */
+export function lastDescendant(rows: VisibleRows, index: number): number {
+  let last = index
+  while (last + 1 < rows.count && rows.levels[last + 1] > rows.levels[index]) last++
+  return last
+}
+
+/** Row `index` shows what its expand listed below it: a child or its error row, not the Loading row (or nothing) of rows rendered before its page. */
+export function childrenShown(rows: VisibleRows, index: number): boolean {
+  return index >= 0 && index + 1 < rows.count && rows.levels[index + 1] > rows.levels[index] && rows.kinds[index + 1] !== RowKind.Loading
+}
+
 /** The rows to render, `[first, end)`: the viewport plus `overscan` rows on each side. */
 export function computeWindow(scrollTop: number, viewport: number, count: number, rowHeight: number = explorerLimits.rowHeight, overscan: number = explorerLimits.overscan): [number, number] {
   if (count <= 0 || rowHeight <= 0) return [0, 0]

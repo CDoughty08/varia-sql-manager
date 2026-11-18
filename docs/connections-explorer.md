@@ -31,8 +31,10 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   the tree, or selecting another row, stops it.
 - With **Auto-expand single children** (Tools › Options › Environment › Object Explorer, on by default), an expanded
   node whose only child can expand keeps expanding, level by level as each loads, down to the first node with more than
-  one child (or none, or a single leaf), which is then selected, so Down goes to its first child. Selecting another row
-  while a level loads stops it. Restoring a server's expansion, `*` and Refresh never auto-expand.
+  one child (or none, or a single leaf, or a listing that failed), which is then selected, so Down goes to its first
+  child; if you scrolled meanwhile, it is selected without scrolling back to it. Selecting another row, collapsing,
+  Stop, Refresh or turning the setting off while a level loads stops it. Restoring a server's expansion, `*` and Refresh
+  never auto-expand.
 
 ## Sessions and authentication
 

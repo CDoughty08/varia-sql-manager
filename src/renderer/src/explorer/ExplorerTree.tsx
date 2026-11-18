@@ -12,7 +12,7 @@ import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
 import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
-import { layoutWindow, pinnedServerBands, renderedIndices, revealChildrenScroll, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
+import { childrenShown, lastDescendant, layoutWindow, pinnedServerBands, renderedIndices, revealChildrenScroll, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -199,20 +199,20 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   })
   // After the user's expand, the children come into view as they arrive, as far as they fit below the expanded row (the
   // node an auto-expand reached). Scrolling or clicking elsewhere stops it; so does selecting another row (the service).
-  const openingHeld = useRef<number | undefined>(undefined)
   useLayoutEffect(() => {
     const opening = explorer.opening
     if (!opening) return
     const tree = element.current, index = rowIndex(rows, opening.id)
-    if (!tree || index < 0 || openingHeld.current === opening.seq) return
-    let last = index
-    while (last + 1 < rows.ids.length && rows.levels[last + 1] > rows.levels[index]) last++
+    if (!tree || index < 0) return
+    const last = lastDescendant(rows, index)
     const destination = revealChildrenScroll(layout, index, last, tree.scrollTop, tree.clientHeight, topLimit, bottomLimit)
     if (destination !== undefined) { releaseFollow(); tree.scrollTop = destination; measure() }
-    // The service is ahead of the rows rendered: its page may be in while the rows still show the loading row.
-    if (opening.settled && last > index && rows.ids[index + 1] > 0) explorer.endOpening()
+    // The service is ahead of the rows rendered: its page may be in while the rows still show the loading row. An error
+    // row is what the expand shows, and ends it too.
+    if (opening.settled && childrenShown(rows, index)) explorer.endOpening()
   })
-  const holdOpening = useCallback(() => { openingHeld.current = explorer.opening?.seq }, [explorer])
+  const holdOpening = useCallback(() => explorer.holdOpening(), [explorer])
+  useEffect(() => { if (!autoExpand) explorer.stopChain() }, [explorer, autoExpand])
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
