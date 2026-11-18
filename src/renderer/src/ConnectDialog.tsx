@@ -75,6 +75,7 @@ const userPlaceholders: Partial<Record<AuthenticationMode, string>> = {
 const mfaWaiting = 'Complete the sign-in in your web browser. Waiting up to 3 minutes…'
 const cancelledNotice = 'Connection cancelled.'
 const testCancelledNotice = 'Test cancelled.'
+const settingsDroppedPassword = 'Saved to History. The saved password was for the old settings, so it was forgotten; enter it with Remember password checked and save to keep it.'
 const saveCancelledNotice = 'Save cancelled. Nothing was saved.'
 const saveTitle = 'Save settings and labels to History. Opens no session.'
 /** What Save will do with a typed password: check it with the server and remember it, or keep only the settings. */
@@ -204,6 +205,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const targetAttempt = useRef<ConnectionAttempt | undefined>(undefined)
   const connectAbort = useRef<AbortController | undefined>(undefined)
   const databasesRequest = useRef<string | undefined>(undefined)
+  // The running Load databases, which Test Connection and Save's check wait for rather than signing in beside it.
+  const databasesRun = useRef<Promise<void> | undefined>(undefined)
+  // Checks Stop ended before they sent their request.
+  const stopped = useRef(new Set<string>())
   const stopButton = useRef<HTMLButtonElement>(null)
   const connectButton = useRef<HTMLButtonElement>(null)
   // The entry whose remembered password main would use for this form: Password left empty sends that entry's id.
@@ -232,7 +237,10 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   /** Stops Test Connection, or Save's password check. */
   function stopTest() {
     const id = testRequest.current
-    if (id) void window.varia.cancelConnectionRequests([id]).catch(() => {})
+    if (!id) return
+    stopped.current.add(id)
+    cancelDatabases()
+    void window.varia.cancelConnectionRequests([id]).catch(() => {})
   }
   /** Stop: the connect ends at once, even while it waits for a Microsoft Entra sign-in in the web browser. */
   function stop() {
@@ -353,6 +361,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const request = ++dbRequest.current
     const requestId = crypto.randomUUID()
     databasesRequest.current = requestId
+    let finished!: () => void
+    const run = databasesRun.current = new Promise<void>(resolve => { finished = resolve })
     setDbBusy(true); setDbNote(''); setDbDetails(undefined)
     // Remember failures too: focusing the field again must not retry a rejected login (lockout policies). Refresh retries.
     const failed = (reason: string, details?: ErrorDetails) => {
@@ -373,6 +383,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     finally {
       if (databasesRequest.current === requestId) databasesRequest.current = undefined
       if (alive.current && request === dbRequest.current) setDbBusy(false)
+      if (databasesRun.current === run) databasesRun.current = undefined
+      finished()
     }
   }
   /** The form's options with the environment as stored (a preset by its own name), or undefined after saying why a
@@ -418,12 +430,17 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
    */
   async function check(labelled: ConnectionOptions, kind: 'test' | 'save'): Promise<DatabaseInfo[] | undefined> {
     const requestId = crypto.randomUUID()
-    // One sign-in at a time: a Load databases still running would sign in again and could overwrite the list after.
-    dbRequest.current++; cancelDatabases(); setDbBusy(false)
     testRequest.current = requestId
     setTesting({ kind, server: labelled.server }); setError(''); setFailure(undefined); setTested(undefined)
     setNotice(current => current === cancelledNotice || current === testCancelledNotice || current === saveCancelledNotice ? '' : current)
     try {
+      // One sign-in at a time: a Load databases still running finishes first, so a password it found rejected is
+      // forgotten here too and its list cannot overwrite this one. Stop while waiting cancels both.
+      if (databasesRun.current) {
+        await databasesRun.current
+        if (!alive.current) return undefined
+        if (testRequest.current !== requestId || stopped.current.has(requestId)) { setNotice(kind === 'save' ? saveCancelledNotice : testCancelledNotice); return undefined }
+      }
       const result = await window.varia.discoverDatabases(labelled, { ...match ? { profileId: match.id } : {}, requestId, ...kind === 'save' ? { remember: true } : {} })
       if (!alive.current) return undefined
       if (result.ok) return result.value
@@ -453,7 +470,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** Save: settings and labels to History. A typed password with Remember password checked is checked with the server
    *  first and remembered; if the check fails nothing is saved. Resolves 'saved', 'warned' when the settings were saved
-   *  but a password was not kept or not forgotten as asked (the notice says so), or false when nothing was saved. */
+   *  but a password could not be kept or forgotten as asked, the new settings dropped the remembered one, or Object
+   *  Explorer connections need the new one (the notice says so), or false when nothing was saved. */
   async function save(chosen: ConnectionOptions = options): Promise<'saved' | 'warned' | false> {
     if (locked || !loaded) return false
     const labelled = labelledOptions(chosen)
@@ -463,22 +481,28 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     // Unchecking Remember password and saving forgets the saved one, as Connect does (a typed one is not kept either).
     const forgetPassword = rememberEdited.current && !remember && rememberable && !!match
     // A new password gets a new revision: Object Explorer targets holding the old one ask for it again, as after Connect.
-    const inUse = rememberPassword && passwordInUse(labelled)
+    const target = editedEntry(labelled)
+    const inUse = rememberPassword && passwordInUse(labelled, target?.id)
+    // The entry's remembered password is for its old login settings: other ones (Trust server certificate, Encrypt, ...)
+    // leave it behind, so Save says so rather than dropping it silently.
+    const hadPassword = !!target && savedIds.has(target.id) && !forgetPassword
     if (rememberPassword && !await check(labelled, 'save')) return false
     const value = await saveProfile(undefined, undefined, undefined, { labelled, rememberPassword, forgetPassword })
     if (!value || !alive.current) return value ? 'saved' : false
     if (value.passwordSaved) {
       setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false
       setNotice(!value.passwordReplaced ? 'Saved to History. The password is remembered.' : inUse ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
-      return 'saved'
+      return inUse && value.passwordReplaced ? 'warned' : 'saved'
     }
     if (rememberPassword) { setNotice('Saved to History, but the password could not be remembered.'); return 'warned' }
+    if (hadPassword && !value.savedPasswords.includes(target!.id)) { setNotice(settingsDroppedPassword); return 'warned' }
     if (forgetPassword) {
       rememberEdited.current = false
       setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.')
-      return value.passwordForgotten && !typed ? 'saved' : 'warned'
+      return value.passwordForgotten ? 'saved' : 'warned'
     }
-    if (typed) { setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.'); return 'warned' }
+    // Remember password unchecked is the user's choice, which the note under Password stated before Save.
+    if (typed) { setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.'); return 'saved' }
     setNotice('Saved to History.')
     return 'saved'
   }
@@ -506,9 +530,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     return form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : target
   }
   /** Whether an Object Explorer target keeps a remembered credential for these login settings. */
-  function passwordInUse(from: ConnectionOptions): boolean {
+  function passwordInUse(from: ConnectionOptions, entryId?: string): boolean {
     const binding = credentialBinding(from)
-    return connections.connectionTargets.getSnapshot().some(target => !!target.credential && credentialBinding(target.options) === binding)
+    return connections.connectionTargets.getSnapshot().some(target => !!target.credential && (credentialBinding(target.options) === binding || target.credential.profileId === entryId))
   }
   /** Cancel, Escape and Close: unsaved edits to a saved entry are never dropped without asking. */
   function requestClose() {

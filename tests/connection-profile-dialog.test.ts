@@ -664,7 +664,7 @@ describe('Save and Test Connection', () => {
     expect(text(view)).not.toContain('will need it entered')
   })
 
-  it("keeps the dialog open when the close prompt's Save could not keep the typed password", async () => {
+  it("closes on the close prompt's Save when Remember password was the user's choice", async () => {
     const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved] })
     await view.choose('Sql profile')
     await pick(view, '#connect-name', 'Renamed')
@@ -672,8 +672,43 @@ describe('Save and Test Connection', () => {
     await act(async () => view.button('Cancel').click())
     await act(async () => promptButton('Save').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ displayName: 'Renamed' }) }))
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it("says when saving other certificate settings forgot the remembered password, and the close prompt's Save stays open", async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await act(async () => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(box => box.parentElement?.textContent === 'Trust server certificate')!.click())
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [] } }))
+    await act(async () => view.button('Cancel').click())
+    await act(async () => promptButton('Save').click())
+    expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, options: expect.objectContaining({ trustServerCertificate: true }) }))
+    expect(text(view)).toContain('The saved password was for the old settings, so it was forgotten')
     expect(view.closed).not.toHaveBeenCalled()
-    expect(text(view)).toContain('The password was not kept')
+  })
+
+  it('waits for a running Load databases before Test Connection signs in, and Stop ends both', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    let answer!: (value: Awaited<ReturnType<VariaApi['discoverDatabases']>>) => void
+    const calls = vi.fn<VariaApi['discoverDatabases']>(() => new Promise(resolve => { answer = resolve }))
+    ;(window as unknown as { varia: VariaApi }).varia.discoverDatabases = calls
+    await act(async () => view.button('Load databases').click())
+    await act(async () => view.button('Test Connection').click())
+    expect(calls).toHaveBeenCalledOnce()
+    // Load databases finds the remembered password rejected: the form forgets it before Test signs in.
+    await act(async () => answer({ ok: false, error: 'Login failed.', code: 'SQL_ERROR', passwordForgotten: true }))
+    expect(calls).toHaveBeenCalledTimes(2)
+    expect(remember(view).checked).toBe(false)
+    await act(async () => answer({ ok: true, value: [] }))
+    expect(text(view)).toContain('Connected to server-7')
+    // Stop while Test waits cancels the Load databases and sends no Test.
+    await act(async () => view.button('Load databases').click())
+    await act(async () => view.button('Test Connection').click())
+    await act(async () => view.button('Stop').click())
+    await act(async () => answer({ ok: false, error: 'Cancelled.', code: 'CANCELLED' }))
+    expect(calls).toHaveBeenCalledTimes(3)
+    expect(text(view)).toContain('Test cancelled.')
   })
 
   it('offers to trust the certificate and test again after a failed test, without connecting', async () => {

@@ -52,12 +52,13 @@ recent ones. A password typed into the form is kept only when Remember password 
 (as Load databases does, so a wrong password saves nothing and shows the failure at Connect), then remembers it, and the
 field goes back to the saved-password dots. Object Explorer connections that used the old password keep their sessions
 but need the new one entered when they next connect, as after Connect with a new password. Unchecking Remember password
-and saving forgets the saved password, as Connect does. Without Remember password, Save keeps the settings and says the password was not kept. A line under
+and saving forgets the saved password, as Connect does. A remembered password belongs to its login settings: saving
+other ones (Trust server certificate, Encrypt, Host name in certificate) forgets it, and Save says so. Without Remember password, Save keeps the settings and says the password was not kept. A line under
 Password says which applies.
 
 **Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
 the same path and limits as Load databases, so like Load databases it signs in to the login's default database rather
-than Database Name; it stops a Load databases still running. It saves nothing and opens no session or Explorer node. A pass reports the
+than Database Name; a Load databases still running finishes first. It saves nothing and opens no session or Explorer node. A pass reports the
 server, the login and how many databases it sees, fills the Database Name list, and warns when the typed database is
 not among them; a failure shows the same error, details and Copy details as a failed Connect, and its certificate fix trusts the
 certificate and tests again rather than connecting. While it runs the
