@@ -33,8 +33,9 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   node whose only child can expand keeps expanding, level by level as each loads, down to the first node with more than
   one child (or none, or a single leaf, or a listing that failed), which is then selected, so Down goes to its first
   child; if you scrolled or switched query tabs meanwhile, it is selected without scrolling back to it. It never opens a
-  System folder: Views in a database without views stops at Views. Clicking, selecting or collapsing a row, Stop,
-  Refresh or turning the setting off while a level loads stops it. Restoring a server's expansion, `*` and Refresh never
+  System folder: Views in a database without views stops at Views. Clicking, selecting or collapsing a row, Collapse
+  All, Stop, Refresh or turning the setting off while a level loads stops it; scrolling, or clicking elsewhere in the
+  tree, only keeps it from scrolling there. Restoring a server's expansion, `*` and Refresh never
   auto-expand.
 
 ## Sessions and authentication
