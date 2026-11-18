@@ -7,7 +7,7 @@ import type { ConnectionOptions } from '../src/shared/contracts'
 
 // Integrated authentication on Linux and macOS without a Kerberos ticket, through the Release backend, as CI's Linux job
 // runs it (VARIA_TEST_KERBEROS_NO_TICKET=1 with KRB5CCNAME naming a cache that does not exist). A real Kerberos round trip
-// needs a KDC and a domain-joined SQL Server, so it is a manual check (README).
+// needs a KDC and a domain-joined SQL Server, so it is a manual check (docs/testing.md).
 const enabled = process.env.VARIA_TEST_KERBEROS_NO_TICKET === '1' && !!process.env.VARIA_TEST_SQL_SERVER && process.platform !== 'win32'
 // Asked for but unable to run is a failure, so CI cannot pass by skipping it.
 if (process.env.VARIA_TEST_KERBEROS_NO_TICKET === '1' && !enabled) throw new Error('VARIA_TEST_KERBEROS_NO_TICKET needs VARIA_TEST_SQL_SERVER on Linux or macOS.')
