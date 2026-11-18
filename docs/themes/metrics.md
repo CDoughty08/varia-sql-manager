@@ -55,7 +55,7 @@ Offset and blur only; a rule adds its colour key, as in `box-shadow: var(--varia
 
 ## Motion
 
-One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). Under `prefers-reduced-motion: reduce`, `--varia-motion-fast` and `--varia-motion-base` are 0 ms, and every looping animation stops, Monaco's codicon spinners included.
+One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). Under `prefers-reduced-motion: reduce`, `--varia-motion-fast` and `--varia-motion-base` and `--varia-motion-move` are 0 ms, and every looping animation stops, Monaco's codicon spinners included.
 
 Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.
 
@@ -63,6 +63,7 @@ Only `:hover` rules carry the fast transition, and rules that mark a state (a se
 | --- | --- | --- |
 | `--varia-motion-fast` | 80 | Hover and pressed fills. |
 | `--varia-motion-base` | 120 | Menus, popovers and dialogs appearing. |
+| `--varia-motion-move` | 180 | List items moving to a new place, in or out, and highlights that follow a selection there (the column profile's cards); transform and opacity only. |
 | `--varia-motion-spin` | 1500 | One turn of a loading spinner (a loop). |
 | `--varia-motion-pulse` | 2000 | One beat of the live dot, 0.5 Hz (a loop). |
 | `--varia-motion-delay` | 300 | The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it. |

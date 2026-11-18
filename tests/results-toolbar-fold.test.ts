@@ -26,7 +26,7 @@ describe('results toolbar in a narrow pane', () => {
       const items = buildMenuModel('output.tools', platform).map(entry => entry.kind === 'command' ? entry.id : entry.kind === 'separator' ? '-' : entry.kind)
       expect(items).toEqual([
         'output.toggleResultsTabs', 'output.goToResult', '-', 'output.pivot', 'output.compare', 'output.transpose', 'output.transposeChooseHeaders', '-',
-        'output.toggleColumnProfile', 'output.toggleRowSize', '-', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', '-', 'output.closeResults'
+        'output.toggleColumnProfile', 'output.toggleProfileSelectedColumns', 'output.toggleRowSize', '-', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', '-', 'output.closeResults'
       ])
     }
   })

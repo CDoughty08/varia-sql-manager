@@ -22,7 +22,7 @@ import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars }
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { RowSizes } from './row-sizes'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
-import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection, withinCap } from './selection'
+import { columnSelection, columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection, withinCap } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
@@ -449,6 +449,16 @@ export class GridView {
 
   /** Select All (Ctrl+A and the command): an open-ended block that grows as rows stream in. */
   selectAll(): void { this.select(selectAll(this.o.entry, this.selection()?.active)) }
+  /** Selects a whole column of the result (a column profile card) and scrolls it into view, keeping the active row and
+   *  leaving the focus where it is. Transposed, the column is a drawn row. */
+  selectColumn(column: number): void {
+    if (column < 0 || column >= this.columns) return
+    const row = this.sourceSelection()?.active.row ?? 0
+    const source = columnSelection(this.o.entry, column, row)
+    this.select(this.rotated ? withinCap(rotateSelection(source)) : source)
+    if (this.rotated) this.reveal(column, -1)
+    else this.reveal(Math.min(Math.max(0, this.rows() - 1), this.viewport?.firstRow ?? row), column)
+  }
   /** The selection changed elsewhere (a command): paint it. */
   repaint(): void { this.schedule() }
   /** The active cell's box, which keyboard-opened menus open below. */

@@ -537,8 +537,8 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
-  keys only through `KeybindingService.capture`. Peek's Ctrl state comes from `KeybindingService`'s `keyDown`, `keyUp` and
-  `blur` hooks (`PeekService.keyDown`), never a listener of its own; its cursor is CSS (`data-peek-armed`). Monaco's defaults (the modules `start.tsx` imports, all platforms) are
+  keys only through `KeybindingService.capture`. Peek's Ctrl state, and the column profile's (`ProfilePeekService`), comes from
+  `KeybindingService`'s `keyDown`, `keyUp` and `blur` hooks (`PeekService.keyDown`), never a listener of its own; its cursor is CSS (`data-peek-armed`). Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
 - **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
   the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its

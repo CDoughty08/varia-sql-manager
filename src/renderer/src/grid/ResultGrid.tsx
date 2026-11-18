@@ -133,6 +133,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
+        results.selectionChanged()
       },
       // Edit › Copy's copy event; Ctrl+C and Ctrl+A are the catalogue's output.copy and output.selectAll.
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
@@ -147,7 +148,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     const registration = results.registerGrid(tabId, key, {
       selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
       fitDrawn: row => { if (row === undefined) view.fitNames(); else view.fitRow(row) },
-      filterColumn: column => apiRef.current?.openFunnel(column)
+      filterColumn: column => apiRef.current?.openFunnel(column),
+      selectColumn: column => view.selectColumn(column)
     })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.

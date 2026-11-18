@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **The column profile follows your selection:** The cards of the columns selected in the grid are highlighted, the active column's card scrolls into view as you move, and clicking a card selects its column in the grid. **Selected Columns Only**, on the panel's filter button or the results ⋯ menu, lists just the selected columns, and holding Ctrl (Cmd on macOS) over the panel peeks at them, or at every column while Selected Columns Only is on, until you let go.
+
 ### Changes to everyday use
 
 - **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.

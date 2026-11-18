@@ -15,8 +15,42 @@ import type { ResultSetEntry, TabResults } from '../src/renderer/src/results/Res
 import { ResultOperations } from '../src/renderer/src/results/operations'
 import type { OperationProgressListener } from '../src/renderer/src/results/ResultClient'
 import { manualTimers } from './fixtures/workbench'
+import { gesturesFor } from '../src/renderer/src/core/gestures'
+import type { GridSelection } from '../src/renderer/src/grid/selection'
+import { ProfilePeekService } from '../src/renderer/src/results/ProfilePeekService'
+import { peekLimits } from '../src/shared/explorer/peek'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+/**
+ * The panel's other services: settings (Selected Columns Only, which its button and Show all toggle), the grid's selection
+ * as ResultsService keeps it (with Select Column), the peek and the gestures. They are added to `results`.
+ */
+function panelServices(results: object) {
+  const timers = manualTimers()
+  const listeners = { settings: new Set<() => void>(), selection: new Set<() => void>() }
+  let settings = { values: { 'queryResults.grid.columnProfileSelectedOnly': false } }
+  let selection: GridSelection | undefined, revision = 0
+  const setOnly = (on: boolean) => { settings = { values: { 'queryResults.grid.columnProfileSelectedOnly': on } }; for (const listener of listeners.settings) listener() }
+  const selectColumn = vi.fn()
+  Object.assign(results, {
+    selections: { subscribe: (listener: () => void) => { listeners.selection.add(listener); return () => listeners.selection.delete(listener) }, getSnapshot: () => revision },
+    selection: (_tab: string, key: string) => selection?.entry === key ? selection : undefined,
+    selectColumn
+  })
+  const profilePeek = new ProfilePeekService({ gestures: gesturesFor('win32'), timers: timers.timers })
+  const commands = { execute: vi.fn(async (id: string) => { if (id === 'output.toggleProfileSelectedColumns') setOnly(!settings.values['queryResults.grid.columnProfileSelectedOnly']); return true }) }
+  const services = {
+    commands, profilePeek, gestures: gesturesFor('win32'),
+    settings: { subscribe: (listener: () => void) => { listeners.settings.add(listener); return () => listeners.settings.delete(listener) }, getSnapshot: () => settings }
+  }
+  return {
+    services, selectColumn, commands,
+    select: (next: GridSelection | undefined) => act(() => { selection = next; revision++; for (const listener of listeners.selection) listener() }),
+    setOnly: (on: boolean) => act(() => setOnly(on)),
+    peek: (held: boolean) => act(() => { if (held) { profilePeek.pointer('t', true); timers.advance(peekLimits.pressMs) } else profilePeek.keyUp('Control') })
+  }
+}
 
 interface Asked { columns: number[]; signal?: AbortSignal; progress?: OperationProgressListener; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
@@ -36,7 +70,8 @@ function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
   // The panel is told which grid took the focus; without one it asks the stack, which names the second.
   const timers = manualTimers()
   const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1], operations: new ResultOperations({ timers: timers.timers }) }
-  const workbench = { results, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
+  const panel = panelServices(results)
+  const workbench = { results, ...panel.services } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
   act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, ...shown === null ? {} : { shown } }) })) })
@@ -48,7 +83,9 @@ function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
   const card = (name: string) => container.querySelector(`section[aria-label="${name}"]`)
   const nulls = (name: string) => [...card(name)?.querySelectorAll('dl > div') ?? []].find(item => item.querySelector('dt')?.textContent === 'NULLs')?.querySelector('dd')?.textContent
   const facts = () => container.querySelector('.profile-facts')?.textContent
-  return { asked, answer, setSnapshot, card, nulls, facts, results, timers, unmount: () => act(() => { root.unmount() }) }
+  const cards = () => [...container.querySelectorAll<HTMLElement>('.profile-cards > section')]
+  const strip = () => container.querySelector('.profile-strip')?.textContent
+  return { asked, answer, setSnapshot, card, cards, strip, nulls, facts, results, timers, panel, container, unmount: () => act(() => { root.unmount() }) }
 }
 /** A complete result of two columns and 1000 rows whose grid's view the test changes, as ResultsService would on a sort. */
 function sortFixture() {
@@ -77,7 +114,7 @@ function sortFixture() {
       return () => { if (!ended) { ended = true; holds.set(view, holds.get(view)! - 1); if (!holds.get(view)) holds.delete(view) } }
     }
   }
-  const workbench = { results, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
+  const workbench = { results, ...panelServices(results).services } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
   act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, shown: 'e1' }) })) })
@@ -307,5 +344,97 @@ describe('column profile panel', () => {
     expect(ops()).toMatchObject({ items: [], notice: 'Profile cancelled.' })
     expect(view.nulls('c0')).toBe('100 (10%)')
     view.unmount()
+  })
+})
+
+describe('column profile selection peek', () => {
+  const columns = (entry: string, from: number, to: number, active = to): GridSelection =>
+    ({ entry, blocks: [{ kind: 'columns', anchor: { row: 0, column: from }, focus: { row: 0, column: to } }], active: { row: 0, column: active } })
+  const names = (cards: HTMLElement[]) => cards.map(card => card.getAttribute('aria-label'))
+
+  it('highlights the selected columns\' cards and marks the active cell\'s column, following the selection', () => {
+    const view = fixture(6)
+    expect(view.cards().filter(card => card.classList.contains('selected'))).toEqual([])
+    view.panel.select(columns('e1', 2, 3))
+    expect(names(view.cards().filter(card => card.classList.contains('selected')))).toEqual(['c2', 'c3'])
+    expect(names(view.cards().filter(card => card.getAttribute('aria-current') === 'true'))).toEqual(['c3'])
+    expect(view.card('c3')?.textContent).toContain('Selected')
+    // The active column's card is the cards' one Tab stop.
+    expect(names(view.cards().filter(card => card.tabIndex === 0))).toEqual(['c3'])
+    // Another result's selection marks nothing here.
+    view.panel.select(columns('e5', 0, 1))
+    expect(view.cards().filter(card => card.classList.contains('selected'))).toEqual([])
+    expect(names(view.cards().filter(card => card.tabIndex === 0))).toEqual(['c0'])
+    view.unmount()
+  })
+
+  it('lists only the selected columns with Selected Columns Only, follows the selection there, and Show all turns it off', async () => {
+    const view = fixture(6)
+    view.panel.select(columns('e1', 1, 2))
+    const toggle = view.container.querySelector<HTMLButtonElement>('button[aria-label="Selected Columns Only"]')!
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(toggle.title).toBe('Selected Columns Only (Ctrl-hover the panel to peek)')
+    await act(async () => { toggle.click() })
+    expect(view.panel.commands.execute).toHaveBeenCalledWith('output.toggleProfileSelectedColumns', undefined, 'toolbar')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(names(view.cards())).toEqual(['c1', 'c2'])
+    expect(view.strip()).toBe('2 of 6 columnsShow all')
+    view.panel.select(columns('e1', 4, 4))
+    expect(names(view.cards())).toEqual(['c4'])
+    // Profiles were asked for every column, so the list changes without a request.
+    expect(view.asked.length).toBe(1)
+    view.panel.select(undefined)
+    expect(view.cards()).toEqual([])
+    expect(view.container.textContent).toContain('Select cells or columns in the grid to see their profiles here.')
+    await act(async () => { view.container.querySelector<HTMLButtonElement>('.profile-strip-action')!.click() })
+    expect(view.cards()).toHaveLength(6)
+    expect(view.strip()).toBeUndefined()
+    view.unmount()
+  })
+
+  it('shows the other list while Ctrl is held over the panel, and says so once', () => {
+    const view = fixture(6)
+    const said = () => view.container.querySelector('.visually-hidden[role="status"]')?.textContent
+    view.panel.select(columns('e1', 0, 1))
+    expect(said()).toBe('')
+    view.panel.peek(true)
+    expect(names(view.cards())).toEqual(['c0', 'c1'])
+    expect(view.strip()).toBe('Peeking at 2 selected columns · release to show all')
+    expect(said()).toBe('Showing 2 of 6 columns')
+    view.panel.peek(false)
+    expect(view.cards()).toHaveLength(6)
+    expect(said()).toBe('Showing all columns')
+    view.panel.setOnly(true)
+    view.panel.peek(true)
+    expect(view.cards()).toHaveLength(6)
+    expect(view.strip()).toBe('Peeking at all 6 columns · release to go back')
+    view.panel.peek(false)
+    expect(view.cards()).toHaveLength(2)
+    view.unmount()
+  })
+
+  it('selects a card\'s column in the grid on a click, Enter or Space, and moves between cards with the arrows, Home and End', () => {
+    const view = fixture(4)
+    document.body.append(view.container)
+    act(() => { view.card('c2')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(view.panel.selectColumn).toHaveBeenLastCalledWith('t', 'e1', 2)
+    const press = (key: string) => act(() => { (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+    act(() => { (view.card('c1') as HTMLElement).focus() })
+    press('ArrowDown')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('c2')
+    press('End')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('c3')
+    press('ArrowDown')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('c3')
+    press('Home')
+    press('ArrowUp')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('c0')
+    press('Enter')
+    expect(view.panel.selectColumn).toHaveBeenLastCalledWith('t', 'e1', 0)
+    press('ArrowDown')
+    press(' ')
+    expect(view.panel.selectColumn).toHaveBeenLastCalledWith('t', 'e1', 1)
+    view.unmount()
+    view.container.remove()
   })
 })
