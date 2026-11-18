@@ -618,8 +618,12 @@ try {
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable.')
   await expect(dialog.getByText(/^Connected to server-down\b/)).toHaveCount(0)
   // A changed form drops the report; a failed test shows Connect's error with its details.
-  await dialog.getByLabel('Server Name', { exact: true }).fill('db-error')
+  await dialog.getByLabel('Server Name', { exact: true }).fill('test-server')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to test-server/)).toBeVisible()
+  await dialog.getByLabel('Database Name', { exact: true }).fill('Other')
   await expect(dialog.getByText(/^Connected to test-server/)).toHaveCount(0)
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-error')
   await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Login failed.')
   await expect(connectErrorDetails(dialog)).toHaveCount(1)

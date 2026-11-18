@@ -590,3 +590,80 @@ describe('changed details on a reused connection', () => {
     expect(withChangedDetails(opened(false), ['displayName']).selected).toEqual(opened(false).selected)
   })
 })
+
+describe('Save and Test Connection', () => {
+  const sqlProfile = (): ConnectionProfile => ({ ...profile('Sql profile', 7), options: { ...connectionDefaults('win32'), server: 'server-7', displayName: 'Sql profile', authentication: 'sql', username: 'reader' } })
+  const type = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+    const field = view.host.querySelector<HTMLInputElement>(selector)!
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })) })
+  }
+  const discover = (answer: Awaited<ReturnType<VariaApi['discoverDatabases']>>) => {
+    const fn = vi.fn<VariaApi['discoverDatabases']>(async () => answer)
+    ;(window as unknown as { varia: VariaApi }).varia.discoverDatabases = fn
+    return fn
+  }
+  const text = (view: Awaited<ReturnType<typeof mount>>) => view.host.textContent ?? ''
+  const remember = (view: Awaited<ReturnType<typeof mount>>) => [...view.host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(box => box.parentElement?.textContent === 'Remember password')!
+
+  it('checks a typed password with the server before Save remembers it, and saves nothing when the check fails', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    expect(remember(view).checked).toBe(true)
+    await type(view, '#connect-password', 'new-secret')
+    expect(text(view)).toContain('Save checks this password with the server, then remembers it.')
+    const failing = discover({ ok: false, error: 'Login failed.', code: 'SQL_ERROR', details: { number: 18456, state: 8, class: 14 } })
+    view.saveConnectionProfile.mockClear()
+    await act(async () => view.button('Save').click())
+    expect(failing).toHaveBeenCalledWith(expect.objectContaining({ password: 'new-secret' }), expect.objectContaining({ remember: true }))
+    expect(view.saveConnectionProfile).not.toHaveBeenCalled()
+    expect(text(view)).toContain('Login failed.')
+    const passing = discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [saved.id], passwordSaved: true } }))
+    await act(async () => view.button('Save').click())
+    expect(passing).toHaveBeenCalledOnce()
+    expect(view.saveConnectionProfile).toHaveBeenCalledWith(expect.objectContaining({ id: saved.id, saved: true, rememberPassword: true, options: expect.objectContaining({ password: 'new-secret' }) }))
+    expect(text(view)).toContain('Saved to History. The new password is remembered.')
+    expect(view.host.querySelector<HTMLInputElement>('#connect-password')!.value).toBe('')
+  })
+
+  it('forgets the saved password when Remember password is unchecked and saved, as Connect does', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await act(async () => remember(view).click())
+    expect(text(view)).toContain('Save or Connect forgets the saved password.')
+    await type(view, '#connect-password', 'typed')
+    expect(text(view)).toContain('Save keeps the settings and forgets the saved password; it does not keep this one either.')
+    const check = discover({ ok: true, value: [] })
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [], passwordForgotten: true } }))
+    await act(async () => view.button('Save').click())
+    expect(check).not.toHaveBeenCalled()
+    expect(view.saveConnectionProfile).toHaveBeenCalledWith(expect.objectContaining({ id: saved.id, forgetPassword: true }))
+    expect(view.saveConnectionProfile.mock.calls.at(-1)?.[0]).not.toHaveProperty('rememberPassword')
+    expect(text(view)).toContain('The saved password was forgotten, and the typed one was not kept.')
+  })
+
+  it('says Object Explorer connections using the old password will need the new one', async () => {
+    const saved = sqlProfile(), targetId = id(60)
+    const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'sid:reader' }, credential: { profileId: saved.id, revision: id(61) } }
+    const view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id], beforeRender: workbench => {
+      const attempt = workbench.connections.beginConnect(saved.options, 1, targetId, detailsOf(saved.options, 'inherit'))!
+      workbench.connections.accept({ id: id(62), targetId, generation: 1, server: saved.options.server, database: '', serverVersion: '17', authentication }, saved.options, targetId, authentication, attempt)
+    } })
+    await view.choose('Sql profile')
+    await type(view, '#connect-password', 'new-secret')
+    expect(text(view)).toContain('Object Explorer connections that use the old one will need the new password entered when they next connect.')
+  })
+
+  it('offers to trust the certificate and test again after a failed test, without connecting', async () => {
+    const view = await mount()
+    await type(view, '#connect-server', 'cert-server')
+    const failing = discover({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-server', reason: 'certificate' } })
+    await act(async () => view.button('Test Connection').click())
+    expect(failing).toHaveBeenCalledOnce()
+    const passing = discover({ ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }] })
+    await act(async () => view.button('Trust server certificate and test').click())
+    expect(passing).toHaveBeenCalledWith(expect.objectContaining({ trustServerCertificate: true }), expect.anything())
+    expect(view.api.connect).not.toHaveBeenCalled()
+    expect(text(view)).toContain('Connected to cert-server')
+  })
+})

@@ -80,6 +80,7 @@ const saveTitle = 'Save settings and labels to History. Opens no session.'
 /** What Save will do with a typed password: check it with the server and remember it, or keep only the settings. */
 const keepsPassword = 'Save checks this password with the server, then remembers it.'
 const dropsPassword = 'Save keeps the settings, not this password. Check Remember password to keep it.'
+const forgetsTyped = 'Save keeps the settings and forgets the saved password; it does not keep this one either.'
 /** The key a Load databases result belongs to: the form without its database and labels. */
 /** Object Explorer targets that reconnect with the remembered password for this login: Save cannot replace it under them. */
 const inUseNote = 'Save checks this password with the server, then remembers it. Object Explorer connections that use the old one will need the new password entered when they next connect.'
@@ -443,9 +444,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     return undefined
   }
   /** Test Connection: reports at Connect whether the form signs in, and fills the database list as Load databases does. */
-  async function testConnection() {
+  async function testConnection(chosen: ConnectionOptions = options) {
     if (locked || !loaded || !authReady) return
-    const labelled = labelledOptions()
+    const labelled = labelledOptions(chosen)
     if (!labelled) return
     const values = await check(labelled, 'test')
     if (!values || !alive.current) return
@@ -458,14 +459,14 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   /** Save: settings and labels to History. A typed password with Remember password checked is checked with the server
    *  first and remembered; if the check fails nothing is saved. */
-  async function save(): Promise<boolean> {
+  async function save(chosen: ConnectionOptions = options): Promise<boolean> {
     if (locked || !loaded) return false
-    const labelled = labelledOptions()
+    const labelled = labelledOptions(chosen)
     if (!labelled) return false
     const typed = usesPassword(labelled.authentication) && !!labelled.password
     const rememberPassword = typed && remember && rememberable
-    // Unchecking Remember password and saving forgets the saved one, as Connect does.
-    const forgetPassword = !typed && rememberEdited.current && !remember && rememberable && !!match
+    // Unchecking Remember password and saving forgets the saved one, as Connect does (a typed one is not kept either).
+    const forgetPassword = rememberEdited.current && !remember && rememberable && !!match
     // A new password gets a new revision: Object Explorer targets holding the old one ask for it again, as after Connect.
     const inUse = rememberPassword && passwordInUse(labelled)
     if (rememberPassword && !await check(labelled, 'save')) return false
@@ -475,7 +476,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       setOptions(current => ({ ...current, password: '' })); rememberEdited.current = false
       setNotice(inUse ? 'Saved to History. The new password is remembered; Object Explorer connections that used the old one will need it entered when they next connect.' : 'Saved to History. The new password is remembered.')
     } else if (rememberPassword) setNotice('Saved to History, but the password could not be remembered.')
-    else if (forgetPassword) { rememberEdited.current = false; setNotice(value.passwordForgotten ? 'Saved to History. The saved password was forgotten.' : 'Saved to History, but the saved password could not be removed.') }
+    else if (forgetPassword) { rememberEdited.current = false; setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.') }
     else if (typed) setNotice(rememberable ? 'Saved to History. The password was not kept; check Remember password to keep it.' : 'Saved to History. The password was not kept.')
     else setNotice('Saved to History.')
     return true
@@ -618,8 +619,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       return target && JSON.stringify(target.options) === JSON.stringify(connectionTargetOptions(value)) ? target : undefined
     } catch { return undefined }
   }
-  /** Trust server certificate and connect: checks the box, as the person would, and connects again with it. */
-  function trustAndConnect() {
+  /** Trust server certificate and connect (or test, or save, after a failed Test or Save check): checks the box, as the
+   *  person would, and runs the same action again with it. */
+  function trustAndRetry(kind?: 'test' | 'save') {
     const next = { ...options, trustServerCertificate: true }
     setOptions(next)
     // Main fills a remembered password in only for the certificate settings it was saved with.
@@ -628,11 +630,14 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       dialog.current?.querySelector<HTMLInputElement>('#connect-password')?.focus()
       return
     }
-    void connect(next)
+    if (kind === 'test') void testConnection(next)
+    else if (kind === 'save') void save(next)
+    else void connect(next)
   }
   const shownFailure = error && failure?.error === error ? failure : undefined
   const fix = shownFailure && connectFix(shownFailure.options, shownFailure.details)
-  const fixActions: ErrorAction[] = fix === 'trust' ? [{ label: trustLabel, run: trustAndConnect }] : []
+  const retry = shownFailure?.checking
+  const fixActions: ErrorAction[] = fix === 'trust' ? [{ label: retry === 'test' ? 'Trust server certificate and test' : retry === 'save' ? 'Trust server certificate and save' : trustLabel, run: () => trustAndRetry(retry) }] : []
   // The error sits at Connect, above the footer, in a region of its own that scrolls when the details are long: keep it in view there.
   useEffect(() => { if (error) failureBox.current?.scrollIntoView({ block: 'nearest' }) }, [error])
   const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase())
@@ -712,7 +717,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
                 {/* Only the types with a password show Password and Remember password; the others have nothing to type there. */}
                 {passwordShown && <>
                   <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
-                  {options.password && rememberable && <div className="property-row"><span /><p className="field-note" id="connect-password-save-note">{!remember ? dropsPassword : passwordInUse(options) ? inUseNote : keepsPassword}</p></div>}
+                  {options.password && rememberable && <div className="property-row"><span /><p className="field-note" id="connect-password-save-note">{!remember ? match && rememberEdited.current ? forgetsTyped : dropsPassword : passwordInUse(options) ? inUseNote : keepsPassword}</p></div>}
                   {!options.password && match && rememberable && !remember && rememberEdited.current && <div className="property-row"><span /><p className="field-note" id="connect-password-forget-note">Save or Connect forgets the saved password.</p></div>}
                   <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => { rememberEdited.current = true; setRemember(event.target.checked) }} />Remember password</label></div>
                   {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
