@@ -7,8 +7,9 @@ namespace Varia.Backend.Tests;
 /// <summary>The search fold (SearchFold) and the culture matcher's pre-check: with the pre-check, a culture matcher finds
 /// exactly what the culture compare alone finds, for every verified culture and every option set, over fuzzed text built
 /// from characters a culture compare treats alike (ß and ss, æ and ae, final sigma, kana, full-width and Arabic-Indic
-/// digits, ignorable characters, decomposed letters) and fictional multilingual text; cultures that join letters into one
-/// are not verified; a cell the fold cannot vouch for goes to the compare; the pre-check stops when most cells pass it.</summary>
+/// digits, ignorable characters, decomposed letters) and fictional multilingual text, and over cells where collation
+/// depends on neighbouring characters; strings the loosest compare finds equal fold alike; cultures that join letters into
+/// one are not verified; a cell the fold cannot vouch for goes to the compare; the pre-check stops when most cells pass it.</summary>
 internal static class SearchFoldChecks
 {
     // SqlCompareOptions: IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16.
@@ -18,15 +19,15 @@ internal static class SearchFoldChecks
     internal static readonly string[][] Groups =
     [
         ["ss", "ß", "ẞ", "SS"], ["ae", "æ", "Æ", "AE"], ["oe", "œ", "Œ"], ["fi", "ﬁ"], ["fl", "ﬂ"], ["ffi", "ﬃ"], ["ij", "ĳ", "Ĳ"],
-        ["a", "á", "à", "â", "ä", "å", "ａ", "Ａ", "A", "á", "ā"], ["e", "é", "è", "ê", "ë", "é", "ｅ", "E", "ę"],
-        ["o", "ø", "ö", "ó", "Ø", "ö"], ["l", "ł", "Ł", "L"], ["d", "đ", "ð", "Đ"], ["i", "ı", "İ", "I", "ｉ", "í"],
-        ["c", "ç", "C", "č"], ["n", "ñ", "N", "ñ"], ["k", "K", "K"], ["σ", "ς", "Σ"], ["か", "カ", "ｶ", "が", "が"],
-        ["2", "٢", "２", "²", "②", "₂"], ["1", "١", "１", "¹", "①"], ["th", "þ", "Þ"], ["й", "й", "Й"], ["u", "ü", "ú", "ü", "U"],
-        ["", "­", "​", "‌", "‍", "⁠", "﻿", "́"], [" ", " ", "　", " "],
+        ["a", "á", "à", "â", "ä", "å", "ａ", "Ａ", "A", "a\u0301", "ā"], ["e", "é", "è", "ê", "ë", "e\u0301", "ｅ", "E", "ę"],
+        ["o", "ø", "ö", "ó", "Ø", "o\u0308"], ["l", "ł", "Ł", "L"], ["d", "đ", "ð", "Đ"], ["i", "ı", "İ", "I", "ｉ", "í"],
+        ["c", "ç", "C", "č"], ["n", "ñ", "N", "n\u0303"], ["k", "K", "K"], ["σ", "ς", "Σ"], ["か", "カ", "ｶ", "が", "か\u3099"],
+        ["2", "٢", "２", "²", "②", "₂"], ["1", "١", "１", "¹", "①"], ["th", "þ", "Þ"], ["й", "и\u0306", "Й"], ["u", "ü", "ú", "u\u0308", "U"],
+        ["", "\u00AD", "\u200B", "\u200C", "\u200D", "\u2060", "\uFEFF", "\u0301"], [" ", "\u00A0", "\u3000", "\u2009"],
         ["-", "–", "‐", "−"], ["A", "𝐀", "𝔸"], ["dz", "ǆ", "Ǆ", "dž"], ["°c", "℃"], ["1/2", "½"], ["'", "’"],
         ["g", "ğ", "G"], ["s", "ş", "ś", "š", "S"], ["z", "ž", "Z"], ["r", "ř", "R"], ["t", "ť", "T"], ["y", "ý", "ÿ", "Y"],
-        ["ч", "Ч"], ["aa", "å", "Å", "AA"], ["cs", "CS"], ["ch", "CH"], ["ll", "LL"], ["lj", "ǉ"], ["ö", "ő", "ø"], ["ё", "ё", "е"],
-        ["ア", "あ", "ｱ"], ["한", "한"], ["数", "數"], ["ㄱ", "ᄀ"], ["ก", "เก", "กำ"], ["क", "क्ष", "कि"], ["😀", "👍🏽", "👨‍👩‍👧"],
+        ["ч", "Ч"], ["aa", "å", "Å", "AA"], ["cs", "CS"], ["ch", "CH"], ["ll", "LL"], ["lj", "ǉ"], ["ö", "ő", "ø"], ["ё", "е\u0308", "е"],
+        ["ア", "あ", "ｱ"], ["한", "한"], ["数", "數"], ["ㄱ", "ᄀ"], ["ก", "เก", "กำ"], ["क", "क्ष", "कि"], ["😀", "👍🏽", "👨\u200D👩\u200D👧"],
     ];
 
     /// <summary>Fictional sentences in several scripts, cut into cells and texts.</summary>
@@ -69,6 +70,8 @@ internal static class SearchFoldChecks
                 + found + " found in " + cases + "; " + string.Join(" | ", differences.Take(5)));
         Unverified(check);
         Cases(check);
+        Contexts(check);
+        KeyClasses(check);
         Adaptive(check);
     }
 
@@ -176,11 +179,12 @@ internal static class SearchFoldChecks
     {
         var fold = SearchFold.Ready(1033);
         string? F(string s) => fold.FoldText(s);
-        check(F("Straße") == F("STRASSE") && F("æther") == F("AETHER") && F("ﬁnal") == F("final") && F("é") == F("é") && F("é") == F("E")
-            && F("ｓｑｌ") == F("sql") && F("٢") == F("2") && F("σοφός") == F("ΣΟΦΟΣ") && F("ab­c") == F("abc") && F("カ") == F("か"),
-            "the fold maps what a culture compare treats alike to the same text: ß and ss, æ and ae, ligatures, accents and decomposed letters, full-width, Arabic-Indic digits, final sigma, soft hyphens, kana");
-        check(F("กำ") is null && F("क्ष") is null && F("a😀") is null && F("­") is null && F("abc") == "abc",
-            "the fold vouches for no Thai, Indic or supplementary character, and a text of only ignorable characters folds to nothing");
+        check(F("Straße") == F("STRASSE") && F("æther") == F("AETHER") && F("é") == F("e\u0301") && F("é") == F("E")
+            && F("ｓｑｌ") == F("sql") && F("٢") == F("2") && F("σοφός") == F("ΣΟΦΟΣ") && F("カ") == F("か") && F("Ёлкин") == F("ЁЛКИН"),
+            "the fold maps what a culture compare treats alike to the same text: ß and ss, æ and ae, accents and decomposed letters, full-width, Arabic-Indic digits, final sigma, kana");
+        check(F("กำ") is null && F("क्ष") is null && F("a😀") is null && F("ab\u00ADc") is null && F("ﬁnal") is null && F("Col·legi") is null
+            && SearchFold.Ready(1041).FoldText("サーバー") is null && F("サーヒ") is not null && F("サーヒ") == F("ｻｰﾋ") && F("ab\uFFFEc") is null && F("ab\uD800c") is null && F("abc") == "abc",
+            "the fold vouches for no Thai, Indic, supplementary, ignorable, ligature or joining character, noncharacter or lone surrogate, nor in Japanese the prolonged sound mark (which it vouches for elsewhere)");
         var turkish = SearchFold.Ready(1055);
         var options = CompareOptions.IgnoreCase;
         var info = CultureInfo.GetCultureInfo(1055).CompareInfo;
@@ -191,6 +195,67 @@ internal static class SearchFoldChecks
         var english = new ResultSearcher.CultureMatcher("กรุณา", CultureInfo.GetCultureInfo(1033).CompareInfo, CompareOptions.IgnoreCase, fold);
         check(english.Matches(Encoding.UTF8.GetBytes("ข้อความ กรุณาลองใหม่"), scratch) && !english.Prechecks == (fold.FoldText("กรุณา") is null),
             "a Thai text in an English column is compared without the pre-check, and found");
+    }
+
+    /// <summary>Cells where collation is not per character, each found by the culture compare under its options (but the
+    /// noncharacter's, which it finds nothing in): with the pre-check the matcher finds them too. (Japanese ゞ, ゝ and ー repeat or prolong the sound before them, root joins l·l,
+    /// Yiddish ligatures, 〆 is しめ, enclosed and presentation forms, Arabic madda and hamza, digraph letters, a mark NFC
+    /// cannot compose, and a noncharacter.)</summary>
+    internal static readonly (int Lcid, int Options, string Cell, string Text)[] Contextual =
+    [
+        (1041, 1 | 8 | 16, "いすゞ自動車", "いすず"), (1041, 1 | 8 | 16, "サーバー", "サアバア"), (1041, 1 | 8 | 16, "かゝ", "かか"),
+        (1033, 1 | 2 | 8 | 16, "Col·legi", "collegi"), (1037, 1 | 8 | 16, "ייִדיש װָארט", "ווָארט"), (1033, 1 | 8 | 16, "ייִדיש װָארט", "ווָארט"),
+        (1041, 1 | 8 | 16, "〆切", "しめ切"), (1033, 1 | 8 | 16, "㉊", "30"), (1025, 1 | 8 | 16, "ﻵ", "لآ"), (1025, 1 | 2 | 8 | 16, "qآ\u0655z", "qآz"),
+        (1025, 1 | 2 | 8 | 16, "آ", "ءء"), (1061, 1 | 2 | 8 | 16, "ǄW", "Dƍ"), (1052, 1 | 8 | 16, "Ǌ", "nJ"),
+        (1053, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1035, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1033, 1 | 8 | 16, "ab\uFFFEc", "abc"),
+    ];
+
+    private static void Contexts(Action<bool, string> check)
+    {
+        var differences = new List<string>();
+        var scratch = new ResultSearcher.Scratch();
+        foreach (var (lcid, options, cell, text) in Contextual)
+        {
+            var culture = ViewSorter.Culture(new ResultCollation(lcid, 0, 1252, false, options))!.Value;
+            var bytes = Encoding.UTF8.GetBytes(cell);
+            var alone = new ResultSearcher.CultureMatcher(text, culture.Info, culture.Options, null).Matches(bytes, scratch);
+            var prechecked = new ResultSearcher.CultureMatcher(text, culture.Info, culture.Options, SearchFold.Ready(lcid)).Matches(bytes, scratch);
+            if (alone != !cell.Contains('\uFFFE')) differences.Add("the compare " + (alone ? "found " : "did not find ") + lcid + " " + Escape(cell) + " <- " + Escape(text));
+            if (alone != prechecked) differences.Add(lcid + " " + Escape(cell) + " <- " + Escape(text) + ": " + alone + " against " + prechecked);
+        }
+        check(differences.Count == 0,
+            "where collation depends on neighbouring characters the pre-checked matcher finds what the compare finds (every cell but the noncharacter's): " + string.Join(" | ", differences));
+    }
+
+    /// <summary>The key-class check: strings the fold vouches for that a verified culture's loosest compare finds equal (the
+    /// same sort key) fold to the same text, over every vouched character alone and pairs of a sample of them. The fold is
+    /// sound because of it: an accent- and case-insensitive compare uses these options. A wider scan (every vouched
+    /// character after a thousand others) runs out of tree.</summary>
+    private static void KeyClasses(Action<bool, string> check)
+    {
+        var sample = new List<char>();
+        for (var c = ' '; c <= '~'; c++) sample.Add(c);
+        sample.AddRange("ÀÄÅÆÇÐÑÖØÞßàäåæçðñöøþÿĀČĐĞİıĲĳŁŉŊŒœŘŠſŸŽơưǍǜșțΆΐΣάήίΰςόώЁЙЪЫЬЭЯёйъыьэяґҐאבךכשתاأبةتلمىي٠٢あかがっゔゕゖアカガッヴヵヶヷヺ一數数가힣！０Ａａｚ～\u00A0‐–’…");
+        sample.RemoveAll(c => !SearchFold.Vouched(c));
+        var conflicts = new string?[SearchFold.Verified.Length];
+        Parallel.For(0, SearchFold.Verified.Length, index =>
+        {
+            var lcid = SearchFold.Verified[index];
+            var fold = SearchFold.Ready(lcid);
+            var info = CultureInfo.GetCultureInfo(lcid).CompareInfo;
+            var folds = new Dictionary<string, (string Fold, string Text)>();
+            void Add(string text)
+            {
+                if (conflicts[index] is not null || fold.FoldText(text) is not { } folded) return;
+                var key = Convert.ToBase64String(info.GetSortKey(text, SearchFold.Loosest).KeyData);
+                if (!folds.TryAdd(key, (folded, text)) && folds[key].Fold != folded)
+                    conflicts[index] = lcid + " " + Escape(folds[key].Text) + " and " + Escape(text);
+            }
+            for (var c = 0; c < 65536; c++) if (SearchFold.Vouched((char)c)) Add(((char)c).ToString());
+            foreach (var a in sample) foreach (var b in sample) Add(new string([a, b]));
+        });
+        check(conflicts.All(conflict => conflict is null),
+            "strings a verified culture's loosest compare finds equal fold alike: " + string.Join(" | ", conflicts.Where(conflict => conflict is not null)));
     }
 
     /// <summary>A text in most cells stops the pre-check after its sample; a rare one keeps it; both find what the compare

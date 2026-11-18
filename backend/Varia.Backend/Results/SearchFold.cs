@@ -9,17 +9,18 @@ namespace Varia.Backend.Results;
 /// dropped. A cell a culture compare finds the text in then holds the text's fold, folded, as an ordinal substring, so an
 /// ordinal search of the folds rules most cells out before the culture compare, which stays the judge
 /// (<see cref="ResultSearcher.MatcherFor"/>). Built from the collator, never by hand: a hand-written fold misses ß, æ,
-/// final sigma, kana, Arabic-Indic digits and more. Only for the cultures <see cref="Verified"/> lists; a character the fold
-/// cannot vouch for (a script whose collation joins letters, a supplementary character) sends its cell to the culture
-/// compare alone.</summary>
+/// final sigma, kana, Arabic-Indic digits and more. Only for the cultures <see cref="Verified"/> lists, and only for text
+/// made of the characters <see cref="Vouched"/> lists after NFC: collation is not per character (Japanese ー and ゝ repeat
+/// the sound before them, root joins l·l, Yiddish ligatures and Arabic presentation forms equal letter pairs), so any other
+/// character sends its cell to the culture compare alone.</summary>
 internal sealed class SearchFold
 {
     internal const CompareOptions Loosest = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth;
 
-    /// <summary>The cultures (LCIDs) whose fold SearchFoldChecks' differential check verifies (and a long run of it, half a
-    /// million cases a culture and option set, found no difference in): Latin1_General and SQL_Latin1_General collations are
-    /// 1033. Danish, Norwegian, Hungarian and Croatian are not: their collations treat a letter as a pair of letters (å as aa,
-    /// dž) in ways a per-character fold cannot follow, and the long run finds misses.</summary>
+    /// <summary>The cultures (LCIDs) whose fold SearchFoldChecks verifies (its differential and key-class checks, and longer
+    /// out-of-tree runs of both, found no difference): Latin1_General and SQL_Latin1_General collations are 1033. Danish,
+    /// Norwegian, Hungarian and Croatian are not: their collations treat a letter as a pair of letters (å as aa, dž) in ways a
+    /// per-character fold cannot follow, and the long run finds misses.</summary>
     internal static readonly int[] Verified =
     [
         1025, 1026, 1028, 1029, 1031, 1032, 1033, 1034, 1035, 1036, 1037, 1039, 1040, 1041, 1042, 1043, 1045, 1046, 1048, 1049,
@@ -50,16 +51,18 @@ internal sealed class SearchFold
     // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss) or none.
     private readonly char[] single = new char[65536];
     private readonly Dictionary<char, string> multiple = [];
-    private const char Multiple = '￿';
-    // Code units a text of which is NFC already: neither a combining mark, a Hangul vowel or final jamo (which compose with
-    // what comes before them), nor one that normalizing changes (Å as U+212B). A text of only these skips normalizing.
-    private readonly bool[] stable = new bool[65536];
+    private const char Multiple = '\uFFFF';
+    // Each code unit's kind: Unvouched (its cell goes to the compare), Plain (vouched and NFC-stable) or Accent (a combining
+    // accent, vouched only once NFC composes it into a plain letter).
+    private readonly byte[] kinds = new byte[65536];
+    private const byte Unvouched = 0, Plain = 1, Accent = 2;
     // The ASCII range's folds, for the UTF-8 fast path: a byte below 0x80 is its character.
     private readonly string[] ascii = new string[128];
 
     private SearchFold(CompareInfo info)
     {
         var emptyKey = Key(info, "");
+        var japanese = info.LCID == 1041;
         // A group's representative: a one to three letter ASCII string with its key if there is one (ß to ss, ﬃ to ffi),
         // else the compatibility decomposition of its lowest code unit, folded, when that has the key (℃ to °c), else the
         // lowest code unit. Every member of a group maps to the same representative, so a cell and a text folded agree.
@@ -108,11 +111,13 @@ internal sealed class SearchFold
         for (var c = 0; c < 65536; c++)
         {
             var unit = (char)c;
-            if (char.IsSurrogate(unit) || Unsafe(unit))
+            if (c is >= 0x300 and <= 0x36F) kinds[c] = Accent;
+            if (!Vouched(unit) || (japanese && Repeating(unit)) || !Stable(unit))
             {
                 single[c] = Multiple;
                 continue;
             }
+            kinds[c] = Plain;
             var fold = Representative(keys[c], 0);
             if (fold.Length == 1 && fold[0] != Multiple) single[c] = fold[0];
             else
@@ -121,8 +126,6 @@ internal sealed class SearchFold
                 multiple[unit] = fold;
             }
             if (c < 128) ascii[c] = fold;
-            stable[c] = CharUnicodeInfo.GetUnicodeCategory(unit) is not (UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark)
-                && c is not (>= 0x1160 and <= 0x11FF) && Stable(unit);
         }
     }
 
@@ -134,12 +137,26 @@ internal sealed class SearchFold
 
     private static string Key(CompareInfo info, string text) => Convert.ToBase64String(info.GetSortKey(text, Loosest).KeyData);
 
-    /// <summary>A code unit the fold cannot vouch for: one of a script whose collation reorders or joins letters into one
-    /// (Indic, Thai, Lao, Tibetan, Myanmar, Khmer, Tai), or half of a supplementary character. Its cell goes to the culture
-    /// compare alone.</summary>
-    internal static bool Unsafe(char c) =>
-        char.IsSurrogate(c) || c is >= 'ऀ' and <= '႟' || c is >= 'ក' and <= '៿' || c is >= 'ᦀ' and <= '᪯'
-        || c is >= '꣠' and <= 'ꣿ' || c is >= 'ꧠ' and <= '꫟';
+    /// <summary>The code units the fold vouches for, whose collation in the verified cultures depends on no neighbour (the
+    /// key-class scan in SearchFoldChecks finds no two strings of them alike to the compare and folded apart): tab, line
+    /// breaks and printable ASCII; no-break space, Latin-1 and Extended-A letters, and Extended-B's Vietnamese ơ ư, pinyin ǎ
+    /// to ǜ and Romanian ș ț; Greek and Cyrillic letters; Hebrew letters; Arabic letters from أ and Arabic-Indic digits;
+    /// dashes and quotes; hiragana and katakana letters, full-width and half-width; CJK ideographs; Hangul syllables;
+    /// full-width ASCII; and, but in Japanese, the <see cref="Repeating"/> marks. Not ·, which root joins with l, nor the
+    /// digraph letters (ǆ, ǉ, ǌ), ء and آ (آ is ءء to an accent-insensitive compare), the voiced marks, ligatures,
+    /// presentation forms, enclosed or squared characters, jamo or combining marks left after NFC.</summary>
+    internal static bool Vouched(char c) =>
+        (c is '\t' or '\n' or '\r' or (>= ' ' and <= '~') or '\u00A0' or (>= '\u00C0' and <= '\u017F')
+        or '\u01A0' or '\u01A1' or '\u01AF' or '\u01B0' or (>= '\u01CD' and <= '\u01DC') or (>= '\u0218' and <= '\u021B')
+        or (>= '\u0386' and <= '\u03CE' and not '\u0387') or (>= '\u0400' and <= '\u0482') or (>= '\u048A' and <= '\u04FF')
+        or (>= '\u05D0' and <= '\u05EA') or (>= '\u0623' and <= '\u063A') or (>= '\u0641' and <= '\u064A') or (>= '\u0660' and <= '\u0669')
+        or (>= '\u2010' and <= '\u2027') or (>= '\u3041' and <= '\u3096') or (>= '\u30A1' and <= '\u30FA')
+        or (>= '\u4E00' and <= '\u9FFF') or (>= '\uAC00' and <= '\uD7A3') or (>= '\uFF01' and <= '\uFF5E')
+        or (>= '\uFF66' and <= '\uFF9D')) || Repeating(c);
+
+    /// <summary>The prolonged sound mark (ー, ｰ) and the kana iteration marks (ゝ, ゞ, ヽ, ヾ): vouched in every verified culture but
+    /// Japanese, whose collation reads them as the sound before them.</summary>
+    internal static bool Repeating(char c) => c is '\u30FC' or '\uFF70' or '\u309D' or '\u309E' or '\u30FD' or '\u30FE';
 
     /// <summary>A text's fold, or null when it holds a character the fold cannot vouch for, or folds to nothing.</summary>
     public string? FoldText(string text)
@@ -154,19 +171,22 @@ internal sealed class SearchFold
     public bool TryFold(ReadOnlySpan<char> text, ref char[] buffer, out int length)
     {
         length = 0;
-        // Half of a supplementary character (unvouched in any case) would make normalizing throw.
-        var composed = true;
+        // Only vouched characters and combining accents; with an accent, NFC must compose every one into a vouched letter.
+        // (Checked first: a noncharacter or half of a supplementary character, unvouched, would make normalizing throw.)
+        var accents = false;
         foreach (var c in text)
         {
-            if (char.IsSurrogate(c)) return false;
-            composed &= stable[c];
+            var kind = kinds[c];
+            if (kind == Unvouched) return false;
+            accents |= kind == Accent;
         }
-        if (!composed && !text.IsNormalized(NormalizationForm.FormC))
+        if (accents)
         {
             string normal;
             try { normal = new string(text).Normalize(NormalizationForm.FormC); }
             catch (ArgumentException) { return false; }
-            return TryFold(normal.AsSpan(), ref buffer, out length);
+            foreach (var c in normal) if (kinds[c] != Plain) return false;
+            text = normal.AsSpan();
         }
         if (buffer.Length < text.Length + 16) buffer = new char[Math.Max(text.Length + 16, 2 * buffer.Length)];
         foreach (var c in text)
@@ -189,6 +209,7 @@ internal sealed class SearchFold
     {
         length = 0;
         if (!System.Text.Ascii.IsValid(utf8)) return false;
+        foreach (var b in utf8) if (kinds[b] != Plain) return false;
         if (buffer.Length < utf8.Length + 16) buffer = new char[Math.Max(utf8.Length + 16, 2 * buffer.Length)];
         foreach (var b in utf8)
         {

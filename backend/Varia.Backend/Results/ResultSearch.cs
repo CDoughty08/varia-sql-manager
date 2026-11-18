@@ -249,7 +249,7 @@ internal static class ResultSearcher
 
     /// <summary>A culture compare (ICU), about 90 MB/s on text that is not ASCII. With the culture's fold, a cell whose fold
     /// does not hold the text's fold as an ordinal substring cannot hold the text, so it is ruled out without the compare
-    /// (4 to 5.5 times faster on real multilingual text); the compare judges the rest. A cell the fold cannot vouch for goes
+    /// (about 3.5 times faster over SQL Server's messages in 22 languages); the compare judges the rest. A cell the fold cannot vouch for goes
     /// to the compare alone. When most cells pass the pre-check anyway (a common word), it only adds work, so after
     /// <see cref="PrecheckSample"/> cells the matcher stops pre-checking if more than <see cref="PrecheckKeep"/> of them
     /// passed.</summary>
