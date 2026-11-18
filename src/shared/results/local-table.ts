@@ -3,7 +3,7 @@
 // that is not on screen (a masked value's secret) can leave through Copy or Save. Copy and Save text is written by the
 // TypeScript twin of ResultTextWriter (text-writer.ts) over a page built here, so it matches a results grid's byte for byte.
 import type { PageView } from '../ipc/wire/pages.ts'
-import { copyText, exportText, jsonKeyBytes, NO_COLUMN_NAME, type TextColumn, type TextFormat, type TextPart } from './text-writer.ts'
+import { copyText, exportText, jsonKeyBytes, NO_COLUMN_NAME, type TextColumn, type TextFormat, type TextPart, type TextWriter } from './text-writer.ts'
 
 /** How a column's values read: numbers right-align, sort by value and are numbers in JSON; the rest is text. */
 export type LocalColumnKind = 'text' | 'number'
@@ -98,7 +98,9 @@ const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
  * Copy of a local table's selection, as a results grid copies (tab-separated, NULL as NULL, the platform's line breaks):
  * `parts` are the grid's copy plan in the rows as shown (`order` maps a shown row to the table's).
  */
-export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[]; afterPage?: () => Promise<void> }): Promise<{ text: string; rows: number }> {
+/** A local copy stopped at its bound (`maxBytes`): parts that overlap copy their rows again, past what the table holds. */
+export class LocalCopyTooLarge extends RangeError {}
+export async function localCopyText(table: LocalTableData, parts: readonly TextPart[], o: { headers: boolean; crlf: boolean; order?: readonly number[]; maxBytes?: number; afterPage?: () => Promise<void> }): Promise<{ text: string; rows: number }> {
   // Pages of the rows the copy reaches, built as it reaches them: a cell's copy encodes its page, not the table.
   const pages = new Map<number, PageView>()
   const pageAt = (row: number) => {
@@ -107,7 +109,14 @@ export async function localCopyText(table: LocalTableData, parts: readonly TextP
     if (!page) pages.set(first, page = localPage(table, o.order, first, localSavePageRows))
     return page
   }
-  const copied = await copyText({ columns: textColumns(table.columns), pageAt, available: o.order?.length ?? table.rows.length, parts, headers: o.headers, crlf: o.crlf }, o.afterPage)
+  const maxBytes = o.maxBytes ?? Number.MAX_SAFE_INTEGER
+  // After each page: past the bound the copy stops there, before it builds more.
+  const afterPage = async (writer: TextWriter) => {
+    if (writer.bytes > maxBytes) throw new LocalCopyTooLarge('The selection is too large to copy.')
+    await o.afterPage?.()
+  }
+  const copied = await copyText({ columns: textColumns(table.columns), pageAt, available: o.order?.length ?? table.rows.length, parts, headers: o.headers, crlf: o.crlf }, afterPage)
+  if (copied.bytes > maxBytes) throw new LocalCopyTooLarge('The selection is too large to copy.')
   return { text: decoder.decode(copied.text), rows: copied.rows }
 }
 

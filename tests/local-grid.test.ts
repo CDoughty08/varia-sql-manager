@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { decodePage, encodePage } from '../src/shared/ipc/wire/pages'
-import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localSavePageChars, localSavePageRows, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { boundTable, LocalCopyTooLarge, localCopyText, localExportBytes, localPage, localSaveBytes, localSavePageChars, localSavePageRows, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
 import { exportText } from '../src/shared/results/text-writer'
 import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
@@ -56,6 +56,17 @@ describe('local tables', () => {
     // A page's rows, then the next page's: a yield after each.
     expect(yields).toBe(2)
     expect(copied.text).toBe([1, 0, -1, -2].map(k => String(long.rows.length - localSavePageRows + k)).join(String.fromCharCode(10)))
+  })
+
+  it('stop a copy past its bound: overlapping parts copy their rows again, past what the table holds', async () => {
+    const wide: LocalTableData = { columns: [{ name: 'a' }, { name: 'b' }, { name: 'c' }], rows: Array.from({ length: 1000 }, () => ['x'.repeat(localTableLimits.cellChars), 'y', 'z']) }
+    const parts = [{ rows: [[0, 999]], columns: [[0, 2]] }, { rows: [[1, 999]], columns: [[0, 1]] }, { rows: [[2, 999]], columns: [[0, 0]] }] as const
+    let pages = 0
+    const refused = await localCopyText(wide, parts.map(part => ({ rows: part.rows.map(range => [...range] as [number, number]), columns: part.columns.map(range => [...range] as [number, number]) })), { headers: false, crlf: false, maxBytes: 8 * 1024 * 1024, afterPage: async () => { pages++ } }).catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(LocalCopyTooLarge)
+    // Stopped at the page that passed the bound, not after every part.
+    expect(pages).toBeLessThan(6)
+    expect((await localCopyText(wide, [{ rows: [[0, 999]], columns: [[0, 2]] }], { headers: false, crlf: false, maxBytes: 8 * 1024 * 1024 })).rows).toBe(1000)
   })
 
   it('copy in the order shown, and only the parts selected', async () => {

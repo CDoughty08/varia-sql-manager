@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
-import { boundTable, localCopyText, localTableLimits, type LocalTableData } from '../../../shared/results/local-table'
+import { maxClipboardText } from '../../../shared/contracts'
+import { boundTable, LocalCopyTooLarge, localCopyText, localTableLimits, type LocalTableData } from '../../../shared/results/local-table'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { registerLiveOutput, type LiveOutput } from '../menus/targets'
@@ -45,6 +46,9 @@ const cardRows = 12
 const cardEmpty = 48
 /** Between a large copy's pages: the renderer paints and takes input while it formats. */
 const yieldToEvents = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+/** The most a local copy writes, in UTF-8 bytes (never fewer than its characters): what the clipboard takes and a results
+ *  grid's copy may be, whichever is less. Overlapping parts copy their rows again, past what the table holds. */
+const localCopyBytes = Math.min(maxClipboardText, wire.jobs.copyBytes)
 const unsorted: readonly LocalSortKey[] = []
 /** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
 const keptSorts = new WeakMap<GridViewState, { readonly columns: string; readonly keys: readonly LocalSortKey[] }>()
@@ -76,6 +80,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const setNotice = useCallback((next?: { readonly text: string; readonly error?: boolean }) => setNoticed(next && { ...next, bound }), [bound])
   const [wide, setWide] = useState(false)
   const apiRef = useRef<GridShellApi | undefined>(undefined)
+  const copies = useRef(0)
   const sourceRef = useRef<LocalSource | undefined>(undefined)
   const own = useMemo<GridViewState>(() => state ?? { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }, [state, bound])
   const latest = useRef({ label, suggestedName })
@@ -130,9 +135,19 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
         const parts = source && selection ? copyPlan(selection, source.table.columns.length) : []
         if (!source || !parts.length) return
         setNotice(undefined)
-        void localCopyText(source.table, parts, { headers, crlf: platform === 'win32', ...source.order ? { order: source.order } : {}, afterPage: yieldToEvents })
-          .then(async copied => { const written = await window.varia.writeClipboardText(copied.text); if (!written.ok) report('copy the rows', written.error) })
-          .catch(error => report('copy the rows', error))
+        // Only the latest copy writes the clipboard: a large one still formatting never overwrites a later, smaller one.
+        const copy = ++copies.current
+        void localCopyText(source.table, parts, { headers, crlf: platform === 'win32', ...source.order ? { order: source.order } : {}, maxBytes: localCopyBytes, afterPage: yieldToEvents })
+          .then(async copied => {
+            if (copy !== copies.current) return
+            const written = await window.varia.writeClipboardText(copied.text)
+            if (!written.ok) report('copy the rows', written.error)
+          })
+          .catch(error => {
+            if (copy !== copies.current) return
+            if (error instanceof LocalCopyTooLarge) setNotice({ text: `The selection is too large to copy (more than ${localCopyBytes / 1024 / 1024} MB).${preset === 'page' ? ' Use Save Results As instead.' : ''}`, error: true })
+            else report('copy the rows', error)
+          })
       },
       selectAll: () => view()?.selectAll(),
       sort: (column, descending, add) => sortBy(column, descending, add),
