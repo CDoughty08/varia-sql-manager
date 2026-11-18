@@ -47,22 +47,31 @@ describe('column profile selection', () => {
 
 describe('profile card motion', () => {
   it('moves, fades in and fades out the cards with transform and opacity only, never layout properties', () => {
-    const played: { target: Element; frames: Keyframe[] }[] = []
-    const animate = vi.spyOn(HTMLElement.prototype, 'animate').mockImplementation(function (this: HTMLElement, frames) {
-      played.push({ target: this, frames: frames as Keyframe[] })
+    const played: { target: Element; frames: Keyframe[]; options: unknown }[] = []
+    const animate = vi.spyOn(HTMLElement.prototype, 'animate').mockImplementation(function (this: HTMLElement, frames, options) {
+      played.push({ target: this, frames: frames as Keyframe[], options })
       return { cancel() {}, onfinish: null, oncancel: null } as unknown as Animation
     })
     const animations = vi.spyOn(HTMLElement.prototype, 'getAnimations').mockReturnValue([])
     const place = (element: HTMLElement, top: number) => { element.getBoundingClientRect = () => ({ top, left: 10, width: 200, height: 40, right: 210, bottom: top + 40, x: 10, y: top, toJSON() {} }) }
     const scroller = document.createElement('div'), ghosts = document.createElement('div')
+    // The theme's move token, as styles.css sets it (0 ms while motion is reduced, when nothing animates).
+    scroller.style.setProperty('--varia-motion-move', '0ms')
     place(scroller, 0)
     scroller.append(ghosts)
+    document.body.append(scroller)
     const stays = document.createElement('section'), arrives = document.createElement('section'), goes = document.createElement('section')
     goes.setAttribute('aria-label', 'c0')
     place(stays, 50)
     place(arrives, 100)
     // c1 was drawn at 100 and moves up to 50; c0 left from 50; c2 is new.
-    playCardMoves({ before: new Map([[0, { top: 50, left: 10, width: 200 }], [1, { top: 100, left: 10, width: 200 }]]), cards: new Map([[1, stays], [2, arrives]]), left: new Map([[0, goes]]), scroller, ghosts })
+    const play = () => playCardMoves({ before: new Map([[0, { top: 50, left: 10, width: 200 }], [1, { top: 100, left: 10, width: 200 }]]), cards: new Map([[1, stays], [2, arrives]]), left: new Map([[0, goes]]), scroller, ghosts })
+    play()
+    expect(played).toEqual([])
+    expect(ghosts.children).toHaveLength(0)
+    scroller.style.setProperty('--varia-motion-move', '180ms')
+    play()
+    expect(played.every(entry => (entry.options as KeyframeAnimationOptions).duration === 180)).toBe(true)
     expect(played.find(play => play.target === stays)?.frames).toEqual([{ transform: 'translateY(50px)' }, { transform: 'none' }])
     expect(played.find(play => play.target === arrives)?.frames[0]).toMatchObject({ opacity: 0 })
     const ghost = ghosts.firstElementChild as HTMLElement
@@ -71,6 +80,7 @@ describe('profile card motion', () => {
     expect(played.find(play => play.target === ghost)?.frames.at(-1)).toMatchObject({ opacity: 0 })
     const properties = new Set(played.flatMap(play => play.frames.flatMap(frame => Object.keys(frame))))
     expect([...properties].filter(property => !['transform', 'opacity', 'offset', 'easing'].includes(property))).toEqual([])
+    scroller.remove()
     animate.mockRestore()
     animations.mockRestore()
   })
