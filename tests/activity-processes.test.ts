@@ -67,7 +67,17 @@ describe('Sessions pane', () => {
     await full.tick({ checked: false, groups: [1] })
     expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: { values: ['app'] } })
     await full.tick({ checked: true, groups: [1] })
-    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: undefined })
+    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: undefined })    // The popover's selection ticks ranges of the list in its order; Space's toggle ticks them all when any is unticked, else
+    // unticks them all, NULL alike when it is selected; Invert ticks flips every value.
+    const ranged = facetList(0, facet, undefined)
+    await ranged.tick({ checked: false, order: 'count', ranges: [[0, 1]] })
+    expect(ranged.ticked()).toMatchObject({ values: ['app'], unticked: ['sa'] })
+    await ranged.tick({ checked: true, order: 'value', ranges: [[0, 2]], toggle: true, nulls: true })
+    expect(ranged.ticked()).toMatchObject({ values: ['app', 'sa'], all: true, blanks: true })
+    await ranged.tick({ checked: true, order: 'value', ranges: [[0, 2]], toggle: true, nulls: true })
+    expect(ranged.ticked()).toMatchObject({ values: [], blanks: false })
+    await ranged.tick({ checked: true, invert: true, nulls: true })
+    expect(ranged.ticked()).toMatchObject({ values: ['app', 'sa'], blanks: true })
   })
   it('turns the popover\'s condition into the filter the backend applies, or none, within the values a column filter holds', async () => {
     const max = activityLimits.columnFilterValues

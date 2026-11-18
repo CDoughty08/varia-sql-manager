@@ -344,7 +344,7 @@ try {
   await expect(funnel.getByRole('option', { name: 'SalesDb (2)', exact: true })).toBeChecked()
   await expect(funnel.getByRole('searchbox', { name: 'Search values', exact: true })).toBeFocused()
   await page.screenshot({ path: join('artifacts', 'activity-monitor-sessions.png') })
-  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await funnel.getByRole('option', { name: /^Untick all \(/ }).click()
   await funnel.getByRole('option', { name: 'BillingDb (1)', exact: true }).check()
   await funnel.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(funnel).toHaveCount(0)

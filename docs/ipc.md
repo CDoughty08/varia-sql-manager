@@ -264,7 +264,7 @@ noted where it matters.
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values ([Distinct values](#distinct-values)) |
 | `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 values, optionally searched |
-| `results.distinctTick` | port | unary | results | 30 s; ticks or clears all values or a search's |
+| `results.distinctTick` | port | unary | results | 30 s; ticks or clears values, all, a search's, ranges of the list, or inverts |
 | `results.distinctClose` | port | unary | control | 10 s; releases 1 – 64 snapshots |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, no backstop: only CANCEL, disconnect, shutdown, failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -1378,9 +1378,12 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   1 – 1,024 characters }`** answers `{ total, offset, values: [{ group, row, text, count, checked }], checked,
   nullsChecked }`; `count` order is most frequent first, ties in value order; `search` matches as [Search in
   results](#search-in-results) does, `total` then counts only the matches, and they are kept for scrolling.
-- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls? }`** sets ticks of the
-  named groups, all values (or all `search` matches), and NULL; answers `{ checked, nullsChecked }`. A frozen snapshot
-  refuses it (`INVALID_PARAMS`).
+- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls?, order?, ranges?: 1 –
+  512 [offset, count], toggle?, invert? }`** sets ticks of the named groups, all values (or all `search` matches), the
+  values at `ranges` of the list in `order` (searched with `search`), or flips every value (`invert`), and NULL; one of
+  those at most. `toggle` (with `ranges`) ticks them all when any, or NULL when `nulls` is given, is cleared, else clears
+  them all, NULL alike, ignoring `checked`. Answers `{ checked, nullsChecked }`. A range past the list's end or a frozen
+  snapshot is refused (`INVALID_PARAMS`).
 - **`results.distinctClose { resultId, snapshotIds: 1 – 64 }`** answers `{ closed }`; ids already gone are skipped. A
   closed snapshot asked for again answers `VIEW_NOT_FOUND`.
 - **Filter.** The first `results.view` using `{ op: 'groups', column, snapshotId }` freezes the snapshot: `in` of the
@@ -1393,7 +1396,7 @@ The header funnel lists a column's distinct values with counts from a snapshot t
   answers (rows below 2³¹, `checked` ≤ `distinct` ≤ `rows`, `nulls` ≤ `rows`, exactly `min(count, total − offset)`
   values, at the offset asked) and closes a snapshot built after its port went.
 - **Renderer.** `ColumnFilterPopover` lists the snapshot over the rows the grid's other filters keep, as a virtualized
-  checklist with backend search, Select all / none, NULL, and custom conditions (equals, does not equal, between, is
+  checklist with backend search, an action list (every value, the matches, the selected rows as ranges), NULL, and custom conditions (equals, does not equal, between, is
   NULL, is not NULL); OK hands it to the grid as a `groups` filter in the replaced filter's place. The grid keeps the snapshot while a filter
   names it and closes it once the view it shows no longer does; a popover closed without OK closes its own. Keep Selected Rows
   (`ResultsService.keepSelectedRows`) is no column's filter, one per grid, counted among the 16; more than 4,095 rows or
@@ -1878,7 +1881,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
 { t: 'distinctRead'; rid; generation; resultId: u32; snapshotId: u32; order: 'count' | 'value'; offset; count: 1..limits.distinct.maxWindow; search? }
-{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true (search? only with all); nulls? }
+{ t: 'distinctTick'; rid; generation; resultId: u32; snapshotId: u32; checked: boolean; groups? | all?: true | ranges? (with order) | invert?: true (search? with all or ranges; toggle? with ranges); nulls? }
 { t: 'distinctClose'; rid; generation; resultId: u32; snapshotIds: u32[1..limits.distinct.maxClose] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }

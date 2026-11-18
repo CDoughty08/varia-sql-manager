@@ -13,6 +13,7 @@ import { ColumnFilterPopover, resultsFilterSource } from '../src/renderer/src/re
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 import { scrollCap } from '../src/renderer/src/grid/scroll'
 import { rowAtTop } from '../src/renderer/src/results/column-filter'
+import { gesturesFor } from '../src/renderer/src/core/gestures'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -48,7 +49,7 @@ function fixture(o: { hold?: boolean; anchor?: DOMRect; size?: { width: number; 
     close: vi.fn(async () => undefined)
   }
   const results = { columnValues: vi.fn(async () => list), applyColumnFilter: vi.fn(() => true), sortOf: () => undefined }
-  const workbench = { results } as unknown as Workbench
+  const workbench = { results, gestures: gesturesFor('win32') } as unknown as Workbench
   const grid = document.createElement('div')
   document.body.appendChild(grid)
   const onClose = vi.fn()
@@ -86,35 +87,35 @@ const rect = (left: number, top: number, width: number, height: number) => new D
 describe('column filter popover', () => {
   it('opens beside its column, not over it, at its remembered size', async () => {
     // happy-dom's window is 1024 × 768: a column from 100 to 200 has room on its right.
-    const right = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 320, height: 0 } })
+    const right = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 400, height: 0 } })
     await right.settle()
-    expect([right.dialog().style.left, right.dialog().style.width, right.dialog().style.top, right.dialog().style.height]).toEqual(['202px', '320px', '50px', ''])
+    expect([right.dialog().style.left, right.dialog().style.width, right.dialog().style.top, right.dialog().style.height]).toEqual(['202px', '400px', '50px', ''])
     expect(right.dialog().dataset.side).toBe('right')
     right.unmount()
     // A column at the window's right edge: the popover opens on its left, its right edge 2 px from the column.
-    const left = fixture({ anchor: rect(800, 50, 200, 600), size: { width: 300, height: 500 } })
+    const left = fixture({ anchor: rect(800, 50, 200, 600), size: { width: 400, height: 500 } })
     await left.settle()
-    expect([left.dialog().style.left, left.dialog().style.height, left.dialog().dataset.side]).toEqual(['498px', '500px', 'left'])
+    expect([left.dialog().style.left, left.dialog().style.height, left.dialog().dataset.side]).toEqual(['398px', '500px', 'left'])
     expect(left.dialog().classList.contains('sized')).toBe(true)
   })
   it('resizes from its corner grip and hands the new size on when the drag ends', async () => {
     const resized = vi.fn()
-    const view = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 300, height: 400 }, onResized: resized })
+    const view = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 400, height: 400 }, onResized: resized })
     await view.settle()
     const grip = view.dialog().querySelector('.column-filter-grip') as HTMLElement
-    view.dialog().getBoundingClientRect = () => rect(202, 50, 300, 400)
+    view.dialog().getBoundingClientRect = () => rect(202, 50, 400, 400)
     const pointer = (type: string, x: number, y: number) => act(() => { grip.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y })) })
-    pointer('pointerdown', 500, 450)
-    pointer('pointermove', 560, 500)
+    pointer('pointerdown', 600, 450)
+    pointer('pointermove', 660, 500)
     // Shown at once, saved only when the drag ends.
-    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['360px', '450px'])
+    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['460px', '450px'])
     expect(resized).not.toHaveBeenCalled()
     // Never smaller than the bounds.
     pointer('pointermove', 0, 0)
-    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['260px', '240px'])
-    pointer('pointermove', 600, 520)
-    pointer('pointerup', 600, 520)
-    expect(resized).toHaveBeenCalledWith({ width: 400, height: 470 })
+    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['340px', '240px'])
+    pointer('pointermove', 700, 520)
+    pointer('pointerup', 700, 520)
+    expect(resized).toHaveBeenCalledWith({ width: 500, height: 470 })
   })
   it('is a listbox of options the arrow keys move through and Space ticks, one Tab stop', async () => {
     const view = fixture()
@@ -196,8 +197,10 @@ describe('column filter popover', () => {
     act(() => { (view.dialog().querySelector('input[type="search"]') as HTMLInputElement).focus() })
     act(() => view.valueList().focus())
     expect(view.activeRow()?.getAttribute('aria-label')).toBe('v05000 (1)')
-    // The tick is aria-checked alone: a multiselectable listbox carries one of aria-checked and aria-selected, not both.
-    expect(view.activeRow()?.hasAttribute('aria-selected')).toBe(false)
+    // The tick is aria-checked and the highlight aria-selected, which mean different things here; the row focus arrived
+    // on is the one selected, so Space ticks it.
+    expect(view.activeRow()?.getAttribute('aria-selected')).toBe('true')
+    expect(view.valueList().querySelectorAll('[aria-selected="true"]')).toHaveLength(1)
     view.unmount()
   })
 
@@ -331,6 +334,160 @@ describe('column filter popover', () => {
     await view.settle()
     expect(view.dialog().querySelector('[role="alert"]')).toBeNull()
     expect(view.checkboxes().length).toBeGreaterThan(0)
+    view.unmount()
+  })
+
+  /** A key with modifiers, as `key` presses one without. */
+  const press = (target: Element, name: string, init: KeyboardEventInit = {}) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...init })) })
+  const actionsOf = (view: ReturnType<typeof fixture>) => view.dialog().querySelector('[role="listbox"][aria-label="Actions"]') as HTMLElement
+  const actionNames = (view: ReturnType<typeof fixture>) => [...actionsOf(view).querySelectorAll('[role="option"]')].map(option => option.getAttribute('aria-label'))
+  const click = (target: Element, init: MouseEventInit = {}) => act(() => {
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...init }))
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }))
+  })
+  const runAction = (view: ReturnType<typeof fixture>, name: string) => click([...actionsOf(view).querySelectorAll('[role="option"]')].find(option => option.getAttribute('aria-label') === name)!)
+  /** Answers every tick sent so far, and those each answer lets go (ticks go one at a time). */
+  const answerTicks = async (view: ReturnType<typeof fixture>) => {
+    for (let round = 0; round < 6; round++) {
+      await view.settle()
+      for (const tick of view.tickRequests.splice(0)) await act(async () => { tick.resolve({ checked: 1, nullsChecked: true }) })
+    }
+  }
+  const selectedRows = (view: ReturnType<typeof fixture>) => view.checkboxes().filter(option => option.getAttribute('aria-selected') === 'true').map(option => option.getAttribute('aria-posinset'))
+  const tickCalls = (view: ReturnType<typeof fixture>) => vi.mocked(view.list.tick).mock.calls.map(call => call[0])
+
+  it('lists actions beside the values by context, each saying how many values it touches, and runs them', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const view = fixture()
+      await view.settle()
+      // No search: every value's actions, and Invert.
+      expect(actionNames(view)).toEqual(['Tick all (10,000)', 'Untick all (10,000)', 'Invert ticks'])
+      runAction(view, 'Untick all (10,000)')
+      expect(view.checkboxes()[0]!.getAttribute('aria-checked')).toBe('false')
+      runAction(view, 'Invert ticks')
+      expect(view.checkboxes()[0]!.getAttribute('aria-checked')).toBe('true')
+      await answerTicks(view)
+      expect(tickCalls(view)).toEqual([{ checked: false, all: true }, { checked: true, invert: true }])
+      // Typing in the values goes on in the search; once it applies, the matches' actions come first and every value's
+      // apart, so unticking never quietly means only the matches.
+      act(() => view.valueList().focus())
+      view.key(view.valueList(), 'v')
+      const search = view.dialog().querySelector('input[type="search"]') as HTMLInputElement
+      expect([document.activeElement === search, search.value]).toEqual([true, 'v'])
+      await act(async () => { vi.advanceTimersByTime(250) })
+      await view.settle()
+      expect(actionNames(view)).toEqual(['Tick the matches (10,000)', 'Tick only the matches (10,000)', 'Untick the matches (10,000)', 'Tick all (10,000)', 'Untick all (10,000)'])
+      runAction(view, 'Untick the matches (10,000)')
+      runAction(view, 'Tick only the matches (10,000)')
+      await answerTicks(view)
+      expect(tickCalls(view).slice(2)).toEqual([{ checked: false, all: true, search: 'v' }, { checked: false, all: true }, { checked: true, all: true, search: 'v' }])
+      view.unmount()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('moves between the search, the action list and the values with the arrows alone', async () => {
+    const view = fixture()
+    await view.settle()
+    const search = view.dialog().querySelector('input[type="search"]') as HTMLInputElement, values = view.valueList(), actions = actionsOf(view)
+    view.key(search, 'ArrowDown')
+    expect(document.activeElement).toBe(values)
+    // Arriving selects the active row.
+    expect(selectedRows(view)).toEqual(['1'])
+    view.key(values, 'ArrowLeft')
+    expect(document.activeElement).toBe(actions)
+    const current = () => document.getElementById(actions.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label')
+    expect(current()).toBe('Tick all (10,000)')
+    view.key(actions, 'ArrowDown')
+    view.key(actions, 'Enter')
+    await answerTicks(view)
+    // The action ran and the focus stayed for the next.
+    expect(tickCalls(view)).toEqual([{ checked: false, all: true }])
+    expect([document.activeElement === actions, current()]).toEqual([true, 'Untick all (10,000)'])
+    view.key(actions, 'ArrowRight')
+    expect(document.activeElement).toBe(values)
+    // Up from the first row, or from the first action, returns to the search.
+    view.key(values, 'ArrowUp')
+    expect(document.activeElement).toBe(search)
+    view.key(search, 'ArrowDown')
+    view.key(values, 'ArrowLeft')
+    view.key(actions, 'Home')
+    view.key(actions, 'ArrowUp')
+    expect(document.activeElement).toBe(search)
+    view.unmount()
+  })
+
+  it('selects rows apart from their ticks, and Space ticks the selection as one request', async () => {
+    const view = fixture()
+    await view.settle()
+    const values = view.valueList()
+    act(() => values.focus())
+    press(values, 'ArrowDown', { shiftKey: true })
+    press(values, 'ArrowDown', { shiftKey: true })
+    expect(selectedRows(view)).toEqual(['1', '2', '3'])
+    expect(actionNames(view).slice(0, 3)).toEqual(['Tick the selected (3)', 'Untick the selected (3)', 'Tick only the selected (3)'])
+    expect(view.dialog().textContent).toContain('3 selected.')
+    // Every selected row is ticked: Space unticks them all.
+    press(values, ' ')
+    await answerTicks(view)
+    expect(tickCalls(view).at(-1)).toEqual({ checked: false, order: 'count', ranges: [[0, 3]] })
+    expect(view.checkboxes().slice(0, 4).map(option => option.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'true'])
+    // Ctrl moves without selecting; Ctrl+Space adds the active row.
+    press(values, 'ArrowDown', { ctrlKey: true })
+    press(values, 'ArrowDown', { ctrlKey: true })
+    press(values, ' ', { ctrlKey: true })
+    expect(selectedRows(view)).toEqual(['1', '2', '3', '5'])
+    // Ctrl+A selects every row; some are unticked, so Space ticks them all, rows not read included.
+    press(values, 'a', { ctrlKey: true })
+    expect(actionNames(view)[0]).toBe('Tick the selected (10,000)')
+    press(values, ' ')
+    await answerTicks(view)
+    expect(tickCalls(view).at(-1)).toEqual({ checked: true, order: 'count', ranges: [[0, distinct]] })
+    view.unmount()
+  })
+
+  it('leaves Space to the backend when the rows it has read are all ticked but others are not read', async () => {
+    const view = fixture()
+    await view.settle()
+    act(() => view.valueList().focus())
+    press(view.valueList(), 'a', { ctrlKey: true })
+    const reads = view.reads.length
+    press(view.valueList(), ' ')
+    await answerTicks(view)
+    expect(tickCalls(view)).toEqual([{ checked: true, order: 'count', ranges: [[0, distinct]], toggle: true }])
+    // The rows shown are read again with the ticks the backend chose.
+    expect(view.reads.length).toBeGreaterThan(reads)
+    view.unmount()
+  })
+
+  it('ticks with a plain click only: Ctrl and Shift clicks select, and Tick only the selected unticks the rest', async () => {
+    const view = fixture()
+    await view.settle()
+    const row = (n: number) => view.checkboxes().find(option => option.getAttribute('aria-posinset') === String(n))!
+    click(row(2), { ctrlKey: true })
+    click(row(5), { shiftKey: true })
+    expect(selectedRows(view)).toEqual(['2', '3', '4', '5'])
+    click(row(8), { ctrlKey: true })
+    expect(selectedRows(view)).toEqual(['2', '3', '4', '5', '8'])
+    expect(view.list.tick).not.toHaveBeenCalled()
+    runAction(view, 'Tick only the selected (5)')
+    await answerTicks(view)
+    expect(tickCalls(view)).toEqual([{ checked: false, all: true }, { checked: true, order: 'count', ranges: [[1, 4], [7, 1]] }])
+    expect(view.checkboxes().slice(0, 9).map(option => option.getAttribute('aria-checked'))).toEqual(['false', 'true', 'true', 'true', 'true', 'false', 'false', 'true', 'false'])
+    // A plain click ticks its row and selects it alone.
+    click(row(1))
+    await answerTicks(view)
+    expect(selectedRows(view)).toEqual(['1'])
+    expect(tickCalls(view).at(-1)).toEqual({ checked: true, groups: [0] })
+    view.unmount()
+  })
+
+  it('applies OK with Ctrl+Enter from the search', async () => {
+    const view = fixture()
+    await view.settle()
+    press(view.dialog().querySelector('input[type="search"]')!, 'Enter', { ctrlKey: true })
+    await view.settle()
+    expect(view.results.applyColumnFilter).toHaveBeenCalledWith('t', 'e1', 0, { kind: 'all' })
     view.unmount()
   })
 })

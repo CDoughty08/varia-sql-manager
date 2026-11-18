@@ -398,7 +398,13 @@ export interface ResultsDistinctReadResult { total: number; offset: number; valu
 /** results.distinctTick: ticks (`checked`) or clears 1 to `limits.distinct.maxWindow` `groups`, or every value (`all`), only
  *  those whose text contains `search` with one; `nulls` sets NULL's tick, alone or with either. Refused once a groups
  *  filter uses the snapshot. */
-export interface ResultsDistinctTickParams { resultId: number; snapshotId: number; checked: boolean; groups?: number[]; all?: true; search?: string; nulls?: boolean }
+/** One mode at most: `groups`; `all` (a `search`'s matches with one); `ranges` of `[offset, count]` in the list `order` reads
+ *  (searched with a `search`), which `toggle` ticks when any of them (or NULL, when `nulls` is given) is cleared and else
+ *  clears, ignoring `checked`; or `invert`, which flips every value. `nulls` sets NULL's tick. */
+export interface ResultsDistinctTickParams {
+  resultId: number; snapshotId: number; checked: boolean; groups?: number[]; all?: true; search?: string; nulls?: boolean
+  order?: 'count' | 'value'; ranges?: [offset: number, count: number][]; toggle?: true; invert?: true
+}
 export interface ResultsDistinctTickResult { checked: number; nullsChecked: boolean }
 export interface ResultsDistinctCloseParams { resultId: number; snapshotIds: number[] }
 export interface ResultsDistinctCloseResult { closed: number }

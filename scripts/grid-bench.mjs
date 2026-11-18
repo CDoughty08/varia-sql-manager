@@ -257,7 +257,7 @@ try {
   record('grid.cache.workerMiB', cached.workerBytes / 1048576, 'MiB', `${cached.workerPages} pages after a sweep of 50 views and 300 jumps`)
 
   // The header funnel over a million distinct values (name): the snapshot stays in the backend, and the checklist reads
-  // only the windows it shows, so opening, scrolling, searching and Select all/none keep the UI free of long tasks.
+  // only the windows it shows, so opening, scrolling, searching and ticking all or none keep the UI free of long tasks.
   await segment('a million distinct values')
   const funnel = page.getByRole('dialog', { name: 'Filter name', exact: true })
   const values = funnel.getByRole('listbox', { name: 'Values', exact: true })
@@ -286,17 +286,17 @@ try {
   await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000777')
   await expect(funnel).toContainText('1,111 of 1,000,000 values match.', { timeout: 30000 })
   record('grid.funnel.searchMs', performance.now() - searching, 'ms', 'a search matching 1,111 of 1,000,000 values, typed → counted (with the 200 ms debounce)')
-  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await funnel.getByRole('option', { name: /^Untick the matches \(/ }).click()
   await expect(funnel).toContainText('998,889 ticked.')
   await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('')
   await expect(funnel).toContainText('1,000,000 values in 1,000,000 rows. 998,889 ticked.')
-  await funnel.getByRole('button', { name: 'Select all', exact: true }).click()
+  await funnel.getByRole('option', { name: /^Tick all \(/ }).click()
   await expect(funnel).toContainText('1,000,000 ticked.')
-  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await funnel.getByRole('option', { name: /^Untick all \(/ }).click()
   await expect(funnel).toContainText(' 0 ticked.')
   await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000777')
   await expect(funnel).toContainText('1,111 of 1,000,000 values match.', { timeout: 30000 })
-  await funnel.getByRole('button', { name: 'Select all', exact: true }).click()
+  await funnel.getByRole('option', { name: /^Tick the matches \(/ }).click()
   await expect(funnel).toContainText('1,111 ticked.')
   const filtering = performance.now()
   await funnel.getByRole('button', { name: 'OK', exact: true }).click()

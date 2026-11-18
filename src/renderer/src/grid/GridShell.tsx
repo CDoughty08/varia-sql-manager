@@ -106,7 +106,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   const { resultClient, platform, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values, setting = values['queryResults.grid.whitespace']
   const filterWidth = values['queryResults.grid.filterPopupWidth'], filterHeight = values['queryResults.grid.filterPopupHeight']
-  const filterSize = useMemo(() => ({ width: filterWidth ?? 300, height: filterHeight ?? 0 }), [filterWidth, filterHeight])
+  const filterSize = useMemo(() => ({ width: filterWidth ?? 440, height: filterHeight ?? 0 }), [filterWidth, filterHeight])
   // A drag of the popover's grip remembers its size for every grid's popover, in Options.
   const filterResized = useCallback((size: { width: number; height: number }) => {
     const now = settings.getSnapshot().values

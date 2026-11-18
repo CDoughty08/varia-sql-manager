@@ -227,7 +227,8 @@ internal sealed record DistinctValue(int Group, int Row, string Text, long Count
 internal sealed record ResultsDistinctReadResult(long Total, long Offset, DistinctValue[] Values, long Checked, bool NullsChecked);
 /// <summary>results.distinctTick: ticks (Checked) or clears 1 to 512 Groups, or every value (All), only those whose text
 /// contains Search with one; Nulls sets NULL's tick, alone or with either.</summary>
-internal sealed record ResultsDistinctTickArgs(uint ResultId, uint SnapshotId, bool Checked, int[]? Groups = null, bool? All = null, string? Search = null, bool? Nulls = null);
+internal sealed record ResultsDistinctTickArgs(uint ResultId, uint SnapshotId, bool Checked, int[]? Groups = null, bool? All = null, string? Search = null, bool? Nulls = null,
+    string? Order = null, long[][]? Ranges = null, bool? Toggle = null, bool? Invert = null);
 internal sealed record ResultsDistinctTickResult(long Checked, bool NullsChecked);
 /// <summary>results.distinctClose: 1 to 64 snapshot ids of one result.</summary>
 internal sealed record ResultsDistinctCloseArgs(uint ResultId, uint[] SnapshotIds);

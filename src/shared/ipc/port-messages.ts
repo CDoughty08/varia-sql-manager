@@ -91,9 +91,13 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   }).strict(),
   z.object({
     t: z.literal('distinctTick'), rid: u31, generation, resultId: u32, snapshotId: u32, checked: z.boolean(), groups: z.array(group).min(1).max(limits.distinct.maxWindow).optional(),
-    all: z.literal(true).optional(), search: z.string().min(1).max(limits.search.maxText).optional(), nulls: z.boolean().optional()
-  }).strict().refine(request => !(request.all && request.groups) && (request.search === undefined || request.all === true) && (request.all || request.groups || request.nulls !== undefined),
-    'Tick some values, every value (a search\'s with one), or NULL.'),
+    all: z.literal(true).optional(), search: z.string().min(1).max(limits.search.maxText).optional(), nulls: z.boolean().optional(),
+    order: z.enum(['count', 'value']).optional(), ranges: z.array(z.tuple([filterRow, filterRow.min(1)])).min(1).max(limits.distinct.maxWindow).optional(),
+    toggle: z.literal(true).optional(), invert: z.literal(true).optional()
+  }).strict().refine(request => [request.all, request.groups, request.ranges, request.invert].filter(Boolean).length <= 1
+    && (request.search === undefined || request.all === true || request.ranges !== undefined) && (request.order === undefined) === (request.ranges === undefined)
+    && (!request.toggle || request.ranges !== undefined) && (request.all || request.groups || request.ranges || request.invert || request.nulls !== undefined),
+    'Tick some values, every value (a search\'s with one), ranges of the list in an order, every value flipped, or NULL.'),
   z.object({ t: z.literal('distinctClose'), rid: u31, generation, resultId: u32, snapshotIds: z.array(u32).min(1).max(limits.distinct.maxClose) }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),

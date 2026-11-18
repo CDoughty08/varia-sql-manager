@@ -514,13 +514,19 @@ export class ResultClient implements Disposable {
       tick: async o => {
         this.usable(state)
         search(o.search)
-        const groups = o.groups
-        if ((groups && (groups.length < 1 || groups.length > wire.distinct.maxWindow || groups.some(group => !Number.isInteger(group) || group < 0 || group > 2 ** 31 - 1)))
-          || (o.all && groups) || (o.search !== undefined && !o.all) || (!o.all && !groups && o.nulls === undefined))
-          throw new ResultError('INVALID_PARAMS', 'Tick 1 to 512 values, every value, or NULL.')
+        const groups = o.groups, ranges = o.ranges
+        const index = (value: number, min: number) => Number.isInteger(value) && value >= min && value <= 2 ** 31 - 1
+        if ((groups && (groups.length < 1 || groups.length > wire.distinct.maxWindow || groups.some(group => !index(group, 0))))
+          || (ranges && (ranges.length < 1 || ranges.length > wire.distinct.maxWindow || ranges.some(([offset, count]) => !index(offset, 0) || !index(count, 1))))
+          || [o.all, groups, ranges, o.invert].filter(Boolean).length > 1 || (o.search !== undefined && !o.all && !ranges) || (o.order === undefined) !== (ranges === undefined)
+          || (o.toggle && !ranges) || (!o.all && !groups && !ranges && !o.invert && o.nulls === undefined))
+          throw new ResultError('INVALID_PARAMS', 'Tick 1 to 512 values, every value, 1 to 512 ranges of the list, every value flipped, or NULL.')
         const response = await this.request(id => ({
           type: 'distinct', id, key,
-          request: { kind: 'tick', snapshotId, checked: o.checked, ...(groups ? { groups: [...groups] } : {}), ...(o.all ? { all: true as const } : {}), ...(o.search === undefined ? {} : { search: o.search }), ...(o.nulls === undefined ? {} : { nulls: o.nulls }) }
+          request: {
+            kind: 'tick', snapshotId, checked: o.checked, ...(groups ? { groups: [...groups] } : {}), ...(o.all ? { all: true as const } : {}), ...(o.search === undefined ? {} : { search: o.search }), ...(o.nulls === undefined ? {} : { nulls: o.nulls }),
+            ...(o.order === undefined ? {} : { order: o.order }), ...(ranges ? { ranges: ranges.map(([offset, count]) => [offset, count] as [number, number]) } : {}), ...(o.toggle ? { toggle: true as const } : {}), ...(o.invert ? { invert: true as const } : {})
+          }
         }))
         if (response.type !== 'distinct' || !('nullsChecked' in response.result) || 'values' in response.result || 'snapshotId' in response.result) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result
