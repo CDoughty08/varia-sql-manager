@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Varia · Column filter: action list and multi-select (mock)</title>
+<style>
+  /* Calm Pro palette (src/shared/theme/palette.ts), Dark then Light. */
+  body.dark  { color-scheme: dark;  --canvas: #16181d; --chrome: #111317; --overlay: #1d2026; --input: #101216; --hover: #262a32; --active: #30343e; --selection: #21273b; --selectionStrong: #29314f;
+    --text: #d9dce3; --textStrong: #f5f6f8; --textSecondary: #bcc1cb; --textMuted: #9298a4; --textAccent: #bcc5ff; --border: #262a31; --borderStrong: #2e323a; --separator: #30343c;
+    --inputBorder: #6a7184; --accent: #8f9cff; --accentHover: #a8b2ff; --onAccent: #0e1230; --focus: #8f9cff; --success: #74d19c; --shadow: 0 8px 24px rgba(0,0,0,.45); }
+  body.light { color-scheme: light; --canvas: #ffffff; --chrome: #f7f8fa; --overlay: #ffffff; --input: #ffffff; --hover: #dfe2e7; --active: #d6dae0; --selection: #e7ebfc; --selectionStrong: #d9e0fb;
+    --text: #1c1f26; --textStrong: #0a0c10; --textSecondary: #3a404b; --textMuted: #5c6370; --textAccent: #3240b0; --border: #e3e6eb; --borderStrong: #d4d8df; --separator: #dcdfe5;
+    --inputBorder: #878e9b; --accent: #4453d0; --accentHover: #3744b8; --onAccent: #ffffff; --focus: #4453d0; --success: #146f3b; --shadow: 0 8px 24px rgba(20,24,40,.16); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--chrome); color: var(--text); font: 12px/18px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  code, kbd { font: 11px/16px "Cascadia Code", Consolas, monospace; }
+  kbd { padding: 0 4px; border: 1px solid var(--borderStrong); border-bottom-width: 2px; border-radius: 3px; background: var(--canvas); color: var(--textStrong); white-space: nowrap; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 16px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 12px 0 0; font-size: 13px; font-weight: 600; color: var(--textStrong); }
+  header .sep { width: 1px; height: 18px; background: var(--separator); }
+  .chip { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--borderStrong); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .chip:hover { background: var(--hover); }
+  .chip[aria-pressed="true"] { background: var(--selectionStrong); border-color: var(--accent); color: var(--textStrong); }
+  main { display: grid; grid-template-columns: minmax(640px, 1fr) minmax(380px, 520px); gap: 16px; padding: 16px; align-items: start; }
+  .stage { position: relative; height: 620px; background: var(--canvas); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  /* A strip of the results grid: the filtered column stays visible beside the popover (feedback 1). */
+  .grid { position: absolute; left: 0; top: 0; right: 0; bottom: 0; font-size: 12px; }
+  .grid .row { display: grid; grid-template-columns: 44px 70px 180px 120px 90px 1fr; height: 22px; border-bottom: 1px solid var(--border); }
+  .grid .row > div { padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--border); }
+  .grid .head { background: var(--chrome); color: var(--textSecondary); font-weight: 600; }
+  .grid .rn { color: var(--textMuted); text-align: right; }
+  .grid .hot { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .grid .head .hot { box-shadow: inset 0 -2px var(--accent); color: var(--textStrong); }
+  .funnel-ico { float: right; color: var(--accent); }
+  /* The popover. */
+  .cf { position: absolute; left: 304px; top: 0; width: 440px; height: 420px; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; background: var(--overlay); color: var(--text);
+    border: 1px solid var(--borderStrong); border-radius: 8px; box-shadow: var(--shadow); }
+  .cf-head { display: flex; align-items: center; gap: 8px; }
+  .cf-head h2 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; color: var(--textStrong); }
+  .cf select { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--inputBorder); border-radius: 3px; padding: 1px 4px; }
+  .cf-search { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 1px solid var(--inputBorder); border-radius: 3px; background: var(--input); color: var(--textMuted); }
+  .cf-search.focus { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+  .cf-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); font: inherit; }
+  .cf-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 148px 1fr; gap: 8px; }
+  .zone { position: relative; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 3px; padding: 2px 0; outline: none; }
+  .zone.focus { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+  .zone-label { position: sticky; top: -2px; z-index: 1; padding: 2px 8px; background: var(--overlay); color: var(--textMuted); font-size: 11px; text-transform: none; }
+  .act { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act .n { margin-left: auto; color: var(--textMuted); font-variant-numeric: tabular-nums; }
+  .act:hover { background: var(--hover); }
+  .act.cur { background: var(--selection); }
+  .zone.focus .act.cur { background: var(--selectionStrong); color: var(--textStrong); box-shadow: inset 2px 0 var(--accent); }
+  .act-sep { height: 1px; margin: 4px 8px; background: var(--separator); }
+  .act-group { padding: 4px 8px 0; color: var(--textMuted); font-size: 11px; }
+  .val { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 6px; cursor: default; user-select: none; }
+  .val:hover { background: var(--hover); }
+  .val.sel { background: var(--selection); }
+  .zone.focus .val.sel { background: var(--selectionStrong); color: var(--textStrong); }
+  .val.cur { outline: 1px solid var(--focus); outline-offset: -1px; }
+  .zone:not(.focus) .val.cur { outline-color: transparent; }
+  .val .box { width: 14px; height: 14px; flex: none; border: 1px solid var(--inputBorder); border-radius: 3px; display: grid; place-items: center; background: var(--input); }
+  .val .box.on { background: var(--accent); border-color: var(--accent); color: var(--onAccent); }
+  .val .box.on::after { content: ""; width: 7px; height: 4px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
+  .val .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .val .t mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 2px; }
+  .val .t.null { color: var(--textMuted); font-style: italic; }
+  .val .c { color: var(--textMuted); font-variant-numeric: tabular-nums; }
+  .cf-note { margin: 0; color: var(--textMuted); }
+  .cf-note b { color: var(--textSecondary); font-weight: 600; }
+  .cf-foot { display: flex; align-items: center; gap: 8px; }
+  .cf-foot .gap { flex: 1; }
+  .btn { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--borderStrong); border-radius: 4px; padding: 2px 12px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--onAccent); font-weight: 600; }
+  .grip { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; opacity: .7;
+    background: linear-gradient(135deg, transparent 0 55%, var(--textMuted) 55% 62%, transparent 62% 75%, var(--textMuted) 75% 82%, transparent 82%); }
+  .toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 6px 12px; border-radius: 6px; background: var(--textStrong); color: var(--canvas); opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: .95; }
+  .keylog { position: absolute; left: 12px; bottom: 12px; color: var(--textMuted); font-size: 11px; }
+  /* Notes. */
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .note { padding: 10px 12px; background: var(--canvas); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 4px; }
+  .note h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--textStrong); }
+  .note p, .note li { margin: 0 0 4px; color: var(--textSecondary); }
+  .note ul, .note ol { margin: 0; padding-left: 18px; }
+  .note table { width: 100%; border-collapse: collapse; }
+  .note td { padding: 2px 4px; vertical-align: top; color: var(--textSecondary); border-top: 1px solid var(--border); }
+  .note td:first-child { width: 42%; white-space: nowrap; }
+  .note tr.new td:last-child::after { content: " new"; color: var(--success); font-size: 10px; }
+  .note .q { color: var(--textAccent); }
+</style>
+</head>
+<body class="dark">
+<header>
+  <h1>Column filter · action list and multi-select (mock, feedback 3, 5 and 6)</h1>
+  <button class="chip" data-theme="dark" aria-pressed="true">Dark</button>
+  <button class="chip" data-theme="light" aria-pressed="false">Light</button>
+  <span class="sep"></span>
+  <span style="color:var(--textMuted)">Scenes:</span>
+  <button class="chip" data-scene="plain">A · No search</button>
+  <button class="chip" data-scene="search">B · Search applied, in the action list</button>
+  <button class="chip" data-scene="multi">C · Several values selected</button>
+  <button class="chip" data-scene="odd">D · The Select none surprise</button>
+  <span class="sep"></span>
+  <span style="color:var(--textMuted)">It is live: click into the popover and use the keyboard.</span>
+</header>
+<main>
+  <section class="stage" id="stage">
+    <div class="grid" id="grid"></div>
+    <form class="cf" id="cf" onsubmit="return false" aria-label="Filter city">
+      <div class="cf-head"><span style="color:var(--accent)">⏷</span><h2>Filter city</h2>
+        <select aria-label="Order values by"><option>Most frequent</option><option>Value</option></select></div>
+      <div class="cf-search" id="searchWrap"><span>⌕</span><input id="search" placeholder="Search values" autocomplete="off"></div>
+      <div class="cf-body">
+        <div class="zone" id="actions" tabindex="-1" role="listbox" aria-label="Actions"></div>
+        <div class="zone" id="values" tabindex="-1" role="listbox" aria-multiselectable="true" aria-label="Values"></div>
+      </div>
+      <p class="cf-note" id="note"></p>
+      <div class="cf-foot"><select aria-label="Condition"><option>Values ticked in the list</option><option>Equals</option><option>Between</option><option>Is NULL</option></select>
+        <span class="gap"></span><button class="btn primary" type="button" id="ok">OK</button><button class="btn" type="button" id="cancel">Cancel</button></div>
+      <div class="grip" title="Drag to resize (shipped in the first PR)"></div>
+    </form>
+    <div class="keylog" id="keylog"></div>
+    <div class="toast" id="toast"></div>
+  </section>
+  <aside>
+    <div class="note">
+      <h3>The idea</h3>
+      <p>Everything the checklist does is reachable from the keyboard without Tab: <kbd>↓</kbd> from the search enters the values,
+        <kbd>←</kbd> from the values enters the <b>action list</b>, <kbd>→</kbd> goes back, <kbd>↑</kbd> from the top of either list returns to the search,
+        and typing in a list goes to the search. Tab still reaches the condition and the buttons.</p>
+      <p>The action list replaces the Select all / Select none buttons and changes with what you are doing, and each action says
+        exactly what it will touch, with a count, so a search never makes "Select none" mean "only these".</p>
+    </div>
+    <div class="note">
+      <h3>The action list, by context</h3>
+      <table>
+        <tr><td>No search</td><td>Tick all · Untick all · Invert ticks</td></tr>
+        <tr><td>Search applied</td><td>Tick the <i>N</i> matches · Tick only the <i>N</i> matches · Untick the <i>N</i> matches — then, apart: Tick all <i>M</i> values · Untick all <i>M</i> values</td></tr>
+        <tr><td>2 or more values selected</td><td>A first group: Tick the <i>S</i> selected · Untick the <i>S</i> selected · Tick only the <i>S</i> selected</td></tr>
+      </table>
+      <p style="margin-top:6px">"Tick only…" unticks everything else, the way Excel's search does by default; "Tick the matches" adds to what is ticked (Excel's "Add current selection to filter").
+        Enter or Space runs the highlighted action; the focus stays in the action list.</p>
+    </div>
+    <div class="note">
+      <h3>Selection is not ticking</h3>
+      <p><b>Ticked</b> (the check box) is what the filter keeps; OK applies it. <b>Selected</b> (the highlight) is the rows you are about to act on.
+        A plain click still ticks a row, as today, and makes it the only selected row. Arrow keys move the selection without ticking.
+        <kbd>Space</kbd> ticks the whole selection: if any selected row is unticked it ticks them all, otherwise it unticks them all (Windows Explorer's rule for check boxes).</p>
+    </div>
+    <div class="note">
+      <h3>Proposed keys in the values list</h3>
+      <table>
+        <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>PgUp</kbd> <kbd>PgDn</kbd> <kbd>Home</kbd> <kbd>End</kbd></td><td>Move; the selection follows (today's keys)</td></tr>
+        <tr class="new"><td><kbd>Shift</kbd> + any of those, <kbd>Ctrl+Shift+Home/End</kbd></td><td>Extend the selection from the anchor</td></tr>
+        <tr class="new"><td><kbd>Ctrl+↑</kbd> <kbd>Ctrl+↓</kbd></td><td>Move without changing the selection</td></tr>
+        <tr class="new"><td><kbd>Ctrl+Space</kbd></td><td>Add or remove the current row from the selection</td></tr>
+        <tr class="new"><td><kbd>Ctrl+A</kbd></td><td>Select every row the list shows (the matches, with a search)</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Tick or untick the selection (one row today)</td></tr>
+        <tr class="new"><td><kbd>Click</kbd> / <kbd>Ctrl+Click</kbd> / <kbd>Shift+Click</kbd> / <kbd>Ctrl+Shift+Click</kbd></td><td>Tick one (as today) / add to selection / select a range / add a range — Ctrl and Shift clicks never tick</td></tr>
+        <tr class="new"><td><kbd>←</kbd></td><td>Into the action list (<kbd>→</kbd> back)</td></tr>
+        <tr class="new"><td><kbd>↑</kbd> on the first row</td><td>Back to the search</td></tr>
+        <tr class="new"><td>Typing a letter or digit</td><td>Goes to the search, appended</td></tr>
+        <tr class="new"><td><kbd>Ctrl+Enter</kbd></td><td>OK from anywhere in the popover (Enter in the lists is OK, as today)</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Cancel (unchanged: it never just clears a selection)</td></tr>
+        <tr class="new"><td><kbd>Shift+F10</kbd> / right-click</td><td>Optional: the same selection actions as a menu</td></tr>
+      </table>
+    </div>
+    <div class="note">
+      <h3>Feedback 3: filter several columns at once?</h3>
+      <p><b>Recommendation: no multi-column popover.</b> One list of values only makes sense for one column; Excel and SSMS both filter the active column, which is what Alt+Down does now.
+        Filtering several columns at once is already Filter for Selected Values (one filter per selected column). What would help is moving between columns without closing:
+        <span class="q">optionally, Alt+→ / Alt+← in the popover applies this column's filter and opens the next or previous column's.</span> I would leave it out unless you want it.</p>
+    </div>
+    <div class="note">
+      <h3>Questions for you</h3>
+      <ol>
+        <li class="q">Wording: "Tick / Untick" (the popover's notes already say "ticked") or "Check / Uncheck"? "Select" is ambiguous once rows can be selected.</li>
+        <li class="q">Should Enter in the search box be OK (Excel does this, filtering to the ticked matches)? Today it does nothing.</li>
+        <li class="q">Default width grows from 300 to about 440 px for the action list (your resized width is kept).</li>
+        <li class="q">Add Invert ticks, or keep the no-search list to Tick all / Untick all?</li>
+        <li class="q">Include Alt+→ / Alt+← to move to the next column's filter?</li>
+      </ol>
+      <p style="margin-top:6px">Under the hood: a selection over a long list (Shift+End across a million values) is kept as ranges, and ticking it sends the ranges to the backend in one bounded request, not every value.</p>
+    </div>
+  </aside>
+</main>
+<script>
+const cities = [['Brightwater', 412], ['Avonlea', 388], ['Cedar Falls', 301], ['Westmarch', 274], ['Port Halden', 266], ['Millbrook', 241], ['Eastbourne Gmbh', 233], ['Larkspur', 198],
+  ['Northgate', 187], ['Riverside', 176], ['Stonehaven', 165], ['Oakridge', 151], ['Fairhaven', 144], ['Kingsbridge', 132], ['Ashford', 121], ['Glenmoor', 117], ['Harrowgate', 103],
+  ['Silverlake', 98], ['Thornbury', 91], ['Willowmere', 84], ['Ravensholm', 77], ['Briarwood', 70], ['Elmstead', 66], ['Dunmore', 61], ['Marlow Gmbh', 55], ['Pinecrest', 49],
+  ['Queensbury', 44], ['Saltmarsh', 40], ['Wexford', 33], ['Yarrow', 27], ['Zennor', 21], ['Ambleside', 18], ['Bramley', 12], ['Copperhill', 8]]
+const nullCount = 57
+const S = { values: cities.map(([text, count]) => ({ text, count, ticked: true })), nullTicked: true, search: '', zone: 'search', act: 0, cur: 0, anchor: 0, sel: new Set() }
+const $ = id => document.getElementById(id)
+const fmt = n => n.toLocaleString('en-US')
+
+// The grid strip beside the popover: id, city (filtered column), country, total, date.
+function drawGrid() {
+  const rows = [['', 'id', 'city <span class="funnel-ico">⏷</span>', 'country', 'total', 'ordered']]
+  for (let i = 0; i < 26; i++) { const c = cities[(i * 7) % cities.length][0]; rows.push([String(i + 1), String(1000 + i), c, ['Avalon', 'Elbonia', 'Freedonia', 'Genovia'][i % 4], (i * 37.5 % 900).toFixed(2), `2026-0${1 + i % 9}-1${i % 10}`]) }
+  $('grid').innerHTML = rows.map((r, i) => `<div class="row${i ? '' : ' head'}">${r.map((v, j) => `<div class="${j === 0 ? 'rn' : ''}${j === 2 ? ' hot' : ''}">${v}</div>`).join('')}</div>`).join('')
+}
+
+function visible() {
+  const q = S.search.trim().toLowerCase(), rows = []
+  if (!q || 'null'.includes(q)) rows.push({ null: true })
+  S.values.forEach((v, i) => { if (!q || v.text.toLowerCase().includes(q)) rows.push({ i }) })
+  return rows
+}
+const isTicked = row => row.null ? S.nullTicked : S.values[row.i].ticked
+const setTick = (row, on) => { if (row.null) S.nullTicked = on; else S.values[row.i].ticked = on }
+const allRows = () => [{ null: true }, ...S.values.map((_, i) => ({ i }))]
+
+function actions() {
+  const rows = visible(), q = S.search.trim(), list = []
+  const sel = [...S.sel].map(k => rows[k]).filter(Boolean)
+  if (sel.length > 1) {
+    list.push({ group: `${sel.length} selected` })
+    list.push({ label: 'Tick the selected', n: sel.length, run: () => sel.forEach(r => setTick(r, true)) })
+    list.push({ label: 'Untick the selected', n: sel.length, run: () => sel.forEach(r => setTick(r, false)) })
+    list.push({ label: 'Tick only the selected', n: sel.length, run: () => { allRows().forEach(r => setTick(r, false)); sel.forEach(r => setTick(r, true)) } })
+    list.push({ sep: true })
+  }
+  if (q) {
+    list.push({ group: `${rows.length} ${rows.length === 1 ? 'match' : 'matches'}` })
+    list.push({ label: 'Tick the matches', n: rows.length, run: () => rows.forEach(r => setTick(r, true)) })
+    list.push({ label: 'Tick only the matches', n: rows.length, run: () => { allRows().forEach(r => setTick(r, false)); rows.forEach(r => setTick(r, true)) } })
+    list.push({ label: 'Untick the matches', n: rows.length, run: () => rows.forEach(r => setTick(r, false)) })
+    list.push({ sep: true })
+    list.push({ group: 'Every value' })
+  }
+  const total = S.values.length + 1
+  list.push({ label: 'Tick all', n: total, run: () => allRows().forEach(r => setTick(r, true)) })
+  list.push({ label: 'Untick all', n: total, run: () => allRows().forEach(r => setTick(r, false)) })
+  if (!q) list.push({ label: 'Invert ticks', run: () => allRows().forEach(r => setTick(r, !isTicked(r))) })
+  return list
+}
+const runnable = () => actions().filter(a => a.run)
+
+function draw() {
+  const rows = visible(), acts = actions()
+  S.cur = Math.max(0, Math.min(rows.length - 1, S.cur))
+  S.act = Math.max(0, Math.min(runnable().length - 1, S.act))
+  let k = -1
+  $('actions').innerHTML = '<div class="zone-label">Actions</div>' + acts.map(a => {
+    if (a.sep) return '<div class="act-sep"></div>'
+    if (a.group) return `<div class="act-group">${a.group}</div>`
+    k++
+    return `<div class="act${k === S.act ? ' cur' : ''}" data-act="${k}" role="option">${a.label}${a.n ? `<span class="n">${fmt(a.n)}</span>` : ''}</div>`
+  }).join('')
+  const q = S.search.trim()
+  const hl = text => q ? text.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), m => `<mark>${m}</mark>`) : text
+  $('values').innerHTML = '<div class="zone-label">Values</div>' + rows.map((r, j) => {
+    const text = r.null ? '<span class="t null">NULL</span>' : `<span class="t">${hl(S.values[r.i].text)}</span>`
+    const count = r.null ? nullCount : S.values[r.i].count
+    return `<div class="val${S.sel.has(j) ? ' sel' : ''}${j === S.cur ? ' cur' : ''}" data-row="${j}" role="option" aria-selected="${S.sel.has(j)}" aria-checked="${isTicked(r)}">
+      <span class="box${isTicked(r) ? ' on' : ''}" data-box="${j}"></span>${text}<span class="c">${fmt(count)}</span></div>`
+  }).join('')
+  const ticked = S.values.filter(v => v.ticked).length + (S.nullTicked ? 1 : 0), total = S.values.length + 1
+  const selN = S.sel.size
+  $('note').innerHTML = (q ? `<b>${fmt(rows.length)}</b> of ${fmt(total)} values match. ` : `${fmt(total)} values in ${fmt(S.values.reduce((s, v) => s + v.count, nullCount))} rows. `)
+    + `<b>${fmt(ticked)}</b> ticked${selN > 1 ? ` · <b>${selN}</b> selected` : ''}.`
+  for (const z of ['actions', 'values']) $(z).classList.toggle('focus', S.zone === z)
+  $('searchWrap').classList.toggle('focus', S.zone === 'search')
+  const cur = $('values').querySelector('.val.cur'); if (cur && S.zone === 'values') cur.scrollIntoView({ block: 'nearest' })
+  const act = $('actions').querySelector('.act.cur'); if (act && S.zone === 'actions') act.scrollIntoView({ block: 'nearest' })
+}
+
+function focusZone(zone) {
+  S.zone = zone
+  if (zone === 'search') $('search').focus(); else $(zone).focus()
+  if (zone === 'values' && S.sel.size === 0) { S.sel = new Set([S.cur]); S.anchor = S.cur }
+  draw()
+}
+let toastTimer
+function toast(text) { const t = $('toast'); t.textContent = text; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800) }
+function keylog(text) { $('keylog').textContent = text }
+function ok() { const ticked = S.values.filter(v => v.ticked).length + (S.nullTicked ? 1 : 0); toast(`OK: the grid would keep the ${fmt(ticked)} ticked values`) }
+const range = (a, b) => { const s = new Set(); for (let i = Math.min(a, b); i <= Math.max(a, b); i++) s.add(i); return s }
+
+function spaceTick() {
+  const rows = visible(), sel = [...S.sel].map(k => rows[k]).filter(Boolean)
+  if (!sel.length) return
+  const on = sel.some(r => !isTicked(r))
+  sel.forEach(r => setTick(r, on))
+}
+
+$('cf').addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey
+  keylog([mod && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt', e.key === ' ' ? 'Space' : e.key].filter(Boolean).join('+'))
+  if (e.key === 'Escape') { e.preventDefault(); toast('Cancel: the popover closes unchanged'); return }
+  if (e.key === 'Enter' && mod) { e.preventDefault(); ok(); return }
+  const rows = visible(), page = 8
+  if (S.zone === 'search') {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusZone('values') }
+    else if (e.key === 'Enter') { e.preventDefault() }
+    return
+  }
+  if (S.zone === 'actions') {
+    const n = runnable().length
+    if (e.key === 'ArrowDown') { e.preventDefault(); S.act = Math.min(n - 1, S.act + 1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (S.act === 0) return focusZone('search'); S.act-- }
+    else if (e.key === 'Home') { e.preventDefault(); S.act = 0 }
+    else if (e.key === 'End') { e.preventDefault(); S.act = n - 1 }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); return focusZone('values') }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const a = runnable()[S.act]; a.run(); toast(a.label + (a.n ? ` (${fmt(a.n)})` : '')) }
+    else if (e.key.length === 1 && !mod && !e.altKey) { e.preventDefault(); S.search += e.key; $('search').value = S.search; S.sel = new Set(); S.cur = 0; return focusZone('search') }
+    draw(); return
+  }
+  // The values list.
+  const moves = { ArrowDown: S.cur + 1, ArrowUp: S.cur - 1, PageDown: S.cur + page, PageUp: S.cur - page, Home: 0, End: rows.length - 1 }
+  if (e.key in moves) {
+    e.preventDefault()
+    if (e.key === 'ArrowUp' && S.cur === 0 && !e.shiftKey && !mod) return focusZone('search')
+    const to = Math.max(0, Math.min(rows.length - 1, moves[e.key]))
+    S.cur = to
+    if (e.shiftKey) S.sel = range(S.anchor, to)
+    else if (!mod) { S.sel = new Set([to]); S.anchor = to }
+  } else if (e.key === ' ' && mod) { e.preventDefault(); S.sel.has(S.cur) ? S.sel.delete(S.cur) : S.sel.add(S.cur); S.anchor = S.cur }
+  else if (e.key === ' ') { e.preventDefault(); spaceTick() }
+  else if ((e.key === 'a' || e.key === 'A') && mod) { e.preventDefault(); S.sel = range(0, rows.length - 1) }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); return focusZone('actions') }
+  else if (e.key === 'Enter') { e.preventDefault(); ok(); return }
+  else if (e.key.length === 1 && !mod && !e.altKey) { e.preventDefault(); S.search += e.key; $('search').value = S.search; S.sel = new Set(); S.cur = 0; return focusZone('search') }
+  draw()
+})
+$('search').addEventListener('input', e => { S.search = e.target.value; S.sel = new Set(); S.cur = 0; S.act = 0; draw() })
+$('search').addEventListener('focus', () => { S.zone = 'search'; draw() })
+$('actions').addEventListener('mousedown', e => {
+  const a = e.target.closest('[data-act]'); e.preventDefault(); S.zone = 'actions'; $('actions').focus()
+  if (a) { S.act = +a.dataset.act; const act = runnable()[S.act]; act.run(); toast(act.label) }
+  draw()
+})
+$('values').addEventListener('mousedown', e => {
+  const v = e.target.closest('[data-row]'); e.preventDefault(); S.zone = 'values'; $('values').focus()
+  if (!v) return draw()
+  const j = +v.dataset.row, mod = e.ctrlKey || e.metaKey
+  if (e.shiftKey && mod) { for (const k of range(S.anchor, j)) S.sel.add(k) }
+  else if (e.shiftKey) S.sel = range(S.anchor, j)
+  else if (mod) { S.sel.has(j) ? S.sel.delete(j) : S.sel.add(j); S.anchor = j }
+  else { S.sel = new Set([j]); S.anchor = j; const r = visible()[j]; setTick(r, !isTicked(r)) }
+  S.cur = j
+  draw()
+})
+$('ok').onclick = ok
+$('cancel').onclick = () => toast('Cancel: the popover closes unchanged')
+
+function scene(name) {
+  S.values.forEach(v => { v.ticked = true }); S.nullTicked = true; S.search = ''; S.sel = new Set(); S.cur = 0; S.anchor = 0; S.act = 0
+  if (name === 'plain') { S.values.forEach((v, i) => { v.ticked = i % 5 !== 3 }); S.cur = 3; S.sel = new Set([3]); S.anchor = 3; S.zone = 'values' }
+  if (name === 'search') { S.search = 'gmbh'; S.zone = 'actions'; S.act = 1 }
+  if (name === 'multi') { S.cur = 6; S.anchor = 3; S.sel = new Set([3, 4, 5, 6, 9]); S.values.forEach((v, i) => { v.ticked = i < 12 }); S.zone = 'values' }
+  if (name === 'odd') { S.search = 'brook'; S.zone = 'actions'; S.act = 0 }
+  $('search').value = S.search
+  if (S.zone === 'search') $('search').focus(); else $(S.zone).focus()
+  draw()
+  if (name === 'odd') toast('Everything is ticked. Today "Select none" here unticks only Millbrook; the list now says so: "Untick the matches 1" vs "Untick all 35".')
+}
+document.querySelectorAll('[data-scene]').forEach(b => b.onclick = () => scene(b.dataset.scene))
+document.querySelectorAll('[data-theme]').forEach(b => b.onclick = () => {
+  document.body.className = b.dataset.theme
+  document.querySelectorAll('[data-theme]').forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+})
+drawGrid()
+scene('plain')
+</script>
+</body>
+</html>
