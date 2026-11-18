@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -248,6 +248,10 @@ describe('local saves in main', () => {
       const path = join(folder, 'new.csv')
       await writeLocalSave(path, new TextEncoder().encode('new'), 'win32')
       expect((await stat(path)).mode & 0o200).toBe(0o200)
+      // A folder is refused before anything is written, on every platform.
+      await mkdir(join(folder, 'dir.csv'))
+      await expect(writeLocalSave(join(folder, 'dir.csv'), new TextEncoder().encode('new'))).rejects.toMatchObject({ code: 'EISDIR' })
+      expect((await readdir(folder)).sort()).toEqual(['dir.csv', 'new.csv'])
     } finally {
       await rm(folder, { recursive: true, force: true })
     }
@@ -269,6 +273,12 @@ describe('local saves in main', () => {
       await writeLocalSave(link, new TextEncoder().encode('new'))
       expect((await lstat(link)).isFile()).toBe(true)
       expect((await stat(link)).mode & 0o077).toBe(0)
+      // A link to a folder stays a link: the save is refused as a folder.
+      const folderLink = join(folder, 'folder-link.csv')
+      await mkdir(join(folder, 'target'))
+      await symlink(join(folder, 'target'), folderLink)
+      await expect(writeLocalSave(folderLink, new TextEncoder().encode('new'))).rejects.toMatchObject({ code: 'EISDIR' })
+      expect((await lstat(folderLink)).isSymbolicLink()).toBe(true)
     } finally {
       await rm(folder, { recursive: true, force: true })
     }

@@ -103,8 +103,12 @@ const errnoTokens: Partial<Record<string, string>> = { EACCES: 'ACCESS', EPERM: 
  * replaced file keeps its permission bits, as a results save's does (Unix; Windows keeps no attributes, docs/ipc.md).
  */
 export async function writeLocalSave(path: string, data: Uint8Array, platform: NodeJS.Platform = process.platform): Promise<void> {
+  // A folder, or a link to one, is refused before anything is written, as ResultJobs' Directory.Exists check refuses it:
+  // a rename would replace the link with the file.
+  const followed = await stat(path).catch(() => undefined)
+  if (followed?.isDirectory()) throw Object.assign(new Error('The target is a folder.'), { code: 'EISDIR' })
   const target = platform === 'win32' ? undefined : await lstat(path).catch(() => undefined)
-  const linked = target?.isSymbolicLink() ? await stat(path).catch(() => undefined) : undefined
+  const linked = target?.isSymbolicLink() ? followed : undefined
   await writeBytesAtomic(path, data, { createFolder: false, ...localSaveMode(target, linked) })
 }
 /**

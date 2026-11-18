@@ -86,8 +86,8 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const mount = (create: (spec: GridSpec) => GridView) => {
     const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells, bound.cut)
     sourceKeys.current = keys
-    // A new view reports only a change of width: it starts narrow.
-    setWide(false)
+    // The card keeps the last view's width until this one reports its own on its first frame (GridView always does), so a
+    // wide card does not shrink and grow back on each new table.
     const view = create({
       handle: source, descriptor: localDescriptor(bound, bound.cutCells), state: own, entry: 'local', resultNumber: 1, resultCount: 1, label: latest.current.label,
       showTypes: false, clipboardKeys: false, sortable, onWide: setWide,

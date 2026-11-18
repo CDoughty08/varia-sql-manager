@@ -1285,6 +1285,15 @@ try {
   await rowsHeader.locator(gridPart.sortButton).click()
   await expect(rowsHeader).toHaveAttribute('aria-sort', 'descending')
   await expect(gridCell(headerGrid, 0, 0)).toHaveText('Order Lines')
+  // A card wider than its frame makes room for the platform's scroll bar under its rows, and a narrow table after it gives
+  // that room back.
+  const headerHeight = () => localGridFrame(page, 'Local header').evaluate(element => element.getBoundingClientRect().height)
+  const narrowHeight = await headerHeight()
+  const scrollbar = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;top:-1000px;width:100px;height:100px;overflow:scroll'; document.body.append(probe); const size = probe.offsetHeight - probe.clientHeight; probe.remove(); return size })
+  await rerenderLocal({ columns: Array.from({ length: 16 }, (_, i) => ({ name: `A rather long column name ${i}` })), rows: [['a'], ['b'], ['c']] })
+  await expect.poll(headerHeight).toBeCloseTo(narrowHeight + scrollbar, 0)
+  await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: [['a'], ['b'], ['c']] })
+  await expect.poll(headerHeight).toBeCloseTo(narrowHeight, 0)
   await page.evaluate(() => window.__variaGrid.unmountLocal())
   await expect(page.locator(part.localGrid)).toHaveCount(0)
   expect(await aliveLocal()).toBe(0)
