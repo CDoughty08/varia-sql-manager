@@ -807,8 +807,14 @@ try {
   await page.keyboard.up(peekKey)
   await expect(peekRow).toHaveCSS('cursor', 'default')
   await expect(peekCard).toBeVisible()
+  // A hovered card never takes focus, so a row hovered while typing in a query leaves focus in the editor: Esc there closes
+  // the card too.
+  const queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
+  await queryText.focus()
+  await expect(peekCard).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
+  await expect(queryText).toBeFocused()
   // 8c. View Dependencies: the menu opens Object Dependencies on the table. Its tree reads the root's level at once and a node's
   // only when it expands, marks the table met again below its view as a cycle, and the other choice starts again from the root.
   await peekRow.click({ button: 'right' })

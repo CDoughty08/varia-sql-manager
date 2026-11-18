@@ -534,7 +534,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
   the role, custom menus and the palette run it through `varia:run-role`. Varia's two-part chords are `bridge`
-  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
+  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. The one other Monaco rule is
+  Escape closing Peek's card (`registerPeekCardEscape`), while a query editor's `variaPeekCard` key is set (never in Peek's
+  own editor); an added rule outranks Monaco's defaults, so its clause steps aside for each Monaco widget that takes Escape
+  (`monacoEscapeContextKeys`, pinned by `tests/monaco-keybindings.test.ts`). User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
   keys only through `KeybindingService.capture`. Peek's Ctrl state comes from `KeybindingService`'s `keyDown`, `keyUp` and
