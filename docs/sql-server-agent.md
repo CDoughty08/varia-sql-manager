@@ -64,6 +64,9 @@ checks impersonated a scratch SQL login (`EXECUTE AS LOGIN`) that was a member o
   ANALYSISQUERY, ANALYSISCOMMAND, SSIS and PowerShell.
 - **Error logs.** `xp_enumerrorlogs 2` returns `Archive #`, `Date` and `Log File Size (Byte)`, with 0 the current log;
   `xp_readerrorlog <n>, 2, …, N'desc'` returns `LogDate`, `ErrorLevel` and `Text`, newest first.
+- **Linux (CI's SQL Server 2022 container).** `xp_enumerrorlogs 2` returns no result set at all, so Linux lists no archives
+  and the reader reports `NOT_SUPPORTED`; `xp_readerrorlog 0, 2, …` still reads the current Agent log, and
+  `xp_servicecontrol N'QueryState'` answers "Running.".
 
 Not checked yet: the Linux container's `sys.dm_server_services` and subsystems (AG-1, against CI's container), Managed
 Instance's `sp_readmierrorlog` and archives (no instance; AG-1 from Microsoft's documentation), service control on a
@@ -98,7 +101,7 @@ The Agent node shows on engine editions 1 (Personal), 2 (Standard), 3 (Enterpris
 | Net send notifications | Yes | No | No |  |
 | Write to the Windows Application event log | Yes | No | No |  |
 | Agent error logs | Yes | Yes | Yes | Managed Instance reads them through `sp_readmierrorlog`; the others through `xp_readerrorlog`. |
-| Agent error log archives (`xp_enumerrorlogs`) | Yes | Yes | No | Managed Instance shows Current only until a Managed Instance check shows archives list there. |
+| Agent error log archives (`xp_enumerrorlogs`) | Yes | No | No | SQL Server 2022 on Linux answers `xp_enumerrorlogs 2` with no result set, so Linux shows Current only; Managed Instance too until a Managed Instance check shows archives list there. |
 | Changing SQL Server Agent Properties | Yes | Yes | No |  |
 | Credentials with a Windows identity | Yes | Yes | No |  |
 | Start, Stop and Restart of the Agent service | Yes | No | No | Not on a failover cluster instance (`SERVERPROPERTY('IsClustered') = 1`), where the cluster owns the service. |

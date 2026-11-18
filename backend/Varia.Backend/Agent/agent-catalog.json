@@ -20,7 +20,7 @@
     {"feature":"netSendNotifications","platforms":["windows"]},
     {"feature":"eventLogNotifications","platforms":["windows"]},
     {"feature":"errorLogs","platforms":["windows","linux","managedInstance"]},
-    {"feature":"errorLogArchives","platforms":["windows","linux"]},
+    {"feature":"errorLogArchives","platforms":["windows"]},
     {"feature":"agentPropertiesWrite","platforms":["windows","linux"]},
     {"feature":"windowsCredentials","platforms":["windows","linux"]},
     {"feature":"serviceControl","platforms":["windows"]},

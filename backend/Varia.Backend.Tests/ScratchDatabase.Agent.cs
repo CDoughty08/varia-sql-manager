@@ -9,9 +9,10 @@ namespace Varia.Backend.Tests;
 /// than 6 hours old (kinds without a creation date included).</summary>
 internal sealed partial class ScratchDatabase
 {
-    /// <summary>The kind tags, in the order the sweep drops them (dependencies first): proxies before their credentials, jobs
-    /// (and the schedules they alone use) before schedules, alerts before operators.</summary>
-    public static readonly IReadOnlyList<string> AgentKinds = ["px", "cr", "job", "sch", "al", "op"];
+    /// <summary>The kind tags, in the order the sweep drops them (dependents first): jobs (and the schedules they alone use)
+    /// before the proxies their steps run as (msdb refuses 14518 otherwise), proxies before their credentials, then schedules,
+    /// alerts before operators.</summary>
+    public static readonly IReadOnlyList<string> AgentKinds = ["job", "px", "cr", "sch", "al", "op"];
 
     /// <summary>This run's Agent object of a kind (job, sch, op, al, px, cr).</summary>
     public string AgentObject(string kind) => AgentKinds.Contains(kind) ? Name + "_" + kind : throw new ArgumentException("Unknown scratch Agent kind.", nameof(kind));

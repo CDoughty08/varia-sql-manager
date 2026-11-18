@@ -207,7 +207,7 @@ export const agentPlatformGates: { readonly [F in AgentFeature]: AgentGate } = {
   netSendNotifications: { title: 'Net send notifications', platforms: ['windows'] },
   eventLogNotifications: { title: 'Write to the Windows Application event log', platforms: ['windows'] },
   errorLogs: { title: 'Agent error logs', platforms: ['windows', 'linux', 'managedInstance'], note: 'Managed Instance reads them through `sp_readmierrorlog`; the others through `xp_readerrorlog`.' },
-  errorLogArchives: { title: 'Agent error log archives (`xp_enumerrorlogs`)', platforms: ['windows', 'linux'], note: 'Managed Instance shows Current only until a Managed Instance check shows archives list there.' },
+  errorLogArchives: { title: 'Agent error log archives (`xp_enumerrorlogs`)', platforms: ['windows'], note: 'SQL Server 2022 on Linux answers `xp_enumerrorlogs 2` with no result set, so Linux shows Current only; Managed Instance too until a Managed Instance check shows archives list there.' },
   agentPropertiesWrite: { title: 'Changing SQL Server Agent Properties', platforms: ['windows', 'linux'] },
   windowsCredentials: { title: 'Credentials with a Windows identity', platforms: ['windows', 'linux'] },
   serviceControl: { title: 'Start, Stop and Restart of the Agent service', platforms: ['windows'], note: 'Not on a failover cluster instance (`SERVERPROPERTY(\'IsClustered\') = 1`), where the cluster owns the service.' },
@@ -295,7 +295,7 @@ export const agentLimits = {
   historyRows: 10_000,
   /** Jobs one history filter or one Delete History names (each a call in one transaction, so a save stays under 255 calls). */
   historyJobs: 64,
-  /** Error log rows one read holds, newest first; the rest are cancelled and a notice says so. */
+  /** Error log rows one read holds, newest first (oldest first on Managed Instance); the rest are cancelled and a notice says so. */
   logRows: 10_000,
   /** Characters of a history or error log search text. */
   searchChars: 200,
@@ -376,7 +376,8 @@ export interface MasterReadShape {
   readonly who: string
 }
 /** The master procedures an Agent read may call, each in exactly this positional shape: log type 2 is the Agent log, `NULL`
- *  leaves the time bounds open, and `N'desc'` reads newest first so a cap keeps the newest rows. */
+ *  leaves the time bounds open, and `N'desc'` reads newest first so a cap keeps the newest rows. `sp_readmierrorlog` takes no
+ *  sort argument and reads oldest first, so on Managed Instance a capped read keeps the oldest rows (its notice must say so). */
 export const masterReadShapes: readonly MasterReadShape[] = [
   { name: 'xp_enumerrorlogs', shape: 'EXEC master.dbo.xp_enumerrorlogs 2;', who: 'sysadmin' },
   { name: 'xp_readerrorlog', shape: "EXEC master.dbo.xp_readerrorlog @p, 2, @p, @p, NULL, NULL, N'desc';", who: 'sysadmin' },

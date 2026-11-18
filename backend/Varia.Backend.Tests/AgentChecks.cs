@@ -160,12 +160,12 @@ internal static class AgentChecks
     private static void Scratch(Action<bool, string> check)
     {
         const string run = "VariaScratch_20261118120000_0123abcd";
-        check(ScratchDatabase.AgentKinds.SequenceEqual(["px", "cr", "job", "sch", "al", "op"])
+        check(ScratchDatabase.AgentKinds.SequenceEqual(["job", "px", "cr", "sch", "al", "op"])
             && ScratchDatabase.AgentKinds.All(kind => ScratchDatabase.AgentKindOf(run + "_" + kind) == kind)
             && new[] { run + "_job2", run + "_x_job", run + "_lnew", run, run + "_sch_", "x" + run + "_op", "VariaScratch_2026111812000_0123abcd_job", "VariaScratch_20261118120000_0123ABCD_job" }
                 .All(name => ScratchDatabase.AgentKindOf(name) is null)
             && ScratchDatabase.IsScratchJob(run + "_job") && !ScratchDatabase.IsScratchJob(run + "_sch"),
-            "scratch Agent objects are the run prefix plus one kind tag (_job, _sch, _op, _al, _px, _cr), swept proxies first and operators last, in the exact-pattern style; anything else is never swept");
+            "scratch Agent objects are the run prefix plus one kind tag (_job, _sch, _op, _al, _px, _cr), swept jobs first and operators last, in the exact-pattern style; anything else is never swept");
         var now = new DateTime(2026, 11, 18, 20, 0, 0, DateTimeKind.Utc);
         check(ScratchDatabase.StaleAgentObject(run + "_op", now) && !ScratchDatabase.StaleAgentObject("VariaScratch_20261118150000_0123abcd_op", now)
             && !ScratchDatabase.StaleAgentObject(run + "_x", now) && !ScratchDatabase.StaleAgentObject("VariaScratch_20261399000000_0123abcd_op", now),
@@ -193,11 +193,11 @@ internal static class AgentChecks
         }
         await ScratchDatabase.SweepAsync(Run, _ => { });
         check(ran.SequenceEqual([
-                "EXEC msdb.dbo.sp_delete_proxy @proxy_id = 2;", "DROP CREDENTIAL [" + stale + "_cr];",
                 "EXEC msdb.dbo.sp_delete_job @job_id = '0f8fad5b-d9cb-469f-a165-70867728950e', @delete_history = 1, @delete_unused_schedule = 1;",
+                "EXEC msdb.dbo.sp_delete_proxy @proxy_id = 2;", "DROP CREDENTIAL [" + stale + "_cr];",
                 "EXEC msdb.dbo.sp_delete_schedule @schedule_id = 12, @force_delete = 1;", "EXEC msdb.dbo.sp_delete_alert @name = N'" + stale + "_al';",
                 "EXEC msdb.dbo.sp_delete_operator @name = N'" + stale + "_op';", "DROP USER [" + stale + "_lagu];"]),
-            "the sweep drops stale scratch Agent objects proxies first, then credentials, marked jobs, schedules, alerts and operators, then stale scratch logins' msdb users, and leaves fresh ones, unmarked jobs, "
+            "the sweep drops stale scratch Agent objects marked jobs first, then proxies, credentials, schedules, alerts and operators, then stale scratch logins' msdb users, and leaves fresh ones, unmarked jobs, "
             + "names that only look like a run's and rows whose id does not parse: " + string.Join(" | ", ran));
     }
 
@@ -244,11 +244,15 @@ internal static class AgentChecks
         check(unknownPrologue, "an Agent read after a prologue that is not one of AgentSql.Callers' never runs (BACKEND_ERROR)");
         var (shaped, shapeErrors) = await new AgentReader
         {
-            TestRun = (statement, _, _) => statement.Id == "errorLogs" ? throw new AgentShapeException("The Agent read errorLogs returned the columns A without Date.")
-                : Task.FromResult(new AgentResult(statement.Columns, [], false))
-        }.ReadAsync(null, null, [AgentSql.ErrorLogs, AgentSql.Jobs], Value, CancellationToken.None);
-        check(shaped.Keys.SequenceEqual(["jobs"]) && shapeErrors is [{ Statement: "errorLogs", Code: "BACKEND_ERROR", Number: 0 }],
-            "a result set without a declared column fails that statement alone as BACKEND_ERROR, and the statements after it still run");
+            TestRun = (statement, _, _) => statement.Id switch
+            {
+                "errorLogs" => throw new AgentShapeException("NOT_SUPPORTED", AgentReader.MissingMessage),
+                "errorLog" => throw new AgentShapeException("BACKEND_ERROR", "The Agent read errorLog returned the columns A without Text."),
+                _ => Task.FromResult(new AgentResult(statement.Columns, [], false))
+            }
+        }.ReadAsync(null, null, [AgentSql.ErrorLogs, AgentSql.ErrorLog, AgentSql.Jobs], Value, CancellationToken.None);
+        check(shaped.Keys.SequenceEqual(["jobs"]) && shapeErrors is [{ Statement: "errorLogs", Code: "NOT_SUPPORTED", Number: 0 }, { Statement: "errorLog", Code: "BACKEND_ERROR", Number: 0 }],
+            "a read with no result set fails alone as NOT_SUPPORTED, one without a declared column as BACKEND_ERROR, and the statements after them still run");
         check(AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(300, 297)).Code == "PERMISSION_DENIED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.")).Code == "BLOCKED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(14234, 1, 16, "server", "The specified '@owner_login_name' is invalid.")) is { Code: "SQL_ERROR", Number: 14234, Message: AgentReader.FailedMessage }

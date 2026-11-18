@@ -92,11 +92,12 @@ internal static class AgentLiveChecks
             var state = results.GetValueOrDefault("state");
             var subsystems = results.GetValueOrDefault("subsystems")?.Rows.Select(row => row[0] as string).ToList() ?? [];
             var logs = results.GetValueOrDefault("errorLogs")?.Rows.Select(row => Convert.ToInt32(row[0], System.Globalization.CultureInfo.InvariantCulture)).ToList() ?? [];
-            // Service control is Windows only; elsewhere the engine may refuse the read, which is a value too.
+            // Service control is Windows only; elsewhere the engine may refuse the read, which is a value too. SQL Server 2022 on
+            // Linux answers xp_enumerrorlogs 2 with no result set (NOT_SUPPORTED); its current log still reads.
             var service = results.GetValueOrDefault("serviceState")?.Rows.FirstOrDefault()?[0] as string;
-            check(state is { Rows: [[1, int sessions]] } && sessions > 0 && results.ContainsKey("jobs") && subsystems.Contains("TSQL") && logs.Contains(0) && results.ContainsKey("errorLog")
+            check(state is { Rows: [[1, int sessions]] } && sessions > 0 && results.ContainsKey("jobs") && subsystems.Contains("TSQL") && (profile.Linux || logs.Contains(0)) && results.ContainsKey("errorLog")
                 && results.ContainsKey("properties") && (profile.Linux ? service is null or "Running." : service == "Running.")
-                && errors.All(error => error.Statement == "serviceState" && profile.Linux),
+                && errors.All(error => profile.Linux && (error.Statement == "serviceState" || error is { Statement: "errorLogs", Code: "NOT_SUPPORTED" })),
                 "as sysadmin under the " + caller + " caller's prologue, every Agent read answers: Agent XPs on with Agent sessions, the jobs, TSQL among the subsystems, the current error log, "
                 + "Agent's properties and the service's Running state (Windows): " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code + " " + error.Number + (error.Code == "BACKEND_ERROR" ? " (" + error.Message + ")" : ""))) + (service is null ? "" : " service " + service));
         }

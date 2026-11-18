@@ -59,7 +59,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             }
             catch (AgentShapeException error)
             {
-                errors.Add(new(statement.Id, "BACKEND_ERROR", 0, error.Message));
+                errors.Add(new(statement.Id, error.Code, 0, error.Message));
             }
             catch (SqlException error) when (!token.IsCancellationRequested)
             {
@@ -99,7 +99,8 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
     }
 
     /// <summary>Runs one statement and reads its first result set's declared columns, at most <paramref name="cap"/> + 1 rows;
-    /// a missing column fails that statement alone (BACKEND_ERROR), so one server's other shape does not stop the rest.</summary>
+    /// no result set (NOT_SUPPORTED) or a missing column (BACKEND_ERROR) fails that statement alone, so one server's other shape
+    /// does not stop the rest.</summary>
     private static async Task<AgentResult> RunAsync(SqlConnection connection, string? prologue, AgentStatement statement, IReadOnlyDictionary<string, object?> arguments, int cap, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
@@ -108,6 +109,9 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         foreach (var parameter in statement.Parameters)
             command.Parameters.Add(new SqlParameter(parameter.Name, parameter.Type) { Value = arguments[parameter.Name] ?? DBNull.Value, Size = parameter.Size });
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        // No result set at all is a server that does not offer the read (SQL Server 2022 on Linux answers xp_enumerrorlogs 2
+        // with none), not another shape.
+        if (reader.FieldCount == 0) throw new AgentShapeException("NOT_SUPPORTED", MissingMessage);
         var ordinals = new int[statement.Columns.Count];
         for (var at = 0; at < ordinals.Length; at++)
         {
@@ -119,7 +123,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
                 var returned = string.Join(", ", Enumerable.Range(0, reader.FieldCount).Select(reader.GetName));
                 // Disposing an open reader drains it; cancelling first stops the server sending a long log or history.
                 command.Cancel();
-                throw new AgentShapeException("The Agent read " + statement.Id + " returned the columns " + returned + " without " + statement.Columns[at] + ".");
+                throw new AgentShapeException("BACKEND_ERROR", "The Agent read " + statement.Id + " returned the columns " + returned + " without " + statement.Columns[at] + ".");
             }
         }
         var rows = new List<object?[]>();
@@ -141,5 +145,9 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
     }
 }
 
-/// <summary>A statement's result set lacks a declared column: a server whose procedure answers in another shape.</summary>
-internal sealed class AgentShapeException(string message) : Exception(message);
+/// <summary>A statement answered without a result set (NOT_SUPPORTED) or without a declared column (BACKEND_ERROR): a server
+/// whose procedure answers in another shape.</summary>
+internal sealed class AgentShapeException(string code, string message) : Exception(message)
+{
+    public string Code { get; } = code;
+}
