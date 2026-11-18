@@ -7,11 +7,18 @@
 - **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
 - **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\. Unchecking Remember password and saving forgets the saved password, as Connect does\.
 
+### Changes to everyday use
+
+- **Ctrl+F in Object Explorer:** With focus in Object Explorer, Ctrl+F (Cmd+F on macOS) jumps to its search box, as Ctrl+Shift+F does. In the query editor Ctrl+F is still Find.
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
+
 ### Fixes
 
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.
+- **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
+- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
 
 ## [0.9.1] - 2026-11-16
 

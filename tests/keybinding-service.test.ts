@@ -239,6 +239,19 @@ describe('keybinding dispatch', () => {
     }
     expect(ran()).toEqual(['explorer.peek'])
   })
+  it.each(platforms)('focuses the Object Explorer search on Ctrl+F (⌘F) in the explorer pane, and leaves Ctrl+F to the editor and text fields elsewhere, on %s', platform => {
+    const { press, execute, ran, state } = service(platform, { values: { activePanel: 'explorer', explorerFocus: true } })
+    expect(press(letter('f', platform)).consumed).toBe(true)
+    expect(execute).toHaveBeenLastCalledWith('explorer.focusSearch', undefined, 'keybinding')
+    // The explorer's toolbar or search hits: still the explorer pane.
+    state.values = { activePanel: 'explorer' }
+    expect(press(letter('f', platform)).consumed).toBe(true)
+    for (const values of [{ activePanel: 'explorer', inputFocus: true, textInputFocus: true }, editorText, { activePanel: 'output' }] as Partial<ContextKeys>[]) {
+      state.values = values
+      expect(press(letter('f', platform)).consumed, JSON.stringify(values)).toBe(false)
+    }
+    expect(ran()).toEqual(['explorer.focusSearch', 'explorer.focusSearch'])
+  })
   it.each(platforms)('focuses the Options search on Ctrl+E (⌘E) over the modal Options dialog only, on %s', platform => {
     const { press, execute, ran, state } = service(platform, { modal: true, values: { optionsDialogFocus: true } })
     expect(press(letter('e', platform)).consumed).toBe(true)

@@ -5,7 +5,7 @@ import type { FoundDefinition } from '../src/renderer/src/languages/SqlLanguageS
 import { commandCatalog } from '../src/shared/commands/catalog'
 import { gestureCatalog } from '../src/shared/commands/gestures'
 import { bindDefinitionPointer, monacoDefinitionLink } from '../src/renderer/src/editor/create-editor'
-import { EditorPeekService, editorPeekAnchor } from '../src/renderer/src/languages/EditorPeekService'
+import { bindPeekCardKey, EditorPeekService, editorPeekAnchor, peekCardContextKey } from '../src/renderer/src/languages/EditorPeekService'
 
 type Handler = { when?: () => boolean; unavailable?: () => string; run: () => Promise<void> | void }
 const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } }
@@ -222,6 +222,80 @@ describe('Go To Definition', () => {
     expect(Object.keys(listeners)).toEqual([])
     anchor.focus()
     expect(editor.focus).toHaveBeenCalled()
+  })
+
+  it("makes Escape in a query editor close Peek's card, beside a name or a row, and drop an Alt+F12 still looking one up", async () => {
+    let answer!: (found: FoundDefinition) => void
+    const f = fixture(() => new Promise<FoundDefinition>(resolve => { answer = resolve }))
+    const snapshot: { open?: object } = {}, peekListeners = new Set<() => void>()
+    f.peek.getSnapshot.mockImplementation(() => snapshot)
+    const close = vi.fn(() => { delete snapshot.open; peekListeners.forEach(listener => listener()) })
+    Object.assign(f.peek, { close, subscribe: (listener: () => void) => { peekListeners.add(listener); return () => peekListeners.delete(listener) } })
+    const values: boolean[] = [], key = { set: vi.fn((value: boolean) => values.push(value)), reset: vi.fn() }
+    const createContextKey = vi.fn(() => key)
+    const binding = bindPeekCardKey(Object.assign(f.editor, { createContextKey }) as never, f.editorPeek)
+    expect(createContextKey).toHaveBeenCalledWith(peekCardContextKey, false)
+    expect(values).toEqual([false])
+
+    // Alt+F12 while its lookup runs: Escape there is the card's, and the lookup then opens nothing, not even a notice.
+    const pending = f.handlers['edit.peekDefinition']!.run()
+    expect(values.at(-1)).toBe(true)
+    expect(f.editorPeek.cardIn(f.editor)).toBe(true)
+    // Another editor's Escape is not the lookup's: the card it would open belongs beside this editor's caret.
+    expect(f.editorPeek.cardIn({})).toBe(false)
+    f.editorPeek.closeCard({})
+    expect(values.at(-1)).toBe(true)
+    f.editorPeek.closeCard(f.editor)
+    expect(values.at(-1)).toBe(false)
+    answer(procedure)
+    await pending
+    expect(f.peek.peekAt).not.toHaveBeenCalled()
+    expect(f.scripting.inform).not.toHaveBeenCalled()
+    // A dropped lookup that fails says nothing either.
+    let fail!: (error: Error) => void
+    f.definition.mockImplementationOnce(() => new Promise<FoundDefinition>((_resolve, reject) => { fail = reject }))
+    const failing = f.handlers['edit.peekDefinition']!.run()
+    f.editorPeek.closeCard(f.editor)
+    fail(new Error('lost'))
+    await failing
+    expect(f.scripting.inform).not.toHaveBeenCalled()
+
+    // A card a hover opened beside a name here, or beside an Object Explorer row while typing here, leaves focus in the text:
+    // Escape in the editor closes either.
+    for (const open of [{ anchor: {} }, { rowId: 'oe-1' }]) {
+      snapshot.open = open
+      peekListeners.forEach(listener => listener())
+      expect(values.at(-1)).toBe(true)
+      expect(f.editorPeek.cardIn({})).toBe(true)
+      f.editorPeek.closeCard(f.editor)
+      expect(values.at(-1)).toBe(false)
+    }
+    expect(close).toHaveBeenCalledTimes(2)
+    // With no card, Escape is the editor's own.
+    f.editorPeek.closeCard(f.editor)
+    expect(close).toHaveBeenCalledTimes(2)
+
+    // A lookup that finishes clears its claim: the card it opened holds Escape from then on.
+    delete snapshot.open
+    f.peek.peekAt.mockImplementationOnce(() => { snapshot.open = { anchor: {} }; peekListeners.forEach(listener => listener()); return true })
+    const opened = f.handlers['edit.peekDefinition']!.run()
+    expect(values.at(-1)).toBe(true)
+    answer(procedure)
+    await opened
+    expect(f.peek.peekAt).toHaveBeenCalledTimes(1)
+    expect(values.at(-1)).toBe(true)
+    f.editorPeek.closeCard(f.editor)
+    expect(values.at(-1)).toBe(false)
+
+    binding.dispose()
+    expect(key.reset).toHaveBeenCalled()
+    expect(peekListeners.size).toBe(0)
+  })
+
+  it('leaves Escape alone while a hover looks a name up: the pointer opened nothing yet', async () => {
+    const f = fixture(() => new Promise<FoundDefinition>(() => {}))
+    void f.editorPeek.run('card', f.place as never, 'hover')
+    expect(f.editorPeek.cardIn(f.editor)).toBe(false)
   })
 
   it('opens a Peek tab on a plain Ctrl+click on a name, never a cursor-adding, selecting, double or margin click', () => {
