@@ -17,6 +17,9 @@ updates the mock in the same PR when the design changes.
 - **Start implementation** beside BigQuery, without heavily conflicting with it: AG-0a (new files only) starts now, lanes
   that register methods, keys or catalogue entries wait for BQ-0, and the shared-file order is in Coordination with
   BigQuery. The rethink scenes were reviewed and the lanes below are rewritten to the document model.
+- **Release gate**: agreed as proposed in Coordination with BigQuery (`agentEnabled`, `VARIA_AGENT_PREVIEW=1`, removed in
+  AG-9).
+- **Create from… schedules** default to **Share**; the user can switch a schedule to Copy or Leave out.
 
 ## Owner decisions (2026-11-16)
 
@@ -1310,7 +1313,7 @@ slow it down:
   | Session and AutoRecover records, docs/hot-exit.md | BQ-3a-2, BQ-3d | AG-6g after BQ-3d merges |
   | Results pipeline, query execution, connect dialog, settings pages | BQ-2, BQ-3a to BQ-3c, BQ-7 | Agent does not touch them |
 
-- **Release gate** (proposed, owner to confirm before AG-0b). Agent lanes merge to main during 0.10.0 but Agent must not appear in 0.10.0. From AG-0b, every Agent
+- **Release gate** (agreed 2026-11-18). Agent lanes merge to main during 0.10.0 but Agent must not appear in 0.10.0. From AG-0b, every Agent
   surface (Explorer node, commands, menus, documents) is behind a context key `agentEnabled`, false unless the
   `VARIA_AGENT_PREVIEW=1` environment variable is set (smoke and live tests set it); the Explorer keeps today's "SQL
   Server Agent" later folder while it is false. AG-9 removes the gate for 0.11.0. AG-0a has no user-visible surface.
@@ -1319,7 +1322,6 @@ slow it down:
 
 ## Questions still open
 
-Before AG-0b: the release gate in Coordination with BigQuery (proposed). Before AG-6e: whether Create from… schedules
-default to Share or Copy (the mocks show Share). Neither blocks AG-0a. AG-0's spikes and AG-1's platform-gate verification report back in their PRs. If service control cannot
+None blocking (the release gate and Share as the Create from… default were decided on 2026-11-18). AG-0's spikes and AG-1's platform-gate verification report back in their PRs. If service control cannot
 work on default virtual accounts or a named instance, or the Windows CI job cannot install SQL Server in a reasonable time,
 that comes back to the owner before AG-2 merges.

@@ -190,4 +190,4 @@ chip.
 
 ## Questions for the owner
 
-1. On Create from…, should schedules default to Share or Copy? The mocks show Share.
+None. Create from… schedules default to Share (decided 2026-11-18); each can be switched to Copy or Leave out.
