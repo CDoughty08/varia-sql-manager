@@ -967,8 +967,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Packing results.** A complete result of 1 MiB or more is packed when hidden for 5 s (stage 1) or shown but idle for
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
   Zstandard level 2 bytes (a page saving under a tenth stays raw), charged at its packed size. Never a result still
-  storing, a live table, one held by a read, operation, Copy or Save, or a shown one with an open sorted or filtered
-  view; sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
+  storing, a live table, or one held by a read, operation, Copy or Save; a sorted or filtered grid does not keep its
+  result raw, and sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
   the workers' gate (except packing for a waiting query), and stops between pages when the result is shown, read, held or released. Reads, Copy, Save and
   most operations read packed pages directly; an operation that must unpack reserves the raw size first and answers
@@ -976,8 +976,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Room for a query.** A query row its half or the global budget refuses waits (≤ 10 s a wait,
   `ResultStore.RoomWaitMs`; 4 waits a row, `SqlService.MaxRoomWaits`; 30 s a query, `SqlService.MaxRoomWaitMs`; never
   a live table's or a derived set's row) while the packer packs other unheld complete results of 1 MiB or more on the
-  results' workers (any query's for the global budget, only the query's own when its own half is full), except one the
-  user is working with (shown with an open view, or unpacked and still used by an operation); then it retries, or the query is truncated.
+  results' workers (any query's for the global budget, only the query's own when its own half is full), except one an
+  operation unpacked and still uses; then it retries, or the query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
   reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
@@ -1324,7 +1324,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   `maxMatches` by at most its last row's columns (main accepts up to `maxMatches` + `page.maxColumns`). `matchRows[k]`/`matchColumns[k]` are
   cells in row, column order; `first` counts matches before the run (or before `fromRow` when empty). `complete`: the rows searched were
   every row of a finished set; `approximate`: a truncated prefix did not match. It reserves no budget (at most 1 MiB of page layouts), except one- or two-page rooms to
-  read a packed result (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
+  read a packed result and, through a view far from a packed result's pages (a sort), the view's inverse, 4 bytes a row of the result (not of the view),
+  as it reads that result in page order instead of unpacking it (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
   close (`VIEW_NOT_FOUND`) stop it at the next checkpoint.
 - **Matching.** A cell matches when its grid text contains the text; NULL, unreadable and hidden columns never match.
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only
@@ -2389,6 +2390,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 - **The packed sort** stores 1,000,000 W1 rows packed (`debug.results.synthesize`'s test-only `pack`), reports the
   result shown, sorts it three times and reads the budget: a sort reads packed pages in place, so the budget may grow
   only by the view's order, never by an unpack ([page-compression-findings.md](page-compression-findings.md#stage-2-as-built)).
+- **The view tiles** sort 1,000,000 W1 rows stored raw, then packed, and read 300 random 128-row tiles of the view (the
+  grid's tile) through main's supervisor and the stream: the p99 of each, packed and raw. What a sorted grid on screen
+  pays for being packed.
 - **The live snapshot churn** runs main's live path with a worker stand-in that acknowledges each frame at once:
   `debug.synthetic.wide` stores 5,000 rows of 23 typed columns every 10 ms if it can, each revision owned, retired,
   forgotten and released one at a time, for 5 s. It reports revisions a second and backend gen2 collections per revision

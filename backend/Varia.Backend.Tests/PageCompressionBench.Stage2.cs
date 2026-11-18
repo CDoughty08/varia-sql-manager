@@ -11,7 +11,7 @@ internal static partial class PageCompressionBench
     /// has packed the shown one too ("after"); then, on the shown result raw and packed, a grid's plain reads while it
     /// scrolls and jumps (results.read's path: each page through the set's accessor while pinned, 1,000-row windows), a
     /// sorted view's screens (256 rows, ViewPages, as results.read with a view reads them), the first sort after it went
-    /// idle (fused when packed), what the policy's next look adds with that sorted view open (nothing: it stays packed), and the whole unpack an operation that still rehydrates (search, value list, comparison)
+    /// idle (fused when packed), what the policy's next look adds with that sorted view open (nothing: it stays packed), and the whole unpack an operation that still rehydrates (a comparison read far out of order)
     /// does first. Backend share only: no IPC or rendering.</summary>
     private static void RunStage2(double gib, string shapeName, Shape shape)
     {
@@ -111,8 +111,8 @@ internal static partial class PageCompressionBench
         var rawSort = SortSeconds();
         Report("raw", Plain(trace), Plain(jumpsAt), Screens(screensAt), rawSort);
 
-        // After: stage 2 packs the shown result once idle. A sorted grid (an open view) keeps it raw, so the view closes first;
-        // it is built again on the packed result to show what its screens would cost.
+        // After: stage 2 packs the shown result once idle. The view closes first and is built again on the packed result, so
+        // its screens are measured on a view sorted from packed pages, as a grid sorted after packing would be.
         store.CloseViews(shown.ResultId, [view!.ViewId]);
         view = null;
         var after = new ResultPacker(store, visibility) { Priority = ThreadPriority.Normal };
@@ -136,7 +136,7 @@ internal static partial class PageCompressionBench
         Print("stage2.packed.sortedLookMiB", (store.UsedBytes - beforeLook) / (double)(1 << 20), "MiB", "what the policy's next look adds to the budget once the packed shown result is sorted, in " + lookTimer.Elapsed.TotalMilliseconds.ToString("0.0", CultureInfo.InvariantCulture) + " ms; " + (shown.HasPacked ? "it stays packed" : "it was unpacked"));
         var unpackTimer = Stopwatch.StartNew();
         using (shown.Pin()) if (!shown.TryUnpackAll()) throw new InvalidOperationException("The budget refused the unpack.");
-        Print("stage2.packed.firstUnpackSeconds", unpackTimer.Elapsed.TotalSeconds, "s", "the whole unpack a search, value list or comparison of the packed shown result does first, " + ViewSorter.Workers + " workers");
+        Print("stage2.packed.firstUnpackSeconds", unpackTimer.Elapsed.TotalSeconds, "s", "the whole unpack a comparison read far out of order does first, " + ViewSorter.Workers + " workers");
         var counters = store.PackingSnapshot();
         Print("stage2.cacheHitShare", counters.CacheLookups == 0 ? 0 : (double)counters.CacheHits / counters.CacheLookups, "x", counters.CacheHits + " cache hits in " + counters.CacheLookups + " lookups over the packed reads");
     }
