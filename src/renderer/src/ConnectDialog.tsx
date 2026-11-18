@@ -502,7 +502,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       return form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : { target }
     }
     // Settings another saved entry already has are not new; a form Save would refuse has nothing to save.
-    if (!touched.current || form === pristine.current || entry || !loaded || !options.server.trim() || !authReady) return undefined
+    // Aliases (several entries with these settings and none named by the labels) are saved too: Save would overwrite one.
+    const key = entryKey(options)
+    if (!touched.current || form === pristine.current || library.profiles.some(profile => entryKeys.get(profile.id) === key) || !loaded || !options.server.trim() || !authReady) return undefined
     return {}
   }
   /** Whether an Object Explorer target keeps a remembered credential for these login settings. */
