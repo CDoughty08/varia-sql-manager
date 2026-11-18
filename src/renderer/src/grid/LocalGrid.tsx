@@ -42,9 +42,11 @@ const maxSortKeys = 4
 const cardRows = 12
 /** A horizontal scroll bar's allowance under a card's rows, when its columns are wider than the card. */
 const cardScrollbar = 12
+/** An empty card's room under its header for the overlay that says so: `.rg-overlay`'s padding and a line of text. */
+const cardEmpty = 48
 const unsorted: readonly LocalSortKey[] = []
 /** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
-const keptSorts = new WeakMap<GridViewState, readonly LocalSortKey[]>()
+const keptSorts = new WeakMap<GridViewState, { readonly columns: string; readonly keys: readonly LocalSortKey[] }>()
 /** A table's columns, which its sort keys name: a table with other columns starts unsorted. */
 const columnsOf = (table: LocalTableData) => table.columns.map(column => `${column.kind ?? ''}:${column.name}`).join('\u0000')
 
@@ -60,14 +62,17 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const columnsKey = useMemo(() => columnsOf(bound), [bound])
   // The keys belong to the columns they were chosen for: derived in render, so the mount that a new table causes
   // already sees a table with other columns unsorted.
-  const [sorted, setSorted] = useState(() => ({ columns: columnsKey, keys: (state && keptSorts.get(state)) ?? unsorted }))
+  const [sorted, setSorted] = useState(() => (state && keptSorts.get(state)) ?? { columns: columnsKey, keys: unsorted })
   const keys = sorted.columns === columnsKey ? sorted.keys : unsorted
   const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => {
     const keys = next(current.columns === columnsKey ? current.keys : unsorted)
-    if (state) keptSorts.set(state, keys)
+    if (state) keptSorts.set(state, { columns: columnsKey, keys })
     return { columns: columnsKey, keys }
   }), [columnsKey, state])
-  const [notice, setNotice] = useState<{ readonly text: string; readonly error?: boolean }>()
+  // A copy's or save's notice belongs to the table it was for: a new table shows its own strip (its truncation) again.
+  const [noticed, setNoticed] = useState<{ readonly bound: typeof bound; readonly text: string; readonly error?: boolean }>()
+  const notice = noticed?.bound === bound ? noticed : undefined
+  const setNotice = useCallback((next?: { readonly text: string; readonly error?: boolean }) => setNoticed(next && { ...next, bound }), [bound])
   const [wide, setWide] = useState(false)
   const apiRef = useRef<GridShellApi | undefined>(undefined)
   const sourceRef = useRef<LocalSource | undefined>(undefined)
@@ -106,7 +111,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   }, [bound, keys, rows])
   const sortBy = useCallback((column: number | undefined, descending = false, add = false) =>
     setKeys(current => column === undefined ? unsorted : sortKeysBy(current, column, descending ? 'descending' : 'ascending', add, maxSortKeys, desc => ({ column, descending: desc }))), [setKeys])
-  const report = useCallback((what: string, error: unknown) => setNotice({ text: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}`, error: true }), [])
+  const report = useCallback((what: string, error: unknown) => setNotice({ text: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}`, error: true }), [setNotice])
   const output = useMemo<LiveOutput>(() => {
     const view = () => apiRef.current?.view()
     const hasRows = () => rows > 0 && columns > 0
@@ -143,21 +148,21 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       },
       canFind: () => false, find: () => {}
     }
-  }, [bound, rows, columns, keys, sortable, preset, platform, sortBy, report])
+  }, [bound, rows, columns, keys, sortable, preset, platform, sortBy, report, setNotice])
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   useEffect(() => root ? registerLiveOutput(root, output) : undefined, [output, root])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const headerSort = useMemo<HeaderSortKey[]>(() => keys.map(key => ({ column: key.column, descending: key.descending })), [keys])
   const truncated = bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined
   // A card is as tall as its header and rows, up to `maxRows`, with room for a scroll bar under columns wider than it.
-  const height = preset === 'card' ? g.headerHeight + Math.max(1, Math.min(rows, maxRows)) * g.rowHeight + (wide ? cardScrollbar : 0) + 2 : undefined
+  const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? cardScrollbar : 0)) + 2 : undefined
   return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.
     gone={rows === 0 ? empty ?? 'No rows.' : undefined}
-    strip={notice ?? (truncated ? { text: truncated } : undefined)} />
+    strip={notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined} />
 }
 
 /** A local table's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */

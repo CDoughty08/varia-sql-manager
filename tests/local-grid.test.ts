@@ -127,6 +127,20 @@ describe('local saves in main', () => {
     const tricky: LocalTableData = { columns: [{ name: 'Ünïcode "key"' }, { name: 'n', kind: 'number' }], rows: [['\u0001\u0002 "é" 日本', '1,5'], [null, null], ['a\r\nb\tc', '12']] }
     for (const format of ['csv', 'tsv', 'json'] as const) for (const headers of [true, false])
       expect(localSaveBytes(tricky)).toBeGreaterThanOrEqual((await localExportBytes(tricky, { format, headers, nullText: 'NULL' })).data.length)
+    // Blank and repeated names (Column{n}, _n keys), NULL and empty cells: tables drawn from awkward parts, never under.
+    const names = ['', '', 'a', 'a', '"q"', 'Ü', '\u0001'.repeat(localTableLimits.nameChars)], cells = [null, '', 'x', '\u0001', '日本', 'a,"b"', '\r\n']
+    let seed = 7
+    const pick = <T,>(of: readonly T[]) => of[(seed = (seed * 1103515245 + 12345) % 2147483648) % of.length]
+    for (let round = 0; round < 40; round++) {
+      const width = 1 + (round % 9), table: LocalTableData = { columns: Array.from({ length: width }, () => ({ name: pick(names) })), rows: Array.from({ length: round % 5 }, () => Array.from({ length: width }, () => pick(cells))) }
+      for (const format of ['csv', 'tsv', 'json'] as const) for (const nullText of ['NULL', 'empty'] as const)
+        expect(localSaveBytes(table)).toBeGreaterThanOrEqual((await localExportBytes(table, { format, headers: true, nullText })).data.length)
+    }
+    // At the bound: blank NULL columns and long control-character names, whose JSON keys repeat on every row.
+    const edge: LocalTableData = { columns: [...Array.from({ length: 40 }, () => ({ name: '' })), ...Array.from({ length: 24 }, (_, i) => ({ name: `${i}`.padEnd(localTableLimits.nameChars, '\u0001') }))], rows: Array.from({ length: 3600 }, () => Array<string | null>(64).fill(null)) }
+    const edgeJson = (await localExportBytes(edge, { format: 'json', headers: true, nullText: 'NULL' })).data.length
+    expect(edgeJson).toBeGreaterThan(localTableLimits.saveBytes)
+    expect(localSaveBytes(edge)).toBeGreaterThanOrEqual(edgeJson)
     // Within the request's own bounds (NULL counts no text) JSON repeats each long key per row, past 64 MiB: refused before any dialog.
     const heavy = { suggestedName: 'Heavy', columns: Array.from({ length: localTableLimits.columns }, (_, i) => ({ name: `${i}`.padEnd(localTableLimits.nameChars, '\u0001') })), rows: Array.from({ length: localTableLimits.rows }, () => Array<string | null>(localTableLimits.columns).fill(null)) }
     expect(localSaveRequestSchema.safeParse(heavy).success).toBe(true)
@@ -173,5 +187,10 @@ describe('local saves in main', () => {
     const error = await failing.jobs.saveLocal(request).catch((value: unknown) => value)
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'EXPORT_FAILED', message: 'Could not save the results: cols.txt is open in another program.' })
+    // Windows refuses to rename over a file another program holds with EPERM: in use, as a results save says, not denied.
+    const held = (platform: NodeJS.Platform, replacing: boolean) => host({ platform, writeFile: async () => { throw Object.assign(new Error('held'), { code: 'EPERM', ...replacing ? { replacing } : {} }) } }).jobs.saveLocal(request).catch((value: Error) => value.message)
+    expect(await held('win32', true)).toBe('Could not save the results: cols.txt is open in another program.')
+    expect(await held('win32', false)).toBe('Could not save the results: access to cols.txt is denied.')
+    expect(await held('linux', true)).toBe('Could not save the results: access to cols.txt is denied.')
   })
 })

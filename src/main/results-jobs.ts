@@ -238,6 +238,17 @@ export class ResultsJobHost {
    * results grid's save, and the same text, written here by the TypeScript twin of ResultTextWriter from the rows the
    * renderer holds; a temporary file renamed over the target, so a failed write leaves no partial file.
    */
+  /**
+   * Why a local save's write failed, as a results save says it: Windows refuses to replace a file another program holds,
+   * or a folder, with EPERM, EACCES or EBUSY at the rename (writeBytesAtomic marks it), where the backend says IN_USE or
+   * IS_DIRECTORY.
+   */
+  private async writeFailure(error: unknown, path: string): Promise<string> {
+    const { code, replacing } = error as NodeJS.ErrnoException & { replacing?: boolean }
+    if (replacing && this.deps.platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'))
+      return (await stat(path).then(found => found.isDirectory(), () => false)) ? 'IS_DIRECTORY' : 'IN_USE'
+    return errnoTokens[code ?? ''] ?? 'IO'
+  }
   async saveLocal(value: unknown): Promise<SavedLocalResults | null> {
     const parsed = localSaveRequestSchema.safeParse(value)
     if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
@@ -255,7 +266,7 @@ export class ResultsJobHost {
       const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] })
       // Into the folder the dialog chose, never one recreated: a folder deleted since then says so.
       try { await (this.deps.writeFile ?? ((target: string, bytes: Uint8Array) => writeBytesAtomic(target, bytes, { createFolder: false })))(path, data) } catch (error) {
-        throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(errnoTokens[(error as NodeJS.ErrnoException).code ?? ''] ?? 'IO', fileName))
+        throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(await this.writeFailure(error, path), fileName))
       }
       this.lastDir = dirname(path)
       this.lastFormat = format

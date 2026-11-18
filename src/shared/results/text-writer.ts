@@ -105,10 +105,12 @@ function jsonKey(key: string): Uint8Array {
   return out.bytes()
 }
 /** JSON keys: a blank name becomes Column{ordinal}; a repeated one gets _2, _3 and so on. */
-function jsonKeys(columns: readonly TextColumn[]): Uint8Array[] {
+function jsonKeys(columns: readonly Pick<TextColumn, 'name'>[]): Uint8Array[] {
   const used = new Set<string>(), next = new Map<string, number>()
   return columns.map((column, index) => jsonKey(unique(used, column.name === '' ? `Column${index + 1}` : column.name, next)))
 }
+/** The bytes of each column's JSON key as a save writes it (quoted and escaped, Column{n} or _n as needed). */
+export function jsonKeyBytes(columns: readonly Pick<TextColumn, 'name'>[]): number[] { return jsonKeys(columns).map(key => key.length) }
 
 function bit(bitmap: Uint8Array | undefined, row: number): boolean { return bitmap !== undefined && (bitmap[row >>> 3] & (1 << (row & 7))) !== 0 }
 

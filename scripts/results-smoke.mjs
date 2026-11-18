@@ -1168,6 +1168,9 @@ try {
   await expect(local.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Type', 'Rows', 'Note'])
   // A card is as tall as its rows: no empty band under three rows.
   expect(await localFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  // ...and no shorter: its last row is inside it.
+  const bottomOf = locator => locator.evaluate(element => element.getBoundingClientRect().bottom)
+  expect(await bottomOf(gridCell(local, 2, 0))).toBeLessThanOrEqual(await bottomOf(localFrame) + 0.5)
   await gridCell(local, 0, 0).click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Control+C')
@@ -1225,10 +1228,28 @@ try {
   await page.keyboard.press('Control+S')
   await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Saved 3 rows to local.csv.')
   expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Orders-Columns\.csv$/) })
-  expect(await readFile(join(saveDir, 'local.csv'), 'utf8')).toBe('﻿' + ['customers,view,80,tab\there', 'Order Lines,table,9000,"a,""b"""', 'Orders,table,"1,200",'].map(line => line + '\r\n').join(''))
+  const savedCsv = await readFile(join(saveDir, 'local.csv'), 'utf8')
+  // A new table shows its own strip, not the last table's notice: here that it was truncated.
+  await rerenderLocal({ columns: localTable.columns, rows: Array.from({ length: 10_001 }, (_, i) => [`Row ${i}`, 'table', String(i), null]) })
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Showing the first 10,000 rows.')
+  expect(savedCsv).toBe('﻿' + ['customers,view,80,tab\there', 'Order Lines,table,9000,"a,""b"""', 'Orders,table,"1,200",'].map(line => line + '\r\n').join(''))
   // An empty table says so in its owner's words.
   await mountLocal({ columns: localTable.columns, rows: [] }, { label: 'Local empty', preset: 'card', empty: 'No predicates apply.' })
   await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
+  // The card has room for it: the overlay ends inside the card.
+  expect(await bottomOf(localGridFrame(page, 'Local empty').locator(gridPart.overlay))).toBeLessThanOrEqual(await bottomOf(localGridFrame(page, 'Local empty')) + 0.5)
+  // An owner's kept state keeps its sort across a remount, but only for the columns it was chosen for.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: true })
+  const keptGrid = localGrid(page, 'Local kept')
+  await localSort(2, 'Sort Descending', keptGrid)
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: true })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  await expect(keptGrid.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const otherColumns = { columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] }
+  await rerenderLocal(otherColumns)
+  await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: true })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('b')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
   await page.evaluate(() => window.__variaGrid.unmountLocal())
   await expect(page.locator(part.localGrid)).toHaveCount(0)
   expect(await aliveLocal()).toBe(0)

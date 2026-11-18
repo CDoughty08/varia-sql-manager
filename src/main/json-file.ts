@@ -84,7 +84,8 @@ export async function writeBytesAtomic(path: string, bytes: Uint8Array, options:
       await file.writeFile(bytes)
       await file.sync()
     } finally { await file.close() }
-    await replaceFile(temporary, path)
+    // Marked, so a caller can tell a target it could not replace (held open, a folder) from a folder it could not write.
+    try { await replaceFile(temporary, path) } catch (error) { throw Object.assign(error as object, { replacing: true }) }
   } finally { await rm(temporary, { force: true }) }
 }
 

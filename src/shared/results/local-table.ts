@@ -3,7 +3,7 @@
 // that is not on screen (a masked value's secret) can leave through Copy or Save. Copy and Save text is written by the
 // TypeScript twin of ResultTextWriter (text-writer.ts) over a page built here, so it matches a results grid's byte for byte.
 import type { PageView } from '../ipc/wire/pages.ts'
-import { copyText, exportText, type TextColumn, type TextFormat, type TextPart } from './text-writer.ts'
+import { copyText, exportText, jsonKeyBytes, NO_COLUMN_NAME, type TextColumn, type TextFormat, type TextPart } from './text-writer.ts'
 
 /** How a column's values read: numbers right-align, sort by value and are numbers in JSON; the rest is text. */
 export type LocalColumnKind = 'text' | 'number'
@@ -19,17 +19,19 @@ export const localTableLimits = Object.freeze({ rows: 10_000, columns: 64, cellC
 
 const utf8Bytes = (text: string) => { let bytes = 0; for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : 3 } return bytes }
 /**
- * At least the bytes any save of the table writes, in any format: per cell its UTF-8 at JSON's worst escape (a control
- * character as \u00XX, 6 bytes a byte), its key as escaped, separators and NULL's letters; per row its brackets; and the
- * header. Cheap and never under, so a save past `saveBytes` is refused before its file is built.
+ * At least the bytes any save of the table writes, in any format: per cell its key as JSON writes it (Column{n} for a
+ * blank name, _n for a repeated one) or its header as CSV quotes it, whichever is longer, a separator, and its text at
+ * JSON's worst escape (a control character's six-character escape, 6 bytes a byte) or NULL's letters; per row its
+ * brackets and line end; and the header line. Cheap and never under, so a save past `saveBytes` is refused before its
+ * file is built.
  */
 export function localSaveBytes(table: LocalTableData): number {
-  // A key exactly as escaped (JSON's, or CSV's doubled quotes): JSON repeats it on every row.
-  const keys = table.columns.map(column => Math.max(utf8Bytes(JSON.stringify(column.name)), utf8Bytes(column.name) * 2 + 2) + 4)
+  const json = jsonKeyBytes(table.columns)
+  const keys = table.columns.map((column, index) => Math.max(json[index], utf8Bytes(column.name || NO_COLUMN_NAME) * 2 + 2) + 2)
   let total = 16 + keys.reduce((sum, key) => sum + key, 0)
   for (const row of table.rows) {
-    total += 8
-    for (let column = 0; column < table.columns.length; column++) total += keys[column] + 4 + utf8Bytes(row[column] ?? '') * 6
+    total += 4
+    for (let column = 0; column < table.columns.length; column++) total += keys[column] + Math.max(utf8Bytes(row[column] ?? '') * 6 + 2, 4)
   }
   return total
 }
