@@ -944,7 +944,11 @@ async function rememberPassword() {
   await expect(dialog.getByRole('alert')).toHaveCount(0)
   expect(await connects()).toBe(attempted)
   await rm(join(control, 'untrusted-certificate'))
+  // Trusting the certificate changed the entry's settings, so closing asks whether to keep that change.
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  const keepTrust = page.getByRole('dialog', { name: /^Save changes to / })
+  await expect(keepTrust).toBeVisible()
+  await keepTrust.getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // (7) Rejected after a password change: forgotten, and the dialog says so.
   // The certificate failure left it offline, so this attempt must authenticate rather than reuse a live transport.
