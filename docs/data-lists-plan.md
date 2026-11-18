@@ -1,6 +1,6 @@
 # Data lists as grids: audit and plan
 
-Status: agreed with the owner (decisions below); LG-0 next. Once the lanes ship, the rules move to
+Status: agreed with the owner (decisions below); LG-0 in progress. Once the lanes ship, the rules move to
 docs/architecture.md (Grid) and the area docs, and this file is deleted.
 
 Mock: [docs/mockups/data-lists.html](mockups/data-lists.html) (Dark and Light, one scene per converted surface).
@@ -42,19 +42,19 @@ It is never sent to the results pipeline as a result: no budget, no lifetime, no
    `tests/fixtures/results-text/cases.json`) moves to `src/shared/results/text-writer.ts`; the fake backend imports it,
    and `tests/results-text.test.ts` keeps both on the same goldens as `TextChecks.cs`, so any change to one writer fails
    until the other and the goldens match. A local table's rows never round-trip to the backend: Copy formats in the
-   renderer and writes through `writeClipboardText`; Save asks main (`saveLocalResults`: main shows the save dialog,
-   writes the bytes atomically and returns only the file's name, so the path never reaches the renderer). The writer's
-   input is bounded as the table is. Query results keep copying and saving in the backend, where their rows are.
+   renderer and writes through `writeClipboardText`; Save sends the rows to main (`saveLocalResults`), which shows the
+   save dialog, writes the format and header row chosen there with the same writer, atomically, and returns only the
+   file's name, so the path never reaches the renderer. The writer's input is bounded as the table is. Query results keep copying and saving in the backend, where their rows are.
 4. **One component, two presets.** `LocalGrid` (`src/renderer/src/grid/LocalGrid.tsx`) renders `GridShell` over a
    `LocalTable`:
    - `card` (hover Peek, Session Details, chart tables, Search Objects details): its height follows its rows up to 12
      then scrolls; no Save (the promoted Peek tab is a `page`).
    - `page` (Properties, SSIS properties, Client Statistics, plan comparison): fills its area; Save Results As.
    Both: selection, Ctrl+A, Ctrl+C, Ctrl+Shift+C, arrows/Home/End/PageUp/PageDown, Shift extend, column resize and
-   double-click Fit, header sort, numbers right-aligned, and the results grid's font, row numbers, row height and colours,
-   so a list looks and reads like a result.
-5. **Commands and menus are the results grid's.** A local grid registers a third output kind (`registerLocalOutput`, next to
-   `registerLiveOutput` in `menus/targets.ts`) and sets `outputGridFocus`, so `output.copy`, `output.copyWithHeaders`,
+   double-click Fit, header sort (numbers by value), and the results grid's font, alignment, row numbers, row height and
+   colours, so a list looks and reads like a result.
+5. **Commands and menus are the results grid's.** A local grid registers as a grid with its own source, as a live grid
+   does (`registerLiveOutput` and `LiveOutput` in `menus/targets.ts`, view `live`, which sets `outputGridFocus`), so `output.copy`, `output.copyWithHeaders`,
    `output.selectAll`, `output.save` and the sort items run on it with the user's remapped keys, and the context menu shows
    only the items that apply (no Filter, Pivot, Profile, Transpose, Compare or Open Value). No new commands.
 6. **Display text only.** A surface builds its table from the text it shows, so a masked value (an SSIS sensitive
@@ -125,7 +125,7 @@ left to Script As. A parameter reads `@OrderId int = 0 OUTPUT`. Copy adds no com
 Each lane has a vitest check and a smoke step (grid found by role and name through `scripts/fixtures/ui.mjs`: select
 all, copy with headers, read the clipboard), docs and a CHANGELOG Unreleased line.
 
-1. **LG-0 Local grid.** `LocalTable`, `GridSource` typing, `LocalGrid` with both presets, `registerLocalOutput`, the
+1. **LG-0 Local grid.** `LocalSource`, `GridSource` typing, `LocalGrid` with both presets, its `LiveOutput`, the
    shared TypeScript writer (moved from the fake backend, still on the goldens), `saveLocalResults` in main and preload,
    a test-only surface for the smoke. Architecture bullets in Grid and Copy and Save. No user-visible change.
 2. **LG-1 Peek.** Columns and Parameters as a Peek list with real columns and Definition (catalogue in
