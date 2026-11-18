@@ -41,7 +41,6 @@ export interface RowActions {
   dragStart(rowId: number, transfer: DataTransfer): boolean
   /** A drag over a row: a server being moved may drop above or below a server row (`edge`: the pointer's half of the row). */
   dragOver(rowId: number, edge: 'before' | 'after', event: Pick<DragEvent, 'preventDefault' | 'dataTransfer'>): void
-  drop(rowId: number, event: Pick<DragEvent, 'preventDefault' | 'dataTransfer'>): void
   /** The drag ended, dropped or not. */
   dragEnd(): void
   /** The Rename box's Enter (`refocus`: focus returns to the tree) or blur; false keeps the box open (an invalid name). */
@@ -324,7 +323,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
-    onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDrop={(event: DragEvent) => actions.drop(rowId, event)} onDragEnd={() => actions.dragEnd()}>
+    onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
     {root && <Accent color={color} />}
     {indent}
     <span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />

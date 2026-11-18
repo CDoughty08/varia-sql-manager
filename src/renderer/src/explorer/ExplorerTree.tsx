@@ -251,15 +251,6 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
       setDropMark(mark => mark?.rowId === rowId && mark.edge === edge ? mark : { rowId, edge })
     },
-    drop: (rowId, event) => {
-      const from = serverDragOf(event, dragging.current), mark = dropMark.current
-      dragging.current = undefined
-      setDropMark(undefined)
-      if (from === undefined || mark?.rowId !== rowId) return
-      event.preventDefault()
-      const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(rowId)
-      if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
-    },
     dragEnd: () => { dragging.current = undefined; setDropMark(undefined) },
     // The pointer's row stays known while it rests, so pressing Peek on Hover's modifier peeks it without a move.
     peekHover: (rowId, held) => {
@@ -274,6 +265,26 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       run('explorer.openPeekTab', rowId)
     }
   }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
+  // The background below the last row drops a server last, and its line shows that. Rows mark themselves (actions.dragOver);
+  // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
+  const dragOverTree = (event: DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest?.('[role="treeitem"]')) return
+    const from = serverDragOf(event, dragging.current), last = explorer.rootIds.at(-1)
+    if (from === undefined || last === undefined) { setDropMark(undefined); return }
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    setDropMark(mark => mark?.rowId === last && mark.edge === 'after' ? mark : { rowId: last, edge: 'after' })
+  }
+  // Releasing drops where the line is, whichever element is under the pointer: a row, its edge or the background.
+  const dropOnTree = (event: DragEvent<HTMLDivElement>) => {
+    const from = serverDragOf(event, dragging.current), mark = dropMark.current
+    dragging.current = undefined
+    setDropMark(undefined)
+    if (from === undefined || !mark) return
+    event.preventDefault()
+    const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(mark.rowId)
+    if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
+  }
   // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -368,8 +379,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     {pinned('top')}
     <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
       aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}
-      // A server drag over the tree's background (no row accepted it) or out of the tree leaves no drop line behind.
-      onDragOver={(event: DragEvent) => { if (!event.defaultPrevented && dropMark.current) setDropMark(undefined) }}
+      onDragOver={dragOverTree} onDrop={dropOnTree}
+      // A server drag out of the tree leaves no drop line behind.
       onDragLeave={(event: DragEvent) => { if (dropMark.current && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropMark(undefined) }}>
       <div className="explorer-spacer" style={{ height: layout.total }}>
         {indices.map(index => {

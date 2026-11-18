@@ -18,7 +18,8 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
 
 ## Server order and expansion
 
-- Drag a server row onto another to move it above or below that server, or use **Move Up** and **Move Down**
+- Drag a server row onto another to move it above or below that server (below the last server, to move it last), or
+  use **Move Up** and **Move Down**
   (Alt+Up and Alt+Down, also on the server's context menu). Varia announces the new position. The order is the
   connection workspace's, so it survives restarts and reloads.
 - The workspace also keeps which nodes each server had expanded, as connection-free keys (at most 128 per server, 1,024

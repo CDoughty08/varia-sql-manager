@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, where the drop line shows, instead of cancelling the move.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.

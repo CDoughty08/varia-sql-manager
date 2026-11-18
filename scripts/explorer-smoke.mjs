@@ -2087,6 +2087,34 @@ try {
   await sampleScroll(0)
   console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
 
+  // 13b. Dragging a server past the last row drops it last, as its line shows; leaving the tree drops nothing.
+  // Collapse All leaves servers open on their folders; Left collapses each server, Down moves to the next.
+  await toolbarButton('Collapse All').click()
+  await tree().focus()
+  await press('Home', 'pin-a')
+  for (let server = 0; server < 6; server++) { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown') }
+  await expect(serverRows(page).and(page.locator('[aria-expanded="true"]'))).toHaveCount(0)
+  const serverOrder = async () => (await serverRows(page).evaluateAll(rows => rows.map(row => [Number(row.getAttribute('aria-posinset')), row.getAttribute('aria-label')])))
+    .sort((a, b) => a[0] - b[0]).map(([, label]) => label.split(' ')[0])
+  const dragServer = async (name, toY) => {
+    const box = await (await explorerRow(page, name)).boundingBox(), x = box.x + 40, y = box.y + box.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    for (let step = 1; step <= 12; step++) await page.mouse.move(x, y + (toY - y) * step / 12)
+    await page.mouse.up()
+  }
+  const servers = ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']
+  await expect.poll(serverOrder).toEqual(servers)
+  const lastBox = await (await explorerRow(page, 'pin-f')).boundingBox(), treeBox = await tree().boundingBox()
+  expect(lastBox.y + lastBox.height + 60).toBeLessThan(treeBox.y + treeBox.height)
+  await dragServer('pin-a', lastBox.y + lastBox.height + 40)
+  await expect.poll(serverOrder).toEqual([...servers.slice(1), 'pin-a'])
+  await dragServer('pin-a', (await (await explorerRow(page, 'pin-b')).boundingBox()).y + 3)
+  await expect.poll(serverOrder).toEqual(servers)
+  await dragServer('pin-c', treeBox.y - 8)
+  expect(await serverOrder()).toEqual(servers)
+  console.log('Object Explorer checks: dragging a server below the last row drops it last; above the first row it drops first; out of the tree it stays.')
+
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
     await application.close()
