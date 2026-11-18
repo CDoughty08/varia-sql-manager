@@ -5,7 +5,7 @@ import type { FoundDefinition } from '../src/renderer/src/languages/SqlLanguageS
 import { commandCatalog } from '../src/shared/commands/catalog'
 import { gestureCatalog } from '../src/shared/commands/gestures'
 import { bindDefinitionPointer, monacoDefinitionLink } from '../src/renderer/src/editor/create-editor'
-import { EditorPeekService, editorPeekAnchor } from '../src/renderer/src/languages/EditorPeekService'
+import { bindPeekCardKey, EditorPeekService, editorPeekAnchor, peekCardContextKey } from '../src/renderer/src/languages/EditorPeekService'
 
 type Handler = { when?: () => boolean; unavailable?: () => string; run: () => Promise<void> | void }
 const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } }
@@ -222,6 +222,68 @@ describe('Go To Definition', () => {
     expect(Object.keys(listeners)).toEqual([])
     anchor.focus()
     expect(editor.focus).toHaveBeenCalled()
+    // The editor owns the anchor, so Escape there knows the card is its own.
+    expect(anchor.owner).toBe(editor)
+  })
+
+  it("makes Escape in the editor close Peek's card beside a name in it, and drop an Alt+F12 still looking one up", async () => {
+    let answer!: (found: FoundDefinition) => void
+    const f = fixture(() => new Promise<FoundDefinition>(resolve => { answer = resolve }))
+    const snapshot: { open?: object } = {}, peekListeners = new Set<() => void>()
+    f.peek.getSnapshot.mockImplementation(() => snapshot)
+    const close = vi.fn(() => { delete snapshot.open; peekListeners.forEach(listener => listener()) })
+    Object.assign(f.peek, { close, subscribe: (listener: () => void) => { peekListeners.add(listener); return () => peekListeners.delete(listener) } })
+    const values: boolean[] = [], key = { set: vi.fn((value: boolean) => values.push(value)), reset: vi.fn() }
+    const createContextKey = vi.fn(() => key)
+    const binding = bindPeekCardKey(Object.assign(f.editor, { createContextKey }) as never, f.editorPeek)
+    expect(createContextKey).toHaveBeenCalledWith(peekCardContextKey, false)
+    expect(values).toEqual([false])
+
+    // Alt+F12 while its lookup runs: Escape there is the card's, and the lookup then opens nothing, not even a notice.
+    const pending = f.handlers['edit.peekDefinition']!.run()
+    expect(values.at(-1)).toBe(true)
+    expect(f.editorPeek.cardIn(f.editor)).toBe(true)
+    expect(f.editorPeek.cardIn({})).toBe(false)
+    f.editorPeek.closeCard()
+    expect(values.at(-1)).toBe(false)
+    answer(procedure)
+    await pending
+    expect(f.peek.peekAt).not.toHaveBeenCalled()
+    expect(f.scripting.inform).not.toHaveBeenCalled()
+
+    // A card open beside a name in this editor (a hover's, which leaves focus in the text) is the editor's to close.
+    snapshot.open = { anchor: { owner: f.editor } }
+    peekListeners.forEach(listener => listener())
+    expect(values.at(-1)).toBe(true)
+    f.editorPeek.closeCard()
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(values.at(-1)).toBe(false)
+    // Another editor's card, or a row's in Object Explorer, is not.
+    snapshot.open = { anchor: { owner: {} } }
+    peekListeners.forEach(listener => listener())
+    expect(values.at(-1)).toBe(false)
+    snapshot.open = {}
+    f.editorPeek.closeCard()
+    expect(close).toHaveBeenCalledTimes(1)
+
+    // A lookup that finishes clears its claim: the card it opened holds Escape from then on.
+    snapshot.open = undefined
+    const opened = f.handlers['edit.peekDefinition']!.run()
+    expect(values.at(-1)).toBe(true)
+    answer(procedure)
+    await opened
+    expect(f.peek.peekAt).toHaveBeenCalledTimes(1)
+    expect(values.at(-1)).toBe(false)
+
+    binding.dispose()
+    expect(key.reset).toHaveBeenCalled()
+    expect(peekListeners.size).toBe(0)
+  })
+
+  it('leaves Escape alone while a hover looks a name up: the pointer opened nothing yet', async () => {
+    const f = fixture(() => new Promise<FoundDefinition>(() => {}))
+    void f.editorPeek.run('card', f.place as never, 'hover')
+    expect(f.editorPeek.cardIn(f.editor)).toBe(false)
   })
 
   it('opens a Peek tab on a plain Ctrl+click on a name, never a cursor-adding, selecting, double or margin click', () => {

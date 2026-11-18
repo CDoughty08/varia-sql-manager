@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 // The runtime checks below load the real Monaco, which needs a DOM; the drift checks only read files.
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { loadMonaco, loadMonacoFor, monacoKeyRows, omittedContextKeys, renderMonacoKeys, reviewedImports, type LoadedMonaco } from './fixtures/monaco-runtime'
 import { monacoKeyRules, monacoRuleWhen } from '../src/shared/commands/monaco-keys.generated'
+import { closePeekCardCommand, peekCardContextKey, registerPeekCardEscape } from '../src/renderer/src/languages/EditorPeekService'
 import { bridgeRules, defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
@@ -302,6 +303,35 @@ describe('Monaco runtime keybinding rules', () => {
     shadow.dispose()
     command.dispose()
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+  })
+
+  it("lets Escape close Peek's card in its editor only after every Monaco widget, snippet and operation that uses Escape", () => {
+    const { KeyCode } = loaded.monaco
+    const closeCard = vi.fn()
+    // A rule added through the API outranks every default, so its clause must step aside for each of Monaco's own Escapes.
+    const escapes = loaded.rules.filter(rule => [rule.primary, ...rule.secondary ?? []].includes(KeyCode.Escape))
+    const satisfying = (when: string | undefined) => Object.fromEntries((when?.split(' || ')[0] ?? '').split(' && ').filter(term => term && !term.startsWith('!') && !/[=<>~]/.test(term)).map(term => [term, true]))
+    const registration = registerPeekCardEscape(loaded.monaco as never, { closeCard })
+    try {
+      expect(press(KeyCode.Escape, editor)).toBeUndefined()
+      expect(press(KeyCode.Escape, { ...editor, [peekCardContextKey]: true })).toBe(closePeekCardCommand)
+      // A selection clears after the card, as with VS Code's peek; every other Escape stays Monaco's while its widget is up.
+      const afterCard = new Set(['cancelSelection', 'removeSecondaryCursors'])
+      const kept: string[] = []
+      for (const rule of escapes) {
+        const context = { ...editor, ...satisfying(rule.when?.serialize()) }
+        const monacos = press(KeyCode.Escape, context)
+        const expected = monacos === undefined || afterCard.has(monacos) ? closePeekCardCommand : monacos
+        if (expected !== closePeekCardCommand) kept.push(expected)
+        expect(press(KeyCode.Escape, { ...context, [peekCardContextKey]: true }), rule.id).toBe(expected)
+      }
+      expect(kept).toEqual(expect.arrayContaining(['hideSuggestWidget', 'closeFindWidget', 'leaveEditorMessage', 'leaveSnippet']))
+    } finally { registration.dispose() }
+    expect(press(KeyCode.Escape, { ...editor, [peekCardContextKey]: true })).toBeUndefined()
+    // The rule runs the card's close through Monaco's command registry.
+    const added = registerPeekCardEscape(loaded.monaco as never, { closeCard })
+    try { loaded.services.keybinding._commandService.executeCommand(closePeekCardCommand) } finally { added.dispose() }
+    expect(closeCard).toHaveBeenCalledTimes(1)
   })
 
   it('removes and restores a two-part default chord', () => {

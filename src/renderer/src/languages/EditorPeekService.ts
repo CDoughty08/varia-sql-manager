@@ -2,6 +2,8 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { reservedKeywords } from '../../../shared/sql/lexer.ts'
+import type { Disposable } from '../core/types'
+import { monacoKeyCodes, type BridgeMonaco } from '../editor/keybinding-bridge'
 import type { PeekAnchor, PeekService, PeekSource } from '../explorer/PeekService'
 import type { PeekTabService } from '../explorer/PeekTabService'
 import type { ScriptingService } from '../scripting/ScriptingService'
@@ -21,7 +23,7 @@ export interface EditorPeekOptions {
   readonly sqlLanguage: Partial<Pick<SqlLanguageService, 'definition'>>
   readonly connections: { isLive(connectionId: string): boolean }
   readonly scripting?: Pick<ScriptingService, 'run' | 'inform'>
-  readonly peek?: Pick<PeekService, 'peekAt' | 'hoverAt' | 'cancelHover' | 'getSnapshot'>
+  readonly peek?: Pick<PeekService, 'peekAt' | 'hoverAt' | 'cancelHover' | 'getSnapshot' | 'close' | 'subscribe'>
   readonly peekTabs?: Pick<PeekTabService, 'open'>
 }
 
@@ -50,8 +52,43 @@ export function editorPeekAnchor({ editor, model, position }: EditorPlace): Peek
       const subscriptions = [editor.onDidScrollChange(moved), editor.onDidLayoutChange(moved), editor.onDidChangeModelContent(gone), editor.onDidChangeModel(gone), editor.onDidDispose(gone)]
       return () => { for (const subscription of subscriptions) subscription.dispose() }
     },
-    focus: () => editor.focus()
+    focus: () => editor.focus(),
+    owner: editor
   }
+}
+
+/** The Monaco context key set on a SQL editor while Peek's card is open beside a name in it, or Alt+F12 looks one up there. */
+export const peekCardContextKey = 'variaPeekCard'
+/**
+ * Monaco's own uses of Escape in an editor, which come before the card's: each closes its widget, leaves its snippet or
+ * cancels its operation first. A rule added through Monaco's API outranks every default, so the card's clause steps aside
+ * for each of these; tests/monaco-keybindings.test.ts fails when a Monaco upgrade adds another. A selection is not one:
+ * as with VS Code's peek, Escape closes the card first and clears the selection next.
+ */
+export const monacoEscapeContextKeys = ['suggestWidgetVisible', 'findWidgetVisible', 'messageVisible', 'inSnippetMode', 'codeActionMenuVisible', 'referenceSearchVisible',
+  'inReferenceSearchEditor', 'markersNavigationVisible', 'hasSymbols', 'cancellableOperation', 'inQuickInput'] as const
+export const peekCardEscapeWhen = [peekCardContextKey, ...monacoEscapeContextKeys.map(key => `!${key}`)].join(' && ')
+export const closePeekCardCommand = 'varia.closePeekCard'
+
+/**
+ * Escape in the SQL editor Peek's card belongs to closes it, as Esc in Object Explorer's tree closes a row's: a card the
+ * pointer opened leaves focus in the editor, so the card's own Esc never sees the key. Monaco dispatches it, after its widgets.
+ */
+export function registerPeekCardEscape(monaco: BridgeMonaco, editorPeek: Pick<EditorPeekService, 'closeCard'>): Disposable {
+  const command = monaco.editor.registerCommand(closePeekCardCommand, () => editorPeek.closeCard())
+  try {
+    const rule = monaco.editor.addKeybindingRules([{ keybinding: monacoKeyCodes.escape!, command: closePeekCardCommand, when: peekCardEscapeWhen }])
+    return { dispose: () => { rule.dispose(); command.dispose() } }
+  } catch (error) { command.dispose(); throw error }
+}
+
+/** Keeps `peekCardContextKey` on `editor` in step with `cardIn`, for the Escape rule. */
+export function bindPeekCardKey(editor: Pick<Monaco.editor.IStandaloneCodeEditor, 'createContextKey'>, editorPeek: Pick<EditorPeekService, 'cardIn' | 'subscribe'>): Disposable {
+  const key = editor.createContextKey<boolean>(peekCardContextKey, false)
+  const sync = () => key.set(editorPeek.cardIn(editor))
+  const unsubscribe = editorPeek.subscribe(sync)
+  sync()
+  return { dispose: () => { unsubscribe(); key.reset() } }
 }
 
 /**
@@ -65,14 +102,51 @@ export class EditorPeekService {
   private shown: { readonly key: string; readonly id: number | undefined } | undefined
   /** The name a hover's lookup is running for while it is still wanted, so the pointer moving within it starts no other. */
   private pending: { readonly key: string; readonly wanted: () => boolean } | undefined
+  /** Alt+F12's lookup while it runs: the editor it is for, until the card opens, nothing is found or Escape drops it. */
+  private opening: { readonly editor: object } | undefined
+  private readonly listeners = new Set<() => void>()
 
   constructor(private readonly options: EditorPeekOptions) {}
+
+  /** Whether Escape in `editor` is the card's: the card is beside a name in it, or Alt+F12 is looking one up there. */
+  cardIn(editor: object): boolean {
+    return this.opening?.editor === editor || this.options.peek?.getSnapshot().open?.anchor?.owner === editor
+  }
+
+  /** Calls `listener` whenever `cardIn` may have changed. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    const unsubscribe = this.options.peek?.subscribe(listener)
+    return () => { this.listeners.delete(listener); unsubscribe?.() }
+  }
+
+  /** Escape in the editor (`closePeekCardCommand`): the card beside a name closes, and an Alt+F12 still looking one up opens nothing. */
+  closeCard(): void {
+    this.setOpening(undefined)
+    if (this.options.peek?.getSnapshot().open?.anchor) this.options.peek.close()
+  }
+
+  private setOpening(opening: { readonly editor: object } | undefined): void {
+    if (this.opening === opening) return
+    this.opening = opening
+    for (const listener of [...this.listeners]) listener()
+  }
 
   /**
    * `wanted` (a hover's) turns false once the hover is cancelled: the lookup's answer then opens nothing. Resolves to whether
    * the card, tab or script opened.
    */
   async run(mode: DefinitionMode, place: EditorPlace, source: PeekSource = 'keyboard', wanted: () => boolean = () => true): Promise<boolean> {
+    const { sqlLanguage, scripting } = this.options
+    if (!sqlLanguage.definition || !scripting) return false
+    // Until Alt+F12's card opens, Escape in its editor drops it, so a slow lookup never opens a card (and takes focus) later.
+    const opening = mode === 'card' && source !== 'hover' ? { editor: place.editor } : undefined
+    if (opening) this.setOpening(opening)
+    try { return await this.find(mode, place, source, opening ? () => wanted() && this.opening === opening : wanted) }
+    finally { if (opening && this.opening === opening) this.setOpening(undefined) }
+  }
+
+  private async find(mode: DefinitionMode, place: EditorPlace, source: PeekSource, wanted: () => boolean): Promise<boolean> {
     const { sqlLanguage, scripting, connections } = this.options
     if (!sqlLanguage.definition || !scripting) return false
     const quiet = source === 'hover'
@@ -80,7 +154,7 @@ export class EditorPeekService {
     const word = place.model.getWordAtPosition(place.position)?.word, version = place.model.getVersionId()
     let found
     try { found = await sqlLanguage.definition(place.model, place.position) }
-    catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
+    catch (error) { if (wanted()) inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
     if (found === undefined || !wanted()) return false
     if (found === null || !connections.isLive(found.connectionId)) { inform(definitionMessages.notFound(word === undefined ? undefined : displayText(word))); return false }
     const node = definitionNode(found)

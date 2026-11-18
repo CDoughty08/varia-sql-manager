@@ -4,18 +4,18 @@ import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
 import { triggerEditorAction } from '../editor/actions'
 import { definitionMessages } from '../languages/definition'
-import type { DefinitionMode } from '../languages/EditorPeekService'
+import { registerPeekCardEscape, type DefinitionMode } from '../languages/EditorPeekService'
 
 type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections'> & {
   readonly sqlLanguage: Pick<Workbench['sqlLanguage'], 'refreshCache'>
-  readonly monaco?: { readonly editor: Pick<typeof Monaco.editor, 'getEditors'> }
-  readonly editorPeek?: Pick<Workbench['editorPeek'], 'run'>
+  readonly monaco?: { readonly editor: Pick<typeof Monaco.editor, 'getEditors'> & Partial<Pick<typeof Monaco.editor, 'registerCommand' | 'addKeybindingRules'>> }
+  readonly editorPeek?: Pick<Workbench['editorPeek'], 'run' | 'closeCard'>
 }
 
 /**
  * Refresh metadata for the chosen query while keeping its execution session and unsaved SQL; Go To Definition (F12), Peek
  * Definition (Alt+F12) and Open Definition in Peek Tab for the SQL editor that has focus: a query tab's, or Peek's read-only
- * one (`EditorPeekService` has the rules).
+ * one (`EditorPeekService` has the rules). Escape in the editor Peek's card is beside closes the card.
  */
 export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
@@ -39,5 +39,9 @@ export function languagesContribution({ commands, documents, connections, sqlLan
     commands.register('edit.peekDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: definition('card') }),
     commands.register('edit.openPeekTab', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: definition('tab') })
   ]
+  const editorApi = monaco?.editor
+  if (editorPeek && editorApi?.registerCommand && editorApi.addKeybindingRules) {
+    registrations.push(registerPeekCardEscape({ editor: { registerCommand: editorApi.registerCommand, addKeybindingRules: editorApi.addKeybindingRules } }, editorPeek))
+  }
   return { dispose: () => { refresh.dispose(); next.dispose(); previous.dispose(); for (const registration of registrations) registration.dispose() } }
 }

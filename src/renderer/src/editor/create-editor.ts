@@ -3,6 +3,7 @@ import type { Workbench } from '../core/workbench'
 import type { Disposable } from '../core/types'
 import { editorFontFamily } from '../fonts'
 import { bindExplorerDrop } from '../explorer/drop'
+import { bindPeekCardKey } from '../languages/EditorPeekService'
 
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
 export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; contains(target: Node | null): boolean; setVisible(visible: boolean): void }
@@ -98,8 +99,10 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   const drop = readOnly ? undefined : bindExplorerDrop(instance)
   if (use.contextKey) instance.createContextKey(use.contextKey, true)
   const definition = bindDefinitionPointer(workbench, instance, !use.contextKey)
+  // Peek's card beside a name here (or Alt+F12 looking one up) makes Escape in this editor close it.
+  const card = workbench.editorPeek ? bindPeekCardKey(instance, workbench.editorPeek) : undefined
   return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
-    dispose: () => { visibility(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+    dispose: () => { visibility(); card?.dispose(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }
 
 /** Monaco's Ctrl+hover definition link (`GotoDefinitionAtPositionEditorContribution.ID`). */
