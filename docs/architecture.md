@@ -219,8 +219,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
   in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`
   (`grid/hidden-columns.ts`) and `ResultTextWriter.Hidden`: never drawn, copied, searched, sorted, filtered or profiled,
-  and every backend column input refuses them (`INVALID_PARAMS`); only Save of a diff writes `Change`, `Old row`, `New
-  row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
+  and the backend's sort keys, filters, distinct values, profiles, pivots and identify's column refuse them
+  (`INVALID_PARAMS`), while search and Copy skip them and window reads serve them (the gutter reads them so); only Save
+  of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
   to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
   pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
