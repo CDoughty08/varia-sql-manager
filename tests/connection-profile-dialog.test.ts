@@ -696,20 +696,30 @@ describe('Save and Test Connection', () => {
     await act(async () => view.button('Load databases').click())
     await act(async () => view.button('Test Connection').click())
     expect(calls).toHaveBeenCalledOnce()
-    // Load databases finds the remembered password rejected: the form forgets it before Test signs in.
+    // Load databases finds the remembered password rejected: the form forgets it, and Test does not sign in again
+    // without one (another failed login would count toward a lockout policy).
     await act(async () => answer({ ok: false, error: 'Login failed.', code: 'SQL_ERROR', passwordForgotten: true }))
-    expect(calls).toHaveBeenCalledTimes(2)
+    expect(calls).toHaveBeenCalledOnce()
     expect(remember(view).checked).toBe(false)
+    expect(text(view)).toContain('The saved password was rejected, so it has been removed. Enter the password.')
+    // With a typed password, Test signs in once Load databases has finished.
+    await type(view, '#connect-password', 'typed')
+    await act(async () => view.button('Load databases').click())
+    await act(async () => view.button('Test Connection').click())
+    expect(calls).toHaveBeenCalledTimes(2)
+    await act(async () => answer({ ok: true, value: [] }))
+    expect(calls).toHaveBeenCalledTimes(3)
+    expect(calls.mock.calls[2][0]).toMatchObject({ password: 'typed' })
     await act(async () => answer({ ok: true, value: [] }))
     expect(text(view)).toContain('Connected to server-7')
     // Stop while Test waits cancels the Load databases quietly and sends no Test.
     await act(async () => view.button('Load databases').click())
-    const loading = calls.mock.calls[2][1]?.requestId
+    const loading = calls.mock.calls[3][1]?.requestId
     await act(async () => view.button('Test Connection').click())
     await act(async () => view.button('Stop').click())
     expect(view.api.cancelConnectionRequests).toHaveBeenCalledWith([loading])
     await act(async () => answer({ ok: false, error: 'Cancelled.', code: 'CANCELLED' }))
-    expect(calls).toHaveBeenCalledTimes(3)
+    expect(calls).toHaveBeenCalledTimes(4)
     expect(text(view)).toContain('Test cancelled.')
     expect(text(view)).not.toContain('Could not load databases')
   })

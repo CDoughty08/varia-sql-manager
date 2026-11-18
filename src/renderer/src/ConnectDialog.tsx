@@ -213,6 +213,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const databasesRequest = useRef<string | undefined>(undefined)
   // The running Load databases, which Test Connection and Save's check wait for rather than signing in beside it.
   const databasesRun = useRef<Promise<void> | undefined>(undefined)
+  // Remembered passwords the server rejected while the dialog was open; a check waiting on Load databases reads it.
+  const rejections = useRef(0)
   // Checks Stop ended before they sent their request.
   const stopped = useRef(new Set<string>())
   const stopButton = useRef<HTMLButtonElement>(null)
@@ -224,6 +226,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   function showLibrary(view: ConnectionLibraryView) { setLibrary(view.library); setSavedIds(new Set(view.savedPasswords)) }
   /** Main forgot every remembered password for these credentials, which SQL Server rejected. */
   function passwordRejected() {
+    rejections.current++
     const binding = credentialBinding(currentOptions.current)
     setSavedIds(current => new Set([...current].filter(id => { const profile = library.profiles.find(item => item.id === id); return !!profile && credentialBinding(profile.options) !== binding })))
     setRemember(false); setNotice(forgottenNotice)
@@ -447,9 +450,13 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       // One sign-in at a time: a Load databases still running finishes first, so a password it found rejected is
       // forgotten here too and its list cannot overwrite this one. Stop while waiting cancels both.
       if (databasesRun.current) {
+        const rejected = rejections.current
         await databasesRun.current
         if (!alive.current) return undefined
         if (testRequest.current !== requestId || stopped.current.has(requestId)) { setNotice(kind === 'save' ? saveCancelledNotice : testCancelledNotice); return undefined }
+        // The remembered password this check would use was just rejected and forgotten: signing in again without it
+        // would only add a failed login (lockout policies). The notice asks for the password.
+        if (rejections.current !== rejected && !labelled.password) return undefined
       }
       const result = await window.varia.discoverDatabases(labelled, { ...match ? { profileId: match.id } : {}, requestId, ...kind === 'save' ? { remember: true } : {} })
       if (!alive.current) return undefined
