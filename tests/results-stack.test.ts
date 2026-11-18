@@ -232,8 +232,18 @@ describe('the stacked results', () => {
     expect([one, two, three].every(entry => results.viewState('t1').weights!.has(entry))).toBe(true)
   })
 
+  it('name a comparison\'s splitter by the comparison\'s name, never by the number it was given', () => {
+    const { results, draw, splitters } = fixture()
+    const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
+    results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])
+    results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', ['1:2', '1:3'])
+    draw()
+    expect(splitters().at(-1)).toBe('Resize Differences: Result 1 → Result 2')
+    expect(container!.querySelectorAll('.rs-splitter')[4]?.getAttribute('aria-valuetext')).toMatch(/^Differences: Result 1 → Result 2 height \d+ pixels$/)
+  })
+
   it('close a view by its caption\'s button, a Table\'s closing its group, moving the focus to the next caption, then the Results tab', () => {
-    const { results, client, keys, draw, names, grids } = fixture()
+    const { results, client, keys, draw, names, grids, splitters } = fixture()
     const [one, two, three, pivot] = keys
     const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
     const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])!
@@ -244,6 +254,8 @@ describe('the stacked results', () => {
     draw()
     // One item per view: Result 3's Pivot directly under it, the comparison after the groups. Each grid says what it shows.
     expect(names()).toEqual(['Result 1', 'Result 2', 'Result 3', 'Pivot of Result 3', 'Differences: Result 1 → Result 2'])
+    // A Pivot's splitter says its own name, never "Result 4" (a number no one sees); the last view has none.
+    expect(splitters()).toEqual(['Resize Result 1', 'Resize Result 2', 'Resize Result 3', 'Resize Pivot of Result 3'])
     expect([...container!.querySelectorAll<HTMLElement>('[data-grid]')].map(element => [element.dataset.view, element.dataset.group])).toEqual([['table', '1'], ['table', '2'], ['table', '3'], ['pivot', '3'], ['comparison', undefined]])
     expect(closers().map(button => button.getAttribute('aria-label'))).toEqual(['Close Result 1', 'Close Result 2', 'Close Result 3', 'Close Pivot of Result 3', 'Close Differences: Result 1 → Result 2'])
     // A Table's button says what goes with it.

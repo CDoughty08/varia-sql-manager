@@ -86,6 +86,8 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in
   characters and bytes, and a histogram, computed in the backend over the rows the grid shows. A re-sort of a loaded
   result keeps it; it is computed again when the filters change, the result finishes loading or the query runs again.
+  A comparison's panel is titled Column profile with the comparison's name under it ("Differences: Result 1 →
+  Result 3"), and a Pivot's names the Pivot, never the number Varia gave it.
   The panel follows the grid's selection: the cards of the selected columns are tinted, the active cell's column's card
   is shaded and scrolled into view, and a click, Enter or Space on a card selects its column in the grid. The cards are
   one Tab stop (the active column's card), with the arrows, Home and End between them. **Selected Columns Only** (the
@@ -248,6 +250,8 @@ Stacked. It is the first toolbar tool to fold ([Narrow and short panes](#narrow-
 
 - A tab row of results then comparisons, then the selected result's view tabs (**Table**, or **Plan set**, and **Pivot**
   once built) with rows, columns, batch, filters and Save Results As beside them.
+- A comparison's tab reads old → new ("Result 1 → Result 3") beside the comparison icon, each side shortened in the
+  middle past 16 characters ("Open ord…sult 1) → Open ord…sult 3)"); its tooltip and accessible name are its full name.
 - Only the shown grid is mounted; each returns with its scroll, widths, selection, orientation, sort and filters. The
   shown view is the current grid; a result's tab returns to its last view; new Pivots and comparisons show at once.
 - While running, the first result stays selected unless you pick one; after a re-run the same number is selected.
@@ -294,15 +298,16 @@ A [named result](#named-results) shows its name wherever an unnamed one says "Re
 | Caption (Stacked) | As a tab; buttons named with the number. |
 | View tabs | "Views of Open orders", "Pivot of Open orders". |
 | Pivot | "Pivot of Open orders" in title, builder, "Out of date" and Update's tooltip ("Build Pivot of Open orders again from Open orders as it is filtered now"). |
-| Comparison | "Differences: Open orders → Result 3", strip links, columns not compared ("Price (Open orders)"); closed: "Open orders (closed)". |
+| Comparison | "Differences: Open orders → Result 3" (its tab "Open orders → Result 3"), strip links, columns not compared ("Price (Open orders)"); closed: "Open orders (closed)". |
 | Compare popover | Name with "Result 2"; sides "Open orders · Result 2". |
 | Go to Result, picker | Name with "Result 2" lighter ("Open orders, Result 2, Table"); filter matches either. |
-| Grid | Accessible name "Open orders, Result 2 of 5, …". |
-| Column Profile, splitter, plans | "Resize Open orders, Result 2", "Open orders, Result 2, plan 1". |
+| Grid | Accessible name "Open orders, Result 2 of 5, …"; a Pivot's or comparison's starts with its own name ("Differences: Open orders → Result 3, …"). |
+| Column Profile, splitter, plans | "Resize Open orders, Result 2", "Open orders, Result 2, plan 1"; a Pivot or comparison by its own name ("Resize Differences: Open orders → Result 3"). |
 | Memory details | "Query 3 · Open orders · Result 2"; narrow panels cut the query part first. |
 
-- Tabs showing a query-given name (or a Pivot or comparison made from one) are at most `--varia-resultTab` wide
-  (docs/themes/metrics.md) with an ellipsis; such a caption's name gives way before its facts. Tooltips keep the whole name.
+- Tabs showing a query-given name (or a Pivot made from one) are at most `--varia-resultTab` wide
+  (docs/themes/metrics.md) with an ellipsis; such a caption's name gives way before its facts. A comparison's tab is not
+  capped: its sides are shortened in the middle instead. Tooltips keep the whole name.
 - Two results of one name keep it, with numbers in lists, tooltips and accessible names ("Totals · Result 2"); things named
   after one add the number: "Pivot of Totals (Result 5)", "Differences: Totals (Result 2) → Orders".
 - A Pivot's or comparison's title is fixed when made.
