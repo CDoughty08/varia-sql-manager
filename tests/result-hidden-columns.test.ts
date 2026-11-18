@@ -82,13 +82,11 @@ describe('comparison gutter', () => {
   })
   it('reads the whole suffix with each row tile, across two tile columns', () => {
     const handle = { getWindow: () => new Promise<never>(() => {}), peekWindow: () => undefined, prefetch: () => {} }
-    // 40 data columns, then the marker (40), row numbers and tone (43): the suffix spans tile columns 1 only; at 30 data
-    // columns it spans 0 (30, 31) and 1 (32, 33).
-    for (const [columns, expected] of [[40, [1]], [30, [0, 1]]] as const) {
-      const data = new GridData({ handle, columns, tone: columns + 3, suffix: columns, clientInflight: () => 0, changed: () => {} })
-      const plan = data.plan({ firstRow: 0, lastRow: 10, firstColumn: 0, lastColumn: 5 }, 1000)
-      expect(plan.filter(key => tileRowOf(key) === 0).map(tileColumnOf).sort(), String(columns)).toEqual([...new Set([0, ...expected])].sort())
-    }
+    // 62 data columns: the marker (62) and Old row (63) are in tile column 1, New row (64) and the tone (65) in 2. A view of
+    // tile column 0 reads both: the tone's tile alone would leave the marker unread and the gutter blank.
+    const data = new GridData({ handle, columns: 62, tone: 65, suffix: 62, clientInflight: () => 0, changed: () => {} })
+    const plan = data.plan({ firstRow: 0, lastRow: 10, firstColumn: 0, lastColumn: 5 }, 1000)
+    expect(plan.filter(key => tileRowOf(key) === 0).map(tileColumnOf).sort()).toEqual([0, 1, 2])
   })
   it("reads the active row's suffix with its cell when the row is out of view, so its pinned header names it", () => {
     const reads: [number, number][] = []

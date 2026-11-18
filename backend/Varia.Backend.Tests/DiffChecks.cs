@@ -507,6 +507,20 @@ internal static class DiffChecks
         }
         check(suffix.Count == 2 && suffix[0].StartsWith("−|removed ", StringComparison.Ordinal) && suffix[1].StartsWith("+|added ", StringComparison.Ordinal) && !suffix.Any(text => text.Contains("cut ", StringComparison.Ordinal)),
             $"a diff row whose data reaches the 8 MiB row limit still stores its marker and tone whole: {string.Join(" / ", suffix)}");
+        // The reservation covers the row numbers too: data at the limit, nine-digit numbers and a short tone still fit whole.
+        var limit = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text]);
+        limit.BeginRow();
+        limit.ReserveRowBytes(UnifiedDiff.SuffixBytes("+", "added 2"));
+        limit.AppendText(new string('z', PageBuilder.MaxRowBytes));
+        limit.ReserveRowBytes(0);
+        limit.AppendText("+");
+        limit.EndFormatted(CellFormat.WriteInteger(limit.BeginFormatted(), 999_999_999));
+        limit.EndFormatted(CellFormat.WriteInteger(limit.BeginFormatted(), 999_999_999));
+        limit.AppendText("added 2");
+        limit.CommitRow();
+        var limited = PageView.Parse(limit.Seal(), 5);
+        check(limited.IsTruncated(0, 0) && !limited.IsTruncated(4, 0) && Encoding.UTF8.GetString(limited.Span(4, 0)) == "added 2" && Encoding.UTF8.GetString(limited.Span(1, 0)) == "+",
+            "a diff row's reservation leaves room for its marker, both row numbers at their widest and its tone after data at the row limit");
         // Data columns 0-2, then mark 3, leftRow 4, rightRow 5, tone 6.
         var refused = new List<string>();
         foreach (var hidden in new[] { 3, 4, 5, 6 })
@@ -515,6 +529,8 @@ internal static class DiffChecks
             {
                 Code("results.view", new { resultId = id, sort = new[] { new { column = hidden, descending = false, mode = "value" } } }),
                 Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "in", column = hidden, rows = new[] { 0 } } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "notIn", column = hidden, rows = new[] { 0 } } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "between", column = hidden, rows = new[] { 0, 1 } } } }),
                 Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "duplicates", columns = new[] { 0, hidden } } } }),
                 // No value list 999 exists, so only the column check answers INVALID_PARAMS (the list's would be VIEW_NOT_FOUND).
                 Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "groups", column = hidden, snapshotId = 999u } } }),
@@ -526,6 +542,9 @@ internal static class DiffChecks
         }
         check(refused.Count == 0, "sort keys, filters, duplicates columns, distinct values, profiles and identify refuse a hidden column: " + string.Join(" | ", refused));
         check(Code("results.view", new { resultId = id, sort = new[] { new { column = 2, descending = false, mode = "value" } } }) is null, "a diff's data columns still sort");
+        check(new[] { "in", "notIn" }.All(op => Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op, column = 2, rows = new[] { 0 } } } }) is null)
+            && Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "between", column = 2, rows = new[] { 0, 1 } } } }) is null,
+            "a diff's data columns still filter by in, notIn and between, so the hidden refusals above are the columns'");
         check(Code("results.identify", new { resultId = id, by = "column", column = 0 }) == "INVALID_PARAMS", "results.identify refuses by column on a diff: entry identity is its only identity");
         // Outside a diff, where by column is allowed, identify still refuses a hidden (tone) column and takes a data one.
         var toned = Fill(store, left.Budget, 7, [["1", "a", "same"], ["2", "b", "same"]], [Columns[0], Columns[1], new ResultColumn("", "nvarchar(500)", "text", Role: "tone")]);

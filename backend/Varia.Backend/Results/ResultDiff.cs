@@ -859,7 +859,7 @@ internal static class UnifiedDiff
         var view = side.Access.At(row, out var at, out var lengths);
         var truncated = 0;
         // The marker and tone follow the data, so data reaching the row limit must leave them room to be stored whole.
-        builder.ReserveRowBytes(3 * (marker.Length + (tone?.Length ?? 0)));
+        builder.ReserveRowBytes(SuffixBytes(marker, tone));
         for (var p = 0; p < side.Pairs.Length; p++)
         {
             var c = side.Column(p);
@@ -888,6 +888,10 @@ internal static class UnifiedDiff
         else builder.AppendText(tone);
         return set.TryCommitRow(truncated);
     }
+
+    /// <summary>The most a row's suffix adds after its data: the marker and tone as UTF-8, and two row numbers, which
+    /// <see cref="PageBuilder.BeginFormatted"/> writes outside the row budget but still counts against the row.</summary>
+    internal static int SuffixBytes(string marker, string? tone) => 3 * (marker.Length + (tone?.Length ?? 0)) + 2 * CellFormat.MaxFixedBytes;
 
     private static void Number(PageBuilder builder, int row)
     {
