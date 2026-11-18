@@ -134,6 +134,26 @@ export async function boundedClose(application, close, ms = closeMs) {
   try { child?.kill('SIGKILL') } catch { /* Already gone. */ }
 }
 
+/**
+ * Has every window's emulateMedia also re-read the reduced-motion preference in the workbench: Chromium reports a changed
+ * media query to the page (which sets or clears the reduced-motion class) only when it renders a frame, and a hidden smoke
+ * window may not render one. The workbench reads the media when it starts, so one that starts later needs no refresh.
+ */
+function refreshMotionOnEmulate(application) {
+  const wrapped = new WeakSet()
+  const wrap = page => {
+    if (wrapped.has(page)) return
+    wrapped.add(page)
+    const emulate = page.emulateMedia.bind(page)
+    page.emulateMedia = async (...args) => {
+      await emulate(...args)
+      await page.evaluate(() => window.__variaMotion?.refresh()).catch(() => {})
+    }
+  }
+  application.on('window', wrap)
+  for (const page of application.windows()) wrap(page)
+}
+
 /** Emulates reduced motion in every window, and has firstWindow() return a window only once it applies there. */
 function reduceMotion(application) {
   const applied = new WeakMap()
@@ -185,6 +205,7 @@ export const electron = {
     if (underXvfb(env)) env.VARIA_TEST_SHOW_WINDOW ??= '1'
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
+    refreshMotionOnEmulate(application)
     if (!motion) reduceMotion(application)
     const close = application.close.bind(application)
     const profile = await startProfile(application)

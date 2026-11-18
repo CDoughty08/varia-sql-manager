@@ -138,6 +138,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 /* Dockview draws the dock tab focus ring in the tab divider color, which is invisible on the tab. */
 .varia-dock .dv-tab:focus-visible::after, .varia-dock .dv-tab:has(:focus-visible)::after { outline-color: var(--varia-focusBorder) !important; }
+/* Dockview stops its tab and group-chip transitions with !important whenever the system asks for reduced motion; Varia
+   follows the system only with Reduce motion when the system asks, so these put them back, timed by the base motion, which
+   reduced motion sets to 0 (tests/reduced-motion.test.ts compares them with dockview.css). */
+:root .dv-tab.dv-tab--shifting { transition: transform var(--varia-motion-base) var(--varia-motion-ease), margin-left var(--varia-motion-base) var(--varia-motion-ease), margin-right var(--varia-motion-base) var(--varia-motion-ease), margin-top var(--varia-motion-base) var(--varia-motion-ease), margin-bottom var(--varia-motion-base) var(--varia-motion-ease) !important; }
+:root .dv-tab.dv-tab--dragging, :root .dv-tab.dv-tab--group-collapsed, :root .dv-tab.dv-tab--group-expanding, :root .dv-tab-group-chip.dv-tab-group-chip--dragging { transition: width var(--varia-motion-base) var(--varia-motion-ease), padding var(--varia-motion-base) var(--varia-motion-ease), margin var(--varia-motion-base) var(--varia-motion-ease), opacity var(--varia-motion-base) var(--varia-motion-ease) !important; }
+:root .dv-tab-group-chip.dv-tab-group-chip--shifting { transition: margin-left var(--varia-motion-base) var(--varia-motion-ease), margin-top var(--varia-motion-base) var(--varia-motion-ease) !important; }
+:root .dv-tabs-container-vertical .dv-tab.dv-tab--dragging, :root .dv-tabs-container-vertical .dv-tab.dv-tab--group-collapsed, :root .dv-tabs-container-vertical .dv-tab.dv-tab--group-expanding, :root .dv-tabs-container-vertical .dv-tab-group-chip.dv-tab-group-chip--dragging { transition: height var(--varia-motion-base) var(--varia-motion-ease), padding var(--varia-motion-base) var(--varia-motion-ease), margin var(--varia-motion-base) var(--varia-motion-ease), opacity var(--varia-motion-base) var(--varia-motion-ease) !important; }
 /* The 4 px sashes between groups paint over a tab's outer 2 px, so a tab's menu outline is drawn inside them. */
 .varia-dock .dv-tab[data-menu-target] { outline-offset: -3px; }
 .dock-workbench { --dv-paneview-header-height: 28px; --dv-tabs-and-actions-container-height: 28px; --dv-tab-font-size: var(--varia-size-xs); --dv-floating-titlebar-height: 16px; }

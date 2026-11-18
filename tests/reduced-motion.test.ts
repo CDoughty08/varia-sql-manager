@@ -5,7 +5,7 @@ import { followReducedMotion, reducedMotionQuery } from '../src/renderer/src/ser
 import { SettingsService } from '../src/renderer/src/settings/SettingsService'
 import { defaultSettings, settingDefs } from '../src/shared/settings/catalog'
 import { reducedMotionClass, reducedMotionRoot } from '../src/shared/theme/metrics'
-import { stylesheetRules } from './fixtures/css-rules'
+import { cssRules, stylesheetRules } from './fixtures/css-rules'
 import { settingsApi } from './fixtures/workbench'
 
 const key = 'environment.reduceMotionWithSystem'
@@ -76,6 +76,13 @@ describe('reduced motion', () => {
     followReducedMotion(root, { enabled: () => true, subscribe: () => () => {} })
     expect(reduced()).toBe(false)
   })
+  it('is wired into the workbench on the document root, from the setting and the system preference', () => {
+    const workbench = readFileSync('src/renderer/src/core/workbench.ts', 'utf8')
+    expect(workbench).toContain("followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,")
+    expect(workbench).toContain("media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })")
+    // Disposed with the workbench's other window listeners.
+    expect(workbench).toMatch(/const listeners = \[[^\]]*\breducedMotion,/)
+  })
   it('keys every reduced-motion rule off the root class, never the prefers-reduced-motion media query', () => {
     const rules = stylesheetRules()
     expect(rules.filter(rule => rule.at.some(prelude => /prefers-reduced-motion/.test(prelude))).map(rule => rule.selector), `use ${reducedMotionRoot} instead`).toEqual([])
@@ -93,5 +100,27 @@ describe('reduced motion', () => {
       .filter(file => readFileSync(join(dir, file), 'utf8').includes('prefers-reduced-motion')).map(file => file.replace(/\\/g, '/'))
     expect(readers).toEqual(['src/services/reduced-motion.ts'])
     expect(reducedMotionQuery).toBe('(prefers-reduced-motion: reduce)')
+  })
+  it('puts back every transition Dockview turns off under prefers-reduced-motion, timed by the motion tokens', () => {
+    // start.tsx imports this stylesheet; its own reduced-motion rules would follow the system whatever the setting says.
+    expect(readFileSync('src/renderer/src/start.tsx', 'utf8')).toContain("import 'dockview-react/dist/styles/dockview.css'")
+    const dockview = cssRules(readFileSync('node_modules/dockview-react/dist/styles/dockview.css', 'utf8'))
+    const parts = (selector: string) => selector.split(/,(?![^(]*\))/).map(part => part.trim())
+    const stopped = dockview.filter(rule => rule.at.some(prelude => /prefers-reduced-motion/.test(prelude)))
+    expect(stopped.length).toBeGreaterThan(0)
+    // Only transitions, so putting transitions back covers all of it.
+    expect(stopped.flatMap(rule => rule.declarations.map(({ property, value }) => `${property}: ${value}`))).toEqual(stopped.flatMap(rule => rule.declarations.map(() => 'transition: none !important')))
+    const classes = stopped.flatMap(rule => parts(rule.selector)).map(part => part.match(/^\.([\w-]+)$/)?.[1])
+    expect(classes.every(Boolean)).toBe(true)
+    const targeted = (part: string) => classes.some(name => new RegExp(`\\.${name}(?![\\w-])`).test(part.split(/\s+/).pop() ?? ''))
+    const properties = (value: string) => value.replace(/\s*!important$/, '').split(/,(?![^(]*\))/).map(item => item.trim().split(/\s+/)[0])
+    const varia = new Map(stylesheetRules().filter(rule => !rule.at.length).flatMap(rule => parts(rule.selector).flatMap(part => rule.declarations.filter(({ property }) => property === 'transition').map(({ value }) => [part, value] as const))))
+    const transitions = dockview.filter(rule => !rule.at.length).flatMap(rule => parts(rule.selector).filter(targeted).flatMap(part => rule.declarations.filter(({ property }) => property === 'transition').map(({ value }) => ({ part, value }))))
+    expect(transitions.length).toBeGreaterThan(0)
+    const missing = transitions.filter(({ part, value }) => {
+      const restored = varia.get(`:root ${part}`)
+      return !restored || !restored.endsWith('!important') || !/var\(--varia-motion-base\)/.test(restored) || properties(restored).join() !== properties(value).join()
+    })
+    expect(missing.map(({ part }) => part), 'restore these in styles.css as :root <selector> { transition: … var(--varia-motion-base) … !important; }').toEqual([])
   })
 })

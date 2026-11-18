@@ -245,7 +245,8 @@ bidirectional-text characters are removed from names, and the window chrome only
   root class `varia-reduced-motion` (`reducedMotionClass` in metrics.ts; `src/renderer/src/services/reduced-motion.ts`),
   which popouts and dialog windows copy from the main window. Every reduced-motion rule in `styles.css` starts with
   `:root.varia-reduced-motion`, and no stylesheet or renderer module reads `prefers-reduced-motion` itself
-  (`tests/reduced-motion.test.ts`). Smoke runs emulate reduced motion in every window and follow it without the setting
+  (`tests/reduced-motion.test.ts`). Dockview's stylesheet stops its tab and group-chip transitions under the media query,
+  so `styles.css` puts them back on the base motion token (the same test compares them with `dockview.css`). Smoke runs emulate reduced motion in every window and follow it without the setting
   (`VARIA_TEST_FOLLOW_SYSTEM_MOTION`), so their checks never read a color partway through a transition.
 - Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
   UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without

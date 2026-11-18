@@ -764,6 +764,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]
+  // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says; they
+  // re-read the media after each emulateMedia (scripts/fixtures/smoke.mjs).
+  const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
+    media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
+  if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [
     keybindings.attach(window),
@@ -771,9 +776,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
     blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
-    // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says.
-    followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
-      media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined }),
+    reducedMotion,
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the

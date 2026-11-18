@@ -22,11 +22,19 @@ export interface SystemMotion {
  * reduced motion, and keeps it current as either changes. Popouts and dialog windows copy the main root's classes
  * (popout-document.ts), so they follow it too. By default the setting is off and every animation plays.
  */
-export function followReducedMotion(root: Pick<HTMLElement, 'classList'>, options: ReducedMotionOptions): Disposable {
+export interface ReducedMotion extends Disposable {
+  /**
+   * Reads the system's preference again now. Chromium reports a changed media query only when it next renders a frame,
+   * which a hidden smoke window may not do; the smoke fixture calls this after each emulateMedia.
+   */
+  refresh(): void
+}
+
+export function followReducedMotion(root: Pick<HTMLElement, 'classList'>, options: ReducedMotionOptions): ReducedMotion {
   const { media } = options
   const update = () => { root.classList.toggle(reducedMotionClass, options.enabled() && media?.matches === true) }
   update()
   const unsubscribe = options.subscribe(update)
   media?.addEventListener('change', update)
-  return { dispose: () => { unsubscribe(); media?.removeEventListener('change', update); root.classList.remove(reducedMotionClass) } }
+  return { refresh: update, dispose: () => { unsubscribe(); media?.removeEventListener('change', update); root.classList.remove(reducedMotionClass) } }
 }

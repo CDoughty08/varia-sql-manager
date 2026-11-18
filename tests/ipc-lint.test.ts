@@ -94,6 +94,9 @@ await import(${JSON.stringify(core)})`
     expect(main).toContain('createChannel: () => new MessageChannelMain(), testSources: testSeams })')
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
     expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
+    // Smoke runs follow their emulated reduced motion without the setting; packaged builds never honour the variable.
+    expect(main).toContain("const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'")
+    expect(main.match(/VARIA_TEST_FOLLOW_SYSTEM_MOTION|--varia-follow-system-motion/g)).toHaveLength(2)
     // Remember password's reversible test cipher, for smoke runs on machines without a keyring.
     expect(main).toContain("const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
     // Updates follow a loopback test feed (plain http) only in unpackaged smoke runs; every other build reads GitHub over https.
