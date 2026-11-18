@@ -84,6 +84,15 @@ describe('reduced motion', () => {
     expect(workbench).toMatch(/const listeners = \[[^\]]*\breducedMotion,/)
     expect(workbench).toMatch(/attachWindow: target => \{\n\s+const attached = \[[^\]]*\breducedMotion\.watch\(target\)\]/)
   })
+  it('is followed by every smoke fixture page that loads the stylesheet, as the workbench is', () => {
+    // A page with styles.css but no follower ignores the smoke fixture's emulated reduced motion, so its checks can read a
+    // colour partway through a transition (document-frame-smoke.mjs did).
+    const dir = 'tests/fixtures'
+    const pages = readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter(file => /\.tsx?$/.test(file))
+      .map(file => ({ file: file.replace(/\\/g, '/'), code: readFileSync(join(dir, file), 'utf8') })).filter(({ code }) => /import '[^']*src\/renderer\/src\/styles\.css'/.test(code))
+    expect(pages.map(({ file }) => file)).toContain('document-frame/page.tsx')
+    expect(pages.filter(({ code }) => !code.includes('followReducedMotion(document.documentElement') || !code.includes('__variaMotion')).map(({ file }) => file)).toEqual([])
+  })
   it('updates when a popout or dialog window sees the preference change, as the main window may not while minimized', async () => {
     const { api, media, reduced } = await setup({}, false)
     await api.updateSettings({ [key]: true })
