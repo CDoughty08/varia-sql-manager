@@ -380,6 +380,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   endOpening(): void { if (this.opened && !this.opened.chain) this.opened = undefined }
   /** The user scrolled or clicked: the tree stops following the expand; an auto-expand still walking selects its end without scrolling there. */
   holdOpening(): void { if (this.opened) this.opened.held = true }
+  /** The user clicked a row: the expand ends, even when the row was selected already (a chevron's click selects nothing). */
+  endOpen(): void { this.opened = undefined }
   /** Auto-expand single children was turned off: a walk still waiting for a level stops where it is. */
   stopChain(): void { if (this.opened?.chain) this.opened = { ...this.opened, chain: false } }
 

@@ -220,7 +220,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (opening.settled && childrenShown(rows, index)) explorer.endOpening()
   })
   const holdOpening = useCallback(() => explorer.holdOpening(), [explorer])
-  useEffect(() => { if (!autoExpand) explorer.stopChain() }, [explorer, autoExpand])
+  // A layout effect: the walk stops as the change commits, before a page that arrives after it can walk on.
+  useLayoutEffect(() => { if (!autoExpand) explorer.stopChain() }, [explorer, autoExpand])
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
@@ -233,7 +234,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
-    select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
+    select: rowId => { explorer.endOpen(); explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
     toggle: rowId => explorer.toggleOpen(rowId, autoExpand),
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),

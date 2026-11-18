@@ -337,6 +337,18 @@ describe('ExplorerService: expanding as the user', () => {
     expect(f.explorer.getSnapshot().selected).toBe(database)
     expect(f.explorer.opening).toBeUndefined()
   })
+  it('stops when the user clicks a row, even the one already selected', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database), selected = f.explorer.getSnapshot().selected
+    await waiting(f, views)
+    f.explorer.endOpen()
+    f.explorer.select(selected!)
+    f.unhold(); f.release()
+    await settleAll()
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+    expect(f.explorer.opening).toBeUndefined()
+  })
   it('ends at, and selects, a level that comes back empty', async () => {
     const f = fixture()
     f.state.viewColumnsEmpty = true

@@ -2179,7 +2179,8 @@ try {
     const box = await tree().boundingBox()
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     const before = await tree().evaluate(element => element.scrollTop)
-    await page.mouse.wheel(0, -200)
+    // Far enough that Parameters, below, is out of view: a reveal of the walk's end would have to scroll back.
+    await page.mouse.wheel(0, -2000)
     await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(before)
     wheeledTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
   })
@@ -2187,14 +2188,36 @@ try {
   await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(wheeledTo)
   // Turning the setting off while Parameters loads stops the walk where it is: the procedure stays selected.
   const setAutoExpand = async value => expect((await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.autoExpandSingleChild': value }), value)).ok).toBe(true)
-  // Two frames after the change reaches the tree, its effect has run.
-  await heldThen('dbo.usp_4', async () => { await setAutoExpand(false); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))) })
+  // Main sends the change before it answers, and the tree stops the walk as the change commits: the page released next comes after.
+  await heldThen('dbo.usp_4', () => setAutoExpand(false))
   await expect.poll(async () => (await active())?.label).toBe('dbo.usp_4')
   await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_4', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
   expect((await active())?.label).toBe('dbo.usp_4')
   await setAutoExpand(true)
+  // A chevron click, a double-click and Numpad + walk on as Right does.
+  await setStub({ procedures: 10, holdParameters: false })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  const procedure = name => revealExplorerRow(page, ...procedures, name)
+  await (await procedure('dbo.usp_5')).locator(part.explorerTwistie).click()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await (await procedure('dbo.usp_6')).locator(part.explorerRowText).first().dblclick()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await selectRevealed(...procedures, 'dbo.usp_7')
+  await press('NumpadAdd', 'Parameters')
+  // Clicking the selected row while a chevron's walk waits stops it: the row stays selected.
+  // Both rows are found first: the tree changes under a scan while the walk waits.
+  await selectRevealed(...procedures, 'dbo.usp_8')
+  const [clicked, chevron] = [await procedure('dbo.usp_8'), await procedure('dbo.usp_9')]
+  await setStub({ holdParameters: true })
+  await chevron.locator(part.explorerTwistie).click()
+  await expect.poll(heldParameters).not.toBeNull()
+  await clicked.locator(part.explorerRowText).first().click()
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_9', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_8')
   await setStub({ holdParameters: false, procedures: 0 })
-  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder; switching query tabs or wheeling meanwhile keeps the tree where it was put, and turning the setting off stops it.')
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, by Right, Enter, Numpad +, chevron and double-click; switching query tabs or wheeling meanwhile keeps the tree where it was put, and clicking a row or turning the setting off stops it.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
