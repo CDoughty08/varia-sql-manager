@@ -127,10 +127,11 @@ is quarantined and the default place used; a file that cannot be read is never o
   before; one closed in full screen reopens as it was before full screen. A maximized window keeps its normal bounds,
   so un-maximizing goes back there.
 - **Platforms.** On Windows, a window placed on a display of another scale factor is placed again once created, as
-  Windows can size it by the wrong factor. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland display with
-  Electron's automatic platform) a window cannot place itself: only the size and the maximized flag are restored and the
-  compositor chooses where. Linux's maximized windows report no reliable normal bounds, so main keeps the last bounds it
-  saw while the window was normal.
+  Windows can size it by the wrong factor, and Windows unmaximizes a window just before it goes full screen, so that
+  unmaximize does not count. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland session with Electron's
+  automatic platform; an X11 session that also exports `WAYLAND_DISPLAY`, as WSLg does, stays X11) a window cannot place
+  itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen, and Linux's
+  maximize, report no reliable normal bounds, so main keeps the bounds the window last settled at while it was normal.
 - **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
 - A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
   set `VARIA_TEST_WINDOW_STATE=1`.

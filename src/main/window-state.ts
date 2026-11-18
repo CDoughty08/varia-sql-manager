@@ -22,7 +22,7 @@ export const mainWindowLimits = {
   maxCoordinate: 1_000_000,
   maxSize: 100_000
 } as const
-export const windowStateLimits = { fileBytes: 4096, saveDelayMs: 750, flushMs: 2000 } as const
+export const windowStateLimits = { fileBytes: 4096, saveDelayMs: 750, flushMs: 2000, fullScreenRestoreMs: 1000 } as const
 
 const coordinate = z.number().finite().min(-mainWindowLimits.maxCoordinate).max(mainWindowLimits.maxCoordinate)
 const size = z.number().finite().min(1).max(mainWindowLimits.maxSize)
@@ -127,15 +127,17 @@ export function placeWindow(saved: SavedWindowState | undefined, displays: Displ
 }
 
 /**
- * Whether this Linux process may run on Wayland, where a window cannot choose its own position. Electron uses Wayland when
- * `--ozone-platform=wayland`, or when the hint is auto (Electron's default) and a Wayland display is available. Erring
- * towards Wayland only costs an X11 session its saved position, never a window placed off screen.
+ * Whether this Linux process runs on Wayland, where a window cannot choose its own position, by Chromium's platform choice:
+ * `--ozone-platform` decides when given; the `wayland` hint needs a Wayland display; the `auto` hint (Electron's default)
+ * follows the session type, so an X11 session that also exports `WAYLAND_DISPLAY` (WSLg) stays X11. Erring towards
+ * Wayland only costs a session its saved position, never a window placed off screen.
  */
 export function onWayland(platform: NodeJS.Platform, switches: { ozonePlatform: string; ozonePlatformHint: string }, env: NodeJS.ProcessEnv): boolean {
   if (platform !== 'linux') return false
   if (switches.ozonePlatform) return switches.ozonePlatform === 'wayland'
   if (switches.ozonePlatformHint === 'x11') return false
-  return !!env.WAYLAND_DISPLAY
+  if (switches.ozonePlatformHint === 'wayland') return !!(env.WAYLAND_DISPLAY || env.WAYLAND_SOCKET)
+  return env.XDG_SESSION_TYPE === 'wayland'
 }
 
 /**
@@ -183,6 +185,7 @@ export interface TrackerOptions {
   readonly platform: NodeJS.Platform
   readonly save: (state: SavedWindowState) => Promise<void>
   readonly delayMs?: number
+  readonly now?: () => number
 }
 
 /**
@@ -191,16 +194,22 @@ export interface TrackerOptions {
  */
 export class WindowStateTracker {
   private latest: SavedWindowState | undefined
-  private timer: ReturnType<typeof setTimeout> | undefined
+  private timer: { window: TrackedWindow; handle: ReturnType<typeof setTimeout> } | undefined
   private writes: Promise<void> = Promise.resolve()
   constructor(private readonly options: TrackerOptions, initial?: SavedWindowState) { this.latest = initial }
   current(): SavedWindowState | undefined { return this.latest }
 
   track(window: TrackedWindow): void {
-    // The last bounds seen while the window was normal: full screen (and Linux's maximize) report no reliable normal bounds.
-    let normal: Rect | undefined = window.isMaximized() || window.isMinimized() || window.isFullScreen() ? undefined : window.getBounds()
-    let maximized = window.isMaximized()
+    const now = this.options.now ?? Date.now
     const isNormal = () => !window.isMaximized() && !window.isMinimized() && !window.isFullScreen()
+    // The bounds the window had once it last settled while normal. Recorded only when a change has settled: a platform may
+    // report the new size before the new state (an X11 window manager's resize before its maximized flag), and full screen
+    // reports no reliable normal bounds.
+    let normal: Rect | undefined = isNormal() ? window.getBounds() : undefined
+    let maximized = window.isMaximized()
+    // Windows restores a maximized window (unmaximize) just before it marks it full screen: entering full screen right after
+    // takes the flag back, so the window reopens maximized as it was before full screen.
+    let unmaximized: { at: number; was: boolean } | undefined
     const capture = (): SavedWindowState | undefined => {
       if (window.isDestroyed()) return undefined
       const fullScreen = window.isFullScreen(), minimized = window.isMinimized()
@@ -211,19 +220,27 @@ export class WindowStateTracker {
       else bounds = window.getNormalBounds()
       return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, maximized }
     }
-    const changed = () => {
-      if (window.isDestroyed()) return
+    const settled = () => {
+      if (window.isDestroyed()) return undefined
       if (isNormal()) normal = window.getBounds()
-      this.schedule(capture)
+      return capture()
     }
+    const changed = () => { if (!window.isDestroyed()) this.schedule(window, settled) }
     window.on('move', changed)
     window.on('resize', changed)
     window.on('maximize', () => { if (!window.isFullScreen()) maximized = true; changed() })
-    window.on('unmaximize', () => { if (!window.isFullScreen()) maximized = false; changed() })
-    window.on('enter-full-screen', changed)
+    window.on('unmaximize', () => {
+      if (!window.isFullScreen()) { unmaximized = { at: now(), was: maximized }; maximized = false }
+      changed()
+    })
+    window.on('enter-full-screen', () => {
+      if (unmaximized && now() - unmaximized.at <= windowStateLimits.fullScreenRestoreMs) maximized = unmaximized.was
+      unmaximized = undefined
+      changed()
+    })
     window.on('leave-full-screen', changed)
-    window.on('close', () => { this.cancel(); this.write(capture()) })
-    window.on('closed', () => this.cancel())
+    window.on('close', () => { this.cancel(window); this.write(capture()) })
+    window.on('closed', () => this.cancel(window))
   }
 
   /** Waits for the writes started so far, at most `flushMs`; never rejects. */
@@ -233,11 +250,17 @@ export class WindowStateTracker {
     return Promise.race([this.writes, limit]).finally(() => clearTimeout(timer))
   }
 
-  private schedule(capture: () => SavedWindowState | undefined): void {
-    this.cancel()
-    this.timer = setTimeout(() => { this.timer = undefined; this.write(capture()) }, this.options.delayMs ?? windowStateLimits.saveDelayMs)
+  private schedule(window: TrackedWindow, run: () => SavedWindowState | undefined): void {
+    if (this.timer) clearTimeout(this.timer.handle)
+    const handle = setTimeout(() => { this.timer = undefined; this.write(run()) }, this.options.delayMs ?? windowStateLimits.saveDelayMs)
+    this.timer = { window, handle }
   }
-  private cancel(): void { if (this.timer) { clearTimeout(this.timer); this.timer = undefined } }
+  /** Drops `window`'s pending save; a window that replaced it keeps its own. */
+  private cancel(window: TrackedWindow): void {
+    if (this.timer?.window !== window) return
+    clearTimeout(this.timer.handle)
+    this.timer = undefined
+  }
   private write(state: SavedWindowState | undefined): void {
     if (!state) return
     const previous = this.latest

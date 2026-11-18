@@ -124,14 +124,24 @@ describe('parseWindowStateFile', () => {
 
 describe('onWayland', () => {
   const none = { ozonePlatform: '', ozonePlatformHint: '' }
-  it('is only Linux with a Wayland display, unless a switch says otherwise', () => {
-    expect(onWayland('win32', none, { WAYLAND_DISPLAY: 'wayland-0' })).toBe(false)
+  it('follows the session type under the automatic hint, as Chromium chooses its platform', () => {
+    expect(onWayland('win32', none, { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' })).toBe(false)
     expect(onWayland('darwin', none, {})).toBe(false)
     expect(onWayland('linux', none, { DISPLAY: ':0' })).toBe(false)
-    expect(onWayland('linux', none, { WAYLAND_DISPLAY: 'wayland-0' })).toBe(true)
-    expect(onWayland('linux', { ozonePlatform: 'x11', ozonePlatformHint: '' }, { WAYLAND_DISPLAY: 'wayland-0' })).toBe(false)
-    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'x11' }, { WAYLAND_DISPLAY: 'wayland-0' })).toBe(false)
+    expect(onWayland('linux', none, { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' })).toBe(true)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'auto' }, { XDG_SESSION_TYPE: 'wayland' })).toBe(true)
+    // WSLg and X11 desktops that also export a Wayland display stay on X11.
+    expect(onWayland('linux', none, { WAYLAND_DISPLAY: 'wayland-0', DISPLAY: ':0' })).toBe(false)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'auto' }, { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'x11' })).toBe(false)
+  })
+
+  it('takes the explicit platform and hint switches', () => {
+    expect(onWayland('linux', { ozonePlatform: 'x11', ozonePlatformHint: '' }, { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' })).toBe(false)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'x11' }, { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' })).toBe(false)
     expect(onWayland('linux', { ozonePlatform: 'wayland', ozonePlatformHint: '' }, {})).toBe(true)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'wayland' }, { WAYLAND_DISPLAY: 'wayland-0' })).toBe(true)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'wayland' }, { WAYLAND_SOCKET: '3' })).toBe(true)
+    expect(onWayland('linux', { ozonePlatform: '', ozonePlatformHint: 'wayland' }, { XDG_SESSION_TYPE: 'wayland' })).toBe(false)
   })
 })
 
@@ -250,11 +260,57 @@ describe('WindowStateTracker', () => {
   it('uses the last normal bounds it saw on Linux, whose maximized windows report no reliable normal bounds', async () => {
     const { tracker, save, state, emit } = setup('linux')
     state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')
+    vi.advanceTimersByTime(500)
     state.maximized = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; state.normal = state.bounds
     emit('maximize'); emit('resize')
     emit('close')
     await tracker.flush()
     expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1300, height: 900, maximized: true })
+  })
+
+  it('ignores a size reported before the maximized state, as X11 window managers may order them', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    // The resize to the work area arrives while isMaximized() is still false; the flag follows within the same burst.
+    state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+    state.maximized = true; state.normal = state.bounds; emit('maximize')
+    vi.advanceTimersByTime(500)
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
+  })
+
+  it('reopens maximized after a close in full screen entered from maximized, though Windows unmaximizes first', async () => {
+    const { tracker, save, state, emit } = setup('win32')
+    state.maximized = true; emit('maximize')
+    vi.advanceTimersByTime(5000)
+    // Windows restores the zoomed window, then marks it full screen.
+    state.maximized = false; emit('unmaximize')
+    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('enter-full-screen'); emit('resize')
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
+  })
+
+  it('a real unmaximize long before full screen stays unmaximized', async () => {
+    const { tracker, save, state, emit } = setup('win32')
+    state.maximized = true; emit('maximize')
+    state.maximized = false; emit('unmaximize')
+    vi.advanceTimersByTime(5000)
+    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('enter-full-screen')
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: false })
+  })
+
+  it('keeps the pending save of a replacement window when the window it replaced closes', async () => {
+    const { tracker, save, emit } = setup('win32')
+    const replacement = fakeWindow({ x: 400, y: 300, width: 1200, height: 800 })
+    tracker.track(replacement.window)
+    replacement.state.maximized = true; replacement.emit('maximize')
+    emit('closed')
+    vi.advanceTimersByTime(500)
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 400, y: 300, width: 1200, height: 800, maximized: true })
   })
 
   it('writes nothing when the place did not change', async () => {
