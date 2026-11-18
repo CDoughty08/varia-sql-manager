@@ -57,6 +57,14 @@ function admitVerifiedPassword(store: object, options: ConnectionOptions): void 
   entries.set(credentialBinding(options), { secret: rejectedSecret(options.password!), expires: now + verifiedLifetime })
   if (entries.size > 64) entries.delete(entries.keys().next().value!)
 }
+/**
+ * Save's remembered password, under the same per-binding gate as a connect's credential write. The caller has proved it
+ * with takeVerifiedPassword.
+ */
+export async function rememberCheckedPassword(store: Pick<SavedPasswordStore, 'set'>, profileId: string, options: ConnectionOptions): Promise<void> {
+  const release = await acquire(store, `binding:${credentialBinding(options)}`)
+  try { await store.set(profileId, options) } finally { release() }
+}
 /** Whether `options.password` is the one a check just verified for these credentials; a match is used up. */
 export function takeVerifiedPassword(store: object, options: ConnectionOptions): boolean {
   const entries = verified.get(store), binding = credentialBinding(options), entry = entries?.get(binding)
@@ -243,7 +251,7 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
     } catch { return { ...outcome, credentialRejected: true } }
   }
   if (prepared.method !== 'connections.connect') {
-    // Test Connection, or Save checking a typed password it is to remember: Save may now remember this one.
+    // Save checking a typed password it is to remember (Test Connection sends no `remember`): Save may now remember it.
     if (context?.remember && !prepared.injected && params.password && canRememberPassword(params.authentication)) admitVerifiedPassword(deps.savedPasswords, params)
     return outcome
   }

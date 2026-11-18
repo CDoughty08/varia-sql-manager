@@ -60,12 +60,13 @@ export function savedConnection(options: ConnectionOptions): Omit<ConnectionOpti
   return parsed
 }
 export const connectionAutoReconnectSchema = z.enum(['inherit', 'on', 'off'])
-/** `saved`: the user saved the entry with Save, so History keeps it (in its Saved group until it connects) though it is
- *  not recent, a favorite or registered. */
+/** `saved`: the user saved the entry with Save before it ever connected, so History keeps it (in its Saved group) though
+ *  it is not recent, a favorite or registered. Connecting clears it: the entry is then a recent one. */
 export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions, 'password'>; favorite: boolean; registered: boolean; saved?: boolean; lastConnected?: string; autoReconnect?: 'inherit' | 'on' | 'off' }
 export interface ConnectionLibrary { version: 1; profiles: ConnectionProfile[] }
-/** `rememberPassword`: Save remembers the options' typed password under the entry, which main does only for a password a
- *  Test Connection or Save check just signed in with (connections.databases with `remember`). */
+/** `saved`: Save keeps an entry that has not connected yet (History's Saved group). `rememberPassword`: Save remembers the
+ *  options' typed password under the entry, which main does only for a password Save's check just signed in with
+ *  (connections.databases with `remember`). */
 export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean; saved?: boolean; rememberPassword?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
 export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional(), saved: z.boolean().optional(), rememberPassword: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()
 /** Set Connection Environment: the live connection's options name its entry (by connectionKey), and only the entry's label

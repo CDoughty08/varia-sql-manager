@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionSaveView, type SecretStorageState } from '../shared/connections'
-import { takeVerifiedPassword } from './connection-requests'
+import { rememberCheckedPassword, takeVerifiedPassword } from './connection-requests'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 
@@ -41,7 +41,7 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
       const { rememberPassword: _remember, ...entry } = input
       const saved = await deps.connections.saveEntry(entry)
       let passwordSaved = true
-      try { await deps.savedPasswords.set(saved.id, input.options) } catch { passwordSaved = false }
+      try { await rememberCheckedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordSaved = false }
       const { library, savedPasswords } = await view(saved.library)
       return { library, savedPasswords, passwordSaved }
     },

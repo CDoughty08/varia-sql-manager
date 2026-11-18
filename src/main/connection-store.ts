@@ -61,9 +61,10 @@ export class ConnectionStore {
       profile.options = kept ? { ...options, environment: kept } : options
       if (input.favorite !== undefined) profile.favorite = input.favorite
       if (input.registered !== undefined) profile.registered = input.registered
-      if (input.saved) profile.saved = true
+      // Saved marks only an entry that never connected; a connection makes it recent instead.
+      if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
-      if (connected) profile.lastConnected = new Date().toISOString()
+      if (connected) { profile.lastConnected = new Date().toISOString(); delete profile.saved }
       prune(library)
       return { id: profile.id, environment: profile.options.environment }
     })
