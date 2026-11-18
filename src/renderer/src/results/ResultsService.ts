@@ -1462,7 +1462,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  (results.pivot) as its source group's Pivot, directly under the Table; a diff (results.diff) as a comparison, after the
    *  groups. It is released with the run's others, and its rows are not counted among those the query read. `sources` are
    *  the set keys it was made from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one)
-   *  does not take it. `pivot` is a pivot's provenance, kept with its slot.
+   *  does not take it. `pivot` is a pivot's provenance, kept with its slot. `names` are the sources' names as its title
+   *  gave them (a comparison's, frozen when Compare was pressed), so its tab's "old → new" says what its title says.
    *
    *  A group that has a Pivot keeps it until this call: the new result replaces the old one in the same slot, under the same
    *  entry key, as the slot's next revision, and only then is the old result released (`replaceSet`). Nothing is freed
@@ -1471,7 +1472,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  Returns its entry's key, or undefined when the run is gone, still running, lacks a source, has its most sets, is
    *  drawn bare, or the result is a pivot of anything but a group's Table of rows; the result is then released, since
    *  nothing else would close it. */
-  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = [], o: { readonly pivot?: PivotProvenance } = {}): EntryKey | undefined {
+  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = [], o: { readonly pivot?: PivotProvenance; readonly names?: readonly string[] } = {}): EntryKey | undefined {
     const run = this.runs.get(tabId)
     const key = setKey(descriptor)
     if (run?.setKeys.has(key)) return undefined
@@ -1485,7 +1486,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
     // Pivot, a comparison or a plan set), and a group has one, so a new one takes the slot of the one it had.
     const group = view === 'comparison' ? undefined : origin?.group
-    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
+    const refs = from.map((source, at): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: o.names?.[at] ?? distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })

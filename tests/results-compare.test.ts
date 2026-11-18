@@ -5,6 +5,7 @@ import { CompareService, compareFullText, compareSources, compareText } from '..
 import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
+import { comparisonTabLabel } from '../src/renderer/src/grid/result-picker'
 import { ResultsService, resultLimits, setKey, slotOf, type TabResults } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -508,6 +509,30 @@ describe('a comparison\'s source links', () => {
     expect(compareText(info, compareSources(tab(), slot().sources))).toMatch(/^Result 1 \(closed\) → Result 3, rows matched by Id: /)
     // An entry of that key that shows another result is not the input it compared.
     expect(compareSources(tab(), [{ ...slot().sources[1], set: '1:12345' }])).toEqual([{ name: 'Result 3' }])
+  })
+})
+
+describe('a comparison\'s names', () => {
+  it('keep the names its title was given in its tab, though a result of the same name closes while it runs', async () => {
+    const { compare, results, client, tab, handle } = fixture()
+    results.begin('t1', 'q1')
+    const values = [descriptor(1, { index: 0, name: 'Totals' }), descriptor(2, { index: 1 }), descriptor(3, { index: 2, name: 'Totals' })]
+    for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })
+    void results.finish('t1', 'q1', { summary: summaryOf(values) })
+    const keys = tab().sets.map(set => set.key)
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const made = compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    // Result 3 is not an input: closing it does not give the comparison up, but leaves Result 1 the only "Totals".
+    results.removeEntry('t1', keys[2])
+    answer.resolve({ descriptor: descriptor(5000, { index: 0, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await made
+    const slot = tab().comparisons[0]
+    expect(slot.entry.label).toBe('Differences: Totals (Result 1) → Result 2')
+    expect(slot.sources.map(source => source.name)).toEqual(['Totals (Result 1)', 'Result 2'])
+    // Not "Totals → Result 2": the tab says what its title says, its old side shortened past 16 characters.
+    expect(comparisonTabLabel(slot)).toBe('Totals (…sult 1) → Result 2')
   })
 })
 
