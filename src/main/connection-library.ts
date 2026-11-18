@@ -48,10 +48,10 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
       if (!takeVerifiedPassword(deps.savedPasswords, input.options)) throw new Error('The password was not checked with the server. Save again to check it.')
       const { rememberPassword: _remember, ...entry } = input
       const saved = await deps.connections.saveEntry(entry)
-      let passwordSaved = true
-      try { await rememberCheckedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordSaved = false }
+      let passwordSaved = true, passwordReplaced = false
+      try { passwordReplaced = await rememberCheckedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordSaved = false }
       const { library, savedPasswords } = await view(saved.library)
-      return { library, savedPasswords, passwordSaved }
+      return { library, savedPasswords, passwordSaved, passwordReplaced }
     },
     async setEnvironment(value: unknown): Promise<ConnectionLibraryView> {
       const { library, savedPasswords } = await view(await deps.connections.setEnvironment(connectionEnvironmentInputSchema.parse(value)))

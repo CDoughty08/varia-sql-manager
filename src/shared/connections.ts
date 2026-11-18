@@ -128,6 +128,6 @@ export const connectContextSchema = z.object({
 export type ConnectContext = z.infer<typeof connectContextSchema>
 /** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
 export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }
-/** Save's answer: whether the password it was asked to remember was remembered, or to forget was forgotten (absent when
- *  neither was asked). */
-export interface ConnectionSaveView extends ConnectionLibraryView { passwordSaved?: boolean; passwordForgotten?: boolean }
+/** Save's answer: whether the password it was asked to remember was remembered (and replaced a different one), or to
+ *  forget was forgotten (absent when neither was asked). */
+export interface ConnectionSaveView extends ConnectionLibraryView { passwordSaved?: boolean; passwordReplaced?: boolean; passwordForgotten?: boolean }

@@ -484,10 +484,15 @@ describe('Save with a checked password', () => {
     await request('connections.databases', options, { remember: true }, () => ({ ok: true, value: [{ name: 'master' }] }))
     const saved = await library.save({ options, saved: true, rememberPassword: true })
     const id = saved.library.profiles[0].id
-    expect(saved).toMatchObject({ passwordSaved: true, savedPasswords: [id] })
+    expect(saved).toMatchObject({ passwordSaved: true, passwordReplaced: true, savedPasswords: [id] })
     expect(await savedPasswords.get(id, empty)).toBe(marker)
     expect(await readFile(join(directory, 'connections.json'), 'utf8')).not.toContain(marker)
     await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    // Saving the same password again keeps its revision, so Object Explorer targets holding it are not told to re-enter it.
+    const before = await savedPasswords.reference(id, options)
+    await request('connections.databases', options, { remember: true }, () => ({ ok: true, value: [{ name: 'master' }] }))
+    expect(await library.save({ id, options, saved: true, rememberPassword: true })).toMatchObject({ passwordSaved: true, passwordReplaced: false })
+    expect(await savedPasswords.reference(id, options)).toEqual(before)
   })
   it('refuses a check for other login settings, an expired check, and reports a password it could not store', async () => {
     const { connections, savedPasswords, request } = await setup()

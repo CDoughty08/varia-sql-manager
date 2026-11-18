@@ -59,11 +59,11 @@ function admitVerifiedPassword(store: object, options: ConnectionOptions): void 
 }
 /**
  * Save's remembered password, under the same per-binding gate as a connect's credential write. The caller has proved it
- * with takeVerifiedPassword.
+ * with takeVerifiedPassword. Resolves whether it replaced the password (see SavedPasswordStore.set).
  */
-export async function rememberCheckedPassword(store: Pick<SavedPasswordStore, 'set'>, profileId: string, options: ConnectionOptions): Promise<void> {
+export async function rememberCheckedPassword(store: Pick<SavedPasswordStore, 'set'>, profileId: string, options: ConnectionOptions): Promise<boolean> {
   const release = await acquire(store, `binding:${credentialBinding(options)}`)
-  try { await store.set(profileId, options) } finally { release() }
+  try { return await store.set(profileId, options) } finally { release() }
 }
 /** Whether `options.password` is the one a check just verified for these credentials; a match is used up. */
 export function takeVerifiedPassword(store: object, options: ConnectionOptions): boolean {
