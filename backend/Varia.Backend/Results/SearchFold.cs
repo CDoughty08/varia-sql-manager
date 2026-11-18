@@ -26,8 +26,8 @@ internal sealed class SearchFold
         1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
-    // About 450 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
-    // a handful (at most 35 cultures times 16 option sets, about 250 MB, if every one were searched).
+    // About 400 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
+    // a handful (at most 35 cultures times 16 option sets, about 220 MB, if every one were searched).
     private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
     /// <summary>The fold for a culture and compare options once it is built, else null (and the build started on the thread
@@ -55,7 +55,7 @@ internal sealed class SearchFold
     internal static SearchFold Build(int lcid, CompareOptions options) => new(CultureInfo.GetCultureInfo(lcid).CompareInfo, options);
 
     // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss, a Hangul
-    // syllable to its jamo where accents count) or none. Those are packed, not a dictionary of strings, which took 1 MB a
+    // syllable to its jamo but in Korean) or none. Those are packed, not a dictionary of strings, which took 1 MB a
     // fold: each code unit's entry (from 1), and each entry's fold as a range of one pool.
     private readonly char[] single = new char[65536];
     private readonly ushort[] multipleEntries = new ushort[65536];
