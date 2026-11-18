@@ -506,7 +506,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       if (form === shape(baseline.current.options, baseline.current.autoReconnect)) return undefined
       return form === shape(target.options, target.autoReconnect ?? 'inherit') ? undefined : { target }
     }
-    // Settings another saved entry already has are not new; a form Save would refuse has nothing to save.
+    // Settings another saved entry already has are not new; Save must be available (library loaded, a server, authentication ready); a label Save then refuses keeps the prompt open with its error.
     // Aliases (several entries with these settings and none named by the labels) are saved too: Save would overwrite one.
     const key = entryKey(options)
     if (!touched.current || form === pristine.current || library.profiles.some(profile => entryKeys.get(profile.id) === key) || !loaded || !options.server.trim() || !authReady) return undefined
