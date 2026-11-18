@@ -7,7 +7,7 @@ import { scrollCap } from '../grid/scroll'
 import { trapFocus } from '../trap-focus'
 import { useWorkbench } from '../core/WorkbenchContext'
 import type { GestureEvent } from '../core/gestures'
-import { addRange, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, isSelected, keepsSide, listWindow, maxListSpace, popoverNaturalHeight, popoverPlace, popoverRoom, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow, type ChecklistAction, type ColumnCondition, type PopoverPlace, type RowSelection } from './column-filter'
+import { addRange, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, isSelected, keepsSide, listWindow, maxListSpace, popoverBounds, popoverNaturalHeight, popoverPlace, popoverRoom, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow, type ChecklistAction, type ColumnCondition, type PopoverPlace, type RowSelection } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
@@ -516,15 +516,19 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     event.currentTarget.setPointerCapture(event.pointerId)
     const shown = card.current.getBoundingClientRect()
     resizing.current = { x: event.clientX, y: event.clientY, width: shown.width, height: shown.height }
-    if (keepsSide(anchor, screen, at.side)) keptSide.current = at.side
+    if (!at.over && keepsSide(anchor, screen, at.side)) keptSide.current = at.side
   }
   const gripMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const start = resizing.current
     if (!start) return
-    // Within the room on its side, so the size saved is the size shown.
+    // Within the room on its side, so the size saved is the size shown, but never below the settings' least (a narrow
+    // window shows it smaller all the same).
     const room = keptSide.current ? popoverRoom(anchor, screen, keptSide.current) : screen
     const next = clampPopoverSize({ width: start.width + (event.clientX - start.x) * gripX, height: Math.max(1, start.height + (event.clientY - start.y) * gripY) }, screen)
-    setSized({ width: Math.min(next.width, Math.floor(room.width)), height: Math.min(next.height, Math.floor(room.height)) })
+    setSized({
+      width: Math.max(popoverBounds.minWidth, Math.min(next.width, Math.floor(room.width))),
+      height: Math.max(popoverBounds.minHeight, Math.min(next.height, Math.floor(room.height)))
+    })
   }
   const gripUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!resizing.current) return

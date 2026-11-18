@@ -192,7 +192,11 @@ export function popoverRoom(band: { left: number; right: number; top: number; bo
 }
 
 /** Where the popover opens: `top` or `bottom` (from the window's bottom edge), its width, and the height it may take. */
-export interface PopoverPlace { readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number }
+export interface PopoverPlace {
+  readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number
+  /** The last resort, over the column: no side of it is kept for a resize. */
+  readonly over?: true
+}
 
 /**
  * Where the funnel's popover opens beside its column (`band`: the column's header and drawn cells, or a rotated grid's
@@ -229,11 +233,11 @@ export function popoverPlace(o: { band: { left: number; right: number; top: numb
   if (above >= fits) return { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: above }
   // Nowhere clear of the column: over it, under its header, at its right end.
   const top = Math.max(edge, Math.min(band.top + gap, view.height - edge - height))
-  return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top) }
+  return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top), over: true }
 }
 
-/** Whether the popover can stay on `side` of the band: the room there takes its smallest size. The last resort over the
- *  column, which reports `right`, cannot be kept. */
+/** Whether the popover can stay on `side` of the band: the room there takes its smallest size. A placement over the
+ *  column (`over`) is never kept, whatever room its side has. */
 export function keepsSide(band: { left: number; right: number; top: number; bottom: number }, view: { width: number; height: number }, side: PopoverPlace['side']): boolean {
   const room = popoverRoom(band, view, side)
   return room.width >= Math.min(popoverBounds.minWidth, view.width - 2 * edge) && room.height >= Math.min(popoverBounds.minHeight, view.height - 2 * edge)

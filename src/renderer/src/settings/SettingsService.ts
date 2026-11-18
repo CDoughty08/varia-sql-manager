@@ -141,10 +141,11 @@ export class SettingsService extends SnapshotStore<SettingsSnapshot> implements 
    * this session only, and the first such failure is reported.
    */
   async choose<K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void> {
-    await this.chooseAll({ [key]: value } as SettingsPatch)
+    await this.chooseAll({ [key]: value } as { readonly [P in K]: SettingValue<K> })
   }
-  /** Sets several settings in one save, as `choose` sets one (a resize's width and height land together). */
-  async chooseAll(patch: SettingsPatch): Promise<void> {
+  /** Sets several settings in one save, as `choose` sets one (a resize's width and height land together). Values only: a
+   *  reset (null) has no value to keep for the session if the save fails. */
+  async chooseAll(patch: { readonly [K in SettingKey]?: SettingValue<K> }): Promise<void> {
     try { await this.update(patch) }
     catch (error) {
       if (this.disposed) return

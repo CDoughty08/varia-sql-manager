@@ -504,6 +504,25 @@ describe('column filter popover', () => {
     view.unmount()
   })
 
+  it('keeps no side when it opened over its column, and saves no size below the settings\' least', async () => {
+    // A column from 400 to 500 down the window, 600 px remembered: over the column (514 px on its right is too little).
+    const resized = vi.fn()
+    const view = fixture({ anchor: rect(400, 100, 100, 660), size: { width: 600, height: 400 }, onResized: resized })
+    await view.settle()
+    expect([view.dialog().style.left, view.dialog().style.width]).toEqual(['8px', '600px'])
+    const grip = view.dialog().querySelector('.column-filter-grip') as HTMLElement
+    view.dialog().getBoundingClientRect = () => rect(8, 100, 600, 400)
+    const pointer = (type: string, x: number, y: number) => act(() => { grip.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y })) })
+    pointer('pointerdown', 600, 500)
+    pointer('pointermove', 610, 500)
+    // It grows where it is rather than jumping beside the column.
+    expect([view.dialog().style.left, view.dialog().style.width]).toEqual(['8px', '610px'])
+    pointer('pointermove', -2000, -2000)
+    pointer('pointerup', -2000, -2000)
+    expect(resized).toHaveBeenLastCalledWith({ width: 340, height: 240 })
+    view.unmount()
+  })
+
   it('ticks a single selected row not read yet through the backend, and moves the count at once when it can', async () => {
     const view = fixture()
     await view.settle()
