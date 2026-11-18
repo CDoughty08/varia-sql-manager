@@ -172,3 +172,47 @@ export function blocksToDrop(blocks: Iterable<number>, first: number, last: numb
   const distance = (block: number) => block < first ? first - block : block > last ? block - last : 0
   return held.filter(block => distance(block) > 0).sort((a, b) => distance(b) - distance(a)).slice(0, held.length - max)
 }
+
+/** The popover's size bounds in px; a size outside them (a small window, a hand-edited setting) is clamped. */
+export const popoverBounds = { minWidth: 260, maxWidth: 900, minHeight: 240, maxHeight: 1200 } as const
+/** The height the popover is placed for when it sizes to its contents (no remembered height). */
+export const popoverNaturalHeight = 420
+/** Room kept between the popover and the window's edges, and between it and the column. */
+const edge = 8, gap = 2
+
+/** Where the popover opens: `top` or `bottom` (from the window's bottom edge), its width, and the height it may take. */
+export interface PopoverPlace { readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number }
+
+/**
+ * Where the funnel's popover opens beside its column (`band`: the column's header and drawn cells, or a rotated grid's
+ * row), so it never covers the values it filters: to the column's right when it fits there, else to its left, else below
+ * or above the band (a rotated grid's row, or a column as wide as the window), else over the column at its right end as
+ * a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
+ * `height` is the remembered height, or `popoverNaturalHeight` when it sizes to its contents.
+ */
+export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number } }): PopoverPlace {
+  const { band, view } = o
+  const width = Math.max(Math.min(popoverBounds.minWidth, view.width - 2 * edge), Math.min(o.width, view.width - 2 * edge))
+  const height = Math.min(o.height, view.height - 2 * edge)
+  const beside = (left: number, side: 'right' | 'left'): PopoverPlace => {
+    const top = Math.max(edge, Math.min(band.top, view.height - edge - height))
+    return { side, left, top, width, maxHeight: Math.max(0, view.height - edge - top) }
+  }
+  if (view.width - edge - (band.right + gap) >= width) return beside(band.right + gap, 'right')
+  if (band.left - gap - edge >= width) return beside(band.left - gap - width, 'left')
+  const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
+  const below = view.height - edge - (band.bottom + gap), above = band.top - gap - edge
+  const fits = Math.min(height, popoverBounds.minHeight)
+  if (below >= fits && (below >= height || below >= above)) return { side: 'below', left, top: band.bottom + gap, width, maxHeight: below }
+  if (above >= fits) return { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: above }
+  // Nowhere clear of the column: over it, under its header, at its right end.
+  const top = Math.max(edge, Math.min(band.top + gap, view.height - edge - height))
+  return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top) }
+}
+
+/** A remembered popover size held within `popoverBounds` and the window; a height of 0 sizes it to its contents. */
+export function clampPopoverSize(size: { width: number; height: number }, view: { width: number; height: number }): { width: number; height: number } {
+  const width = Math.round(Math.max(popoverBounds.minWidth, Math.min(popoverBounds.maxWidth, view.width - 2 * edge, size.width)))
+  const height = size.height <= 0 ? 0 : Math.round(Math.max(popoverBounds.minHeight, Math.min(popoverBounds.maxHeight, view.height - 2 * edge, size.height)))
+  return { width, height }
+}
