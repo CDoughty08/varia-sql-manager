@@ -228,7 +228,8 @@ internal static class ExplorerStatusLiveChecks
     /// <summary>An Agent job of this run's own that waits 30 s: counted while it runs, and no longer once it is stopped. Agent
     /// jobs are server-wide, and other runs start and stop theirs, so each value is compared with direct counts of the Agent's
     /// current session taken just before and after the sample, while this job's own row says it runs (or has stopped). Stale
-    /// jobs of earlier runs are swept by ScratchDatabase.SweepAsync; this one is deleted in finally.</summary>
+    /// Agent objects of earlier runs are swept first (any live group may run this suite without Explorer's full sweep); this
+    /// one is deleted in finally.</summary>
     private static async Task AgentAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
     {
         // The same Agent-up condition as the Agent suites (Agent XPs on and an Agent session), which Linux's container meets
@@ -239,6 +240,7 @@ internal static class ExplorerStatusLiveChecks
             Console.WriteLine("Object Explorer status Agent checks skipped: SQL Server Agent is not running on this server.");
             return;
         }
+        await ScratchDatabase.SweepAgentAsync(sql, Console.WriteLine);
         // Independent of the probe's own statement: the Agent's newest session by its start time, and this job's row in it.
         var direct = "DECLARE @session int = (SELECT TOP (1) s.session_id FROM msdb.dbo.syssessions AS s ORDER BY s.agent_start_date DESC, s.session_id DESC);\n"
             + "SELECT COUNT(*), COUNT(CASE WHEN j.name = " + Literal(job) + " THEN 1 END) FROM msdb.dbo.sysjobactivity AS a JOIN msdb.dbo.sysjobs AS j ON j.job_id = a.job_id\n"

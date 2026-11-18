@@ -266,7 +266,7 @@ each a parameter or one of the constants listed (`AgentSql.LintRead`):
 | `msdb.dbo.sp_help_jobschedule` | `@job_id`, `@schedule_id`, `@include_description` (`1`) | Every Agent role |
 | `msdb.dbo.sp_help_schedule` | `@schedule_id`, `@include_description` (`1`) | Every Agent role |
 | `msdb.dbo.sp_help_category` | `@class` (`N'JOB'`, `N'ALERT'`, `N'OPERATOR'`) | Every Agent role |
-| `msdb.dbo.sp_help_operator` | `@operator_id` | SQLAgentOperatorRole and sysadmin |
+| `msdb.dbo.sp_help_operator` | `@operator_id` | Every Agent role (msdb grants SQLAgentUserRole EXECUTE) |
 | `msdb.dbo.sp_help_alert` | `@alert_id` | SQLAgentOperatorRole and sysadmin |
 | `msdb.dbo.sp_help_notification` | `@object_type` (`N'ALERTS'`, `N'OPERATORS'`), `@name`, `@enum_type` (`N'ACTUAL'`, `N'ALL'`), `@notification_method` (`7`) | SQLAgentOperatorRole and sysadmin |
 | `msdb.dbo.sp_help_proxy` | `@proxy_id`, `@subsystem_name` | Every Agent role (proxies granted to it below sysadmin) |
@@ -324,7 +324,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_revoke_login_from_proxy` | AG-8b |
 | `msdb.dbo.sp_cycle_agent_errorlog` | AG-5b |
 
-msdb error numbers the actions map:
+msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):
 
 | Number | Code | Meaning |
 | --- | --- | --- |

@@ -50,7 +50,7 @@ internal sealed partial class ScratchDatabase
     };
 
     /// <summary>Drops stale scratch Agent objects, kind by kind in <see cref="AgentKinds"/> order (names only are logged).</summary>
-    private static async Task SweepAgentAsync(Func<string, string, Task<SqlRun>> run, Action<string> log)
+    internal static async Task SweepAgentAsync(Func<string, string, Task<SqlRun>> run, Action<string> log)
     {
         var found = await run(StaleAgentSql, "msdb");
         if (found.Status != "completed" || found.Sets.Count == 0) return;

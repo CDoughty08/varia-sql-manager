@@ -31,6 +31,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
     public const string DisabledMessage = "SQL Server Agent's extended procedures are off (Agent XPs): SQL Server Agent is stopped or disabled on this server.";
     public const string RefusedMessage = "This login may not read this part of SQL Server Agent.";
     public const string MissingMessage = "This server's SQL Server Agent does not offer this read.";
+    public const string GoneMessage = "This SQL Server Agent object no longer exists.";
 
     private readonly AgentCatalog catalog = catalog ?? AgentCatalog.Current;
 
@@ -68,8 +69,8 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         return (results, errors);
     }
 
-    /// <summary>A statement's SqlException as a value. 15281 is Agent XPs off; 2812 a procedure this server lacks; 229 (EXECUTE
-    /// denied) and the live layer's refusals are PERMISSION_DENIED; anything else keeps the live classification.</summary>
+    /// <summary>A statement's SqlException as a value. 15281 is Agent XPs off; 2812 a procedure this server lacks; 14262 an id that no longer
+    /// exists (NOT_FOUND, whose msdb text quotes the id); 229 (EXECUTE denied), 916 (no msdb access) and the live layer's refusals are PERMISSION_DENIED; anything else keeps the live classification.</summary>
     public static AgentReadError Classify(AgentStatement statement, SqlException error)
     {
         var first = error.Errors.Cast<SqlError>().FirstOrDefault(item => item.Class > 10) ?? (error.Errors.Count > 0 ? error.Errors[0] : null);
@@ -78,7 +79,8 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         {
             15281 => "AGENT_DISABLED",
             2812 => "NOT_SUPPORTED",
-            229 => "PERMISSION_DENIED",
+            229 or 916 => "PERMISSION_DENIED",
+            14262 => "NOT_FOUND",
             _ => LiveErrors.Classify(number, first?.Class ?? error.Class)
         };
         var message = code switch
@@ -86,6 +88,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             "AGENT_DISABLED" => DisabledMessage,
             "PERMISSION_DENIED" => RefusedMessage,
             "NOT_SUPPORTED" => MissingMessage,
+            "NOT_FOUND" => GoneMessage,
             _ => LiveErrors.From(statement.Id, error).Message
         };
         return new(statement.Id, code, number, message);
@@ -108,8 +111,12 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             for (var field = 0; field < reader.FieldCount; field++) if (reader.GetName(field) == statement.Columns[at]) ordinals[at] = field;
             // Only the server's own column names are named: an msdb or master procedure's result shape, never data.
             if (ordinals[at] < 0)
-                throw new AgentShapeException("The Agent read " + statement.Id + " returned the columns " + string.Join(", ", Enumerable.Range(0, reader.FieldCount).Select(reader.GetName))
-                    + " without " + statement.Columns[at] + ".");
+            {
+                var returned = string.Join(", ", Enumerable.Range(0, reader.FieldCount).Select(reader.GetName));
+                // Disposing an open reader drains it; cancelling first stops the server sending a long log or history.
+                command.Cancel();
+                throw new AgentShapeException("The Agent read " + statement.Id + " returned the columns " + returned + " without " + statement.Columns[at] + ".");
+            }
         }
         var rows = new List<object?[]>();
         var truncated = false;

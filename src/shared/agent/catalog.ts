@@ -359,7 +359,7 @@ export const readProcedures: readonly ReadProcedure[] = [
   { name: 'sp_help_jobschedule', arguments: [{ name: '@job_id' }, { name: '@schedule_id' }, { name: '@include_description', constants: ['1'] }], who: 'Every Agent role' },
   { name: 'sp_help_schedule', arguments: [{ name: '@schedule_id' }, { name: '@include_description', constants: ['1'] }], who: 'Every Agent role' },
   { name: 'sp_help_category', arguments: [{ name: '@class', constants: ["N'JOB'", "N'ALERT'", "N'OPERATOR'"] }], who: 'Every Agent role' },
-  { name: 'sp_help_operator', arguments: [{ name: '@operator_id' }], who: 'SQLAgentOperatorRole and sysadmin' },
+  { name: 'sp_help_operator', arguments: [{ name: '@operator_id' }], who: 'Every Agent role (msdb grants SQLAgentUserRole EXECUTE)' },
   { name: 'sp_help_alert', arguments: [{ name: '@alert_id' }], who: 'SQLAgentOperatorRole and sysadmin' },
   { name: 'sp_help_notification', arguments: [{ name: '@object_type', constants: ["N'ALERTS'", "N'OPERATORS'"] }, { name: '@name' }, { name: '@enum_type', constants: ["N'ACTUAL'", "N'ALL'"] }, { name: '@notification_method', constants: ['7'] }], who: 'SQLAgentOperatorRole and sysadmin' },
   { name: 'sp_help_proxy', arguments: [{ name: '@proxy_id' }, { name: '@subsystem_name' }], who: 'Every Agent role (proxies granted to it below sysadmin)' },

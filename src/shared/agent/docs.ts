@@ -132,7 +132,7 @@ export function renderAgentDocs(): string {
     '',
     table(['Procedure', 'Lane'], writeProcedures.map(procedure => [code(procedure.database + '.dbo.' + procedure.name), procedure.lane])),
     '',
-    'msdb error numbers the actions map:',
+    'msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):',
     '',
     table(['Number', 'Code', 'Meaning'], agentErrorNumbers.map(error => [code(error.number), code(error.code), error.meaning])),
     '',

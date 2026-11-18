@@ -90,6 +90,10 @@ internal static class AgentChecks
         string[] misses =
         [
             "EXECUTE msdb.dbo.sp_help_job;",
+            "msdb.dbo.sp_start_job @job_id = @job_id;",
+            "msdb.dbo.sp_delete_job @job_id = @job_id;",
+            "master.dbo.xp_servicecontrol N'Stop', N'SQLServerAgent';",
+            "sp_help_job;",
             "EXEC msdb..sp_help_job;",
             "EXEC [msdb].[dbo].[sp_help_job];",
             "EXEC sp_help_job;",
@@ -220,7 +224,9 @@ internal static class AgentChecks
             "a result set without a declared column fails that statement alone as BACKEND_ERROR, and the statements after it still run");
         check(AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(300, 297)).Code == "PERMISSION_DENIED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.")).Code == "BLOCKED"
-            && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(50000, 1, 16, "server", "other")).Code == "SQL_ERROR",
-            "the reader keeps the live classification for everything else: 300 then 297 (server state on 2022 and later) is PERMISSION_DENIED, a lock wait BLOCKED, the rest SQL_ERROR");
+            && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(50000, 1, 16, "server", "other")).Code == "SQL_ERROR"
+            && AgentReader.Classify(AgentSql.Job, ConnectionFailureChecks.Sql(14262, 1, 16, "server", "The specified @job_id ('x') does not exist.")) is { Code: "NOT_FOUND", Message: AgentReader.GoneMessage }
+            && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal \"p\" is not able to access the database \"msdb\".")) is { Code: "PERMISSION_DENIED", Message: AgentReader.RefusedMessage },
+            "the reader keeps the live classification for everything else: 300 then 297 (server state on 2022 and later) is PERMISSION_DENIED, a lock wait BLOCKED, the rest SQL_ERROR; a job gone since the listing (14262) is NOT_FOUND and no msdb access (916) PERMISSION_DENIED, neither quoting msdb's text");
     }
 }

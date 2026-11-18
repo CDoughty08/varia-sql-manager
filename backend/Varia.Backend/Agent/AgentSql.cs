@@ -107,6 +107,8 @@ internal static partial class AgentSql
         }
         else if (text.TrimStart().StartsWith("SET ", StringComparison.OrdinalIgnoreCase)) problems.Add("carries a prologue its caller runs as its own command");
         if (!body.TrimEnd().EndsWith(';')) problems.Add("does not end with a semicolon");
+        // A batch's first statement may name a procedure without EXEC, and that runs it; so the body opens with a keyword.
+        if (!FirstKeyword().IsMatch(body)) problems.Add("does not open with SELECT, WITH, DECLARE or EXEC");
         var rest = ExecStatement().Replace(body, match =>
         {
             if (shapes.Any(shape => shape.IsMatch(match.Value))) return " ";
@@ -118,6 +120,9 @@ internal static partial class AgentSql
         problems.AddRange(LiveSql.Lint(LiveSql.UncommittedPrologue + rest));
         return problems;
     }
+
+    [GeneratedRegex(@"^\s*(?:SELECT|WITH|DECLARE|EXEC)\s", RegexOptions.CultureInvariant)]
+    private static partial Regex FirstKeyword();
 
     /// <summary>Why an EXEC is not an admitted msdb read, or null when it is one.</summary>
     private static string? CallProblem(string statement, AgentCatalog catalog)

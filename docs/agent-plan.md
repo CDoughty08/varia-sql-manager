@@ -119,15 +119,15 @@ From Microsoft's documentation (re-checked in AG-0 and AG-1, never assumed):
   (AG-0 probes it with a low-privilege login).
 
 Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job:
-which Agent reads raise 15281 with Agent XPs off (`sp_help_job` does, through `sp_get_composite_job_info`'s
-`xp_sqlagent_*` calls; `sp_help_jobactivity` and `sp_help_jobhistory @mode = N'FULL'` contain no `xp_sqlagent` call, and
+which Agent reads raise 15281 with Agent XPs off (expected of `sp_help_job` through `sp_get_composite_job_info`'s
+`xp_sqlagent_*` calls, but AG-0 found it does not; `sp_help_jobactivity` and `sp_help_jobhistory @mode = N'FULL'` contain no `xp_sqlagent` call, and
 the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable; the Log File Viewer's running state comes from `agent.jobs`, which does fail,
 so its banner stays either way, and if a history read also raises 15281 its view ends with `AGENT_DISABLED` and is
 restarted by the Log File Viewer's refresh of both handles, below);
 whether `sp_get_sqlagent_properties` returns values to a SQLAgentUserRole login (msdb grants that role EXECUTE and the
 procedure has no sysadmin check, but it reads through `xp_instance_regread`, which may refuse non-sysadmin callers; until
 then the plan treats it as sysadmin-only, and if it works the cap text, idle-CPU and mail facts show to every role that
-can run it, with any refusal number mapped to "not read"); what
+can run it, with any refusal number mapped to "not read"; AG-0 found it does); what
 `sp_help_job` and `xp_sqlagent_enum_jobs` return while Agent is stopped; that `xp_servicecontrol N'Start'|N'Stop',
 N'SQLServerAgent'` works under the default virtual accounts and for a named instance (the CI job installs one); how its failures
 surface (a probe of `QueryState` on a missing service showed every `xp_servicecontrol` failure arrives as engine message
@@ -232,7 +232,7 @@ since no Agent role has EXECUTE on `sp_add_alert`/`sp_update_alert`, `sp_add_ope
 `sp_add_proxy`/`sp_update_proxy`; a non-owner, non-sysadmin on a schedule in Manage Schedules and the schedule dialog;
 SQL Server Agent Properties on Managed Instance, "Managed Instance does not allow changing SQL Server Agent properties", in
 AG-8a). The Agent node's Properties item is disabled for non-sysadmin logins with "Only sysadmin can read SQL Server Agent
-properties" until AG-0's `sp_get_sqlagent_properties` spike says another role gets values (node-menu vitest).
+properties" (node-menu vitest); AG-0 found `sp_get_sqlagent_properties` returns values to SQLAgentUserRole, so AG-8a may enable it for every Agent role.
 `ObjectDialog` gains a read-only mode for it (for Agent objects, the document's read-only mode, `rx-job-readonly`): every field disabled, OK replaced by Close (primary, focused), and the reason
 in the message bar; pages stay navigable; list buttons that change something (Steps' New, Insert, Delete, Move up/down;
 Schedules' New, Pick, Remove; Alerts' Add, Remove; Start step) are disabled with the same reason, while Edit stays enabled
@@ -314,7 +314,7 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   to verify), an Agent session (`program_name LIKE N'SQLAgent - %'`) in `sys.dm_exec_sessions`. Without the permission the
   state is unknown and no state chip shows. Managed Instance is always running.
 - Agent XPs and service state combine: XPs at 0 with Agent stopped shows the Stopped chip plus the "Agent XPs disabled"
-  sublabel, lists no folders and no Job Activity Monitor singleton (msdb's procedures fail with error 15281), and still offers Start to sysadmin on Windows
+  sublabel, lists no folders and no Job Activity Monitor singleton (decided by the service probe and `Agent XPs`: AG-0 found `sp_help_job` reports every job idle rather than raising 15281), and still offers Start to sysadmin on Windows
   (starting Agent turns the option on, as SSMS does). XPs at 0 with Agent running (rare; AG-0 spikes the option's value
   after a clean Agent stop) shows the sublabel and no folders. Error 15281 from any Agent read maps to this state, never to
   a generic failure: a new explorer code `AGENT_DISABLED` joins `explorerErrorCodes` in `src/shared/contracts.ts` (C# has
@@ -345,7 +345,7 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   and a history view that ended with `AGENT_DISABLED` (if AG-0 finds history raises 15281; a view's probes must come from
   its own source, so `agent.jobs.service` cannot join it) restarts through `refresh()`'s re-subscribe path for a
   retryable end, and while ended it shows the warning banner, not the generic ended error (renderer vitest); for Object Explorer that is
-  `ExplorerStatusService`, so the role-path `explorer.agent` probe (`sp_help_job`, terminal on 15281) and the running-jobs
+  `ExplorerStatusService`, so the role-path `explorer.agent` probe (`sp_help_job`, terminal on 15281 where a read raises it; AG-0 found `sp_help_job` itself does not, so the role path also reads `Agent XPs`) and the running-jobs
   chips come back by themselves alongside `AgentStateSource`'s re-list. A C# offline LiveService check asserts that after
   an `AGENT_DISABLED` stop a refresh makes the probe due at once; renderer vitests cover each view: Job Activity Monitor
   and the Log File Viewer (with Object Explorer hidden, including a 15281 right after their own Start that recovers on the
@@ -778,8 +778,8 @@ Database Mail logs, which SSMS shows there).
   `instance_id` filter and returns at most 1,024 characters, so on the role path the pane shows the captured row's message
   and says "msdb returns at most 1,024 characters to this login" when it is that long.
 - History cap text ("Agent keeps 1,000 history rows, 100 per job") shows only when it was read: through
-  `msdb.dbo.sp_get_sqlagent_properties` (undocumented, allowlisted read; sysadmin until AG-0's spike shows other roles get
-  values). Other logins see no cap text.
+  `msdb.dbo.sp_get_sqlagent_properties` (undocumented, allowlisted read; AG-0 found it returns values to SQLAgentUserRole, so every Agent role
+  sees the cap text). Logins it refuses see none.
 - Delete History (sysadmin and Operator; other logins only when the capability read says they have EXECUTE on
   `sp_purge_jobhistory`, which msdb grants only to SQLAgentOperatorRole by default, and they own every checked job,
   because the procedure then raises 14392 for another owner's job; otherwise the button is disabled with the reason;
@@ -839,7 +839,7 @@ the same `sp_update_alert`, under the alert's identity guard; the page shows 0 p
   lists per procedure, such as `@mode = N'FULL'` for `sp_help_jobhistory` and `@job_aspect = N'JOB'` for `sp_help_job`) for a procedure in `AgentSql.ReadProcedures` (`sp_help_job`,
   `sp_help_jobhistory`, `sp_help_jobactivity`, `sp_help_jobstep`, `sp_help_jobschedule`, `sp_help_schedule`,
   `sp_help_category`, `sp_help_operator`, `sp_help_alert`, `sp_help_notification`, `sp_help_proxy`,
-  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and `sp_get_sqlagent_properties`, sysadmin-only unless AG-0's spike says otherwise).
+  `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and `sp_get_sqlagent_properties`, which AG-0 found returns values to SQLAgentUserRole).
   And the master procedures, which take positional arguments, each have a named shape: `EXEC master.dbo.xp_enumerrorlogs
   2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3, NULL, NULL, N'desc';` and, on Managed Instance, `EXEC
   master.dbo.sp_readmierrorlog @p1, 2, @p2, @p3` (with the same sort arguments if it accepts them, which AG-0 checks;
