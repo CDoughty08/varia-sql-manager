@@ -340,7 +340,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const label = comparisonName(fromName, toName)
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
       // says nothing was compared.
-      const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
+      // The tab's sides take the title's names, which a result closed meanwhile would otherwise change ("Totals (Result 1)").
+      const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)], { names: [fromName, toName] })
       if (key === undefined) return undefined
       done = true
       const info: CompareInfo = {

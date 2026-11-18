@@ -4,7 +4,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { distinctName, entryName, entryNumber, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -475,9 +475,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       // The value is the upper grid's height, which the splitter moves between the two grids' floors.
       const height = Math.round(layout.heights[index])
       // Named by the result above it, by its name or else its number, as that result's grid is.
-      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${resultTitle(entry)}`}
+      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${entryTitle(entry)}`}
         aria-valuenow={height} aria-valuemin={Math.round(floors[index])} aria-valuemax={Math.round(Math.max(floors[index], layout.heights[index] + layout.heights[index + 1] - floors[index + 1]))}
-        aria-valuetext={`${resultTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
+        aria-valuetext={`${entryTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
         onPointerDown={event => splitterDown(index, event)} onPointerMove={splitterMove} onPointerUp={splitterUp} onLostPointerCapture={() => { drag.current = undefined }}
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }

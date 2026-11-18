@@ -39,7 +39,7 @@ export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
 }
-type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> }
+type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind'>> }
 // One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
 // and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
 /** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
@@ -60,6 +60,10 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
  *  told apart, else "Result N". Unlike
  *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
 export const resultTitle = (entry: Named): string => { const name = queryName(entry); return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}` }
+/** What a surface that names an original result by its title (its splitter, its plans, the Column Profile and its
+ *  operation) calls any entry: an original result by `resultTitle`, a Pivot or a comparison by its own name ("Differences:
+ *  Result 1 → Result 3"), never by the number a derived entry was given, which no one sees elsewhere. */
+export const entryTitle = (entry: Named): string => entry.descriptor?.kind === 'diff' || entry.descriptor?.kind === 'pivot' ? entryName(entry) : resultTitle(entry)
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
@@ -1457,7 +1461,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  (results.pivot) as its source group's Pivot, directly under the Table; a diff (results.diff) as a comparison, after the
    *  groups. It is released with the run's others, and its rows are not counted among those the query read. `sources` are
    *  the set keys it was made from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one)
-   *  does not take it. `pivot` is a pivot's provenance, kept with its slot.
+   *  does not take it. `pivot` is a pivot's provenance, kept with its slot. `names` are the sources' names as its title
+   *  gave them (a comparison's, frozen when Compare was pressed), so its tab's "old → new" says what its title says.
    *
    *  A group that has a Pivot keeps it until this call: the new result replaces the old one in the same slot, under the same
    *  entry key, as the slot's next revision, and only then is the old result released (`replaceSet`). Nothing is freed
@@ -1466,7 +1471,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  Returns its entry's key, or undefined when the run is gone, still running, lacks a source, has its most sets, is
    *  drawn bare, or the result is a pivot of anything but a group's Table of rows; the result is then released, since
    *  nothing else would close it. */
-  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = [], o: { readonly pivot?: PivotProvenance } = {}): EntryKey | undefined {
+  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = [], o: { readonly pivot?: PivotProvenance; readonly names?: readonly string[] } = {}): EntryKey | undefined {
     const run = this.runs.get(tabId)
     const key = setKey(descriptor)
     if (run?.setKeys.has(key)) return undefined
@@ -1480,7 +1485,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
     // Pivot, a comparison or a plan set), and a group has one, so a new one takes the slot of the one it had.
     const group = view === 'comparison' ? undefined : origin?.group
-    const refs = from.map((source): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
+    const refs = from.map((source, at): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: o.names?.[at] ?? distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })

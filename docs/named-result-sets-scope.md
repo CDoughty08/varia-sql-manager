@@ -153,14 +153,16 @@ text ("Result 2") apart, so a surface shows either or both:
 | `numberedName` | "Totals · Result 2" for a named result in lists and tooltips; the name alone otherwise. |
 | `spokenName` | "Totals, Result 2" for accessible names, so a screen reader tells two of one name apart. |
 | `resultTitle` | "Totals, Result 3" where a number named a result before names existed (splitter, plans, copy and save jobs, Column Profile). |
+| `entryTitle` | `resultTitle` for an original result, a Pivot's or comparison's own name otherwise (splitter, plans, Column Profile). |
 | `distinctName` | The name, with "(Result 3)" only when another result of the run has the same name: titles and links of Pivots and comparisons. |
 
 - Tabs, Stacked captions, view tabs, Pivot titles and sentences, comparison titles and links, the Compare popover, Go
-  to Result and the overflow picker, the grid's accessible name ("Open orders, Result 2 of 5, …"), Column Profile,
+  to Result and the overflow picker, the grid's accessible name ("Open orders, Result 2 of 5, …"; a Pivot's or comparison's starts with its own name), Column Profile,
   splitters, plans and memory details all take their text from these. results-tools.md, "Where a result's name shows",
   lists each surface's exact wording.
 - **Long names.** A tab showing a query-given name is at most the `resultTab` metric wide (240 px) with an ellipsis, and
-  such a caption's name gives way before its facts. Tooltip and accessible name keep the whole name.
+  such a caption's name gives way before its facts. A comparison's tab reads old → new with each side shortened in the
+  middle instead. Tooltip and accessible name keep the whole name.
 - **Names that collide.** Nothing is renamed or suffixed in the pane; lists carry each number.
 - **Go to Result 1 to 8** stay positional.
 - **Derived titles are frozen when made:** a comparison made from "Open orders" keeps that title.
@@ -170,7 +172,8 @@ text ("Result 2") apart, so a surface shows either or both:
   (`save-names.ts`). The number stays beside the name when another result of the run makes the same file name or the
   name was cut (a name keeps at most 64 characters). A name of only refused characters is named by its number. The tab's
   name gives way first, never the suffix.
-- **Smoke locators.** `scripts/fixtures/ui.mjs` finds a grid by an accessible name starting "Result 2", or by name.
+- **Smoke locators.** `scripts/fixtures/ui.mjs` finds a grid by an accessible name starting "Result 2", or by name; a
+  Pivot's or comparison's grid, named for itself, by the number it keeps in `data-result-number`.
 
 ## The default query
 
