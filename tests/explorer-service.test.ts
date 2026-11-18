@@ -160,6 +160,11 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   return { ...backend, backend, explorer, connections, events, emitted, clock, wall, connect, rows, labels, find, open, calls }
 }
 
+/** A big folder for the reconcile tests: 50 pages, so the per-page bounds below are about a twentieth of the folder. They
+ *  scale with the page and the folder, not the row count, so a scan or copy of the folder per page fails here as it would
+ *  at 99,000 rows (2,000 a page), which took 15 to 32 s on a starved 4-vCPU Windows runner and stalled the tests beside it. */
+const bigFolder = { rows: 9_900, page: 200 }
+
 /** Measure reconciliation's work, not a shared runner's GC pauses or setTimeout(0) wakeup time. Old refs count matching
  *  work; table reads catch a scan of every pending load for each unchanged leaf. Flattening visits the visible nodes
  *  directly, so it does not charge a table lookup for every visible row. The work meter counts the array copying, sorting
@@ -1029,25 +1034,26 @@ describe('ExplorerService: reconcile', () => {
     f.explorer.setNote(appData, undefined)
     expect(f.explorer.node(appData)!.note).toBeUndefined()
   })
-  it('reconciles 99,000 rows with bounded matching work and publishes each page before the next', async () => {
+  it('reconciles 9,900 rows in 50 pages with bounded matching work and publishes each page before the next', async () => {
     const f = fixture()
-    const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)
+    const names = Array.from({ length: bigFolder.rows }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names
+    f.state.pageSize = bigFolder.page
     f.connect()
     await settle()
     const tables = await f.open('Databases', 'AppData', 'Tables')
     while (f.explorer.node(tables)!.more === 'auto') await settle()
-    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    expect(f.explorer.node(tables)!.children).toHaveLength(bigFolder.rows + 1)
     // The first row is gone, so every page after it is matched by name rather than in turn.
     f.state.tables = [...names.slice(1), 'dbo.Extra']
     f.hold(isFolder('tables'))
     f.explorer.reconcile(tables)
     expect(await reconcilePages(f, tables)).toBe(50)
-    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    expect(f.explorer.node(tables)!.children).toHaveLength(bigFolder.rows + 1)
     expect(f.explorer.node(tables)!.children!.at(-1)!.label).toBe('dbo.Extra')
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
-  }, heavyTimeout)
-  it('reconciles 99,000 leaves with bounded work while 300 loads wait on another server', async () => {
+  })
+  it('reconciles 9,900 leaves in 50 pages with bounded work while 300 loads wait on another server', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 300 }, (_, index) => `dbo.Wait${index}`)
     f.connect('server-a')
@@ -1057,22 +1063,23 @@ describe('ExplorerService: reconcile', () => {
     for (const label of ['Databases', 'AppData', 'Tables']) { waiting = f.find(label, waiting); f.explorer.expand(waiting); await settle() }
     f.hold(params => params.connectionId === cid('server-b') && params.node.type === 'object')
     for (const child of f.explorer.node(waiting)!.children!.filter(child => child.kind === 'table')) f.explorer.expand(child.id)
-    const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)
+    const names = Array.from({ length: bigFolder.rows }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names
+    f.state.pageSize = bigFolder.page
     f.state.leafTables = true
     let tables = f.find('server-a.example')
     for (const label of ['Databases', 'AppData', 'Tables']) { tables = f.find(label, tables); f.explorer.expand(tables); await settle() }
     while (f.explorer.node(tables)!.more === 'auto') await settle()
-    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    expect(f.explorer.node(tables)!.children).toHaveLength(bigFolder.rows + 1)
     f.state.tables = [...names.slice(1), 'dbo.Extra']
     const isA = (params: ExplorerChildrenParams) => params.connectionId === cid('server-a') && isFolder('tables')(params)
     f.hold(isA)
     f.explorer.reconcile(tables)
     expect(await reconcilePages(f, tables, isA)).toBe(50)
-    expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
+    expect(f.explorer.node(tables)!.children).toHaveLength(bigFolder.rows + 1)
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     expect(f.explorer.context.getSnapshot().explorerLoading).toBe(true)
-  }, heavyTimeout)
+  })
 })
 
 describe('ExplorerService: seek', () => {

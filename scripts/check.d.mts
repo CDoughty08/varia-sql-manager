@@ -4,6 +4,7 @@ import type { ChildProcess } from 'node:child_process'
 export type CheckNode = string | { all: CheckNode[] } | { chain: CheckNode[] } | { gate: CheckNode, then: CheckNode }
 export const needsBackend: string[]
 export const steps: Record<string, string>
+export function sharedCompilation(env?: Record<string, string | undefined>): string
 export function plan(options: { cpus: number, build?: boolean, skip?: string[] }): CheckNode
 export const running: Set<{ name: string, started: number, output: Buffer[], child: ChildProcess }>
 export function run(name: string, command: string, write?: (text: string) => void, env?: Record<string, string>): Promise<{ name: string, code: number, seconds: number }>
