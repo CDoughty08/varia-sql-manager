@@ -487,6 +487,26 @@ internal static class DiffChecks
         var id = diff.Descriptor.ResultId;
         var set = store.Find(id)!;
         check(set.DiffInputs == (left.ResultId, right.ResultId), "a diff records its two input result ids when written");
+        // A compared value at the row limit leaves the hidden marker and tone stored whole after it.
+        var (bigLeft, bigRight) = Pair(store, [["1", new string('x', PageBuilder.MaxRowBytes + 10), "1"]], [["1", new string('y', PageBuilder.MaxRowBytes + 10), "1"]]);
+        var big = store.Find(Call<ResultsDiffResult>("results.diff", new { left = bigLeft.ResultId, right = bigRight.ResultId, context = -1 }).Descriptor.ResultId)!;
+        var suffix = new List<string>();
+        foreach (var page in big.SealedSnapshot())
+        {
+            var view = PageView.Parse(PinnedPage.Body(page), big.Wires.Count);
+            for (var r = 0; r < page.Rows; r++)
+            {
+                var cells = new string[2];
+                for (var i = 0; i < 2; i++)
+                {
+                    var c = i == 0 ? 3 : 6;
+                    cells[i] = (view.IsTruncated(c, r) ? "cut " : "") + Encoding.UTF8.GetString(view.Span(c, r));
+                }
+                suffix.Add(string.Join("|", cells));
+            }
+        }
+        check(suffix.Count == 2 && suffix[0].StartsWith("−|removed ", StringComparison.Ordinal) && suffix[1].StartsWith("+|added ", StringComparison.Ordinal) && !suffix.Any(text => text.Contains("cut ", StringComparison.Ordinal)),
+            $"a diff row whose data reaches the 8 MiB row limit still stores its marker and tone whole: {string.Join(" / ", suffix)}");
         // Data columns 0-2, then mark 3, leftRow 4, rightRow 5, tone 6.
         var refused = new List<string>();
         foreach (var hidden in new[] { 3, 4, 5, 6 })

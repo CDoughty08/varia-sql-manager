@@ -858,6 +858,8 @@ internal static class UnifiedDiff
         if (builder is null) return false;
         var view = side.Access.At(row, out var at, out var lengths);
         var truncated = 0;
+        // The marker and tone follow the data, so data reaching the row limit must leave them room to be stored whole.
+        builder.ReserveRowBytes(3 * (marker.Length + (tone?.Length ?? 0)));
         for (var p = 0; p < side.Pairs.Length; p++)
         {
             var c = side.Column(p);
@@ -878,6 +880,7 @@ internal static class UnifiedDiff
             // Kept beside the page when the unified column's own rule would not give the source's size again.
             builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
+        builder.ReserveRowBytes(0);
         builder.AppendText(marker);
         Number(builder, leftRow);
         Number(builder, rightRow);

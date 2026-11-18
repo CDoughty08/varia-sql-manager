@@ -131,8 +131,9 @@ export class GridData {
     this.rows = rows
     const plan = this.plan(range, rows)
     if (active && active.row >= 0 && active.row < rows && active.column >= 0 && active.column < this.columns) {
-      const key = tileKey(Math.floor(active.row / this.shape.rows), Math.floor(active.column / this.shape.columns))
-      if (!plan.includes(key)) plan.push(key)
+      // The active row's suffix too: a pinned active row out of view draws its tone and names its gutter.
+      const tileRow = Math.floor(active.row / this.shape.rows)
+      for (const key of [tileKey(tileRow, Math.floor(active.column / this.shape.columns)), ...this.suffixTiles(tileRow)]) if (!plan.includes(key)) plan.push(key)
     }
     const ring = prefetchTiles(range, rows, this.columns, this.shape)
     const wanted = new Set([...plan, ...ring])
@@ -195,15 +196,19 @@ export class GridData {
    *  marker and row numbers too). */
   plan(range: VisibleRange, rows: number): number[] {
     const plan = planTiles(range, rows, this.columns, this.shape)
-    if (this.tone >= 0) {
-      const first = Math.floor(this.suffix / this.shape.columns), last = Math.floor(this.tone / this.shape.columns)
-      for (const key of [...plan]) for (let column = first; column <= last; column++) { const tile = tileKey(tileRowOf(key), column); if (!plan.includes(tile)) plan.push(tile) }
-    }
+    for (const key of [...plan]) for (const tile of this.suffixTiles(tileRowOf(key))) if (!plan.includes(tile)) plan.push(tile)
     if (this.also !== undefined && this.also >= 0 && this.also < this.columns) {
       const columnTile = Math.floor(this.also / this.shape.columns)
       for (const key of [...plan]) { const also = tileKey(tileRowOf(key), columnTile); if (!plan.includes(also)) plan.push(also) }
     }
     return plan
+  }
+  /** The tiles of one tile row that hold its hidden suffix, none without a tone. */
+  private suffixTiles(tileRow: number): number[] {
+    if (this.tone < 0) return []
+    const tiles: number[] = []
+    for (let column = Math.floor(this.suffix / this.shape.columns); column <= Math.floor(this.tone / this.shape.columns); column++) tiles.push(tileKey(tileRow, column))
+    return tiles
   }
   /** Reads a tile into the client's window cache as a frame would, outside this grid's own reads (a live swap's prepare). */
   fetch(key: number, signal?: AbortSignal): Promise<RowWindow> {

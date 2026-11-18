@@ -847,6 +847,7 @@ function searchResult(source, { text, fromRow, maxMatches, backward }) {
   for (let row = 0; row < rows; row++) {
     const cells = source.rowAt(row), found = []
     for (let column = 0; column < columns; column++) {
+      if (isHidden(source.columns[column])) continue
       const shown = display(cells[column])
       if (shown !== null && shown.toLowerCase().includes(needle)) found.push(column)
     }
@@ -871,14 +872,16 @@ function searchResult(source, { text, fromRow, maxMatches, backward }) {
 /** Matches at or after `fromRow` (a backward run's first counts the matches before it). */
 function countFrom(source, needle, display, fromRow, rows) {
   let count = 0
-  for (let row = fromRow; row < rows; row++) for (const cell of source.rowAt(row)) { const shown = display(cell); if (shown !== null && shown.toLowerCase().includes(needle)) count++ }
+  for (let row = fromRow; row < rows; row++) source.rowAt(row).forEach((cell, column) => { const shown = isHidden(source.columns[column]) ? null : display(cell); if (shown !== null && shown.toLowerCase().includes(needle)) count++ })
   return count
 }
 // results.rowBytes and results.profile: a cell's bytes are its text's UTF-8 bytes (a binary cell's own), and a profile
 // compares as the fake views sort, ordinally; the real backend's DATALENGTH rules and collations have their own checks.
 const cellValue = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? (cell.error ? null : cell.value) : cell
 const cellBytes = cell => { const value = cellValue(cell); return value === null || value === undefined ? 0 : value instanceof Uint8Array ? value.length : Buffer.byteLength(String(value)) }
-const rowBytesOf = (source, row) => source.rowAt(row).reduce((sum, cell) => sum + cellBytes(cell), 0)
+// A row's bytes are its shown values': hidden cells (a tone, a diff's suffix) are never measured.
+const shownBytes = (source, cells) => cells.reduce((sum, cell, column) => isHidden(source.columns[column]) ? sum : sum + cellBytes(cell), 0)
+const rowBytesOf = (source, row) => shownBytes(source, source.rowAt(row))
 const lengthsOf = values => {
   if (!values.length) return undefined
   let min = Infinity, max = -Infinity, sum = 0
@@ -896,7 +899,7 @@ function profileOf(source, columns) {
   const rows = available(source), all = columns.length ? [] : undefined, bytes = new Array(rows)
   for (let row = 0; row < rows; row++) {
     const cells = source.rowAt(row)
-    bytes[row] = cells.reduce((sum, cell) => sum + cellBytes(cell), 0)
+    bytes[row] = shownBytes(source, cells)
     all?.push(cells)
   }
   const show = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value).slice(0, 256)
@@ -1878,6 +1881,9 @@ async function workbench(id, method, params, credit) {
         write(FrameKind.EVENT, id, 0, { type: 'op.progress', phase: percent < 40 ? 'keys' : 'sort', percent })
         await sleep(100)
       }
+      // Hidden columns (a tone, a diff's marker and row numbers) are not data: no sort key or filter names one.
+      const named = [...(params.sort ?? []).map(key => key.column), ...(params.filters ?? []).flatMap(filter => filter.columns ?? (filter.column === undefined ? [] : [filter.column]))]
+      if (named.some(column => isHidden(result.columns[column]))) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
       let view
       try { view = buildView(result, params.sort, params.filters) } catch (error) { return fail(id, error.code ?? 'BACKEND_ERROR', error.message) }
       result.views ??= new Map()
@@ -1955,13 +1961,14 @@ async function workbench(id, method, params, credit) {
     case 'results.profile': {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
+      if (params.columns.some(column => isHidden(source.columns[column]))) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
       return respond(id, profileOf(source, params.columns))
     }
     case 'results.distinct': {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
       const result = stored.get(params.resultId)
-      if (params.column >= result.columns.length) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
+      if (params.column >= result.columns.length || isHidden(result.columns[params.column])) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
       const keptView = params.keptViewId === undefined ? undefined : sourceOf(id, params.resultId, params.keptViewId)
       if (params.keptViewId !== undefined && !keptView) return
       result.snapshots ??= new Map()

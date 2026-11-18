@@ -17,6 +17,7 @@ import { gridOperation, operationNoun } from '../results/operations'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 import type { DiffSides } from './diff-gutter'
+import { visibleColumnCount } from './hidden-columns'
 
 export interface ResultGridProps {
   readonly tabId: string
@@ -140,7 +141,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []) } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
-        results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
+        results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, visibleColumnCount(entry.descriptor)))
         results.selectionChanged()
       },
       onFirstCell: () => results.selectionChanged(),

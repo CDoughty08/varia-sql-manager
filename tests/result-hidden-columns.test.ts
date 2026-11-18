@@ -86,4 +86,12 @@ describe('comparison gutter', () => {
       expect(plan.filter(key => tileRowOf(key) === 0).map(tileColumnOf).sort(), String(columns)).toEqual([...new Set([0, ...expected])].sort())
     }
   })
+  it("reads the active row's suffix with its cell when the row is out of view, so its pinned header names it", () => {
+    const reads: [number, number][] = []
+    const handle = { getWindow: (first: number, _count: number, o: { colStart: number }) => { reads.push([first, o.colStart]); return new Promise<never>(() => {}) }, peekWindow: () => undefined, prefetch: () => {} }
+    const data = new GridData({ handle: handle as never, columns: 40, tone: 43, suffix: 40, clientInflight: () => 0, changed: () => {} })
+    data.ensure({ firstRow: 0, lastRow: 10, firstColumn: 0, lastColumn: 5 }, 100_000, 0, 10, { row: 50_000, column: 2 })
+    const tileRows = 128
+    expect(reads.filter(([first]) => first === Math.floor(50_000 / tileRows) * tileRows).map(([, column]) => column).sort((a, b) => a - b)).toEqual([0, 32])
+  })
 })

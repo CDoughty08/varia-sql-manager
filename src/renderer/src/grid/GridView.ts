@@ -1731,7 +1731,7 @@ export class GridView {
       slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
       slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
     }
-    if (this.diff && slot.mark?.diffMark) this.paintGutter(slot, row, tile)
+    if (this.diff) this.paintGutter(slot, row, tile)
     // A transposed row is a column, which no highlight names: a highlighted row tints its drawn column (paintBands).
     const odd = row % 2 === 1, tone = slot.toneOf, highlight = this.rotated ? 0 : colorAt(this.highlights, row)
     if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
@@ -1856,8 +1856,8 @@ export class GridView {
     if (key === slot.gutterKey) return
     slot.gutterKey = key
     const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides) : undefined
-    slot.mark!.diffMark!.nodeValue = gutter?.mark ?? ''
-    slot.mark!.text.nodeValue = gutter?.number ?? ''
+    // The pinned active row has no drawn number, only its header, which still names the row.
+    if (slot.mark?.diffMark) { slot.mark.diffMark.nodeValue = gutter?.mark ?? ''; slot.mark.text.nodeValue = gutter?.number ?? '' }
     slot.number.nodeValue = gutter?.name ?? 'Loading'
     slot.gutter = gutter?.name ?? ''
   }
