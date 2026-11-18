@@ -1123,6 +1123,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
 .column-filter-gap { flex: 1 1 auto; }
 .column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter.sized .column-filter-list { max-height: none; }
+/* The resize grip at the corner away from the column: two short diagonal strokes, like a window's size grip. */
+.column-filter-grip { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; touch-action: none; opacity: 0.7;
+  background: linear-gradient(135deg, transparent 0 55%, var(--varia-descriptionForeground) 55% 62%, transparent 62% 75%, var(--varia-descriptionForeground) 75% 82%, transparent 82%); }
+.column-filter-grip:hover { opacity: 1; }
+.column-filter-grip.start { right: auto; left: 0; cursor: nesw-resize; transform: scaleX(-1); }
+.column-filter-grip.top { bottom: auto; top: 0; cursor: nesw-resize; transform: scaleY(-1); }
+.column-filter-grip.start.top { cursor: nwse-resize; transform: scale(-1, -1); }
 .column-filter-space { position: relative; overflow: hidden; }
 .column-filter-item { position: absolute; left: 0; right: 0; box-sizing: border-box; display: flex; align-items: center; gap: var(--varia-space-2); padding: 0 var(--varia-space-2); cursor: default; }
 .column-filter-item.pending::after { content: ''; flex: 1 1 auto; height: 6px; margin-right: 40%; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); }

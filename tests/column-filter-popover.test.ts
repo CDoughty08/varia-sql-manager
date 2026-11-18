@@ -27,7 +27,7 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-function fixture(o: { hold?: boolean } = {}) {
+function fixture(o: { hold?: boolean; anchor?: DOMRect; size?: { width: number; height: number }; onResized?(size: { width: number; height: number }): void } = {}) {
   const ticks = new Array<boolean>(distinct).fill(true)
   const reads: Read[] = [], tickRequests: Tick[] = []
   let hold = o.hold ?? false
@@ -58,9 +58,9 @@ function fixture(o: { hold?: boolean } = {}) {
   let live = true
   const unmount = () => { if (!live) return; live = false; mounted.delete(unmount); act(() => { root.unmount() }) }
   mounted.add(unmount)
-  const anchor = { left: 0, top: 0, right: 300, bottom: 20, width: 300, height: 20, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+  const anchor = o.anchor ?? { left: 0, top: 0, right: 300, bottom: 20, width: 300, height: 20, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   act(() => {
-    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 'e1'), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
+    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 'e1'), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose, ...o.size ? { size: o.size } : {}, ...o.onResized ? { onResized: o.onResized } : {} }) }))
   })
   const dialog = () => document.querySelector('form[role="dialog"]') as HTMLFormElement
   const valueList = () => dialog().querySelector('[role="listbox"][aria-label="Values"]') as HTMLElement
@@ -81,7 +81,41 @@ function fixture(o: { hold?: boolean } = {}) {
   }
 }
 
+const rect = (left: number, top: number, width: number, height: number) => new DOMRect(left, top, width, height)
+
 describe('column filter popover', () => {
+  it('opens beside its column, not over it, at its remembered size', async () => {
+    // happy-dom's window is 1024 × 768: a column from 100 to 200 has room on its right.
+    const right = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 320, height: 0 } })
+    await right.settle()
+    expect([right.dialog().style.left, right.dialog().style.width, right.dialog().style.top, right.dialog().style.height]).toEqual(['202px', '320px', '50px', ''])
+    expect(right.dialog().dataset.side).toBe('right')
+    right.unmount()
+    // A column at the window's right edge: the popover opens on its left, its right edge 2 px from the column.
+    const left = fixture({ anchor: rect(800, 50, 200, 600), size: { width: 300, height: 500 } })
+    await left.settle()
+    expect([left.dialog().style.left, left.dialog().style.height, left.dialog().dataset.side]).toEqual(['498px', '500px', 'left'])
+    expect(left.dialog().classList.contains('sized')).toBe(true)
+  })
+  it('resizes from its corner grip and hands the new size on when the drag ends', async () => {
+    const resized = vi.fn()
+    const view = fixture({ anchor: rect(100, 50, 100, 600), size: { width: 300, height: 400 }, onResized: resized })
+    await view.settle()
+    const grip = view.dialog().querySelector('.column-filter-grip') as HTMLElement
+    view.dialog().getBoundingClientRect = () => rect(202, 50, 300, 400)
+    const pointer = (type: string, x: number, y: number) => act(() => { grip.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y })) })
+    pointer('pointerdown', 500, 450)
+    pointer('pointermove', 560, 500)
+    // Shown at once, saved only when the drag ends.
+    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['360px', '450px'])
+    expect(resized).not.toHaveBeenCalled()
+    // Never smaller than the bounds.
+    pointer('pointermove', 0, 0)
+    expect([view.dialog().style.width, view.dialog().style.height]).toEqual(['260px', '240px'])
+    pointer('pointermove', 600, 520)
+    pointer('pointerup', 600, 520)
+    expect(resized).toHaveBeenCalledWith({ width: 400, height: 470 })
+  })
   it('is a listbox of options the arrow keys move through and Space ticks, one Tab stop', async () => {
     const view = fixture()
     await view.settle()

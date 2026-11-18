@@ -168,7 +168,7 @@ export interface GridViewOptions {
   onSort?(column: number, add: boolean): void
   /** The columns with a filter of their own; their funnels show it. */
   readonly filtered?: ReadonlySet<number>
-  /** A header's funnel was clicked: the popover opens under `anchor`. Without it headers have none. */
+  /** A header's funnel was clicked: the popover opens beside `anchor`, the column's band (`filterAnchor`). Without it headers have none. */
   onFilter?(column: number, anchor: DOMRect): void
   /** The columns whose headers have a funnel, when not every column's: a live source filters only some (its facets). */
   readonly filterable?: ReadonlySet<number>
@@ -918,7 +918,7 @@ export class GridView {
     if (funnel && !this.canFilter(filterColumn)) { event.preventDefault(); return }
     if (filterColumn >= 0) {
       event.preventDefault()
-      this.o.onFilter!(filterColumn, funnel!.getBoundingClientRect())
+      this.o.onFilter!(filterColumn, this.filterAnchor(filterColumn))
       return
     }
     // A press on a header's sort button sorts; it selects nothing and starts no drag.
@@ -1957,16 +1957,17 @@ export class GridView {
   /** Whether a column's header has a funnel. */
   canFilter(column: number): boolean { return !!this.o.onFilter && column >= 0 && column < this.columns && (!this.filterable || this.filterable.has(column)) }
 
-  /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid);
-   *  transposed, under its name cell's right end, kept inside the rows in view. */
+  /** The band a column's funnel popover opens beside, so it covers none of the column: the column's header and drawn
+   *  cells, clipped to the grid; transposed, the column's row across the grid, kept inside the rows in view. */
   filterAnchor(column: number): DOMRect {
     const box = this.scroller.getBoundingClientRect()
     if (this.rotated) {
       const first = box.top + g.headerHeight, top = first + column * g.rowHeight - this.offsets.virtualTop
-      return new DOMRect(box.left + this.rowHeader - g.funnelWidth, Math.min(Math.max(first, box.bottom - g.rowHeight), Math.max(first, top)), g.funnelWidth, g.rowHeight)
+      return new DOMRect(box.left, Math.min(Math.max(first, box.bottom - g.rowHeight), Math.max(first, top)), box.width, g.rowHeight)
     }
-    const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.offsets.scrollLeft))
-    return new DOMRect(right - 18, box.top, 18, g.headerHeight)
+    const start = box.left + this.rowHeader, x = start + this.layout.xOf(column) - this.offsets.scrollLeft
+    const left = Math.min(box.right, Math.max(start, x)), right = Math.min(box.right, Math.max(start, x + this.layout.width(column)))
+    return new DOMRect(left, box.top, right - left, box.height)
   }
 
   /** A column's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on

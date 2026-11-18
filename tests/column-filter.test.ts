@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow } from '../src/renderer/src/results/column-filter'
+import { blocksToDrop, checklistCondition, clampPopoverSize, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, popoverPlace, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -137,5 +137,24 @@ describe('column filter', () => {
     expect(blocksToDrop([0, 1, 2], 1, 1, 4)).toEqual([])
     expect(blocksToDrop([0, 1, 2, 3, 10, 50], 2, 3, 3)).toEqual([50, 10, 0])
     expect(blocksToDrop([4, 5, 6], 4, 6, 1)).toEqual([])
+  })
+  it('places the funnel popover beside its column: right, else left, else below or above, never over it while there is room', () => {
+    const view = { width: 1200, height: 800 }
+    // Right of the column, level with its header.
+    expect(popoverPlace({ band: { left: 100, right: 250, top: 300, bottom: 780 }, width: 300, height: 420, view })).toEqual({ side: 'right', left: 252, top: 300, width: 300, maxHeight: 492 })
+    // No room on the right: on the left. Too tall to start level with the header: it moves up only as far as it needs.
+    expect(popoverPlace({ band: { left: 900, right: 1150, top: 500, bottom: 780 }, width: 300, height: 420, view })).toEqual({ side: 'left', left: 598, top: 372, width: 300, maxHeight: 420 })
+    // A rotated grid's row across the window: below it, else above it.
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 100, bottom: 120 }, width: 300, height: 420, view })).toEqual({ side: 'below', left: 8, top: 122, width: 300, maxHeight: 670 })
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 700, bottom: 720 }, width: 300, height: 420, view })).toEqual({ side: 'above', left: 8, bottom: 102, width: 300, maxHeight: 690 })
+    // Nowhere clear of the column (it fills the window): over it, at its right end.
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 0, bottom: 800 }, width: 300, height: 420, view }).left).toBe(892)
+    // A window narrower than the popover: it shrinks to fit.
+    expect(popoverPlace({ band: { left: 0, right: 100, top: 0, bottom: 300 }, width: 600, height: 420, view: { width: 400, height: 300 } }).width).toBe(384)
+  })
+  it('keeps a remembered popover size within its bounds and the window', () => {
+    expect(clampPopoverSize({ width: 100, height: 100 }, { width: 1200, height: 800 })).toEqual({ width: 260, height: 240 })
+    expect(clampPopoverSize({ width: 2000, height: 2000 }, { width: 1200, height: 800 })).toEqual({ width: 900, height: 784 })
+    expect(clampPopoverSize({ width: 320.4, height: 0 }, { width: 1200, height: 800 })).toEqual({ width: 320, height: 0 })
   })
 })

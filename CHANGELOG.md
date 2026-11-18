@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- **Column filters beside their column:** The list a header's funnel or Alt\+Down opens now sits to the column's right, or its left when there is no room, instead of over the values it filters\. Drag its corner to resize it; the size is remembered and can be set in Options › Results to Grid\.
+- **Clear all filters from the keyboard:** Ctrl\+Shift\+L \(⇧⌘L on macOS\) in a results grid takes every filter off, as Filter › Clear Filters does\.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.

@@ -36,6 +36,16 @@ export const queryResultsSettings = [
     description: 'A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column\'s collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too.'
   },
   {
+    key: 'queryResults.grid.filterPopupWidth', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Column filter width', title: 'Column filter popup width', type: 'integer', min: 260, max: 900, default: 300, unit: 'px', varia: true,
+    keywords: ['filter', 'funnel', 'popup', 'popover', 'size', 'resize', 'width'],
+    description: 'The width of the column filter that a header\'s funnel or Filter Column Values opens. Dragging the filter\'s corner grip sets it. The filter shrinks to fit a small window.'
+  },
+  {
+    key: 'queryResults.grid.filterPopupHeight', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Column filter height', title: 'Column filter popup height', type: 'integer', min: 0, max: 1200, default: 0, unit: 'px', hint: '0 = fit to contents', varia: true,
+    keywords: ['filter', 'funnel', 'popup', 'popover', 'size', 'resize', 'height'],
+    description: 'The height of the column filter that a header\'s funnel or Filter Column Values opens; a taller filter shows more values. 0 fits it to its contents. Dragging the filter\'s corner grip sets it, at least 240 px. The filter shrinks to fit a small window.'
+  },
+  {
     key: 'queryResults.grid.includeColumnHeaders', page: 'queryResults.sqlServer.grid', group: 'Copy and save', label: 'Include column headers when copying or saving the results', type: 'boolean', default: false,
     keywords: ['headers', 'copy', 'csv', 'export', 'save'],
     description: 'Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them.'

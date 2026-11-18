@@ -239,7 +239,7 @@ describe('default keybindings', () => {
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
-    // Alt+Down in a grid opens the header funnel's popover for the active cell's column.
+    // Alt+Down in a grid opens the header funnel's popover for the active cell's column; Ctrl/⌘+Shift+L clears its filters.
     // Ctrl+Alt+Page Down and Up step through the results, with Shift through a result's views; in the output panes also
     // Ctrl+Page Down and Up (not on macOS, as for queries) and Ctrl/⌘+1 to 9. Ctrl/⌘+Shift+O opens Go to Result.
     const resultJumps = ['output.goToResult1', 'output.goToResult2', 'output.goToResult3', 'output.goToResult4', 'output.goToResult5', 'output.goToResult6', 'output.goToResult7', 'output.goToResult8', 'output.goToLastResult']
@@ -247,8 +247,8 @@ describe('default keybindings', () => {
     const macResultTabs = ['output.nextResult', 'output.previousResult', ...resultJumps, 'output.nextResultView', 'output.previousResultView', 'output.goToResult']
     // Ctrl/⌘+1 to 9 pick query tabs outside the output panes.
     const queryJumps = ['document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery']
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...resultTabs]
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...macResultTabs]
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...resultTabs]
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...macResultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']

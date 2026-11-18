@@ -1,16 +1,19 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { scrollCap } from '../grid/scroll'
 import { trapFocus } from '../trap-focus'
-import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, maxListSpace, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, clampPopoverSize, columnFilterKind, listWindow, maxListSpace, popoverNaturalHeight, popoverPlace, rowAtTop, rowsInView, scrollForRowAtTop, scrollToShow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
 
+/** The column the popover filters, and its band (`GridView.filterAnchor`): the popover opens beside it, never over it. */
 export interface ColumnFilterTarget { readonly column: number; readonly anchor: DOMRect }
+/** The popover's size (queryResults.grid.filterPopupWidth and filterPopupHeight); a height of 0 fits its contents. */
+export interface ColumnFilterSize { readonly width: number; readonly height: number }
 
 /** The custom conditions beside the checklist (`list`): one value, not it, between two, NULL, not NULL. */
 export type Condition = 'list' | 'equals' | 'notEquals' | 'between' | 'null' | 'notNull'
@@ -20,7 +23,8 @@ const conditions: readonly (readonly [Condition, string])[] = [
 type Load = { readonly status: 'loading' } | { readonly status: 'error'; readonly message: string } | { readonly status: 'ready'; readonly list: DistinctList }
 interface Ticks { readonly checked: number; readonly nullChecked: boolean }
 
-const width = 300
+/** The width before the setting is read (the setting's default). */
+const defaultSize: ColumnFilterSize = { width: 300, height: 0 }
 /** A search asks the backend once typing pauses; clearing it shows every value at once. */
 const searchPauseMs = 200
 /** Values one window read asks for, and rows drawn past each edge of the list's viewport. */
@@ -104,15 +108,23 @@ export function resultsFilterSource(results: Pick<ResultsService, 'columnValues'
  * outside closes it unchanged and closes the snapshot. It lists the values of the rows the grid's other filters keep, so
  * values the column's own filter dropped can be ticked again.
  */
-export function ColumnFilterPopover({ source, columnName, target, filtered, grid, onClose }: {
+export function ColumnFilterPopover({ source, columnName, target, filtered, grid, size = defaultSize, onResized, onClose }: {
   source: ColumnFilterSource; columnName: string; target: ColumnFilterTarget; filtered: boolean
   /** The grid it filters: the popover opens in that grid's window (the main one, or a popout's). */
   grid: HTMLElement
+  /** Its remembered size; a drag of its corner grip shows the new size at once and hands it to `onResized` when it ends. */
+  size?: ColumnFilterSize
+  onResized?(size: ColumnFilterSize): void
   onClose(refocus?: boolean): void
 }) {
   const nullText = source.nullText ?? 'NULL', titleId = useId(), rowId = useId()
   const offered = (source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions).map(([value, label]) => [value, source.conditionLabels?.[value] ?? label] as const)
   const { column, anchor } = target
+  /** The size shown: the remembered one, or the one a drag of the grip is setting. */
+  const [sized, setSizedState] = useState<ColumnFilterSize>(size), sizedNow = useRef(size)
+  const setSized = (next: ColumnFilterSize) => { sizedNow.current = next; setSizedState(next) }
+  const resizing = useRef<{ x: number; y: number; width: number; height: number } | undefined>(undefined)
+  useEffect(() => { if (!resizing.current) { sizedNow.current = size; setSizedState(size) } }, [size.width, size.height])
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
   const [order, setOrder] = useState<'count' | 'value'>('count')
   const [load, setLoad] = useState<Load>({ status: 'loading' })
@@ -412,12 +424,30 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     return drawn
   }, [firstRow, lastRow, nullRows, version])
 
-  // Under the header when it has room (its usual height), else above it when there is more room there; measured in the
-  // grid's own window.
-  const view = grid.ownerDocument.defaultView ?? window, innerWidth = view.innerWidth, innerHeight = view.innerHeight
-  const left = Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))
-  const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
-  const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
+  // Beside the column, not over it (popoverPlace), at its remembered size; measured in the grid's own window.
+  const view = grid.ownerDocument.defaultView ?? window, screen = { width: view.innerWidth, height: view.innerHeight }
+  const box = clampPopoverSize(sized, screen)
+  const at = popoverPlace({ band: anchor, width: box.width, height: box.height || popoverNaturalHeight, view: screen })
+  const place = { left: at.left, width: at.width, maxHeight: at.maxHeight, ...at.top !== undefined ? { top: at.top } : { bottom: at.bottom }, ...box.height ? { height: Math.min(box.height, at.maxHeight) } : {} }
+  // The grip sits at the corner away from the column (and from the band above it), so dragging it never covers the column.
+  const gripX = at.side === 'left' ? -1 : 1, gripY = at.side === 'above' ? -1 : 1
+  const gripDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !card.current) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const shown = card.current.getBoundingClientRect()
+    resizing.current = { x: event.clientX, y: event.clientY, width: shown.width, height: shown.height }
+  }
+  const gripMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = resizing.current
+    if (start) setSized(clampPopoverSize({ width: start.width + (event.clientX - start.x) * gripX, height: Math.max(1, start.height + (event.clientY - start.y) * gripY) }, screen))
+  }
+  const gripUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizing.current) return
+    resizing.current = undefined
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    onResized?.(sizedNow.current)
+  }
   // The column's own range limits the values listed, so Equals and Between can choose only within it.
   const ranged = !!source.ranged?.(column)
   const sourceNote = source.note?.(column)
@@ -469,7 +499,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   // Focus first: focusing the list from elsewhere runs listFocused, which may pick the first row in view; the clicked row wins.
   const pick = useCallback<RowPick>(row => { viewport.current?.focus({ preventScroll: true }); setActive(row) }, [])
 
-  return createPortal(<form ref={card} className="column-filter" role="dialog" aria-labelledby={titleId} style={place}
+  return createPortal(<form ref={card} className={'column-filter' + (box.height ? ' sized' : '')} role="dialog" aria-labelledby={titleId} style={place} data-side={at.side}
     onKeyDown={keyDown} onSubmit={event => { event.preventDefault(); void apply() }}>
     <div className="column-filter-head">
       <span className={codiconClass('filter')} aria-hidden="true" />
@@ -531,5 +561,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
       <button type="submit" className="primary" disabled={!summary}>OK</button>
       <button type="button" onClick={() => onClose()}>Cancel</button>
     </div>
+    {/* Pointer only: Options › Query Results sets the same size from the keyboard. */}
+    <div className={'column-filter-grip' + (gripX < 0 ? ' start' : '') + (gripY < 0 ? ' top' : '')} aria-hidden="true" title="Drag to resize"
+      onPointerDown={gripDown} onPointerMove={gripMove} onPointerUp={gripUp} onPointerCancel={gripUp} />
   </form>, grid.ownerDocument.body)
 }
