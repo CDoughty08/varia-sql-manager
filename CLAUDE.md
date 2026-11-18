@@ -106,6 +106,7 @@ After changing a catalogue, regenerate its outputs with the matching command and
 | `src/shared/settings/` | `npx vitest run tests/settings-catalog.test.ts -u` |
 | `src/shared/theme/metrics.ts` | `npx vitest run tests/theme-metrics.test.ts -u` |
 | `src/shared/icons.ts` | `npx vitest run tests/icons.test.ts -u` |
+| `src/shared/agent/catalog.ts` | `npx vitest run tests/agent-catalog.test.ts -u` |
 | Published `release-notes/*.json` records | `node scripts/release-notes.mjs --changelog` |
 
 ## User-facing documentation

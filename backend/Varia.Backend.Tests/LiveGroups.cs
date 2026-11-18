@@ -30,7 +30,7 @@ public static class LiveGroups
         ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 4), ("Attach", 2), ("Restore", 28), ("Login", 11), ("LoginListing", 0), ("LoginAction", 3), ("LoginDelete", 2), ("Unlock", 3),
         ("LoginProperties", 5), ("Securables", 2), ("LoginKinds", 5), ("DatabaseProperties", 47), ("TableProperties", 3),
         ("Designer", 8), ("NewDatabase", 1), ("Ssis", 111), ("Activity", 1), ("ActivitySource", 28), ("ActivityResources", 8), ("ActivityQuery", 1), ("ActivityAction", 1), ("SsisCreate", 0),
-        ("Entra", 0)
+        ("Entra", 0), ("Agent", 8)
     ];
 
     /// <summary>Group <c>Index</c> of <c>Count</c>, or with <c>Suite</c> only that suite (a developer's `--live-suite name`).</summary>

@@ -134,6 +134,12 @@ surface (a probe of `QueryState` on a missing service showed every `xp_serviceco
 22003, a reused number, with `@rc = 1` and `@@ERROR` 0, the Windows code only in the xp's fixed "returned error <n>," text); which msdb calls bump `sysjobs.version_number` and `sysschedules.version_number`; the
 msdb error numbers the action mapping needs; and what the Linux container's `sys.dm_server_services` lists.
 
+AG-0a ran these on 2026-11-18; the results are in docs/sql-server-agent.md › What AG-0 found on a real server. Two change
+the plan: `xp_servicecontrol` Start and Stop are refused ("Access is denied", Windows error 5) under the default virtual
+accounts, so service control (AG-2) comes back to the owner; and `sp_help_job` does not raise 15281 with Agent XPs off
+(it reports every job idle), so Agent's state comes from the service probe and `Agent XPs`, never from a failed job read.
+`sp_get_sqlagent_properties` returns values to SQLAgentUserRole.
+
 ## Servers and platform gates
 
 | Server | Agent node | Notes |
@@ -1259,7 +1265,7 @@ CLAUDE.md requires. The **Shared files** column names files BigQuery lanes also 
 
 | Lane | Scope | Depends on | Shared files | Size |
 | --- | --- | --- | --- | --- |
-| AG-0a | Foundations in new files only: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, `AgentSql.ReadProcedures`/`WriteProcedures` lists) with `tests/agent-catalog.test.ts` generating docs/sql-server-agent.md's reference part and `Agent/agent-catalog.json`; `backend/Varia.Backend/Agent/` with `AgentSql` and `AgentSql.LintRead`, `AgentReader` (not yet wired to a method), offline suites; `VARIA_TEST_SQL_AGENT`, the scratch prefix and sweep extension, the Agent live suite skeleton; CI `MSSQL_AGENT_ENABLED` and the Agent-up wait; AG-0's spikes on the owner's test instance (results in the PR and in docs/sql-server-agent.md) | — | Program.cs `offlineSuites`, `LiveGroups.Suites`, ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, CLAUDE.md's generated-files table (one row each) | M |
+| AG-0a | **Done.** Foundations in new files only: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, `AgentSql.ReadProcedures`/`WriteProcedures` lists) with `tests/agent-catalog.test.ts` generating docs/sql-server-agent.md's reference part and `Agent/agent-catalog.json`; `backend/Varia.Backend/Agent/` with `AgentSql` and `AgentSql.LintRead`, `AgentReader` (not yet wired to a method), offline suites; `VARIA_TEST_SQL_AGENT`, the scratch prefix and sweep extension, the Agent live suite skeleton; CI `MSSQL_AGENT_ENABLED` and the Agent-up wait; AG-0's spikes on the owner's test instance (results in the PR and in docs/sql-server-agent.md) | — | Program.cs `offlineSuites`, `LiveGroups.Suites`, ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, CLAUDE.md's generated-files table (one row each) | M |
 | AG-0b | `agent.profile` in the five places, the `agentRole` context keys, the release gate (Coordination with BigQuery) | AG-0a, **BQ-0 merged** | contracts.ts, validation.ts, methods.ts, preload, `SqlService.DispatchAsync`, Contracts.cs, context keys | S |
 | AG-1 | Object Explorer, as before (catalogue kinds, Agent node, folders, `explorer.agentService`, chips, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden, Ctrl+Q reveal), all behind the release gate | AG-0b; **before BQ-5** | explorer catalogue and its generated docs, live catalogue, icons, menus | M |
 | AG-2 | Job verbs from the tree (Start Job at Step dialog for the tree, Stop, Enable/Disable, Rename, Delete), `AgentSql.LintExecutable`, identity guard, msdb error mapping, Agent service Start / Stop / Restart, `agent-service.yml` | AG-1 | actions catalogue, ActionService | M |
