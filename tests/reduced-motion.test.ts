@@ -118,9 +118,10 @@ describe('reduced motion', () => {
     const transitions = dockview.filter(rule => !rule.at.length).flatMap(rule => parts(rule.selector).filter(targeted).flatMap(part => rule.declarations.filter(({ property }) => property === 'transition').map(({ value }) => ({ part, value }))))
     expect(transitions.length).toBeGreaterThan(0)
     const missing = transitions.filter(({ part, value }) => {
-      const restored = varia.get(`:root ${part}`)
+      // Skipping elements with an inline transition keeps Dockview's instant changes (it sets style.transition = 'none').
+      const restored = varia.get(`:root ${part}:not([style*="transition"])`)
       return !restored || !restored.endsWith('!important') || !/var\(--varia-motion-base\)/.test(restored) || properties(restored).join() !== properties(value).join()
     })
-    expect(missing.map(({ part }) => part), 'restore these in styles.css as :root <selector> { transition: … var(--varia-motion-base) … !important; }').toEqual([])
+    expect(missing.map(({ part }) => part), 'restore these in styles.css as :root <selector>:not([style*="transition"]) { transition: … var(--varia-motion-base) … !important; }').toEqual([])
   })
 })
