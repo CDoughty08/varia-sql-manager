@@ -516,6 +516,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.selected === id && !reveal) return
     // A selection the user made wins over one a reconcile still waits to make.
     this.pendingSelect = undefined
+    // It also ends the user's expand: coming back to the row later does not start it again.
+    if (this.opened && this.opened.selected !== id) this.opened = undefined
     this.selected = id
     if (reveal) this.reveals++
     this.evictable = true
@@ -1130,8 +1132,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const end = opened.id
     this.opened = { ...opened, chain: false }
     if (end !== opened.start) {
-      this.select(end, { reveal: !opened.held })
+      // The walk's own selection, recorded first: any other one ends the walk (select).
       this.opened.selected = end
+      this.select(end, { reveal: !opened.held })
     }
     // Nothing is left to follow below a level that came back empty, or once the user scrolled away.
     if (opened.held || !this.nodes.get(end)?.expanded) this.opened = undefined

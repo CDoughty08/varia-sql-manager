@@ -325,6 +325,18 @@ describe('ExplorerService: expanding as the user', () => {
     expect(f.explorer.getSnapshot().selected).toBe(tables)
     expect(f.explorer.opening).toBeUndefined()
   })
+  it('stays stopped when the user selects another row and comes back before a level loads', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database)
+    const { view } = await waiting(f, views)
+    f.explorer.select(view)
+    f.explorer.select(database)
+    f.unhold(); f.release()
+    await settleAll()
+    expect(f.explorer.getSnapshot().selected).toBe(database)
+    expect(f.explorer.opening).toBeUndefined()
+  })
   it('ends at, and selects, a level that comes back empty', async () => {
     const f = fixture()
     f.state.viewColumnsEmpty = true
@@ -389,6 +401,25 @@ describe('ExplorerService: expanding as the user', () => {
     await settle()
     const database = await f.open('Databases', 'AppData')
     const views = f.find('Views', database)
+    f.explorer.open(views, false)
+    await settleAll()
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: false })
+    f.state.viewsChain = true
+    f.explorer.reconcile(views)
+    await settleAll()
+    expect(f.explorer.node(views)!.expanded).toBe(true)
+    expect(f.explorer.opening).toBeUndefined()
+  })
+  it('forgets an expand whose reloaded listing came back empty, so Varia opening the folder later does not follow it', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database)
+    f.explorer.expand(views)
+    await settleAll()
+    f.explorer.collapse(views)
+    // Collapsed with its rows, it lists them again (a reconcile) when next expanded, and they are gone.
+    f.explorer.reconcile(views)
+    f.state.viewsChain = false
     f.explorer.open(views, false)
     await settleAll()
     expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: false })

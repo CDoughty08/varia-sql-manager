@@ -2163,8 +2163,38 @@ try {
   await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
   await expect.poll(async () => (await active())?.label).toBe('Parameters')
   await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(followedTo)
+  // Wheeling the tree while Parameters loads keeps it where the wheel left it too.
+  const heldThen = async (ready, act) => {
+    await setStub({ procedures: 5, holdParameters: true })
+    await selectRevealed(...procedures)
+    await page.keyboard.press('F5')
+    await selectRevealed(...procedures, ready)
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(heldParameters).not.toBeNull()
+    await act()
+    await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  }
+  let wheeledTo
+  await heldThen('dbo.usp_3', async () => {
+    const box = await tree().boundingBox()
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    const before = await tree().evaluate(element => element.scrollTop)
+    await page.mouse.wheel(0, -200)
+    await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(before)
+    wheeledTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  })
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(wheeledTo)
+  // Turning the setting off while Parameters loads stops the walk where it is: the procedure stays selected.
+  const setAutoExpand = async value => expect((await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.autoExpandSingleChild': value }), value)).ok).toBe(true)
+  // Two frames after the change reaches the tree, its effect has run.
+  await heldThen('dbo.usp_4', async () => { await setAutoExpand(false); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))) })
+  await expect.poll(async () => (await active())?.label).toBe('dbo.usp_4')
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_4', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_4')
+  await setAutoExpand(true)
   await setStub({ holdParameters: false, procedures: 0 })
-  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, and switching query tabs meanwhile keeps the tree where the tab put it.')
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder; switching query tabs or wheeling meanwhile keeps the tree where it was put, and turning the setting off stops it.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
