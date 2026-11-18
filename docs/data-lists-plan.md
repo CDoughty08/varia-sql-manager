@@ -27,10 +27,10 @@ and, on persistent pages, Save Results As.
 A **local table** is a small immutable table the renderer already holds (from an IPC call, a live sample or static data).
 It is never sent to the results pipeline as a result: no budget, no lifetime, no worker decoding.
 
-1. **`LocalTable`** (`src/renderer/src/grid/local-table.ts`): columns `{ id, label, kind: 'text' | 'number' | 'flag' |
-   'date' }` and rows of display text or null. Bounded at construction: 10,000 rows, 64 columns, 4,000 characters a
-   cell (longer text is cut and flagged like a capped results cell), 4 MiB of text a table; past a bound it keeps the first
-   rows and says so (`truncated`), as the surfaces' "There are more" notes do now. It implements the six handle members
+1. **A local table** (`src/shared/results/local-table.ts`): columns `{ name, kind?: 'text' | 'number' }` and rows of
+   display text or null. `boundTable` holds it to 10,000 rows, 64 columns, 4,000 characters a cell (longer text is cut)
+   and 4 Mi characters a table; past a bound it keeps the first rows and the grid says so, as the surfaces' "There are
+   more" notes do now. `LocalSource` (`src/renderer/src/grid/local-source.ts`) implements the six handle members
    `GridView` reads, synchronously from memory, and `GridView`/`GridData` take that narrower type (`GridSource`), a typing
    change with no behaviour change for results.
 2. **Sort in the renderer.** Header sort and multi-key sort reuse `sort-keys.ts`; a stable sort over a row permutation,
@@ -46,7 +46,7 @@ It is never sent to the results pipeline as a result: no budget, no lifetime, no
    save dialog, writes the format and header row chosen there with the same writer, atomically, and returns only the
    file's name, so the path never reaches the renderer. The writer's input is bounded as the table is. Query results keep copying and saving in the backend, where their rows are.
 4. **One component, two presets.** `LocalGrid` (`src/renderer/src/grid/LocalGrid.tsx`) renders `GridShell` over a
-   `LocalTable`:
+   local table:
    - `card` (hover Peek, Session Details, chart tables, Search Objects details): its height follows its rows up to 12
      then scrolls; no Save (the promoted Peek tab is a `page`).
    - `page` (Properties, SSIS properties, Client Statistics, plan comparison): fills its area; Save Results As.
@@ -78,7 +78,7 @@ that fit, by composition rather than inheritance:
 | --- | --- | --- | --- |
 | `ResultGrid` (query results, Peek Top rows) | backend result store | backend `ResultTextWriter` (rows may be millions) | everything: views, funnels, Find, profile, pivot, transpose, compare, Open Value |
 | `LiveGrid` (Activity Monitor, SSIS Operations) | backend, swapped per revision | backend `ResultTextWriter` | sort, facet funnels, follow tail, tones |
-| `LocalGrid` (new) | renderer memory (`LocalTable`) | TypeScript writer, same goldens | selection, copy, sort, resize, Save on pages |
+| `LocalGrid` (new) | renderer memory (`LocalSource`) | TypeScript writer, same goldens | selection, copy, sort, resize, Save on pages |
 
 LG-0 makes that split explicit: `GridView` and `GridData` take a `GridSource` (the six read members) instead of a full
 `ResultHandle`, and the three menus' targets share one output-grid shape. Nothing about query results changes.
