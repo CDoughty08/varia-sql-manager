@@ -110,6 +110,7 @@ import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
+import { followReducedMotion, reducedMotionQuery } from '../services/reduced-motion'
 import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
@@ -305,6 +306,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+  // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says; they
+  // re-read the media after each emulateMedia (scripts/fixtures/smoke.mjs).
+  const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
+    media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
+  if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
@@ -646,7 +652,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     help,
     dialogWindows: true,
     attachWindow: target => {
-      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement), reducedMotion.watch(target)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
     },
     dispose: () => {
@@ -778,6 +784,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
     blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
+    reducedMotion,
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
