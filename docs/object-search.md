@@ -7,8 +7,8 @@ expressions).
 
 ## Where to search
 
-**Object Explorer's search box** (top of the pane). Search in Object Explorer (Ctrl+Shift+F, Cmd+Shift+F on macOS, or
-the palette) focuses it and selects its text. It searches the server of the tree's selection, or the first connected
+**Object Explorer's search box** (top of the pane). Search in Object Explorer (Ctrl+Shift+F, Cmd+Shift+F on macOS; Ctrl+F or
+Cmd+F while the Object Explorer pane has focus; or the palette) focuses it and selects its text. It searches the server of the tree's selection, or the first connected
 server. Hits show in a band above the tree; a hit reveals its object in the tree below.
 
 - In the box: Enter reveals the first hit and keeps focus; each further Enter reveals the next, wrapping (Shift+Enter goes
