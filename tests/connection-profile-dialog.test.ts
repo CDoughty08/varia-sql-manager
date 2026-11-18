@@ -758,3 +758,80 @@ describe('Save and Test Connection', () => {
     expect(passing).toHaveBeenCalledWith(expect.objectContaining({ trustServerCertificate: true, password: '' }), expect.objectContaining({ profileId: trusted.id }))
   })
 })
+
+describe('closing with a new, unsaved connection', () => {
+  const prompt = () => document.body.querySelector<HTMLElement>('.sub-dialog')
+  const promptButton = (label: string) => [...prompt()!.querySelectorAll('button')].find(value => value.textContent === label)!
+  const type = async (view: Awaited<ReturnType<typeof mount>>, selector: string, value: string) => {
+    const field = view.host.querySelector<HTMLInputElement>(selector)!
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })) })
+  }
+
+  it('asks before dropping a filled-in connection; Don\'t Save closes and Cancel keeps editing', async () => {
+    const view = await mount()
+    await type(view, '#connect-server', 'brand-new')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save brand-new to History?')
+    await act(async () => promptButton('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).not.toHaveBeenCalled()
+    await act(async () => view.button('Cancel').click())
+    await act(async () => promptButton("Don't Save").click())
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it('asks after Trust server certificate changed an opened form the user did not otherwise edit', async () => {
+    const view = await mount(undefined, { initial: { ...connectionDefaults('win32'), server: 'cert-server' } })
+    const varia = (window as unknown as { varia: VariaApi }).varia
+    varia.discoverDatabases = vi.fn<VariaApi['discoverDatabases']>(async () => ({ ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-server', reason: 'certificate' } }))
+    await act(async () => view.button('Test Connection').click())
+    varia.discoverDatabases = vi.fn<VariaApi['discoverDatabases']>(async () => ({ ok: true, value: [] }))
+    await act(async () => view.button('Trust server certificate and test').click())
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save cert-server to History?')
+  })
+
+  it('asks for a new connection whose Custom environment label is still blank', async () => {
+    // Opened blank, as on Linux and macOS, where the default server is empty.
+    const view = await mount(undefined, { profiles: [], initial: { ...connectionDefaults('win32'), server: '' } })
+    await type(view, '#connect-server', 'label-server')
+    await pick(view, '#connect-environment', 'custom')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save label-server to History?')
+  })
+
+  it('does not ask for a typed password alone, a form typed back to how it opened, or settings a saved entry has', async () => {
+    const initial = { ...connectionDefaults('win32'), server: 'fresh', authentication: 'sql' as const, username: 'reader' }
+    let view = await mount(undefined, { initial })
+    await type(view, '#connect-password', 'typed-only')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
+    view = await mount(undefined, { initial })
+    await type(view, '#connect-server', 'elsewhere')
+    await type(view, '#connect-server', 'fresh')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
+    // Several entries share these settings and the empty labels name none of them: their Save would overwrite one.
+    const first = profile('First alias', 1), second = { ...profile('Second alias', 2), options: { ...first.options, displayName: 'Second alias' } }
+    view = await mount(undefined, { profiles: [first, second] })
+    await type(view, '#connect-server', first.options.server)
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+
+  it('does not offer to save back an entry the user removed while editing it', async () => {
+    const view = await mount()
+    await view.choose('Off profile')
+    if (view.button('Custom Properties').getAttribute('aria-expanded') !== 'true') await act(async () => view.button('Custom Properties').click())
+    await type(view, '#connect-name', 'Edited')
+    const remaining = view.profiles().filter(value => value.options.displayName !== 'Off profile')
+    ;(window as unknown as { varia: VariaApi }).varia.removeConnectionProfile = vi.fn<VariaApi['removeConnectionProfile']>(async () => ({ ok: true, value: { library: { version: 1, profiles: remaining }, savedPasswords: [] } }))
+    await act(async () => view.button('Remove saved Off profile').click())
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()).toBeNull()
+    expect(view.closed).toHaveBeenCalledOnce()
+  })
+})
