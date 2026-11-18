@@ -15,8 +15,9 @@ import { displayColumns } from './measure'
 export interface LocalSortKey { readonly column: number; readonly descending: boolean }
 
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true })
-/** A number column's value, for sorting: NaN for text that is not one (sorted after the numbers, as text). */
-const numberOf = (text: string) => Number(text.replace(/,/g, ''))
+/** A number column's value, for sorting: NaN for text that is not a decimal number, empty text included (sorted after the numbers, as text). */
+const decimal = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i
+const numberOf = (text: string) => { const plain = text.replace(/,/g, '').trim(); return decimal.test(plain) ? Number(plain) : Number.NaN }
 /** NULL first ascending, as SQL Server orders it; numbers by value in a number column, else text by the locale, digits as numbers. */
 function compare(a: LocalCell, b: LocalCell, numeric: boolean): number {
   if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1

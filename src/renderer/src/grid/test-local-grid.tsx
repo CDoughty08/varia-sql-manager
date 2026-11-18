@@ -8,7 +8,7 @@ import { LocalGrid, type LocalGridPreset } from './LocalGrid'
 
 export interface TestLocalGridOptions { readonly label: string; readonly preset: LocalGridPreset; readonly empty?: string; readonly suggestedName?: string; readonly sortable?: boolean }
 
-let mounted: { root: Root; host: HTMLElement } | undefined
+let mounted: { root: Root; host: HTMLElement; workbench: Workbench; o: TestLocalGridOptions } | undefined
 export function mountTestLocalGrid(workbench: Workbench, table: LocalTableData, o: TestLocalGridOptions): void {
   unmountTestLocalGrid()
   const host = document.createElement('div')
@@ -17,7 +17,12 @@ export function mountTestLocalGrid(workbench: Workbench, table: LocalTableData, 
   document.body.append(host)
   const root = createRoot(host)
   root.render(<WorkbenchProvider workbench={workbench}><LocalGrid table={table} {...o} /></WorkbenchProvider>)
-  mounted = { root, host }
+  mounted = { root, host, workbench, o }
+}
+/** The mounted grid given a new table, as an owner renders one: the same component, not a new mount. */
+export function rerenderTestLocalGrid(table: LocalTableData): void {
+  if (!mounted) return
+  mounted.root.render(<WorkbenchProvider workbench={mounted.workbench}><LocalGrid table={table} {...mounted.o} /></WorkbenchProvider>)
 }
 export function unmountTestLocalGrid(): void {
   mounted?.root.unmount()

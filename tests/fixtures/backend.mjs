@@ -1022,7 +1022,7 @@ function readResults(id, credit, { resultId, firstRow, maxRows, viewId }) {
   const next = pages.length ? pages.at(-1).firstRow + pages.at(-1).rows : firstRow
   streamBodies(id, credit, pages.map(page => page.body), () => ({ nextRow: next, rowsAvailable: available(result), complete: result.complete && next >= result.read, pages: pages.length, rows: pages.reduce((sum, page) => sum + page.rows, 0) }))
 }
-/** results.copy: the text_writer.mjs text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
+/** results.copy: the text-writer.ts text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
 async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes, viewId, transposed, headerColumn }) {
   const result = sourceOf(id, resultId, viewId)
   if (!result) return

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { boundTable, localCopyText, type LocalTableData } from '../../../shared/results/local-table'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -41,6 +42,11 @@ const maxSortKeys = 4
 const cardRows = 12
 /** A horizontal scroll bar's allowance under a card's rows, when its columns are wider than the card. */
 const cardScrollbar = 12
+const unsorted: readonly LocalSortKey[] = []
+/** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
+const keptSorts = new WeakMap<GridViewState, readonly LocalSortKey[]>()
+/** A table's columns, which its sort keys name: a table with other columns starts unsorted. */
+const columnsOf = (table: LocalTableData) => table.columns.map(column => `${column.kind ?? ''}:${column.name}`).join('\u0000')
 
 /**
  * A local table in the results grid (GridShell over GridView): rows the renderer already holds, never a backend result
@@ -51,20 +57,32 @@ const cardScrollbar = 12
 function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, state }: LocalGridProps) {
   const { commands, platform } = useWorkbench()
   const bound = useMemo(() => boundTable(table), [table])
-  const [keys, setKeys] = useState<readonly LocalSortKey[]>([])
+  const columnsKey = useMemo(() => columnsOf(bound), [bound])
+  // The keys belong to the columns they were chosen for: derived in render, so the mount that a new table causes
+  // already sees a table with other columns unsorted.
+  const [sorted, setSorted] = useState(() => ({ columns: columnsKey, keys: (state && keptSorts.get(state)) ?? unsorted }))
+  const keys = sorted.columns === columnsKey ? sorted.keys : unsorted
+  const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => {
+    const keys = next(current.columns === columnsKey ? current.keys : unsorted)
+    if (state) keptSorts.set(state, keys)
+    return { columns: columnsKey, keys }
+  }), [columnsKey, state])
   const [notice, setNotice] = useState<{ readonly text: string; readonly error?: boolean }>()
   const [wide, setWide] = useState(false)
   const apiRef = useRef<GridShellApi | undefined>(undefined)
   const sourceRef = useRef<LocalSource | undefined>(undefined)
   const own = useMemo<GridViewState>(() => state ?? { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }, [state, bound])
-  // A new table starts unsorted: its columns may differ.
-  useEffect(() => { setKeys([]) }, [bound])
   const latest = useRef({ label, suggestedName })
   latest.current = { label, suggestedName }
   const rows = bound.rows.length, columns = bound.columns.length
+  /** The keys the current source was sorted by. */
+  const sourceKeys = useRef(keys)
   const mount = (create: (spec: GridSpec) => GridView) => {
     const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells)
-    create({
+    sourceKeys.current = keys
+    // A new view reports only a change of width: it starts narrow.
+    setWide(false)
+    const view = create({
       handle: source, descriptor: localDescriptor(bound, bound.cutCells), state: own, entry: 'local', resultNumber: 1, resultCount: 1, label: latest.current.label,
       showTypes: false, clipboardKeys: false, sortable, onWide: setWide,
       onSelection: () => {},
@@ -72,21 +90,22 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
       onCopy: headers => { void commands.execute(headers ? 'output.copyWithHeaders' : 'output.copy', undefined, 'keybinding') },
       onEscape: () => false
     })
-    return () => { sourceRef.current = undefined }
+    // GridShell leaves the view to its owner: disposed here, or its listeners and subscriptions outlive it.
+    return () => { view.dispose(); sourceRef.current = undefined }
   }
   // A new sort swaps a source in the new order into the view, so the selection follows its rows.
   useEffect(() => {
     const view = apiRef.current?.view(), old = sourceRef.current
-    if (!view || !old) return
+    if (!view || !old || sourceKeys.current === keys) return
     const order = sortOrder(bound, keys)
-    if (order === old.order || (!order && !old.order)) return
+    sourceKeys.current = keys
     const next = new LocalSource(bound, order, bound.cutCells), place = new Int32Array(rows)
     for (let row = 0; row < rows; row++) place[next.rowOf(row)] = row
     sourceRef.current = next
     view.swap(next, localDescriptor(bound, bound.cutCells), row => row >= 0 && row < rows ? place[old.rowOf(row)] : -1)
   }, [bound, keys, rows])
   const sortBy = useCallback((column: number | undefined, descending = false, add = false) =>
-    setKeys(current => column === undefined ? [] : sortKeysBy(current, column, descending ? 'descending' : 'ascending', add, maxSortKeys, desc => ({ column, descending: desc }))), [])
+    setKeys(current => column === undefined ? unsorted : sortKeysBy(current, column, descending ? 'descending' : 'ascending', add, maxSortKeys, desc => ({ column, descending: desc }))), [setKeys])
   const report = useCallback((what: string, error: unknown) => setNotice({ text: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}`, error: true }), [])
   const output = useMemo<LiveOutput>(() => {
     const view = () => apiRef.current?.view()
@@ -116,7 +135,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
         if (preset !== 'page' || !hasRows()) return
         const order = sourceRef.current?.order
         setNotice(undefined)
-        void window.varia.saveLocalResults({ suggestedName: latest.current.suggestedName ?? latest.current.label, columns: bound.columns.map(column => ({ name: column.name, ...column.kind ? { kind: column.kind } : {} })), rows: (order ?? bound.rows.map((_, index) => index)).map(index => [...bound.rows[index]]) })
+        void window.varia.saveLocalResults({ suggestedName: (latest.current.suggestedName || latest.current.label || 'Results').slice(0, wire.jobs.suggestedName), columns: bound.columns.map(column => ({ name: column.name, ...column.kind ? { kind: column.kind } : {} })), rows: (order ?? bound.rows.map((_, index) => index)).map(index => [...bound.rows[index]]) })
           .then(saved => {
             if (!saved.ok) report('save the rows', saved.error)
             else if (saved.value) setNotice({ text: `Saved ${formatCount(saved.value.rows)} ${plural(saved.value.rows, 'row')} to ${saved.value.fileName}.` })

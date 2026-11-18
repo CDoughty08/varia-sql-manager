@@ -13,7 +13,26 @@ export type LocalCell = string | null
 export interface LocalTableData { readonly columns: readonly LocalColumn[]; readonly rows: readonly (readonly LocalCell[])[] }
 
 /** The bounds of one local table: past them the first rows are kept and the table says it is truncated. */
-export const localTableLimits = Object.freeze({ rows: 10_000, columns: 64, cellChars: 4_000, nameChars: 128, textChars: 4 * 1024 * 1024 })
+// `textChars` counts UTF-16 code units of cell text; `saveBytes` bounds a save's file, which UTF-8, quoting and JSON's
+// keys make larger than its text (localSaveBytes).
+export const localTableLimits = Object.freeze({ rows: 10_000, columns: 64, cellChars: 4_000, nameChars: 128, textChars: 4 * 1024 * 1024, saveBytes: 64 * 1024 * 1024 })
+
+const utf8Bytes = (text: string) => { let bytes = 0; for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : 3 } return bytes }
+/**
+ * At least the bytes any save of the table writes, in any format: per cell its UTF-8 at JSON's worst escape (a control
+ * character as \u00XX, 6 bytes a byte), its key as escaped, separators and NULL's letters; per row its brackets; and the
+ * header. Cheap and never under, so a save past `saveBytes` is refused before its file is built.
+ */
+export function localSaveBytes(table: LocalTableData): number {
+  // A key exactly as escaped (JSON's, or CSV's doubled quotes): JSON repeats it on every row.
+  const keys = table.columns.map(column => Math.max(utf8Bytes(JSON.stringify(column.name)), utf8Bytes(column.name) * 2 + 2) + 4)
+  let total = 16 + keys.reduce((sum, key) => sum + key, 0)
+  for (const row of table.rows) {
+    total += 8
+    for (let column = 0; column < table.columns.length; column++) total += keys[column] + 4 + utf8Bytes(row[column] ?? '') * 6
+  }
+  return total
+}
 
 /**
  * The table held to its bounds: at most 64 columns (names at most 128 characters), 10,000 rows, 4,000 characters a cell,

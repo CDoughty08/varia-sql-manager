@@ -9,7 +9,7 @@ import type { StreamSink } from './backend/connection'
 import { BackendError, sentences } from './backend/errors'
 import type { BackendSupervisor } from './backend/supervisor'
 import { sanitizeFileName } from './file-names'
-import { localExportBytes } from '../shared/results/local-table'
+import { localExportBytes, localSaveBytes, localTableLimits } from '../shared/results/local-table'
 import { writeBytesAtomic } from './json-file'
 import { localSaveRequestSchema, resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
 
@@ -31,6 +31,7 @@ export const jobSentences = {
   invalid: 'The results request was invalid.',
   copyTooLarge: `The selection is too large to copy (more than ${wire.jobs.copyBytes / 1024 / 1024} MB). Use Save Results As instead.`,
   copyCancelled: 'The copy was cancelled.',
+  saveTooLarge: `These rows are too large to save (over ${localTableLimits.saveBytes / 1024 / 1024} MB).`,
   /** EXPORT_FAILED tokens; the backend never sends a path or an OS message, so the sentence names only the file. */
   exportFailed: (token: string, fileName: string): string => 'Could not save the results: ' + (({
     ACCESS: `access to ${fileName} is denied.`,
@@ -241,6 +242,8 @@ export class ResultsJobHost {
     const parsed = localSaveRequestSchema.safeParse(value)
     if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
     const request = parsed.data
+    // Before the dialog: a file past the bound is never built.
+    if (localSaveBytes(request) > localTableLimits.saveBytes) throw new BackendError('TOO_LARGE', jobSentences.saveTooLarge)
     if (this.saveBusy) throw new BackendError('JOB_BUSY', jobSentences.busy)
     this.saveBusy = true
     let fileName = ''
@@ -250,7 +253,8 @@ export class ResultsJobHost {
       const { path, format } = chosen
       fileName = basename(path)
       const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] })
-      try { await (this.deps.writeFile ?? writeBytesAtomic)(path, data) } catch (error) {
+      // Into the folder the dialog chose, never one recreated: a folder deleted since then says so.
+      try { await (this.deps.writeFile ?? ((target: string, bytes: Uint8Array) => writeBytesAtomic(target, bytes, { createFolder: false })))(path, data) } catch (error) {
         throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(errnoTokens[(error as NodeJS.ErrnoException).code ?? ''] ?? 'IO', fileName))
       }
       this.lastDir = dirname(path)

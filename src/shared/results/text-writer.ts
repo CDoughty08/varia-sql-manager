@@ -1,6 +1,6 @@
 // Copy and Save Results As text in TypeScript: the twin of the C# ResultTextWriter, held to the same goldens
 // (tests/fixtures/results-text/cases.json, checked by tests/results-text.test.ts and Varia.Backend.Tests/TextChecks.cs),
-// so the two write byte-identical text. Local tables (src/shared/results/local-text.ts) and the fake backend
+// so the two write byte-identical text. Local tables (src/shared/results/local-table.ts) and the fake backend
 // (tests/fixtures/backend.mjs) write through it; query results are written by the C# writer, where their rows are. It
 // reads decoded pages (src/shared/ipc/wire/pages.ts) and works on UTF-8 bytes, as the C# writer does. Plain erasable
 // TypeScript, so Node runs it unbuilt.

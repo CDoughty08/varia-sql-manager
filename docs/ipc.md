@@ -2350,7 +2350,7 @@ docs/testing.md has the environment variables and rules; the protocol-specific p
   `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `src/shared/results/text-writer.ts`, and `hold/results.export` pauses an export after each page
   (or line of a transposed one) so a test can cancel it mid-save.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets with the exact Copy, CSV,
-  TSV and JSON bytes; the C# writer (through the real jobs) and the JavaScript twin are both checked against them.
+  TSV and JSON bytes; the C# writer (through the real jobs) and the TypeScript twin are both checked against them.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`: malformed frames,
   stdout purity and, with test hooks, synthetic results, streams, cancellation, the budget, and live subscriptions whose
   every frame must pass main's schemas.

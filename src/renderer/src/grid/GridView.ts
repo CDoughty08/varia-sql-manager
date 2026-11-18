@@ -206,6 +206,8 @@ export interface GridViewOptions {
  * listener is contained: after 3 failures in a row the grid stops and its shell offers Retry.
  */
 export class GridView {
+  /** Views not yet disposed, by entry: a view its owner forgets keeps its listeners and subscriptions (smoke checks read it). */
+  static readonly alive = new Map<string, number>()
   private readonly o: GridViewOptions
   private get gestures() { return gesturesFor(this.o.platform) }
   /** The grid element (GridShell's), which result visibility observes. */
@@ -336,6 +338,7 @@ export class GridView {
 
   constructor(o: GridViewOptions) {
     this.o = o
+    GridView.alive.set(o.entry, (GridView.alive.get(o.entry) ?? 0) + 1)
     this.root = o.root
     this.scroller = o.scroller
     this.handle = o.handle
@@ -658,6 +661,8 @@ export class GridView {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    const alive = (GridView.alive.get(this.o.entry) ?? 1) - 1
+    if (alive > 0) GridView.alive.set(this.o.entry, alive); else GridView.alive.delete(this.o.entry)
     this.fitting?.abort()
     this.resizing = undefined
     this.cancelFrame?.()

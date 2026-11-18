@@ -1,12 +1,16 @@
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { decodePage, encodePage } from '../src/shared/ipc/wire/pages'
-import { boundTable, localCopyText, localExportBytes, localPage, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { boundTable, localCopyText, localExportBytes, localPage, localSaveBytes, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
 import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
 import { FLAG_CAPPED, FLAG_NULL } from '../src/renderer/src/results/worker-protocol'
 import { localSaveRequestSchema } from '../src/main/validation'
 import { ResultsJobHost, type JobHostDeps } from '../src/main/results-jobs'
 import { BackendError } from '../src/main/backend/errors'
+import { writeBytesAtomic } from '../src/main/json-file'
 
 const table: LocalTableData = {
   columns: [{ name: 'Name' }, { name: 'Rows', kind: 'number' }, { name: 'Note' }],
@@ -71,6 +75,8 @@ describe('local tables', () => {
     expect(sortOrder(names, [{ column: 1, descending: false }, { column: 0, descending: true }])).toEqual([1, 4, 0, 3, 2])
     // A number column sorts text that is not a number after the numbers.
     expect(sortOrder({ columns: [{ name: 'n', kind: 'number' }], rows: [['n/a'], ['10'], ['9'], ['-1.5']] }, [{ column: 0, descending: false }])).toEqual([3, 2, 1, 0])
+    // Empty text and what only JavaScript reads as a number (hex, Infinity) are text, not 0 or a value.
+    expect(sortOrder({ columns: [{ name: 'n', kind: 'number' }], rows: [[''], ['0x10'], ['5'], [' '], ['Infinity'], ['1e3'], ['0']] }, [{ column: 0, descending: false }])).toEqual([6, 2, 5, 0, 3, 1, 4])
   })
 
   it('serve windows as a result does: NULL and capped cells flagged, display text, the order shown', async () => {
@@ -106,6 +112,7 @@ describe('local saves in main', () => {
       expect(localSaveRequestSchema.safeParse(bad).success).toBe(false)
   })
 
+  const realDeps = (): JobHostDeps => ({ backend: {} as JobHostDeps['backend'], owns: () => true, writeClipboard: () => {}, showSaveDialog: async () => ({ canceled: true }), documentsDir: () => tmpdir(), progress: () => {}, platform: 'linux', exportHeaders: async () => true })
   function host(patch: Partial<JobHostDeps> = {}) {
     const written: { path: string; text: string }[] = []
     const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: false, filePath: '/home/me/Documents/cols.txt' }))
@@ -115,6 +122,39 @@ describe('local saves in main', () => {
     } satisfies JobHostDeps
     return { jobs: new ResultsJobHost(deps), written, dialog }
   }
+
+  it('bound a save before the dialog by the most bytes any format writes', async () => {
+    const tricky: LocalTableData = { columns: [{ name: 'Ünïcode "key"' }, { name: 'n', kind: 'number' }], rows: [['\u0001\u0002 "é" 日本', '1,5'], [null, null], ['a\r\nb\tc', '12']] }
+    for (const format of ['csv', 'tsv', 'json'] as const) for (const headers of [true, false])
+      expect(localSaveBytes(tricky)).toBeGreaterThanOrEqual((await localExportBytes(tricky, { format, headers, nullText: 'NULL' })).data.length)
+    // Within the request's own bounds (NULL counts no text) JSON repeats each long key per row, past 64 MiB: refused before any dialog.
+    const heavy = { suggestedName: 'Heavy', columns: Array.from({ length: localTableLimits.columns }, (_, i) => ({ name: `${i}`.padEnd(localTableLimits.nameChars, '\u0001') })), rows: Array.from({ length: localTableLimits.rows }, () => Array<string | null>(localTableLimits.columns).fill(null)) }
+    expect(localSaveRequestSchema.safeParse(heavy).success).toBe(true)
+    const { jobs, dialog } = host()
+    await expect(jobs.saveLocal(heavy)).rejects.toMatchObject({ code: 'TOO_LARGE', message: 'These rows are too large to save (over 64 MB).' })
+    expect(dialog).not.toHaveBeenCalled()
+  })
+
+  it('refuse a second save while one is open, and never recreate a folder deleted since the dialog', async () => {
+    let close!: (value: { canceled: boolean }) => void
+    const waiting = host({ showSaveDialog: () => new Promise(resolve => { close = resolve }) })
+    const first = waiting.jobs.saveLocal(request)
+    await expect(waiting.jobs.saveLocal(request)).rejects.toMatchObject({ code: 'JOB_BUSY' })
+    close({ canceled: true })
+    expect(await first).toBeNull()
+    const folder = await mkdtemp(join(tmpdir(), 'varia-local-save-'))
+    try {
+      const gone = join(folder, 'deleted')
+      await expect(writeBytesAtomic(join(gone, 'cols.csv'), new Uint8Array([1]), { createFolder: false })).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readdir(folder)).toEqual([])
+      // Through the real atomic write: the save fails as the folder being gone, and nothing is created.
+      const error = await new ResultsJobHost({ ...realDeps(), showSaveDialog: async () => ({ canceled: false, filePath: join(gone, 'cols.csv') }) }).saveLocal(request).catch((value: unknown) => value)
+      expect(error).toMatchObject({ code: 'EXPORT_FAILED' })
+      expect(await readdir(folder)).toEqual([])
+    } finally {
+      await rm(folder, { recursive: true, force: true })
+    }
+  })
 
   it('write the format the chosen file names, through the same dialog as a results grid', async () => {
     const { jobs, written, dialog } = host()

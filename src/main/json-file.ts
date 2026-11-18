@@ -63,6 +63,8 @@ export interface AtomicWriteOptions {
   /** POSIX permissions of the new file, set on the temporary file before it is synced and renamed into place, so its
    *  content is never readable under the umask's default. Windows ignores it. */
   readonly mode?: number
+  /** False to fail (ENOENT) when the folder is missing rather than create it: a file the user chose in a dialog. */
+  readonly createFolder?: boolean
 }
 export async function writeJsonAtomic(path: string, value: unknown, limit: number, tooLarge: string, options: AtomicWriteOptions = {}): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value, null, 2) + '\n')
@@ -72,7 +74,7 @@ export async function writeJsonAtomic(path: string, value: unknown, limit: numbe
 
 /** Writes a temporary file beside `path` and renames it over `path`, so a failed write leaves the old file as it was. */
 export async function writeBytesAtomic(path: string, bytes: Uint8Array, options: AtomicWriteOptions = {}): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
+  if (options.createFolder !== false) await mkdir(dirname(path), { recursive: true })
   const temporary = join(dirname(path), `.varia-${randomUUID()}.tmp`)
   try {
     const file = await open(temporary, 'wx', options.mode ?? 0o666)

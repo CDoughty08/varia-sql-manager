@@ -1194,6 +1194,20 @@ try {
   await gridCell(local, 2, 0).click({ modifiers: ['Shift'] })
   await page.keyboard.press('Control+C')
   await expect.poll(clipboard).toBe(['Order Lines', 'Orders', 'customers'].join(eol))
+  // A new table with the same columns keeps the sort, and its old view is disposed: one view left, none after unmount.
+  const rerenderLocal = table => page.evaluate(value => window.__variaGrid.rerenderLocal(value), table)
+  await rerenderLocal({ ...localTable, rows: [...localTable.rows, ['Archive', 'table', '20000', null]] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 4 rows, 4 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('Archive')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const aliveLocal = () => page.evaluate(() => window.__variaGrid.aliveViews('local'))
+  expect(await aliveLocal()).toBe(1)
+  // A table with other columns starts unsorted.
+  await rerenderLocal({ columns: [{ name: 'Name' }, { name: 'Size', kind: 'number' }], rows: [['b', '2'], ['a', '1']] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 2 rows, 2 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('b')
+  await expect(local.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await rerenderLocal(localTable)
   // Query Output's menu, without what only query results do; a card has no Save.
   await gridCell(local, 1, 1).click({ button: 'right' })
   const localMenu = page.getByRole('menu', { name: 'Query output', exact: true })
@@ -1217,6 +1231,7 @@ try {
   await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
   await page.evaluate(() => window.__variaGrid.unmountLocal())
   await expect(page.locator(part.localGrid)).toHaveCount(0)
+  expect(await aliveLocal()).toBe(0)
   console.log('Results checks: local grids select, copy and copy with headers as results grids do, sort numbers by value, show Query Output\'s menu, save a page through main and say when they are empty.')
 
   // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
