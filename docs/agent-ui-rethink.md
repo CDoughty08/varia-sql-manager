@@ -1,7 +1,7 @@
 # Rethinking SQL Server Agent's UI
 
 Status: **adopted by the owner on 2026-11-16** for Agent's first release, now 0.11.0 (0.10.0 focuses on BigQuery).
-`docs/agent-plan.md` is rewritten to match once the owner has reviewed the rethink scenes. Mocks: the "Rethink · …" groups
+`docs/agent-plan.md`'s lanes were rewritten to match on 2026-11-18. Mocks: the "Rethink · …" groups
 at the top of `docs/mockups/sql-server-agent.html`; the SSMS-style scenes below them stay as reference.
 
 SSMS's Agent UI dates from small monitors: every object is a modal dialog with a page list, and anything inside it

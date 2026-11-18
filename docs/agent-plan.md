@@ -1,16 +1,22 @@
 # SQL Server Agent plan (0.11.0)
 
-Status: **agreed with the owner on 2026-11-15** (decisions below), revised after adversarial review. Nothing here is
-implemented yet. This page is the plan of record for the Agent lanes; each lane's PR updates the area's own page (a new
+Status: **agreed with the owner on 2026-11-15** (decisions below), revised after adversarial review, UI rethink adopted
+on 2026-11-16, lanes rewritten to the document model on 2026-11-18. Implementation starts with AG-0a. This page is the plan of record for the Agent lanes; each lane's PR updates the area's own page (a new
 docs/sql-server-agent.md, generated below a marker like docs/integration-services.md) and moves the lane's row here to Done.
 
-Agent is planned for 0.11.0. 0.10.0 focuses on BigQuery (docs/bigquery-plan.md, in CDoughty08/varia-sql-manager#528, not
-yet on main); until then Agent work is limited to these docs and the mocks. SSMS 2022/22 is the parity target for names,
+Agent is planned for 0.11.0. 0.10.0 focuses on BigQuery (docs/bigquery-plan.md); Agent lanes run beside it without getting
+in its way (Coordination with BigQuery, after Lanes) and stay hidden until 0.11.0. SSMS 2022/22 is the parity target for names,
 menus, keys and behaviour; visuals follow Calm Pro.
 
 Mocks of every new or changed surface: [docs/mockups/sql-server-agent.html](mockups/sql-server-agent.html) (open it in a
 browser; Dark and Light, a picker per surface, design notes as dashed boxes). Each lane's PR builds what its mock shows, or
 updates the mock in the same PR when the design changes.
+
+## Owner decisions (2026-11-18)
+
+- **Start implementation** beside BigQuery, without heavily conflicting with it: AG-0a (new files only) starts now, lanes
+  that register methods, keys or catalogue entries wait for BQ-0, and the shared-file order is in Coordination with
+  BigQuery. The rethink scenes were reviewed and the lanes below are rewritten to the document model.
 
 ## Owner decisions (2026-11-16)
 
@@ -20,8 +26,8 @@ updates the mock in the same PR when the design changes.
   in-place editing and inline creation, replacing the stacked child dialogs decided on 2026-11-16. Agent's first release
   takes the rethink's first two tiers plus Create several.
 - **Review the mocks first**: every view the rethink changes gets a "Rethink" scene in the mocks, and the SSMS-style scenes
-  stay as reference. The sections and lanes below still describe the dialog design; they are rewritten to the document
-  model once the owner has reviewed the rethink scenes.
+  stay as reference. Done on 2026-11-18: the lanes are rewritten; the sections keep their
+  SQL and rules and read "document" for "dialog" (Lanes).
 
 ## Owner decisions (2026-11-15)
 
@@ -218,7 +224,7 @@ since no Agent role has EXECUTE on `sp_add_alert`/`sp_update_alert`, `sp_add_ope
 SQL Server Agent Properties on Managed Instance, "Managed Instance does not allow changing SQL Server Agent properties", in
 AG-8a). The Agent node's Properties item is disabled for non-sysadmin logins with "Only sysadmin can read SQL Server Agent
 properties" until AG-0's `sp_get_sqlagent_properties` spike says another role gets values (node-menu vitest).
-`ObjectDialog` gains a read-only mode for it: every field disabled, OK replaced by Close (primary, focused), and the reason
+`ObjectDialog` gains a read-only mode for it (for Agent objects, the document's read-only mode, `rx-job-readonly`): every field disabled, OK replaced by Close (primary, focused), and the reason
 in the message bar; pages stay navigable; list buttons that change something (Steps' New, Insert, Delete, Move up/down;
 Schedules' New, Pick, Remove; Alerts' Add, Remove; Start step) are disabled with the same reason, while Edit stays enabled
 and opens the Step, Schedule or Alert dialog read-only the same way; Script stays offered and, since nothing can change,
@@ -591,7 +597,7 @@ other logins read `sp_help_jobactivity`, which joins `sysjobs_view` and so retur
 row for the current Agent session in `syssessions`), Varia shows no elapsed time (tiles, status bar, In progress run),
 never a guess.
 
-Job dialog pages (`ObjectDialog` with pages, as Login and Database Properties; describe through `actions.describe`). Describe
+Job document sections (the rethink's job document, `rx-job-*`; formerly `ObjectDialog` pages; describe through `actions.describe`). Describe
 reads use the role path where the login cannot read the tables: `sp_help_job @job_id` (several result sets),
 `sp_help_jobstep`, `sp_help_jobschedule`, all in `AgentSql.ReadProcedures` and checked by `AgentSql.LintRead`; AG-6a has a
 live check that a SQLAgentUserRole login opens and saves its own job:
@@ -681,44 +687,16 @@ live check that a SQLAgentUserRole login opens and saves its own job:
   them") and Edit opens the alert read-only; the describe marks alert links not editable (renderer vitest for an Operator on
   their own job; `AgentRoles` check of the describe flag). Edit, like Add, needs the Alert dialog, so until AG-7 lands the
   page lists the alerts with Remove (sysadmin) only.
-- **Stacked child dialogs** (owner, 2026-11-16, over closing the parent; SSMS opens these on top of the parent):
-  `ObjectDialogService` holds one dialog today (`open()` refuses a second, with one `request`, `lookup` and secret slot),
-  and `SubDialog` only edits the parent's draft, which is right for Step and Schedule but not for dialogs that save on their
-  own. Dialogs today open only from a tree node (`open(dialog, node)` needs `node.id`, the target comes from `node.ref` and
-  `refreshListing` uses `listingFolderOf(nodeId)`), but Job Activity Monitor's row Properties, Ctrl+Q, the palette's New
-  Job and these children have no tree node, so AG-6a adds an object-target form, `open(dialog, { connectionId, target,
-  label })`, alongside the node form: focus returns to the invoking control, and `afterSuccess` reveals through
-  `folderNode(connectionId, owner, folder)` with the folder's real owner (`{ kind: 'agent' }` for Agent folders, the
-  server for Security › Credentials), instead of `listingFolderOf`, which also finds nothing for a New Job opened from the
-  Agent node's New › (its parent is the server, not a folder), so that path reveals the same way (vitest that a node-less
-  New Job selects the job in an expanded Jobs folder) (vitests
-  for each node-less opener). Job Activity Monitor's Properties row action is hidden until AG-6a lands. The child is a second
-  dialog controller with its own snapshot (today every service method acts on `this.current` and `App.tsx` mounts one
-  `<ObjectDialog />` reading one snapshot): a second `<ObjectDialog />` bound to the child controller renders it, the pages
-  take their controller from props instead of the service singleton, and the frame derives its element ids
-  (`object-dialog-title`, `-steps`, `-progress`, `-blocked`, `-script-*`) from the dialog's id so the child's
-  `aria-labelledby` names its own title while the parent is `inert` (vitest of both accessible names). It gains one
-  child slot, built in AG-6a: `openChild(dialog, { connectionId, target, label }, preset)` (always the object-target form) runs the child's own describe, execute,
-  Cancel, long-run and secret handling (its secret cleared on close like the parent's), while the parent stays open,
-  inert and unchanged with its draft kept; on the child's success the parent re-reads only the affected page through a page-scoped describe id that returns just
-  that list (`jobAlerts`, `credentialList`, `alertJobPicker`, `alertOperatorPicker`, registered in zod's describe set and
-  C#'s `catalog.Describes` / `Validate(ActionDescribeArgs)`) and merges that slice into the parent model, never a full
-  re-describe, so the parent's identity and version fields stay as first read and the `STALE` guard still sees another
-  session's edit (vitest that they do not change across a child's success); it then selects the new object; on the child's
-  Cancel nothing changes; a disconnect or backend loss puts the child and then the parent into the `disconnected` state, as
-  a dialog does today (both stay open, inert, with Close); only one child at a time:
-  inside a child, every control that would open another dialog that saves on its own is disabled with "Open this from
-  its own dialog to use it" (a child alert's Response New Job…, View Job, New Operator… and View Operator; a child job's
-  Alerts Add and Edit; a child proxy's New Credential), while pickers, `SubDialog`s (steps, schedules) and read-only views
-  keep working (vitests: a child alert's New Operator… disabled, a View Job child's Alerts Add disabled). In a New Job,
-  which has no job id until it is saved, Alerts Add and Edit are disabled for sysadmin with "Save the job first, then add
-  alerts", since the child's `sp_add_alert` needs an existing job; for every other role the role reason above takes
-  precedence, since saving would not help (vitests for sysadmin's and an Operator's New Job; mock note on `new-job`). Users: the job's Alerts page Add (New Alert with the job
-  preset) and Edit (AG-7), an alert's Response page New Job…, View Job, New Operator… and View Operator (AG-7, the job
-  dialog from AG-6a), the Proxy dialog's New Credential (AG-8b), and Manage Schedules' New…, Properties and Jobs in Schedule (AG-6c). Focus moves into the child and returns to the
-  invoking button on close; Escape closes only the child (vitests: child Cancel, child success re-reading the parent page,
-  a disconnect while the child is open, the secret cleared, focus return; smoke: New Alert from the job's Alerts page and
-  back; mock scene `job-alerts-child`).
+- **Superseded by the document model** (2026-11-16 rethink, replacing the stacked child dialogs decided earlier that day):
+  Agent objects are document tabs, so nothing opens a dialog on a dialog. What the child-dialog design needed carries
+  over: documents open without a tree node (tree, Job Activity Monitor, Ctrl+Q, palette) and reveal the saved object
+  through `folderNode(connectionId, owner, folder)` with the folder's real owner (`{ kind: 'agent' }` for Agent folders,
+  the server for Security › Credentials); a document re-reads only the list an inline create changed through the
+  page-scoped describes (`jobAlerts`, `credentialList`, `alertJobPicker`, `alertOperatorPicker`), merged without touching
+  the identity and version fields, so `STALE` still sees another session's edit; a disconnect or backend loss puts open
+  documents into the disconnected state with their drafts kept. New Alert from a job's Alerts section opens an alert tab
+  beside the job with the job preset (`rx-job-alerts`); in an unsaved New Job it says "Save the job first, then add
+  alerts". The SSMS-style scene `job-alerts-child` stays as reference only.
 - **Notifications**: E-mail / Page / Net send operator with When (succeeds, fails, completes), Write to the Windows
   Application event log, Automatically delete job. Kinds the platform gates refuse are disabled with the reason.
 - **Targets**: "Target local server" only in 0.11.0; multi-server (MSX/TSX) targets are later and shown disabled.
@@ -1121,9 +1099,11 @@ Actions catalogue rows (today's catalogue knows none of these kinds, `enable`/`d
 - New object actions: `startJob` (with the Start Job at Step… dialog id `startJobAtStep`, whose describe lists the steps),
   `stopJob`, `enableSchedule`, `disableSchedule`, `deleteSchedule`, `recycleAgentErrorLog` (AG-5b; sysadmin; on
   `agentErrorLog`), `deleteJobHistory` (Delete History), plus the service rows above.
-- New dialog ids: `agentJob` (job Properties and New Job), `agentAlert`, `agentOperator`, `agentProxy`, `credential`,
-  `agentProperties`, `schedule`, `manageSchedules`, the page-scoped describes (`jobAlerts`, `credentialList`,
-  `alertJobPicker`, `alertOperatorPicker`, `scheduleList`), and `startJobAtStep`.
+- New describe ids: `agentJob` (job document and New Job), `agentAlert`, `agentOperator`, `agentProxy`, `credential`,
+  `schedule`, `scheduleList` (the Schedules document), the page-scoped describes (`jobAlerts`, `credentialList`,
+  `alertJobPicker`, `alertOperatorPicker`), and the dialogs that stay dialogs: `agentProperties`, `startJobAtStep` (from
+  the tree; the job header uses its Start menu) and the service-control dialogs. `manageSchedules` is dropped (the
+  Schedules document replaces it).
 - `ActionArgs` (zod and C#, strict, bounded) gain `agentIdentity` (the job, schedule, alert, operator or proxy id with its
   version or modified date), `deleteUnusedSchedule`, `reassignTo` (operator name, `sysname` bound) and a `scheduleJobs` list
   (below); `deleteHistory` widens from databases to `agentJob`, where it means `@delete_history` (both on by default, as
@@ -1263,39 +1243,83 @@ Smoke suites find surfaces by ARIA role and name, so these are part of the desig
 
 ## Lanes
 
+Rewritten on 2026-11-18 to the document model ([docs/agent-ui-rethink.md](agent-ui-rethink.md)). The sections above keep
+their SQL, guards, role rules and limits; where they say "dialog", "page" or "child dialog" for a job, alert, operator,
+proxy, credential or schedule, read "document" and "section", and creation in place replaces the child (see Superseded by
+the document model in Jobs). Each lane builds what its Rethink scene shows; the SSMS-style scenes are reference for names,
+fields and behaviour. AG-0 is split into AG-0a and AG-0b; "AG-0" above means both (the spikes are AG-0a's).
+
 Ordered; lanes on the same line can run in parallel once their dependency lands. Sizes are rough (S < 1 day of agent
 work, M, L). **Every lane's definition of done** includes its part of docs/sql-server-agent.md, README where users see a
 change, CHANGELOG.md's Unreleased summary, and its Getting Started guide/sample impact or a concrete no-impact reason, as
-CLAUDE.md requires.
+CLAUDE.md requires. The **Shared files** column names files BigQuery lanes also change (Coordination with BigQuery below).
 
-| Lane | Scope | Depends on | Size |
-| --- | --- | --- | --- |
-| AG-0 | Foundations: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, docs generation), `agent.profile` and `agentRole` keys, `AgentReader` + `AgentSql.LintRead`, CI `MSSQL_AGENT_ENABLED` and the Agent-up wait, `VARIA_TEST_SQL_AGENT`, scratch prefix and sweep extension, Agent live suite skeleton; spikes on the owner's test instance: `sp_help_job` while stopped, the Agent XPs value after a clean Agent stop and error 15281, msdb procedures that roll back themselves (266), `xp_servicecontrol` with `SQLServerAgent` on virtual accounts and its "Access is denied" number, `version_number` bumps, msdb error numbers, the `dm_server_services` permission on 2022+ (which `HAS_PERMS_BY_NAME` guards each probe uses), the Linux DMV | — | M |
-| AG-1 | Object Explorer: catalogue singleton children and `opens` leaves (with C# `Served`, docs and tests), Agent node, Job Activity Monitor leaf, folders and `agentProxySubsystem`, the session sysadmin column and reader session facts, both listing paths, edition gate (`ExplorerProfile` edition; existing Linux and Managed Instance flags), platform-gate verification, `explorer.agentService`, Agent node chips, per-probe reader routing in `SqlSampler` and the role path of `explorer.agent` (updating `ExplorerStatusLiveChecks`), XPs-disabled state, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden (Agent node New › appears with AG-6a's Job…), Ctrl+Q reveals Agent objects | AG-0 | M |
-| AG-2 | Job verbs from the tree: Start Job at Step, Stop, Enable/Disable, Rename, Delete; `AgentSql.LintExecutable` with return-code checks, the identity guard and msdb error mapping (`AGENT_STOPPED`, `JOB_STATE` after 22022, `STALE` codes registered); Agent service Start / Stop / Restart with every state; the `AgentService` suite under the exclusive lock and the path-gated `agent-service.yml` workflow | AG-1 | M |
-| AG-3 | Job Activity Monitor: `agent.jobs` live source, document with LiveGrid, tiles, view chips, filters, multi-select row actions with Start / Stop / Enable / Disable Jobs progress, loading, error and Agent-stopped states, server-time labels; status-bar running job (`agent.jobs.watched`), Agent-stopped probe (`agent.jobs.service`) | AG-1 (AG-2 for actions) | M |
-| AG-4 | Script As for Job, Alert, Operator, ProxyAccount (UrnBuilder JobServer children, scripting catalogue rows, goldens, role check) | AG-1 | S |
-| AG-5a | Log File Viewer: `agent.history` live source (both paths), run grouping with In progress and Unknown, master/detail grids, details pane, `agent.historyMessage`, Delete History for checked jobs (all or older than), start times through `sp_help_jobactivity`, role-path message limit, cap text from `sp_get_sqlagent_properties` | AG-1, AG-2 (write path), AG-3 (`agent.jobs` source for running state) | M |
-| AG-5b | Agent error logs in the Log File Viewer: `agent.errorLogs`, `xp_readerrorlog` / `sp_readmierrorlog` capped reads with the truncation notice, Recycle | AG-5a | S |
-| AG-6a | Stacked child dialogs in `ObjectDialogService`; job dialog shell: describe (both paths), General, Notifications (with the Database Mail readiness warning), Targets (local), Alerts list (Add hidden until AG-7), one-transaction save with `STALE`, Script Action, New Job (also from the Agent node's New ›, which appears with it), Ctrl+Q opens job Properties | AG-2 | M |
-| AG-6b | Steps page, the step save planner, and step dialog (T-SQL with editor features and Parse, CmdExec, PowerShell, SSIS package, Advanced) | AG-6a | L |
-| AG-6c | Schedules: `schedule.ts` encoding and sentences, schedule dialog (CPU-idle warning), Pick, Jobs in Schedule, Manage Schedules, Remove with delete offer; Agent node New › Schedule… | AG-6a | M |
-| AG-7 | Operators and Alerts: dialogs (all pages), Enable/Disable, Rename, Delete; performance counter picker; Agent node New › Operator… and Alert…; job dialog Alerts page Add | AG-1, AG-6a (shared dialog parts) | M |
-| AG-8a | SQL Server Agent Properties (General, History) through `sp_set_sqlagent_properties`, read-only on Managed Instance; the one-shot "Remove agent history older than" purge with its confirmation | AG-1, AG-2 (write path) | S |
-| AG-8b | Proxies: New / Properties (General, Principals, References), Rename, Delete, Agent node New › Proxy…; New Credential and Credential Properties (`CredentialSql`, generalised secret slot, identity and secret always sent together) | AG-1, AG-6a | M |
-| AG-9 | Getting Started guide and sample for Agent, parity re-check of the Agent rows | all | S |
-| Later | Manage Job Categories, multi-server targets, Script Action to Job, output file and table log viewers, Activity Monitor job links, SQL Server Logs and Database Mail in the Log File Viewer, Agent Properties' remaining pages and fail-safe operator, WMI alert editing, Elastic Jobs | | |
+| Lane | Scope | Depends on | Shared files | Size |
+| --- | --- | --- | --- | --- |
+| AG-0a | Foundations in new files only: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, `AgentSql.ReadProcedures`/`WriteProcedures` lists) with `tests/agent-catalog.test.ts` generating docs/sql-server-agent.md's reference part and `Agent/agent-catalog.json`; `backend/Varia.Backend/Agent/` with `AgentSql` and `AgentSql.LintRead`, `AgentReader` (not yet wired to a method), offline suites; `VARIA_TEST_SQL_AGENT`, the scratch prefix and sweep extension, the Agent live suite skeleton; CI `MSSQL_AGENT_ENABLED` and the Agent-up wait; AG-0's spikes on the owner's test instance (results in the PR and in docs/sql-server-agent.md) | — | Program.cs `offlineSuites`, `LiveGroups.Suites`, ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, CLAUDE.md's generated-files table (one row each) | M |
+| AG-0b | `agent.profile` in the five places, the `agentRole` context keys, the release gate (Coordination with BigQuery) | AG-0a, **BQ-0 merged** | contracts.ts, validation.ts, methods.ts, preload, `SqlService.DispatchAsync`, Contracts.cs, context keys | S |
+| AG-1 | Object Explorer, as before (catalogue kinds, Agent node, folders, `explorer.agentService`, chips, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden, Ctrl+Q reveal), all behind the release gate | AG-0b; **before BQ-5** | explorer catalogue and its generated docs, live catalogue, icons, menus | M |
+| AG-2 | Job verbs from the tree (Start Job at Step dialog for the tree, Stop, Enable/Disable, Rename, Delete), `AgentSql.LintExecutable`, identity guard, msdb error mapping, Agent service Start / Stop / Restart, `agent-service.yml` | AG-1 | actions catalogue, ActionService | M |
+| AG-3 | Job Activity Monitor (`agent.jobs`, LiveGrid, tiles, chips, filters, states) with the rethink's chevron (last run in place), double-click to open (hidden until AG-6a), bulk Enable, Disable, Start and Stop with one result per job; status-bar running job and Agent-stopped probe | AG-1 (AG-2 for actions) | live catalogue, status bar | M |
+| AG-4 | Script As for Job, Alert, Operator, ProxyAccount | AG-1; **before BQ-5** | scripting catalogue, `ScriptPipeline` | S |
+| AG-5a | Log File Viewer for cross-job history, unchanged (master/detail, `agent.history`, `agent.historyMessage`, Delete History) | AG-1, AG-2, AG-3 | live catalogue | M |
+| AG-5b | Agent error logs in the Log File Viewer, Recycle | AG-5a | | S |
+| AG-6a | Job document shell (`rx-job-general`, `-notifications`, `-alerts`, `-readonly`, `-stale`, `-denied`, `-new`): an Agent document kind on `DocumentFrame` and the document service, as Table Designer; opens from the tree, Job Activity Monitor, Ctrl+Q and the palette (one tab per job, focused if open); header with live state from `agent.jobs`, Start split button with the step menu (`rx-start-step`) and Stop; sections General, Notifications (Database Mail readiness, off-duty pager), Targets, Alerts (list, Remove; New Alert opens beside with AG-7); dirty state, "Save · n changes", close prompt; read-only mode; Problems (field, section, header; warn, never block); the one-transaction save with `STALE`, the field-by-field compare and "Reload and keep my changes"; errors on the field that caused them; Script; New Job's start panel (Blank, Copy an existing job) | AG-2, AG-3 | document kinds in `services/documents.ts`, commands catalogue | L |
+| AG-6b | Steps master/detail (`rx-job-steps`, `rx-step-ssis`, `-ps`, `-cmdexec`, `-delete`): Monaco editors with the step's database, Parse, Open in query window; SSIS step on one scroll with the inline SSISDB picker; More options folded; drag to reorder with go-to targets following; delete with Undo and the targets that pointed at it; the step save planner | AG-6a | | L |
+| AG-6c | Schedules (`rx-job-schedules`, `-schedule-pick`, `-schedule-remove`, `rx-schedules-doc`): `schedule.ts` encoding and sentences, presets, next five runs, free-slot check, the in-place editor, pick with search and preview, Remove with detach or delete and Undo, the Schedules document replacing Manage Schedules; Agent node New › Schedule… | AG-6a | | M |
+| AG-6d | History in place and the live run view (`rx-job-history`, `rx-job-running`): runs with step states, the failed step's message open, usual duration (median of the last 10 successful runs) and sparkline, SSIS execution link | AG-6a, AG-5a | | M |
+| AG-6e | Create Job Like This (`rx-create-from`): Changes from source, Replace across the copy with preview, per-step key fields, schedules Share, Copy or Leave out, Compare with source; entry points on the job menu, Job Activity Monitor and the palette; saves through New Job's save | AG-6b, AG-6c | commands catalogue | M |
+| AG-6f | Create several (`rx-create-several`, `-review`): table, Columns, per-row overrides, Open full editor and back, Fill, checks, one transaction per row, Enable the created jobs | AG-6e | | M |
+| AG-6g | Unsaved Agent documents in hot exit and AutoRecover, restored like query tabs | AG-6a, **BQ-3d merged** | session and AutoRecover records, docs/hot-exit.md | S |
+| AG-7 | Alerts and operators (`rx-alert`, `-alert-perf`, `-alerts-recommended`, `rx-operators`, `-operator-delete`): alert document on one screen (When / Then / Options, history in the header, current counter values), operator chips with the inline new operator, the Operators and notifications grid, Send test e-mail and the Agent mail check, Add recommended alerts, Delete operator with Reassign to; Enable/Disable, Rename, Delete; Agent node New › Operator… and Alert…; the job's Alerts section Add | AG-6a | actions catalogue | L |
+| AG-8a | SQL Server Agent Properties (`rx-agent-props`; stays a dialog) with what retention keeps per job and the inline purge confirmation | AG-1, AG-2 | | S |
+| AG-8b | Proxy document on one screen with the inline credential (`rx-proxy`); Credential document with Used by (`rx-credential`); Rename, Delete, Agent node New › Proxy… | AG-6a | actions catalogue, `ObjectDialogService` secret slot | M |
+| AG-3b | Job Activity Monitor bulk Change owner and Attach schedule, one request per job | AG-3, AG-6c | | S |
+| AG-9 | Getting Started guide and sample, parity re-check, the release gate removed | all | help catalogue | S |
+| Later | Schedules Timeline, Agent overview health checks, Copy to another server, New Job templates, Flow view; Manage Job Categories, multi-server targets, Script Action to Job, output file and table log viewers, Activity Monitor job links, SQL Server Logs and Database Mail in the Log File Viewer, Agent Properties' remaining pages and fail-safe operator, WMI alert editing, Elastic Jobs | | | |
 
-Suggested waves: AG-0 → AG-1 → {AG-2, AG-4} → {AG-3, AG-6a, AG-8a} → {AG-5a, AG-6b, AG-6c, AG-7, AG-8b} → AG-5b → AG-9.
-Lanes that touch the Agent tree menus or the actions catalogue (AG-2, AG-6a, AG-7, AG-8a, AG-8b) merge main in after each
-lands, as the Activity Monitor lanes did.
+Suggested waves: AG-0a (now) → AG-0b once BQ-0 merges → AG-1 → {AG-2, AG-4} → {AG-3, AG-8a} → AG-6a →
+{AG-5a, AG-6b, AG-6c, AG-7, AG-8b} → {AG-5b, AG-6d, AG-6e, AG-3b} → AG-6f → AG-6g once BQ-3d merges → AG-9.
+Lanes that touch the Agent tree menus, the actions catalogue or the document service (AG-2, AG-6a, AG-6e, AG-7, AG-8a,
+AG-8b) merge main in after each lands, as the Activity Monitor lanes did.
 
-Coordination with BigQuery: AG-1 and BQ-5 both extend `src/shared/explorer/catalog.ts` and its generated
-docs/object-explorer.md and `explorer-catalog.json`. Land AG-1 before BQ-5 starts, or rebase whichever is second; neither
-needs the other. BQ-0's `providers` default covers Agent's entries whichever lands first.
+Scope cut if 0.11.0 runs long: must ship AG-0a to AG-6c; may slip AG-6d to AG-6f, AG-7, AG-8a, AG-8b and AG-3b.
+Operators, alerts and proxies stay listable and scriptable from AG-1 and AG-4.
+
+## Coordination with BigQuery
+
+BigQuery (docs/bigquery-plan.md) is the 0.10.0 milestone and runs at the same time, with BQ-0 in progress. Agent must not
+slow it down:
+
+- **Before BQ-0 merges, only AG-0a.** BQ-0 touches every registry (methods in the five places, context keys, the
+  commands, menus, Explorer and actions catalogues, tab and session records). AG-0a adds new files and one line in each of
+  a few shared lists; it registers no method, context key, command, menu, Explorer kind or action. Everything that
+  registers waits for BQ-0, then takes its `providers` default of `['sqlserver']` and its lint.
+- **Agent never edits a BigQuery lane's hot files beyond appending.** No refactor of a shared file inside an Agent lane: if
+  one is needed it is its own small PR, announced in the shared notes folder first.
+- **Order in the files both plans change:**
+
+  | Shared area | BigQuery lane | Rule |
+  | --- | --- | --- |
+  | ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, `LiveGroups` | BQ-1 (emulator service and live group) | One-line additions each; whichever merges second merges main |
+  | The five method places, context keys, catalogues' `providers` | BQ-0 | AG-0b and later start after BQ-0 merges |
+  | Explorer catalogue, docs/object-explorer.md, `explorer-catalog.json` | BQ-5 | AG-1 lands before BQ-5 starts |
+  | Scripting catalogue, `ScriptPipeline` | BQ-5 (Script As) | AG-4 lands before BQ-5 starts |
+  | Status bar | BQ-2 (principal and project) | Agent adds its chip in its own item; no change to the connection item |
+  | Live catalogue | BQ-9 (`bigquery` scope) | Additive entries |
+  | Session and AutoRecover records, docs/hot-exit.md | BQ-3a-2, BQ-3d | AG-6g after BQ-3d merges |
+  | Results pipeline, query execution, connect dialog, settings pages | BQ-2, BQ-3a to BQ-3c, BQ-7 | Agent does not touch them |
+
+- **Release gate** (proposed, owner to confirm before AG-0b). Agent lanes merge to main during 0.10.0 but Agent must not appear in 0.10.0. From AG-0b, every Agent
+  surface (Explorer node, commands, menus, documents) is behind a context key `agentEnabled`, false unless the
+  `VARIA_AGENT_PREVIEW=1` environment variable is set (smoke and live tests set it); the Explorer keeps today's "SQL
+  Server Agent" later folder while it is false. AG-9 removes the gate for 0.11.0. AG-0a has no user-visible surface.
+- After each BigQuery lane merges, open Agent branches merge main. Agent sessions note their shared-file changes in the
+  shared notes folder (`agent-shared-infrastructure.md`).
 
 ## Questions still open
 
-None blocking. AG-0's spikes and AG-1's platform-gate verification report back in their PRs. If service control cannot
+Before AG-0b: the release gate in Coordination with BigQuery (proposed). Before AG-6e: whether Create from… schedules
+default to Share or Copy (the mocks show Share). Neither blocks AG-0a. AG-0's spikes and AG-1's platform-gate verification report back in their PRs. If service control cannot
 work on default virtual accounts or a named instance, or the Windows CI job cannot install SQL Server in a reasonable time,
 that comes back to the owner before AG-2 merges.
