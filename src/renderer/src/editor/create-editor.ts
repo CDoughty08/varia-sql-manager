@@ -99,8 +99,9 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   const drop = readOnly ? undefined : bindExplorerDrop(instance)
   if (use.contextKey) instance.createContextKey(use.contextKey, true)
   const definition = bindDefinitionPointer(workbench, instance, !use.contextKey)
-  // Peek's card beside a name here (or Alt+F12 looking one up) makes Escape in this editor close it.
-  const card = workbench.editorPeek ? bindPeekCardKey(instance, workbench.editorPeek) : undefined
+  // An open Peek card (or Alt+F12 looking one up here) makes Escape in this editor close it. Not in Peek's own editor: it is
+  // inside the card, whose Esc closes it and puts focus back where the peek came from.
+  const card = workbench.editorPeek && !use.contextKey ? bindPeekCardKey(instance, workbench.editorPeek) : undefined
   return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
     dispose: () => { visibility(); card?.dispose(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

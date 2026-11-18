@@ -222,11 +222,9 @@ describe('Go To Definition', () => {
     expect(Object.keys(listeners)).toEqual([])
     anchor.focus()
     expect(editor.focus).toHaveBeenCalled()
-    // The editor owns the anchor, so Escape there knows the card is its own.
-    expect(anchor.owner).toBe(editor)
   })
 
-  it("makes Escape in the editor close Peek's card beside a name in it, and drop an Alt+F12 still looking one up", async () => {
+  it("makes Escape in a query editor close Peek's card, beside a name or a row, and drop an Alt+F12 still looking one up", async () => {
     let answer!: (found: FoundDefinition) => void
     const f = fixture(() => new Promise<FoundDefinition>(resolve => { answer = resolve }))
     const snapshot: { open?: object } = {}, peekListeners = new Set<() => void>()
@@ -243,36 +241,50 @@ describe('Go To Definition', () => {
     const pending = f.handlers['edit.peekDefinition']!.run()
     expect(values.at(-1)).toBe(true)
     expect(f.editorPeek.cardIn(f.editor)).toBe(true)
+    // Another editor's Escape is not the lookup's: the card it would open belongs beside this editor's caret.
     expect(f.editorPeek.cardIn({})).toBe(false)
-    f.editorPeek.closeCard()
+    f.editorPeek.closeCard({})
+    expect(values.at(-1)).toBe(true)
+    f.editorPeek.closeCard(f.editor)
     expect(values.at(-1)).toBe(false)
     answer(procedure)
     await pending
     expect(f.peek.peekAt).not.toHaveBeenCalled()
     expect(f.scripting.inform).not.toHaveBeenCalled()
+    // A dropped lookup that fails says nothing either.
+    let fail!: (error: Error) => void
+    f.definition.mockImplementationOnce(() => new Promise<FoundDefinition>((_resolve, reject) => { fail = reject }))
+    const failing = f.handlers['edit.peekDefinition']!.run()
+    f.editorPeek.closeCard(f.editor)
+    fail(new Error('lost'))
+    await failing
+    expect(f.scripting.inform).not.toHaveBeenCalled()
 
-    // A card open beside a name in this editor (a hover's, which leaves focus in the text) is the editor's to close.
-    snapshot.open = { anchor: { owner: f.editor } }
-    peekListeners.forEach(listener => listener())
-    expect(values.at(-1)).toBe(true)
-    f.editorPeek.closeCard()
-    expect(close).toHaveBeenCalledTimes(1)
-    expect(values.at(-1)).toBe(false)
-    // Another editor's card, or a row's in Object Explorer, is not.
-    snapshot.open = { anchor: { owner: {} } }
-    peekListeners.forEach(listener => listener())
-    expect(values.at(-1)).toBe(false)
-    snapshot.open = {}
-    f.editorPeek.closeCard()
-    expect(close).toHaveBeenCalledTimes(1)
+    // A card a hover opened beside a name here, or beside an Object Explorer row while typing here, leaves focus in the text:
+    // Escape in the editor closes either.
+    for (const open of [{ anchor: {} }, { rowId: 'oe-1' }]) {
+      snapshot.open = open
+      peekListeners.forEach(listener => listener())
+      expect(values.at(-1)).toBe(true)
+      expect(f.editorPeek.cardIn({})).toBe(true)
+      f.editorPeek.closeCard(f.editor)
+      expect(values.at(-1)).toBe(false)
+    }
+    expect(close).toHaveBeenCalledTimes(2)
+    // With no card, Escape is the editor's own.
+    f.editorPeek.closeCard(f.editor)
+    expect(close).toHaveBeenCalledTimes(2)
 
     // A lookup that finishes clears its claim: the card it opened holds Escape from then on.
-    snapshot.open = undefined
+    delete snapshot.open
+    f.peek.peekAt.mockImplementationOnce(() => { snapshot.open = { anchor: {} }; peekListeners.forEach(listener => listener()); return true })
     const opened = f.handlers['edit.peekDefinition']!.run()
     expect(values.at(-1)).toBe(true)
     answer(procedure)
     await opened
     expect(f.peek.peekAt).toHaveBeenCalledTimes(1)
+    expect(values.at(-1)).toBe(true)
+    f.editorPeek.closeCard(f.editor)
     expect(values.at(-1)).toBe(false)
 
     binding.dispose()

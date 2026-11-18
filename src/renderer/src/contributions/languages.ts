@@ -15,7 +15,7 @@ type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections
 /**
  * Refresh metadata for the chosen query while keeping its execution session and unsaved SQL; Go To Definition (F12), Peek
  * Definition (Alt+F12) and Open Definition in Peek Tab for the SQL editor that has focus: a query tab's, or Peek's read-only
- * one (`EditorPeekService` has the rules). Escape in the editor Peek's card is beside closes the card.
+ * one (`EditorPeekService` has the rules). Escape in a query editor closes Peek's card, or drops its own Alt+F12 lookup.
  */
 export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
@@ -41,7 +41,7 @@ export function languagesContribution({ commands, documents, connections, sqlLan
   ]
   const editorApi = monaco?.editor
   if (editorPeek && editorApi?.registerCommand && editorApi.addKeybindingRules) {
-    registrations.push(registerPeekCardEscape({ editor: { registerCommand: editorApi.registerCommand, addKeybindingRules: editorApi.addKeybindingRules } }, editorPeek))
+    registrations.push(registerPeekCardEscape({ editor: { registerCommand: editorApi.registerCommand, addKeybindingRules: editorApi.addKeybindingRules, getEditors: editorApi.getEditors } }, editorPeek))
   }
   return { dispose: () => { refresh.dispose(); next.dispose(); previous.dispose(); for (const registration of registrations) registration.dispose() } }
 }

@@ -306,7 +306,7 @@ describe('Monaco runtime keybinding rules', () => {
   })
 
   it("lets Escape close Peek's card in its editor only after every Monaco widget, snippet and operation that uses Escape", () => {
-    const { KeyCode } = loaded.monaco
+    const { KeyCode, editor: api } = loaded.monaco
     const closeCard = vi.fn()
     // A rule added through the API outranks every default, so its clause must step aside for each of Monaco's own Escapes.
     const escapes = loaded.rules.filter(rule => [rule.primary, ...rule.secondary ?? []].includes(KeyCode.Escape))
@@ -328,10 +328,12 @@ describe('Monaco runtime keybinding rules', () => {
       expect(kept).toEqual(expect.arrayContaining(['hideSuggestWidget', 'closeFindWidget', 'leaveEditorMessage', 'leaveSnippet']))
     } finally { registration.dispose() }
     expect(press(KeyCode.Escape, { ...editor, [peekCardContextKey]: true })).toBeUndefined()
-    // The rule runs the card's close through Monaco's command registry.
-    const added = registerPeekCardEscape(loaded.monaco as never, { closeCard })
+    // The rule runs the card's close through Monaco's command registry, for the editor that has focus.
+    const focused = { hasWidgetFocus: () => true }
+    const added = registerPeekCardEscape({ editor: { registerCommand: api.registerCommand, addKeybindingRules: api.addKeybindingRules, getEditors: () => [{ hasWidgetFocus: () => false }, focused] } }, { closeCard })
     try { loaded.services.keybinding._commandService.executeCommand(closePeekCardCommand) } finally { added.dispose() }
     expect(closeCard).toHaveBeenCalledTimes(1)
+    expect(closeCard).toHaveBeenCalledWith(focused)
   })
 
   it('removes and restores a two-part default chord', () => {

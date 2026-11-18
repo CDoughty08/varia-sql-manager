@@ -52,12 +52,11 @@ export function editorPeekAnchor({ editor, model, position }: EditorPlace): Peek
       const subscriptions = [editor.onDidScrollChange(moved), editor.onDidLayoutChange(moved), editor.onDidChangeModelContent(gone), editor.onDidChangeModel(gone), editor.onDidDispose(gone)]
       return () => { for (const subscription of subscriptions) subscription.dispose() }
     },
-    focus: () => editor.focus(),
-    owner: editor
+    focus: () => editor.focus()
   }
 }
 
-/** The Monaco context key set on a SQL editor while Peek's card is open beside a name in it, or Alt+F12 looks one up there. */
+/** The Monaco context key set on a query editor while Peek's card is open (beside a name or a row), or Alt+F12 looks one up there. */
 export const peekCardContextKey = 'variaPeekCard'
 /**
  * Monaco's own uses of Escape in an editor, which come before the card's: each closes its widget, leaves its snippet or
@@ -71,15 +70,22 @@ export const peekCardEscapeWhen = [peekCardContextKey, ...monacoEscapeContextKey
 export const closePeekCardCommand = 'varia.closePeekCard'
 
 /**
- * Escape in the SQL editor Peek's card belongs to closes it, as Esc in Object Explorer's tree closes a row's: a card the
- * pointer opened leaves focus in the editor, so the card's own Esc never sees the key. Monaco dispatches it, after its widgets.
+ * Escape in a query editor closes Peek's card, as Esc in Object Explorer's tree does: a card the pointer opened (beside a
+ * name in the editor, or beside a row while typing in the editor) leaves focus in the text, so the card's own Esc never sees
+ * the key. Monaco dispatches it, after its widgets.
  */
-export function registerPeekCardEscape(monaco: BridgeMonaco, editorPeek: Pick<EditorPeekService, 'closeCard'>): Disposable {
-  const command = monaco.editor.registerCommand(closePeekCardCommand, () => editorPeek.closeCard())
+export function registerPeekCardEscape(monaco: PeekCardMonaco, editorPeek: Pick<EditorPeekService, 'closeCard'>): Disposable {
+  // Monaco dispatches the rule only from an editor's own DOM, so the editor with focus is the one Escape was pressed in.
+  const command = monaco.editor.registerCommand(closePeekCardCommand, () => editorPeek.closeCard(monaco.editor.getEditors().find(editor => editor.hasWidgetFocus())))
   try {
     const rule = monaco.editor.addKeybindingRules([{ keybinding: monacoKeyCodes.escape!, command: closePeekCardCommand, when: peekCardEscapeWhen }])
     return { dispose: () => { rule.dispose(); command.dispose() } }
   } catch (error) { command.dispose(); throw error }
+}
+
+/** The parts of Monaco the Escape rule uses, so tests can pass a fake. */
+export interface PeekCardMonaco {
+  readonly editor: BridgeMonaco['editor'] & { getEditors(): readonly { hasWidgetFocus(): boolean }[] }
 }
 
 /** Keeps `peekCardContextKey` on `editor` in step with `cardIn`, for the Escape rule. */
@@ -108,9 +114,12 @@ export class EditorPeekService {
 
   constructor(private readonly options: EditorPeekOptions) {}
 
-  /** Whether Escape in `editor` is the card's: the card is beside a name in it, or Alt+F12 is looking one up there. */
+  /**
+   * Whether Escape in `editor` (a query editor) is the card's: a card is open, or Alt+F12 is looking one up there. With focus
+   * in the editor the card has none, so it is one a hover opened, or one the editor's caret took focus back from.
+   */
   cardIn(editor: object): boolean {
-    return this.opening?.editor === editor || this.options.peek?.getSnapshot().open?.anchor?.owner === editor
+    return this.opening?.editor === editor || !!this.options.peek?.getSnapshot().open
   }
 
   /** Calls `listener` whenever `cardIn` may have changed. */
@@ -120,10 +129,13 @@ export class EditorPeekService {
     return () => { this.listeners.delete(listener); unsubscribe?.() }
   }
 
-  /** Escape in the editor (`closePeekCardCommand`): the card beside a name closes, and an Alt+F12 still looking one up opens nothing. */
-  closeCard(): void {
-    this.setOpening(undefined)
-    if (this.options.peek?.getSnapshot().open?.anchor) this.options.peek.close()
+  /**
+   * Escape in a query editor (`closePeekCardCommand`, `editor` the one it was pressed in): the card closes, and an Alt+F12
+   * still looking one up in that editor opens nothing. One started in another editor is that editor's.
+   */
+  closeCard(editor?: object): void {
+    if (this.opening && this.opening.editor === editor) this.setOpening(undefined)
+    if (this.options.peek?.getSnapshot().open) this.options.peek.close()
   }
 
   private setOpening(opening: { readonly editor: object } | undefined): void {

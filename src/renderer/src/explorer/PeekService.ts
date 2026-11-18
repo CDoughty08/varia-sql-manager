@@ -73,8 +73,6 @@ export interface PeekAnchor {
   rect(): { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number } | undefined
   watch(moved: () => void, gone: () => void): () => void
   focus(): void
-  /** What holds the anchor (a query editor's Monaco instance), so it can tell the card beside it is its own. */
-  readonly owner?: object
 }
 export interface PeekSnapshot { readonly open?: OpenPeek }
 /** What a read peeks; `subtype` (the tree's) says whether Script As can write a scripted kind's definition. */
