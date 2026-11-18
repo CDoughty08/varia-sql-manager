@@ -53,7 +53,8 @@ recent ones. A password typed into the form is kept only when Remember password 
 field goes back to the saved-password dots. Object Explorer connections that used the old password keep their sessions
 but need the new one entered when they next connect, as after Connect with a new password. Unchecking Remember password
 and saving forgets the saved password, as Connect does. A remembered password belongs to its login settings: saving
-other ones (Trust server certificate, Encrypt, Host name in certificate) forgets it, and Save says so. Without Remember password, Save keeps the settings and says the password was not kept. A line under
+others (authentication, login, Encrypt, Trust server certificate, Host name in certificate, or the Advanced server
+certificate, failover partner or network protocol) forgets it, and Save says so. Without Remember password, Save keeps the settings and says the password was not kept. A line under
 Password says which applies.
 
 **Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
