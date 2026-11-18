@@ -700,8 +700,8 @@ internal sealed class ResultSetBuffer
         return saved;
     }
 
-    /// <summary>Unpacks every packed page in place before an operation that reads the whole result (a sort, a filter, a
-    /// profile, a pivot, a diff, a search, row identities, a transposed Copy or Save), on the workers, after reserving the bytes it adds from the budget as
+    /// <summary>Unpacks every packed page in place before an operation that reads the whole result (a diff read far out
+    /// of order, or a sort, pivot or other read whose rooms or extract were refused), on the workers, after reserving the bytes it adds from the budget as
     /// working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from 64 MiB, as
     /// a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and
     /// view reads still work. The caller holds a pin, so nothing packs the pages again until it ends.</summary>
