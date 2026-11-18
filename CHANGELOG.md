@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
+
+### Fixes
+
+- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.
@@ -20,13 +28,11 @@ A clearer Tools › Options in a window of its own, servers you can arrange that
 
 ### Changes to everyday use
 
-- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
 - **Peek from the query editor:** Hold Ctrl \(Cmd on macOS\) and rest the pointer on a table or other object name to Peek it in a card beside the name, as in Object Explorer\. Alt\+F12 opens the same card at the caret, and Ctrl\+click now opens a Peek tab instead of scripting the object; F12 still scripts it as CREATE\.
 - **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
 
 ### Fixes
 
-- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
 - **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
 - **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
 - **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved\.
