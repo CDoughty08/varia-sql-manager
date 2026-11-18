@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Varia · Data lists as grids (mock)</title>
+<style>
+  /* Calm Pro palette (src/shared/theme/palette.ts), Dark then Light. */
+  body.dark  { color-scheme: dark;  --canvas: #16181d; --chrome: #111317; --overlay: #1d2026; --input: #101216; --hover: #262a32; --active: #30343e; --selection: #21273b; --selectionStrong: #29314f;
+    --text: #d9dce3; --textStrong: #f5f6f8; --textSecondary: #bcc1cb; --textMuted: #9298a4; --textAccent: #bcc5ff; --border: #262a31; --borderStrong: #2e323a; --separator: #30343c;
+    --inputBorder: #6a7184; --accent: #8f9cff; --onAccent: #0e1230; --focus: #8f9cff; --success: #74d19c; --warn: #e3b85c; --shadow: 0 8px 24px rgba(0,0,0,.45); }
+  body.light { color-scheme: light; --canvas: #ffffff; --chrome: #f7f8fa; --overlay: #ffffff; --input: #ffffff; --hover: #dfe2e7; --active: #d6dae0; --selection: #e7ebfc; --selectionStrong: #d9e0fb;
+    --text: #1c1f26; --textStrong: #0a0c10; --textSecondary: #3a404b; --textMuted: #5c6370; --textAccent: #3240b0; --border: #e3e6eb; --borderStrong: #d4d8df; --separator: #dcdfe5;
+    --inputBorder: #878e9b; --accent: #4453d0; --onAccent: #ffffff; --focus: #4453d0; --success: #146f3b; --warn: #8a5a00; --shadow: 0 8px 24px rgba(20,24,40,.16); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--chrome); color: var(--text); font: 12px/18px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  code, kbd, .mono { font: 11px/16px "Cascadia Code", Consolas, monospace; }
+  kbd { padding: 0 4px; border: 1px solid var(--borderStrong); border-bottom-width: 2px; border-radius: 3px; background: var(--canvas); color: var(--textStrong); white-space: nowrap; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 16px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 12px 0 0; font-size: 13px; font-weight: 600; color: var(--textStrong); }
+  header .sep { width: 1px; height: 18px; background: var(--separator); }
+  .chip { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--borderStrong); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .chip:hover { background: var(--hover); }
+  .chip[aria-pressed="true"] { background: var(--selectionStrong); border-color: var(--accent); color: var(--textStrong); }
+  main { display: grid; grid-template-columns: minmax(680px, 1fr) minmax(320px, 440px); gap: 16px; padding: 16px; align-items: start; }
+  .stage { position: relative; min-height: 600px; background: var(--canvas); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; padding: 16px; }
+  aside { background: var(--canvas); border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; }
+  aside h2 { margin: 0 0 6px; font-size: 13px; color: var(--textStrong); }
+  aside ul { margin: 6px 0; padding-left: 18px; }
+  aside li { margin: 3px 0; }
+  .scene { display: none; }
+  .scene.on { display: block; }
+
+  /* Editor behind the Peek card. */
+  .editor { font: 12px/20px "Cascadia Code", Consolas, monospace; color: var(--textSecondary); padding: 4px 8px; }
+  .editor .kw { color: var(--textAccent); }
+  .editor .hot { text-decoration: underline; color: var(--textStrong); }
+  .side { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .cap { color: var(--textMuted); font-size: 11px; margin: 0 0 6px; }
+
+  /* Peek card. */
+  .peek { width: 100%; max-width: 560px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 8px; box-shadow: var(--shadow); padding: 8px 10px 10px; }
+  .peek-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .peek-head b { color: var(--textStrong); font-weight: 600; }
+  .peek-head .muted { color: var(--textMuted); }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .tabs span { padding: 2px 8px; color: var(--textMuted); }
+  .tabs span.on { color: var(--textStrong); box-shadow: inset 0 -2px var(--accent); }
+  .old li { display: flex; gap: 6px; padding: 1px 0; list-style: none; }
+  .old { margin: 0; padding: 0; }
+  .old .note { color: var(--textMuted); }
+  .ico { width: 14px; display: inline-block; text-align: center; color: var(--warn); }
+  .ico.c { color: var(--textMuted); }
+
+  /* Local grid: the results grid's look, Compact rows, no row-number column. */
+  .lg { position: relative; border: 1px solid var(--border); border-radius: 3px; overflow: auto; outline: none; background: var(--canvas); }
+  .lg.focus { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+  .lg table { border-collapse: collapse; width: max-content; min-width: 100%; font: 11px/16px "Cascadia Code", Consolas, monospace; }
+  .lg th, .lg td { height: 22px; padding: 2px 6px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .lg th { position: sticky; top: 0; background: var(--chrome); color: var(--textSecondary); font: 600 12px/16px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  .lg th .sort { float: right; color: var(--accent); margin-left: 6px; }
+  .lg th .grip { position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+  .lg th.hot { box-shadow: inset 0 -2px var(--accent); color: var(--textStrong); }
+  .lg td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .lg td.null { color: var(--textMuted); font-style: italic; }
+  .lg td.sel { background: var(--selection); }
+  .lg.focus td.sel { background: var(--selectionStrong); color: var(--textStrong); }
+  .lg td.cur { box-shadow: inset 0 0 0 1px var(--accent); }
+  .lg tr:hover td:not(.sel) { background: var(--hover); }
+  .lg .empty { padding: 10px; color: var(--textMuted); }
+  .status { display: flex; justify-content: space-between; color: var(--textMuted); font-size: 11px; margin-top: 4px; }
+
+  /* Context menu (MenuService look). */
+  .menu { position: absolute; z-index: 3; min-width: 230px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 6px; box-shadow: var(--shadow); padding: 4px; }
+  .menu div { display: flex; justify-content: space-between; gap: 24px; padding: 3px 10px; border-radius: 3px; }
+  .menu div.on { background: var(--selectionStrong); color: var(--textStrong); }
+  .menu div.off { color: var(--textMuted); }
+  .menu .k { color: var(--textMuted); }
+  .menu hr { border: 0; border-top: 1px solid var(--separator); margin: 4px 6px; }
+
+  /* Document page (Properties, SSIS). */
+  .page { display: grid; grid-template-columns: 170px 1fr; min-height: 560px; border: 1px solid var(--border); border-radius: 4px; }
+  .nav { background: var(--chrome); border-right: 1px solid var(--border); padding: 6px 0; }
+  .nav div { padding: 3px 12px; color: var(--textSecondary); }
+  .nav div.on { background: var(--selection); color: var(--textStrong); box-shadow: inset 2px 0 var(--accent); }
+  .body { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .body h3 { margin: 0; font-size: 13px; color: var(--textStrong); font-weight: 600; }
+  .clip { margin-top: 8px; border: 1px dashed var(--borderStrong); border-radius: 4px; padding: 6px 8px; background: var(--chrome); white-space: pre; overflow: auto; }
+  .clip-cap { color: var(--textMuted); font-size: 11px; margin-top: 10px; }
+  .toast { position: absolute; right: 16px; bottom: 16px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 6px; padding: 6px 10px; box-shadow: var(--shadow); }
+  .toast b { color: var(--success); }
+</style>
+</head>
+<body class="dark">
+<header>
+  <h1>Data lists as grids</h1>
+  <button class="chip" data-theme="dark" aria-pressed="true">Dark</button>
+  <button class="chip" data-theme="light" aria-pressed="false">Light</button>
+  <span class="sep"></span>
+  <button class="chip" data-scene="1" aria-pressed="true">1 Peek columns</button>
+  <button class="chip" data-scene="2" aria-pressed="false">2 Peek list tab</button>
+  <button class="chip" data-scene="3" aria-pressed="false">3 Table Properties</button>
+  <button class="chip" data-scene="4" aria-pressed="false">4 SSIS Parameters</button>
+  <button class="chip" data-scene="5" aria-pressed="false">5 Session Details</button>
+  <button class="chip" data-scene="6" aria-pressed="false">6 Empty and capped</button>
+</header>
+<main>
+<div class="stage">
+
+  <!-- 1: Peek Columns, before and after. -->
+  <section class="scene on" data-scene="1">
+    <div class="editor"><span class="kw">SELECT</span> o.OrderId, o.Total <span class="kw">FROM</span> Sales.<span class="hot">Orders</span> o</div>
+    <div class="side" style="margin-top:8px">
+      <div>
+        <p class="cap">Today: a list of the tree's labels</p>
+        <div class="peek">
+          <div class="peek-head"><b>Sales.Orders</b><span class="muted">Table</span></div>
+          <div class="tabs"><span>Properties</span><span class="on">Columns</span><span>Indexes</span><span>Top rows</span></div>
+          <ul class="old">
+            <li><span class="ico">⚿</span>OrderId <span class="note">(PK, int, not null)</span></li>
+            <li><span class="ico c">▭</span>CustomerId <span class="note">(FK, int, not null)</span></li>
+            <li><span class="ico c">▭</span>OrderDate <span class="note">(datetime2(3), not null)</span></li>
+            <li><span class="ico c">▭</span>Status <span class="note">(varchar(20), not null)</span></li>
+            <li><span class="ico c">▭</span>Total <span class="note">(decimal(12,2), null)</span></li>
+            <li><span class="ico c">▭</span>Notes <span class="note">(nvarchar(max), null)</span></li>
+            <li><span class="ico c">▭</span>RowVer <span class="note">(timestamp, not null)</span></li>
+          </ul>
+        </div>
+      </div>
+      <div style="position:relative">
+        <p class="cap">Proposed: a card grid with real columns; a column block selected, context menu open</p>
+        <div class="peek">
+          <div class="peek-head"><b>Sales.Orders</b><span class="muted">Table</span></div>
+          <div class="tabs"><span>Properties</span><span class="on">Columns</span><span>Indexes</span><span>Top rows</span></div>
+          <div class="lg focus" role="grid" aria-label="Columns, 7 rows, 5 columns">
+            <table>
+              <thead><tr><th class="hot">Name<span class="grip"></span></th><th>Type</th><th>Null</th><th>Key</th><th>Default</th></tr></thead>
+              <tbody id="peekCols"></tbody>
+            </table>
+          </div>
+          <div class="status"><span>7 rows · 7 cells selected</span><span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copies with headers</span></div>
+        </div>
+        <div class="menu" style="left:200px; top:200px">
+          <div class="on"><span>Copy</span><span class="k">Ctrl+C</span></div>
+          <div><span>Copy with Headers</span><span class="k">Ctrl+Shift+C</span></div>
+          <div><span>Select All</span><span class="k">Ctrl+A</span></div>
+          <hr>
+          <div><span>Sort Ascending</span><span class="k"></span></div>
+          <div><span>Sort Descending</span><span class="k"></span></div>
+          <div class="off"><span>Clear Sort</span><span class="k"></span></div>
+          <hr>
+          <div><span>Fit Column</span><span class="k"></span></div>
+        </div>
+      </div>
+    </div>
+    <p class="clip-cap">Clipboard after Copy (the Name column), formatted by ResultTextWriter as a results grid's copy is:</p>
+    <div class="clip mono">OrderId&#10;CustomerId&#10;OrderDate&#10;Status&#10;Total&#10;Notes&#10;RowVer</div>
+  </section>
+
+  <!-- 2: Peek list tab (Files) promoted to a Peek tab: page preset, Save. -->
+  <section class="scene" data-scene="2" style="position:relative">
+    <p class="cap">Files on a database's Peek, promoted to a Peek tab (page preset): sorted by Size, descending; Save Results As in the menu</p>
+    <div class="peek" style="max-width:none">
+      <div class="peek-head"><b>Warehouse</b><span class="muted">Database</span></div>
+      <div class="tabs"><span>Properties</span><span class="on">Files</span><span>Top rows</span></div>
+      <div class="lg" role="grid" aria-label="Files, 4 rows, 5 columns">
+        <table>
+          <thead><tr><th>Logical name</th><th>Type</th><th class="hot">Size<span class="sort">▼</span></th><th>Autogrowth</th><th>Path</th></tr></thead>
+          <tbody id="files"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="menu" style="left:340px; top:150px">
+      <div><span>Copy</span><span class="k">Ctrl+C</span></div>
+      <div><span>Copy with Headers</span><span class="k">Ctrl+Shift+C</span></div>
+      <div><span>Select All</span><span class="k">Ctrl+A</span></div>
+      <hr>
+      <div class="on"><span>Save Results As…</span><span class="k">Ctrl+S</span></div>
+      <hr>
+      <div><span>Sort Ascending</span><span class="k"></span></div>
+      <div><span>Sort Descending</span><span class="k"></span></div>
+      <div><span>Clear Sort</span><span class="k"></span></div>
+    </div>
+  </section>
+
+  <!-- 3: Table Properties > Permissions. -->
+  <section class="scene" data-scene="3">
+    <div class="page">
+      <div class="nav"><div>General</div><div class="on">Permissions</div><div>Storage</div><div>Security predicates</div><div>Extended properties</div></div>
+      <div class="body">
+        <h3>Permissions</h3>
+        <p class="cap" style="margin:0">Sorted by Principal then Permission (Shift+click adds a key). Rows 2-4 selected.</p>
+        <div class="lg focus" role="grid" aria-label="Permissions, 9 rows, 6 columns" style="max-height:330px">
+          <table>
+            <thead><tr><th class="hot">Principal<span class="sort">▲1</span></th><th>Type</th><th class="hot">Permission<span class="sort">▲2</span></th><th>Column</th><th>State</th><th>Grantor</th></tr></thead>
+            <tbody id="perms"></tbody>
+          </table>
+        </div>
+        <div class="status"><span>9 rows · 3 rows selected</span><span></span></div>
+        <p class="clip-cap">Copy with Headers:</p>
+        <div class="clip mono" id="permsClip"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4: SSIS Parameters, masked value. -->
+  <section class="scene" data-scene="4" style="position:relative">
+    <div class="page">
+      <div class="nav"><div>General</div><div>Packages</div><div class="on">Parameters</div><div>References</div><div>Variables</div></div>
+      <div class="body">
+        <h3>Parameters</h3>
+        <div class="lg focus" role="grid" aria-label="Parameters, 6 rows, 6 columns">
+          <table>
+            <thead><tr><th>Name</th><th>Data type</th><th>Value</th><th>Source</th><th>Required</th><th>Sensitive</th></tr></thead>
+            <tbody id="params"></tbody>
+          </table>
+        </div>
+        <p class="clip-cap">Copy with Headers of the selected rows: the sensitive value copies as shown, never as stored.</p>
+        <div class="clip mono" id="paramsClip"></div>
+      </div>
+    </div>
+    <div class="toast"><b>✓</b> Copied 3 rows with headers</div>
+  </section>
+
+  <!-- 5: Activity Session Details: card grids. -->
+  <section class="scene" data-scene="5">
+    <p class="cap">Session Details beside the Sessions pane: the small tables become card grids (height follows rows, up to 12)</p>
+    <div style="max-width:560px; display:flex; flex-direction:column; gap:8px">
+      <div><b style="color:var(--textStrong)">Session 57</b> <span class="cap">· suspended · LCK_M_S</span></div>
+      <div class="cap" style="margin:0">Waits</div>
+      <div class="lg" role="grid" aria-label="Waits, 3 rows, 5 columns">
+        <table><thead><tr><th>Wait type</th><th>Tasks</th><th>Wait (ms)</th><th>Max (ms)</th><th>Signal (ms)</th></tr></thead><tbody id="waits"></tbody></table>
+      </div>
+      <div class="cap" style="margin:0">Locks</div>
+      <div class="lg focus" role="grid" aria-label="Locks, 14 rows, 5 columns" style="max-height:290px">
+        <table><thead><tr><th>Resource</th><th>Database</th><th>Mode</th><th>Status</th><th>Count</th></tr></thead><tbody id="locks"></tbody></table>
+      </div>
+      <div class="status"><span>14 rows · scroll for more</span><span></span></div>
+    </div>
+  </section>
+
+  <!-- 6: Empty and capped states. -->
+  <section class="scene" data-scene="6">
+    <div class="side">
+      <div>
+        <p class="cap">Empty: the surface's own message, inside the grid frame (role=status)</p>
+        <div class="lg" role="grid" aria-label="Security predicates, 0 rows, 5 columns">
+          <table><thead><tr><th>Policy</th><th>Type</th><th>Operation</th><th>Predicate</th><th>Enabled</th></tr></thead></table>
+          <div class="empty" role="status">No security predicates apply to this table.</div>
+        </div>
+      </div>
+      <div>
+        <p class="cap">Capped: the first 1,024 rows, and the surface's note under the grid</p>
+        <div class="lg" role="grid" aria-label="Columns, 1,024 rows, 5 columns" style="max-height:200px">
+          <table><thead><tr><th>Name</th><th>Type</th><th>Null</th><th>Key</th><th>Default</th></tr></thead><tbody id="wide"></tbody></table>
+        </div>
+        <div class="status"><span>1,024 rows</span><span></span></div>
+        <p class="cap">There are more; Object Explorer lists them all.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<aside>
+  <h2 id="noteTitle"></h2>
+  <div id="note"></div>
+  <h2 style="margin-top:14px">Every local grid</h2>
+  <ul>
+    <li>Click, Shift+click, Ctrl+click; drag a block; click a header to select its column.</li>
+    <li><kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>: the results grid's commands, with the user's remapped keys.</li>
+    <li>Arrows, Home/End, PageUp/PageDown, Ctrl+Home/End; Shift extends.</li>
+    <li>Drag a header edge to resize; double-click it to fit.</li>
+    <li>Header sort (Shift+click adds a key), numbers by value.</li>
+    <li>No Filter, Pivot, Profile, Transpose, Compare or Open Value: those stay with query results.</li>
+  </ul>
+</aside>
+</main>
+<script>
+  const notes = {
+    1: ['Peek: Columns', '<p>The owner\'s example. Today the tab lists the tree\'s labels; nothing selects or copies except a text drag.</p><ul><li>Card preset: height follows the rows (up to 12), no row numbers, no Save.</li><li>Real columns come from a Peek list served with the facts, not the tree\'s "(…)" text (question 2).</li><li>Escape still closes the card; Ctrl+Enter still promotes it.</li></ul>'],
+    2: ['Peek list tab, promoted', '<p>Index columns, Events, Files, Server roles and User mapping are HTML tables today. In the card they are card grids; in a Peek tab they are page grids, which add Save Results As (Ctrl+S while the grid has focus, as in results).</p>'],
+    3: ['Table Properties', '<p>Permissions, Partitions and Security predicates; Database Properties\' Files and Filegroups likewise. Page preset: fills the page, Save Results As, multi-key sort. Extended properties stays an editable table.</p>'],
+    4: ['SSIS Properties', '<p>Packages, Parameters, References and Variables replace PropertiesList\'s own virtualization. The table is built from the text on screen, so a sensitive value is masked in the grid, in Copy and in Save.</p>'],
+    5: ['Session Details', '<p>Waits, Transactions and Locks are small card grids under the session\'s fields (which stay a definition list). Copying a lock list into a ticket is the common use.</p>'],
+    6: ['States', '<p>Loading, error and Retry stay each surface\'s notes. Empty uses the surface\'s existing message inside the frame, so every list says it one way. Past the table bound (10,000 rows, 64 columns, 4,000 characters a cell) the first rows show and the surface says there are more.</p>'],
+  }
+  const $ = id => document.getElementById(id)
+  const td = (v, o = {}) => `<td class="${[o.num ? 'num' : '', v === null ? 'null' : '', o.sel ? 'sel' : '', o.cur ? 'cur' : ''].join(' ')}">${v === null ? 'NULL' : v}</td>`
+  const rows = (id, data, f) => { $(id).innerHTML = data.map((r, i) => `<tr>${r.map((v, c) => td(v, f(i, c))).join('')}</tr>`).join('') }
+  const cols = [['OrderId', 'int', 'No', 'PK', null], ['CustomerId', 'int', 'No', 'FK', null], ['OrderDate', 'datetime2(3)', 'No', '', '(sysutcdatetime())'], ['Status', 'varchar(20)', 'No', '', "('New')"], ['Total', 'decimal(12,2)', 'Yes', '', null], ['Notes', 'nvarchar(max)', 'Yes', '', null], ['RowVer', 'timestamp', 'No', '', null]]
+  rows('peekCols', cols, (i, c) => ({ sel: c === 0, cur: c === 0 && i === 0 }))
+  rows('files', [['Warehouse_data', 'Rows', '18,432 MB', 'By 512 MB, unlimited', 'D:\\Data\\Warehouse.mdf'], ['Warehouse_fact', 'Rows', '9,216 MB', 'By 512 MB, unlimited', 'D:\\Data\\Warehouse_fact.ndf'], ['Warehouse_log', 'Log', '4,096 MB', 'By 256 MB, to 32,768 MB', 'L:\\Log\\Warehouse.ldf'], ['Warehouse_fs', 'FILESTREAM', '512 MB', 'None', 'D:\\Data\\Warehouse_fs']], (i, c) => ({ num: c === 2 }))
+  const perms = [['app_reader', 'Database role', 'SELECT', null, 'Grant', 'dbo'], ['app_writer', 'Database role', 'DELETE', null, 'Deny', 'dbo'], ['app_writer', 'Database role', 'INSERT', null, 'Grant', 'dbo'], ['app_writer', 'Database role', 'UPDATE', null, 'Grant', 'dbo'], ['auditor', 'SQL user', 'SELECT', 'Total', 'Grant', 'dbo'], ['etl_svc', 'Windows user', 'ALTER', null, 'Grant', 'dbo'], ['etl_svc', 'Windows user', 'INSERT', null, 'Grant', 'dbo'], ['public', 'Database role', 'VIEW DEFINITION', null, 'Deny', 'dbo'], ['report_user', 'SQL user', 'SELECT', null, 'Grant with grant', 'dbo']]
+  rows('perms', perms, (i, c) => ({ sel: i >= 1 && i <= 3, cur: i === 1 && c === 0 }))
+  $('permsClip').textContent = ['Principal\tType\tPermission\tColumn\tState\tGrantor', ...perms.slice(1, 4).map(r => r.map(v => v ?? 'NULL').join('\t'))].join('\n')
+  const params = [['ServerName', 'String', 'sql-prod-02', 'Default', 'Yes', 'No'], ['BatchSize', 'Int32', '5000', 'Default', 'No', 'No'], ['ApiKey', 'String', '••••••••', 'Environment', 'Yes', 'Yes'], ['LoadDate', 'DateTime', null, 'Default', 'No', 'No'], ['RetryCount', 'Int32', '3', 'Literal', 'No', 'No'], ['ArchivePath', 'String', '\\\\files\\archive', 'Default', 'No', 'No']]
+  rows('params', params, (i, c) => ({ num: c === 2 && /^\d+$/.test(params[i][2] ?? ''), sel: i <= 2, cur: i === 2 && c === 2 }))
+  $('paramsClip').textContent = ['Name\tData type\tValue\tSource\tRequired\tSensitive', ...params.slice(0, 3).map(r => r.map(v => v ?? 'NULL').join('\t'))].join('\n')
+  rows('waits', [['LCK_M_S', '1', '41,220', '41,220', '0'], ['PAGEIOLATCH_SH', '1', '312', '96', '4'], ['SOS_SCHEDULER_YIELD', '1', '18', '2', '18']], (i, c) => ({ num: c > 0 }))
+  const locks = Array.from({ length: 14 }, (_, i) => [i === 0 ? 'OBJECT: Sales.Orders' : `KEY: Sales.Orders (${(0x8194 + i * 37).toString(16)})`, 'Warehouse', i === 0 ? 'IS' : 'S', i === 1 ? 'WAIT' : 'GRANT', '1'])
+  rows('locks', locks, (i, c) => ({ num: c === 4, sel: i === 1, cur: i === 1 && c === 0 }))
+  rows('wide', Array.from({ length: 12 }, (_, i) => [`Attribute${String(i + 1).padStart(4, '0')}`, 'nvarchar(100)', 'Yes', '', null]), (i, c) => ({}))
+  const scene = n => {
+    document.querySelectorAll('.scene').forEach(s => s.classList.toggle('on', s.dataset.scene === n))
+    document.querySelectorAll('[data-scene].chip').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scene === n)))
+    $('noteTitle').textContent = notes[n][0]; $('note').innerHTML = notes[n][1]
+  }
+  document.querySelectorAll('.chip[data-scene]').forEach(b => b.onclick = () => scene(b.dataset.scene))
+  document.querySelectorAll('.chip[data-theme]').forEach(b => b.onclick = () => {
+    document.body.className = b.dataset.theme
+    document.querySelectorAll('.chip[data-theme]').forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+  })
+  scene('1')
+</script>
+</body>
+</html>
