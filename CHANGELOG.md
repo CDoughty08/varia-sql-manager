@@ -11,6 +11,7 @@
 
 - **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
 - **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
+- **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, instead of cancelling the move. The drop line always shows where the server lands: below the tree's last row, and above an expanded server rather than under its name, and it no longer lingers over loading and error rows.
 
 ## [0.9.1] - 2026-11-16
 

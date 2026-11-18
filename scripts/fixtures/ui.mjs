@@ -836,6 +836,8 @@ export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
+/** The row a dragged server's drop line is drawn on (its data-drop says above or below it); none while no line shows. */
+export const explorerDropLine = page => explorerTree(page).locator('[role="treeitem"][data-drop]')
 /** Offline roots may name a concise recovery reason and their environment after Disconnected. */
 export const lostServerRows = page => serverRows(page).and(explorerTree(page).getByRole('treeitem', { name: /\(Disconnected(?: · [^)\r\n]{1,80})?\)(?:, [^\r\n]{1,256})?$/ }))
 export const explorerLabel = row => row.locator(part.explorerLabel)
