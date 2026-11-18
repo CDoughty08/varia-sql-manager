@@ -44,12 +44,37 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   values match in both). Filters stack with each other and with a sort; Search, the column profile, highlights, Copy
   and Save Results As follow the filtered rows.
 - A column header's funnel (**Filter Column Values…**, Alt+Down in a grid) lists every distinct value with its count,
-  most frequent first or by value, as a checklist with a search, Select all, Select none and NULL as an entry; OK keeps
-  the ticked values. It also filters by a condition: equals, does not equal, between, is NULL, is not NULL. From the
-  keyboard: Down in the search goes to the list, the arrows, Page Up, Page Down, Home and End move through it, Space ticks
-  the value, Enter is OK and Escape cancels; the list is one Tab stop, after Select all and Select none and before the
-  condition. It opens beside its column, on the right when it fits and otherwise on the left (above or below a
-  transposed grid's row), so it never covers the values it filters. Drag its corner grip to resize it; the size is kept
+  most frequent first or by value, as a checklist with a search and NULL as an entry; OK keeps the ticked values. It also
+  filters by a condition: equals, does not equal, between, is NULL, is not NULL.
+- Beside the values, an **action list** changes with what you are doing, and each action shows how many values it
+  touches: **Tick all**, **Untick all** and **Invert ticks**; with a search, **Tick the matches**, **Tick only the
+  matches** (unticking every other value) and **Untick the matches**, with Tick all and Untick all apart; with two or more
+  values selected, **Tick the selected**, **Untick the selected** and **Tick only the selected**.
+- Selecting a value is not ticking it: the highlight marks the values you are about to act on, the check box what the
+  filter keeps. A click ticks a value and selects it alone; Ctrl+click (⌘-click on macOS) adds a value to the selection
+  or takes it out, Shift+click selects from the last value clicked, and Ctrl+Shift+click adds that range. Space ticks the
+  selection: if any selected value is unticked it ticks them all, otherwise it unticks them all.
+- The funnel works from the keyboard alone:
+
+  | Keys | In the values list |
+  | --- | --- |
+  | ↑ ↓, Page Up, Page Down, Home, End | Move, selecting the value |
+  | Shift with any of those, Ctrl+Shift+Home or End | Select from the anchor |
+  | Ctrl+↑, Ctrl+↓ | Move without changing the selection |
+  | Ctrl+Space | Add the value to the selection, or take it out |
+  | Ctrl+A | Select every value listed (the matches, with a search) |
+  | Space | Tick or untick the selection |
+  | ← | Go to the action list (→ comes back; Enter or Space runs an action) |
+  | ↑ on the first value, or the first action | Go back to the search |
+  | A letter or digit | Type it in the search |
+  | Enter | OK (Ctrl+Enter is OK anywhere in the funnel) |
+  | Esc | Cancel |
+
+  Down in the search goes to the values. The values list is one Tab stop, between the search and the condition.
+- The funnel opens beside its column, on the right when it fits and otherwise on the left (above or below a
+  transposed grid's row), narrower than its kept width when neither side has room for that, so it covers the values it
+  filters only when a column leaves too little room on both sides. Drag its corner grip to resize it; it stays on the
+  side it was on while you drag. The size is kept
   for every grid as **Column filter width** and **Column filter height** in Options › Query Results › SQL Server ›
   Results to Grid.
 - **Clear Filters** (grid menu › Filter, Ctrl+Shift+L in a grid, ⇧⌘L on macOS) takes every filter off the grid; the

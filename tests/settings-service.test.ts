@@ -123,6 +123,17 @@ describe('settings service', () => {
     expect(service.get('textEditor.sql.wordWrap')).toBe(true)
     expect(api.updateSettings).toHaveBeenLastCalledWith({ 'textEditor.sql.wordWrap': true })
   })
+  it('saves several settings in one update, and keeps them all for the session when the save fails', async () => {
+    const { api, service } = setup()
+    await service.load()
+    api.updateSettings.mockImplementation(async patch => ({ ok: true, value: { revision: 2, values: { ...stored, ...patch } as SettingsValues } }))
+    await service.chooseAll({ 'queryResults.grid.filterPopupWidth': 520, 'queryResults.grid.filterPopupHeight': 480 })
+    expect(api.updateSettings).toHaveBeenCalledTimes(1)
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ 'queryResults.grid.filterPopupWidth': 520, 'queryResults.grid.filterPopupHeight': 480 })
+    api.updateSettings.mockResolvedValue({ ok: false, error: 'Disk full.' })
+    await service.chooseAll({ 'queryResults.grid.filterPopupWidth': 600, 'queryResults.grid.filterPopupHeight': 500 })
+    expect([service.get('queryResults.grid.filterPopupWidth'), service.get('queryResults.grid.filterPopupHeight')]).toEqual([600, 500])
+  })
   it('flips a second toggle pressed while the first is being saved', async () => {
     const { api, service } = setup()
     await service.load()

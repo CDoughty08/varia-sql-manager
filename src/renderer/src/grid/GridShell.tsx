@@ -106,12 +106,16 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   const { resultClient, platform, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values, setting = values['queryResults.grid.whitespace']
   const filterWidth = values['queryResults.grid.filterPopupWidth'], filterHeight = values['queryResults.grid.filterPopupHeight']
-  const filterSize = useMemo(() => ({ width: filterWidth ?? 300, height: filterHeight ?? 0 }), [filterWidth, filterHeight])
+  const filterSize = useMemo(() => ({ width: filterWidth ?? 440, height: filterHeight ?? 0 }), [filterWidth, filterHeight])
   // A drag of the popover's grip remembers its size for every grid's popover, in Options.
   const filterResized = useCallback((size: { width: number; height: number }) => {
     const now = settings.getSnapshot().values
-    if (now['queryResults.grid.filterPopupWidth'] !== size.width) void settings.choose('queryResults.grid.filterPopupWidth', size.width)
-    if (now['queryResults.grid.filterPopupHeight'] !== size.height) void settings.choose('queryResults.grid.filterPopupHeight', size.height)
+    // One save for both, so the popover never shows the new width with the old height while the second lands.
+    const patch = {
+      ...now['queryResults.grid.filterPopupWidth'] !== size.width ? { 'queryResults.grid.filterPopupWidth': size.width } : {},
+      ...now['queryResults.grid.filterPopupHeight'] !== size.height ? { 'queryResults.grid.filterPopupHeight': size.height } : {}
+    }
+    if (Object.keys(patch).length) void settings.chooseAll(patch)
   }, [settings])
   const whitespace = ownWhitespace ?? setting
   const rootRef = useRef<HTMLDivElement | null>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
