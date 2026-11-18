@@ -143,7 +143,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   documentTab: ['.query-shelf-more'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],
-  row: ['.explorer-row', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
+  row: ['.explorer-row', '.column-filter-action', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */

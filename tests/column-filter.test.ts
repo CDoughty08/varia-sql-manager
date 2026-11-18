@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blocksToDrop, checklistCondition, clampPopoverSize, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, popoverPlace, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow } from '../src/renderer/src/results/column-filter'
+import { addRange, keepsSide, blocksToDrop, checklistActions, checklistCondition, clampPopoverSize, columnFilterKind, conditionFilter, isNotNullFilter, isSelected, listWindow, maxListSpace, maxSelectionRanges, popoverPlace, popoverRoom, rowAtTop, rowsInView, sameFilterFamily, scrollForRowAtTop, scrollToShow, selectedCount, selectionTicks, selectRange, toggleRow } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -141,20 +141,79 @@ describe('column filter', () => {
   it('places the funnel popover beside its column: right, else left, else below or above, never over it while there is room', () => {
     const view = { width: 1200, height: 800 }
     // Right of the column, level with its header.
-    expect(popoverPlace({ band: { left: 100, right: 250, top: 300, bottom: 780 }, width: 300, height: 420, view })).toEqual({ side: 'right', left: 252, top: 300, width: 300, maxHeight: 492 })
+    expect(popoverPlace({ band: { left: 100, right: 250, top: 300, bottom: 780 }, width: 400, height: 420, view })).toEqual({ side: 'right', left: 252, top: 300, width: 400, maxHeight: 492 })
     // No room on the right: on the left. Too tall to start level with the header: it moves up only as far as it needs.
-    expect(popoverPlace({ band: { left: 900, right: 1150, top: 500, bottom: 780 }, width: 300, height: 420, view })).toEqual({ side: 'left', left: 598, top: 372, width: 300, maxHeight: 420 })
+    expect(popoverPlace({ band: { left: 900, right: 1150, top: 500, bottom: 780 }, width: 400, height: 420, view })).toEqual({ side: 'left', left: 498, top: 372, width: 400, maxHeight: 420 })
     // A rotated grid's row across the window: below it, else above it.
-    expect(popoverPlace({ band: { left: 0, right: 1200, top: 100, bottom: 120 }, width: 300, height: 420, view })).toEqual({ side: 'below', left: 8, top: 122, width: 300, maxHeight: 670 })
-    expect(popoverPlace({ band: { left: 0, right: 1200, top: 700, bottom: 720 }, width: 300, height: 420, view })).toEqual({ side: 'above', left: 8, bottom: 102, width: 300, maxHeight: 690 })
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 100, bottom: 120 }, width: 400, height: 420, view })).toEqual({ side: 'below', left: 8, top: 122, width: 400, maxHeight: 670 })
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 700, bottom: 720 }, width: 400, height: 420, view })).toEqual({ side: 'above', left: 8, bottom: 102, width: 400, maxHeight: 690 })
     // Nowhere clear of the column (it fills the window): over it, at its right end.
-    expect(popoverPlace({ band: { left: 0, right: 1200, top: 0, bottom: 800 }, width: 300, height: 420, view }).left).toBe(892)
+    expect(popoverPlace({ band: { left: 0, right: 1200, top: 0, bottom: 800 }, width: 400, height: 420, view }).left).toBe(792)
     // A window narrower than the popover: it shrinks to fit.
     expect(popoverPlace({ band: { left: 0, right: 100, top: 0, bottom: 300 }, width: 600, height: 420, view: { width: 400, height: 300 } }).width).toBe(384)
   })
+  it('keeps the side a resize started on, holding the popover to the room there instead of jumping across the column', () => {
+    const view = { width: 1600, height: 800 }, band = { left: 900, right: 1100, top: 100, bottom: 780 }
+    // 490 px on the right: 500 wide would move it left, unless the side is kept.
+    expect(popoverPlace({ band, width: 500, height: 420, view }).side).toBe('left')
+    expect(popoverRoom(band, view, 'right')).toEqual({ width: 490, height: 784 })
+    expect(popoverPlace({ band, width: 500, height: 420, view, side: 'right' })).toMatchObject({ side: 'right', left: 1102, width: 490 })
+    // Kept on the left, a narrow popover that would fit on the right stays left, its right edge by the column.
+    expect(popoverPlace({ band, width: 400, height: 420, view, side: 'left' })).toMatchObject({ side: 'left', left: 498, width: 400 })
+    // Below a band, the height is held to the room below.
+    const row = { left: 0, right: 1600, top: 300, bottom: 320 }
+    expect(popoverPlace({ band: row, width: 400, height: 700, view, side: 'below' })).toMatchObject({ side: 'below', top: 322, maxHeight: 470 })
+    // A side with no room for the smallest popover is not kept (the last resort over the column).
+    expect(keepsSide({ left: 0, right: 1600, top: 0, bottom: 800 }, view, 'right')).toBe(false)
+    // Too wide for either side at its remembered width: narrower beside the column on the roomier side, not over it.
+    const tall = { left: 400, right: 500, top: 100, bottom: 760 }, small = { width: 1024, height: 768 }
+    expect(popoverPlace({ band: tall, width: 600, height: 420, view: small })).toEqual({ side: 'right', left: 502, top: 100, width: 514, maxHeight: 660 })
+    expect(popoverPlace({ band: { left: 600, right: 700, top: 100, bottom: 760 }, width: 700, height: 420, view: small })).toMatchObject({ side: 'left', left: 8, width: 590 })
+    // A results pane under the editor leaves room above the grid: beside the column all the same, not over the editor.
+    expect(popoverPlace({ band: { left: 600, right: 700, top: 450, bottom: 880 }, width: 900, height: 420, view: { width: 1400, height: 900 } })).toMatchObject({ side: 'right', left: 702, width: 690 })
+    // Only a column with no room for the smallest popover on either side is covered, and that placement is marked, so a
+    // resize keeps no side (it would jump beside the column at the first move).
+    expect(popoverPlace({ band: { left: 100, right: 950, top: 100, bottom: 760 }, width: 600, height: 420, view: small })).toMatchObject({ side: 'right', left: 350, over: true })
+    expect(popoverPlace({ band, width: 400, height: 420, view }).over).toBeUndefined()
+    expect(popoverPlace({ band: { left: 0, right: 1600, top: 0, bottom: 800 }, width: 400, height: 420, view, side: 'right' }).left).toBe(1192)
+  })
   it('keeps a remembered popover size within its bounds and the window', () => {
-    expect(clampPopoverSize({ width: 100, height: 100 }, { width: 1200, height: 800 })).toEqual({ width: 260, height: 240 })
+    expect(clampPopoverSize({ width: 100, height: 100 }, { width: 1200, height: 800 })).toEqual({ width: 340, height: 240 })
     expect(clampPopoverSize({ width: 2000, height: 2000 }, { width: 1200, height: 800 })).toEqual({ width: 900, height: 784 })
-    expect(clampPopoverSize({ width: 320.4, height: 0 }, { width: 1200, height: 800 })).toEqual({ width: 320, height: 0 })
+    expect(clampPopoverSize({ width: 420.4, height: 0 }, { width: 1200, height: 800 })).toEqual({ width: 420, height: 0 })
+  })
+  it('keeps a selection as sorted, disjoint ranges and names it to the backend as ranges of the list, NULL apart', () => {
+    let selection = selectRange(5, 2)
+    expect(selection).toEqual([[2, 5]])
+    selection = addRange(selection, 9, 7)
+    selection = addRange(selection, 6, 6)
+    expect(selection).toEqual([[2, 9]])
+    selection = toggleRow(selection, 4)
+    expect(selection).toEqual([[2, 3], [5, 9]])
+    expect([isSelected(selection, 4), isSelected(selection, 5), isSelected(selection, 10), selectedCount(selection)]).toEqual([false, true, false, 7])
+    expect(toggleRow(selection, 0)).toEqual([[0, 0], [2, 3], [5, 9]])
+    // With NULL listed first, row 0 is NULL's and the values' ranges start one row on.
+    expect(selectionTicks([[0, 3], [6, 6]], 1)).toEqual({ nulls: true, ranges: [[0, 3], [5, 1]] })
+    expect(selectionTicks([[0, 0]], 1)).toEqual({ nulls: true, ranges: [] })
+    expect(selectionTicks([[0, 3]], 0)).toEqual({ nulls: false, ranges: [[0, 4]] })
+    // No more ranges than one tick names: a click past that adds nothing.
+    let many: ReturnType<typeof selectRange> = []
+    for (let row = 0; row < maxSelectionRanges; row++) many = addRange(many, row * 2, row * 2)
+    expect(addRange(many, maxSelectionRanges * 2 + 5, maxSelectionRanges * 2 + 5)).toBe(many)
+    expect(toggleRow([[0, 10]], 5)).toEqual([[0, 4], [6, 10]])
+  })
+  it('lists the checklist actions by context, each with how many values it touches', () => {
+    const labels = (o: Parameters<typeof checklistActions>[0]) => checklistActions(o).map(group => [group.label, group.actions.map(item => item.count === undefined ? item.label : `${item.label} ${item.count}`)])
+    expect(labels({ selected: 1, matches: undefined, total: 36 })).toEqual([[undefined, ['Tick all 36', 'Untick all 36', 'Invert ticks']]])
+    expect(labels({ selected: 1, matches: 1, total: 36 })).toEqual([
+      ['1 match', ['Tick the matches 1', 'Tick only the matches 1', 'Untick the matches 1']],
+      ['Every value', ['Tick all 36', 'Untick all 36']]
+    ])
+    expect(labels({ selected: 1200, matches: undefined, total: 5000 })[0]).toEqual(['1,200 selected', ['Tick the selected 1200', 'Untick the selected 1200', 'Tick only the selected 1200']])
+    expect(checklistActions({ selected: 2, matches: 4, total: 9 }).flatMap(group => group.actions.map(item => item.action))).toEqual([
+      { kind: 'selected', checked: true }, { kind: 'selected', checked: false }, { kind: 'selected', checked: true, only: true },
+      { kind: 'matches', checked: true }, { kind: 'matches', checked: true, only: true }, { kind: 'matches', checked: false },
+      { kind: 'all', checked: true }, { kind: 'all', checked: false }
+    ])
   })
 })

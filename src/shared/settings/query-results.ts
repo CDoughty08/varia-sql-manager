@@ -36,7 +36,7 @@ export const queryResultsSettings = [
     description: 'A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column\'s collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too.'
   },
   {
-    key: 'queryResults.grid.filterPopupWidth', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Column filter width', title: 'Column filter popup width', type: 'integer', min: 260, max: 900, default: 300, unit: 'px', varia: true,
+    key: 'queryResults.grid.filterPopupWidth', page: 'queryResults.sqlServer.grid', group: 'Grid display', label: 'Column filter width', title: 'Column filter popup width', type: 'integer', min: 340, max: 900, default: 440, unit: 'px', varia: true,
     keywords: ['filter', 'funnel', 'popup', 'popover', 'size', 'resize', 'width'],
     description: 'The width of the column filter that a header\'s funnel or Filter Column Values opens. Dragging the filter\'s corner grip sets it. The filter shrinks to fit a small window.'
   },

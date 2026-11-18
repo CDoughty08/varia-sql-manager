@@ -454,7 +454,9 @@ export class ResultsWorkerCore {
       case 'read': return this.send({ t: 'distinctRead', rid, generation, resultId, snapshotId: asked.snapshotId, order: asked.order, offset: asked.offset, count: asked.count, ...(asked.search === undefined ? {} : { search: asked.search }) })
       case 'tick': return this.send({
         t: 'distinctTick', rid, generation, resultId, snapshotId: asked.snapshotId, checked: asked.checked, ...(asked.groups ? { groups: [...asked.groups] } : {}), ...(asked.all ? { all: true as const } : {}),
-        ...(asked.search === undefined ? {} : { search: asked.search }), ...(asked.nulls === undefined ? {} : { nulls: asked.nulls })
+        ...(asked.search === undefined ? {} : { search: asked.search }), ...(asked.nulls === undefined ? {} : { nulls: asked.nulls }),
+        ...(asked.order === undefined ? {} : { order: asked.order }), ...(asked.ranges ? { ranges: asked.ranges.map(([offset, count]) => [offset, count] as [number, number]) } : {}),
+        ...(asked.toggle ? { toggle: true as const } : {}), ...(asked.invert ? { invert: true as const } : {})
       })
       case 'close': return this.send({ t: 'distinctClose', rid, generation, resultId, snapshotIds: [...asked.snapshotIds] })
     }

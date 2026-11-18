@@ -1118,10 +1118,19 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .column-filter-search { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
 .column-filter-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
 .column-filter-search input { flex: 1 1 0; width: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; }
-.column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
 .column-filter-gap { flex: 1 1 auto; }
-.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
-.column-filter.sized .column-filter-list { max-height: none; }
+.column-filter-body { flex: 1 1 auto; display: flex; gap: var(--varia-space-2); min-height: 0; }
+.column-filter-actionlist { flex: 0 0 42%; max-width: 190px; min-width: 0; max-height: 260px; overflow: auto; overscroll-behavior: contain; padding: 2px 0; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); }
+.column-filter-actionlist:focus { outline: none; border-color: var(--varia-focusBorder); }
+.column-filter-actionlist[aria-disabled="true"] { opacity: 0.55; }
+.column-filter-actionhead { padding: 4px var(--varia-space-2) 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.column-filter-action { display: flex; align-items: center; gap: var(--varia-space-2); height: var(--varia-row); padding: 0 var(--varia-space-2); cursor: default; }
+.column-filter-action:hover { background: var(--varia-list-hoverBackground); }
+.column-filter-actionlist:focus .column-filter-action.active { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.column-filter-actionsep { height: 1px; margin: 4px var(--varia-space-2); background: var(--varia-editorWidget-border); }
+.column-filter-list { flex: 1 1 auto; min-width: 0; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter.sized .column-filter-list, .column-filter.sized .column-filter-actionlist { max-height: none; }
 /* The resize grip at the corner away from the column: two short diagonal strokes, like a window's size grip. */
 .column-filter-grip { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; touch-action: none; opacity: 0.7;
   background: linear-gradient(135deg, transparent 0 55%, var(--varia-descriptionForeground) 55% 62%, transparent 62% 75%, var(--varia-descriptionForeground) 75% 82%, transparent 82%); }
@@ -1134,6 +1143,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .column-filter-item.pending::after { content: ''; flex: 1 1 auto; height: 6px; margin-right: 40%; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); }
 .column-filter-item:hover { background: var(--varia-list-hoverBackground); }
 .column-filter-list:focus { outline: none; border-color: var(--varia-focusBorder); }
+.column-filter-item.selected { background: var(--varia-list-inactiveSelectionBackground); }
+.column-filter-list:focus .column-filter-item.selected { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
 .column-filter-list:focus .column-filter-item.active { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .column-filter-item input { pointer-events: none; }
 .column-filter-item.null .column-filter-text, .column-filter-item.empty .column-filter-text { font-style: italic; color: var(--varia-descriptionForeground); }

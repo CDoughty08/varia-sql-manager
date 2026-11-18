@@ -1,5 +1,6 @@
 import type { ResolvedViewFilter, ViewFilter } from '../../../shared/contracts'
 import type { DistinctList } from './ResultClient'
+import { formatCount } from './status'
 
 /**
  * What the header funnel's popover applies to a column: the values its checklist ticks (a `groups` filter by its distinct
@@ -174,32 +175,67 @@ export function blocksToDrop(blocks: Iterable<number>, first: number, last: numb
 }
 
 /** The popover's size bounds in px; a size outside them (a small window, a hand-edited setting) is clamped. */
-export const popoverBounds = { minWidth: 260, maxWidth: 900, minHeight: 240, maxHeight: 1200 } as const
+export const popoverBounds = { minWidth: 340, maxWidth: 900, minHeight: 240, maxHeight: 1200 } as const
 /** The height the popover is placed for when it sizes to its contents (no remembered height). */
 export const popoverNaturalHeight = 420
 /** Room kept between the popover and the window's edges, and between it and the column. */
 const edge = 8, gap = 2
 
+/** The room beside the band on `side`, between the band and the window's edges. */
+export function popoverRoom(band: { left: number; right: number; top: number; bottom: number }, view: { width: number; height: number }, side: 'right' | 'left' | 'below' | 'above'): { width: number; height: number } {
+  switch (side) {
+    case 'right': return { width: view.width - edge - (band.right + gap), height: view.height - 2 * edge }
+    case 'left': return { width: band.left - gap - edge, height: view.height - 2 * edge }
+    case 'below': return { width: view.width - 2 * edge, height: view.height - edge - (band.bottom + gap) }
+    case 'above': return { width: view.width - 2 * edge, height: band.top - gap - edge }
+  }
+}
+
 /** Where the popover opens: `top` or `bottom` (from the window's bottom edge), its width, and the height it may take. */
-export interface PopoverPlace { readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number }
+export interface PopoverPlace {
+  readonly side: 'right' | 'left' | 'below' | 'above'; readonly left: number; readonly top?: number; readonly bottom?: number; readonly width: number; readonly maxHeight: number
+  /** The last resort, over the column: no side of it is kept for a resize. */
+  readonly over?: true
+}
 
 /**
  * Where the funnel's popover opens beside its column (`band`: the column's header and drawn cells, or a rotated grid's
- * row), so it never covers the values it filters: to the column's right when it fits there, else to its left, else below
- * or above the band (a rotated grid's row, or a column as wide as the window), else over the column at its right end as
- * a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
+ * row), so it never covers the values it filters: to the column's right when it fits there, else to its left, else
+ * narrower on the roomier side that takes the smallest popover, else below or above the band (a rotated grid's row, or a
+ * column as wide as the window), else over the column at its right end as a last resort. Beside the column it starts level with the header and moves up only as far as its height needs.
  * `height` is the remembered height, or `popoverNaturalHeight` when it sizes to its contents.
  */
-export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number } }): PopoverPlace {
+export function popoverPlace(o: { band: { left: number; right: number; top: number; bottom: number }; width: number; height: number; view: { width: number; height: number }; side?: PopoverPlace['side'] }): PopoverPlace {
   const { band, view } = o
-  const width = Math.max(Math.min(popoverBounds.minWidth, view.width - 2 * edge), Math.min(o.width, view.width - 2 * edge))
-  const height = Math.min(o.height, view.height - 2 * edge)
+  let width = Math.max(Math.min(popoverBounds.minWidth, view.width - 2 * edge), Math.min(o.width, view.width - 2 * edge))
+  let height = Math.min(o.height, view.height - 2 * edge)
   const beside = (left: number, side: 'right' | 'left'): PopoverPlace => {
     const top = Math.max(edge, Math.min(band.top, view.height - edge - height))
     return { side, left, top, width, maxHeight: Math.max(0, view.height - edge - top) }
   }
+  // A side kept (`popoverSide`, while and after its grip is dragged) holds whatever size fits there, so the popover never
+  // jumps across the column as it grows or shrinks.
+  if (o.side && keepsSide(band, view, o.side)) {
+    const room = popoverRoom(band, view, o.side)
+    width = Math.min(width, room.width)
+    height = Math.min(height, room.height)
+    if (o.side === 'right') return beside(band.right + gap, 'right')
+    if (o.side === 'left') return beside(band.left - gap - width, 'left')
+    const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
+    return o.side === 'below' ? { side: 'below', left, top: band.bottom + gap, width, maxHeight: room.height } : { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: room.height }
+  }
   if (view.width - edge - (band.right + gap) >= width) return beside(band.right + gap, 'right')
   if (band.left - gap - edge >= width) return beside(band.left - gap - width, 'left')
+  // Too wide for either side at its remembered width: narrower, beside the column on the roomier side that takes the
+  // smallest popover, rather than above or below the grid (over the editor) or over the values it filters. A rotated
+  // grid's row or a column as wide as the window leaves no such side.
+  const roomRight = popoverRoom(band, view, 'right').width, roomLeft = popoverRoom(band, view, 'left').width
+  const sides = (['right', 'left'] as const).filter(side => keepsSide(band, view, side))
+  if (sides.length) {
+    const side = sides.length === 2 ? (roomRight >= roomLeft ? 'right' : 'left') : sides[0]
+    width = Math.min(width, side === 'right' ? roomRight : roomLeft)
+    return side === 'right' ? beside(band.right + gap, 'right') : beside(band.left - gap - width, 'left')
+  }
   const left = Math.max(edge, Math.min(band.left, view.width - edge - width))
   const below = view.height - edge - (band.bottom + gap), above = band.top - gap - edge
   const fits = Math.min(height, popoverBounds.minHeight)
@@ -207,7 +243,14 @@ export function popoverPlace(o: { band: { left: number; right: number; top: numb
   if (above >= fits) return { side: 'above', left, bottom: view.height - band.top + gap, width, maxHeight: above }
   // Nowhere clear of the column: over it, under its header, at its right end.
   const top = Math.max(edge, Math.min(band.top + gap, view.height - edge - height))
-  return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top) }
+  return { side: 'right', left: Math.max(edge, Math.min(band.right - width, view.width - edge - width)), top, width, maxHeight: Math.max(0, view.height - edge - top), over: true }
+}
+
+/** Whether the popover can stay on `side` of the band: the room there takes its smallest size. A placement over the
+ *  column (`over`) is never kept, whatever room its side has. */
+export function keepsSide(band: { left: number; right: number; top: number; bottom: number }, view: { width: number; height: number }, side: PopoverPlace['side']): boolean {
+  const room = popoverRoom(band, view, side)
+  return room.width >= Math.min(popoverBounds.minWidth, view.width - 2 * edge) && room.height >= Math.min(popoverBounds.minHeight, view.height - 2 * edge)
 }
 
 /** A remembered popover size held within `popoverBounds` and the window; a height of 0 sizes it to its contents. */
@@ -215,4 +258,108 @@ export function clampPopoverSize(size: { width: number; height: number }, view: 
   const width = Math.round(Math.max(popoverBounds.minWidth, Math.min(popoverBounds.maxWidth, view.width - 2 * edge, size.width)))
   const height = size.height <= 0 ? 0 : Math.round(Math.max(popoverBounds.minHeight, Math.min(popoverBounds.maxHeight, view.height - 2 * edge, size.height)))
   return { width, height }
+}
+
+/** The checklist's selected rows (the highlight, apart from the ticks): sorted, disjoint, inclusive ranges of list rows,
+ *  so Shift+End over a million values is one range. */
+export type RowSelection = readonly (readonly [first: number, last: number])[]
+/** Separate ranges a selection keeps at most (the ranges one results.distinctTick names); a click past it adds nothing. */
+export const maxSelectionRanges = 512
+
+/** Rows `a` to `b`, either way round. */
+export const selectRange = (a: number, b: number): RowSelection => [[Math.min(a, b), Math.max(a, b)]]
+
+/** Whether `row` is selected. */
+export function isSelected(selection: RowSelection, row: number): boolean {
+  let low = 0, high = selection.length - 1
+  while (low <= high) {
+    const mid = (low + high) >> 1, [first, last] = selection[mid]
+    if (row < first) high = mid - 1
+    else if (row > last) low = mid + 1
+    else return true
+  }
+  return false
+}
+
+/** How many rows are selected. */
+export const selectedCount = (selection: RowSelection) => selection.reduce((sum, [first, last]) => sum + last - first + 1, 0)
+
+/** The selection with rows `a` to `b` added (ranges that touch merge), or as it was when that needs more ranges than
+ *  `maxSelectionRanges`. */
+export function addRange(selection: RowSelection, a: number, b: number): RowSelection {
+  let first = Math.min(a, b), last = Math.max(a, b)
+  const out: (readonly [number, number])[] = []
+  for (const range of selection) {
+    if (range[1] < first - 1 || range[0] > last + 1) out.push(range)
+    else { first = Math.min(first, range[0]); last = Math.max(last, range[1]) }
+  }
+  out.push([first, last])
+  out.sort((x, y) => x[0] - y[0])
+  return out.length > maxSelectionRanges ? selection : out
+}
+
+/** The selection with `row` added, or taken out when it is selected (Ctrl+Click, Ctrl+Space). */
+export function toggleRow(selection: RowSelection, row: number): RowSelection {
+  if (!isSelected(selection, row)) return addRange(selection, row, row)
+  const out: (readonly [number, number])[] = []
+  for (const [first, last] of selection) {
+    if (row < first || row > last) { out.push([first, last]); continue }
+    if (first < row) out.push([first, row - 1])
+    if (row < last) out.push([row + 1, last])
+  }
+  return out.length > maxSelectionRanges ? selection : out
+}
+
+/** A selection as results.distinctTick names it: NULL's entry (list row 0 when `nullRows` is 1) apart, the values as
+ *  `[offset, count]` ranges of the list in its order and search. */
+export function selectionTicks(selection: RowSelection, nullRows: number): { readonly nulls: boolean; readonly ranges: [offset: number, count: number][] } {
+  const ranges: [number, number][] = []
+  for (const [first, last] of selection) {
+    const from = Math.max(first, nullRows) - nullRows, to = last - nullRows
+    if (to >= from) ranges.push([from, to - from + 1])
+  }
+  return { nulls: nullRows > 0 && isSelected(selection, 0), ranges }
+}
+
+/** What an entry of the checklist's action list does (ColumnFilterPopover runs it): ticks for every value, the search's
+ *  matches or the selected rows, `only` unticking everything else first; or flips every tick. */
+export type ChecklistAction =
+  | { readonly kind: 'all' | 'matches' | 'selected'; readonly checked: boolean; readonly only?: boolean }
+  | { readonly kind: 'invert' }
+
+/** An entry of the action list: a group's heading and its actions, each with its label and how many values it touches. */
+export interface ActionGroup { readonly label?: string; readonly actions: readonly { readonly label: string; readonly count?: number; readonly action: ChecklistAction }[] }
+
+/**
+ * The action list beside the values, by context: with two or more rows selected, actions for them first; with a search,
+ * actions for its matches, then for every value apart; Invert ticks only with no search. Each action names how many values
+ * it touches, so a search never makes "untick" quietly mean "only these".
+ */
+export function checklistActions(o: { selected: number; matches: number | undefined; total: number }): ActionGroup[] {
+  const groups: ActionGroup[] = []
+  if (o.selected > 1) groups.push({
+    label: `${formatCount(o.selected)} selected`,
+    actions: [
+      { label: 'Tick the selected', count: o.selected, action: { kind: 'selected', checked: true } },
+      { label: 'Untick the selected', count: o.selected, action: { kind: 'selected', checked: false } },
+      { label: 'Tick only the selected', count: o.selected, action: { kind: 'selected', checked: true, only: true } }
+    ]
+  })
+  if (o.matches !== undefined) groups.push({
+    label: `${formatCount(o.matches)} ${o.matches === 1 ? 'match' : 'matches'}`,
+    actions: [
+      { label: 'Tick the matches', count: o.matches, action: { kind: 'matches', checked: true } },
+      { label: 'Tick only the matches', count: o.matches, action: { kind: 'matches', checked: true, only: true } },
+      { label: 'Untick the matches', count: o.matches, action: { kind: 'matches', checked: false } }
+    ]
+  })
+  groups.push({
+    label: groups.length ? 'Every value' : undefined,
+    actions: [
+      { label: 'Tick all', count: o.total, action: { kind: 'all', checked: true } },
+      { label: 'Untick all', count: o.total, action: { kind: 'all', checked: false } },
+      ...o.matches === undefined ? [{ label: 'Invert ticks', action: { kind: 'invert' } as const }] : []
+    ]
+  })
+  return groups
 }

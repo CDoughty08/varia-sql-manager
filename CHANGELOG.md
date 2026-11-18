@@ -6,8 +6,9 @@
 
 - **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
 - **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\. Unchecking Remember password and saving forgets the saved password, as Connect does\.
-- **Column filters beside their column:** The list a header's funnel or Alt\+Down opens now sits to the column's right, or its left when there is no room, instead of over the values it filters\. Drag its corner to resize it; the size is remembered and can be set in Options › Results to Grid\.
+- **Column filters beside their column:** The list a header's funnel or Alt\+Down opens now sits to the column's right, or its left when there is no room, instead of over the values it filters\. Drag its corner to resize it; the size is remembered and can be set in Options › Query Results › SQL Server › Results to Grid\.
 - **Clear all filters from the keyboard:** Ctrl\+Shift\+L \(⇧⌘L on macOS\) in a results grid takes every filter off, as Filter › Clear Filters does\.
+- **Column filter actions and selection:** Select all and Select none are now a list of actions beside the values that changes with a search \(Tick the matches, Tick only the matches, Untick the matches\) or a selection, and each says how many values it touches, so a search no longer makes Select none untick only the matches\. Select values apart from their ticks with Ctrl\+click, Shift\+click, Shift with the arrows or Ctrl\+A; Space ticks the selection, and Left and Right move between the actions and the values, so the filter works from the keyboard alone\.
 
 ### Changes to everyday use
 
