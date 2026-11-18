@@ -28,12 +28,13 @@ internal static class PackingChecks
         return set;
     }
 
-    /// <summary>A set of one binary column of random bytes, which Zstandard cannot shrink.</summary>
-    private static ResultSetBuffer Random(ResultStore store, string session, int rows)
+    /// <summary>A set of one binary column of random bytes, which Zstandard cannot shrink. Cells larger than a page make
+    /// pages of one row, which grow when packed: the codec's framing outweighs the one offset the lengths form saves.</summary>
+    private static ResultSetBuffer Random(ResultStore store, string session, int rows, int cellBytes = 2000)
     {
         var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", [new ResultColumn("b", "varbinary", "binary")], [WireKind.Binary])!;
         var random = new Random(7);
-        var cell = new byte[2000];
+        var cell = new byte[cellBytes];
         for (var row = 0; row < rows; row++)
         {
             set.CountRow();
@@ -58,6 +59,7 @@ internal static class PackingChecks
     public static void Run(Action<bool, string> check)
     {
         Codec(check);
+        LengthsForm(check);
         Switch(check);
         Packs(check);
         KeepsRaw(check);
@@ -65,6 +67,130 @@ internal static class PackingChecks
         UnpacksWhole(check);
         ViewReads(check);
         Service(check);
+    }
+
+    /// <summary>A page with every kind of column the lengths form treats apart: one width (with and without NULLs), many
+    /// widths, all NULL, all empty, binary, failed and truncated cells, at row counts that end bitmaps mid-byte. With
+    /// <paramref name="emptyLast"/> a last column of NULLs and empty strings holds no data, so at an even row count the
+    /// blob ends in padding after its offsets.</summary>
+    private static byte[] MixedPage(int rows, bool emptyLast = false)
+    {
+        var builder = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Binary, WireKind.Text, .. emptyLast ? new[] { WireKind.Text } : []]);
+        for (var row = 0; row < rows; row++)
+        {
+            builder.BeginRow();
+            builder.AppendText($"2026-11-{row % 28 + 1:00}");
+            if (row % 5 == 0) builder.AppendNull(); else builder.AppendText($"{row * 37 % 1000:000}");
+            builder.AppendText(row % 3 == 0 ? "" : "order " + row * 7919 % 100_003 + new string('x', row % 40));
+            builder.AppendNull(error: row % 11 == 0);
+            builder.AppendText("");
+            builder.AppendBinary(BitConverter.GetBytes((long)row * 2654435761)[..(1 + row % 8)]);
+            builder.AppendText("note " + row, truncated: row % 13 == 0);
+            if (emptyLast) { if (row % 2 == 0) builder.AppendNull(); else builder.AppendText(""); }
+            builder.CommitRow();
+        }
+        return builder.Seal();
+    }
+
+    private static void LengthsForm(Action<bool, string> check)
+    {
+        var pages = new[] { 1, 7, 64, 1000, PageBuilder.MaxRows }.Select(rows => MixedPage(rows)).ToList();
+        var formed = pages.All(page => PageCodec.Pack(page) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page));
+        var room = new byte[pages[^1].Length];
+        PageCodec.UnpackInto(PageCodec.Pack(pages[^1])!, room);
+        check(formed && room.AsSpan().SequenceEqual(pages[^1]),
+            "a sealed page packs in its lengths form and unpacks to its bytes as sealed, alone or into a fused read's room");
+        var emptyLast = new[] { 1, 2, 7, 64, 1000, PageBuilder.MaxRows }.Select(rows => MixedPage(rows, emptyLast: true)).ToList();
+        check(emptyLast.All(page => PageCodec.Pack(page) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page)),
+            "a page whose last column holds no data packs in its lengths form too, at odd and even row counts");
+
+        // A lengths form changed anywhere unpacks to some bytes or fails as unreadable, never with another error.
+        var formed1000 = PageCodec.Pack(pages[3])!;
+        var formAt = 1;
+        while (formed1000[formAt++] >= 0x80) { }
+        var form = new byte[pages[3].Length];
+        System.IO.Compression.ZstandardDecoder.TryDecompress(formed1000.AsSpan(formAt), form, out var formLength);
+        var corrupt = new Random(5);
+        var failures = 0;
+        var unexpected = new List<string>();
+        for (var trial = 0; trial < 2000; trial++)
+        {
+            var changed = form.AsSpan(0, formLength).ToArray();
+            // Half the changes land in the header and the first columns' regions, where most of the layout and lengths are.
+            changed[corrupt.Next(trial % 2 == 0 ? changed.Length : 1024)] ^= (byte)(1 + corrupt.Next(255));
+            var frame = new byte[System.IO.Compression.ZstandardEncoder.GetMaxCompressedLength(changed.Length)];
+            System.IO.Compression.ZstandardEncoder.TryCompress(changed, frame, out var frameLength, PageCodec.Quality, PageCodec.Window);
+            byte[] repacked = [.. formed1000.AsSpan(0, formAt), .. frame.AsSpan(0, frameLength)];
+            try { PageCodec.Unpack(repacked, pages[3].Length); }
+            catch (InvalidDataException) { failures++; }
+            catch (Exception error) { unexpected.Add(error.GetType().Name); }
+        }
+        // A form cut short anywhere, its prefix saying the shorter length, fails as unreadable too.
+        var cutFailures = 0;
+        for (var cut = 1; cut < formLength; cut += Math.Max(1, cut / 2))
+        {
+            var shorter = form.AsSpan(0, formLength - cut).ToArray();
+            var frame = new byte[System.IO.Compression.ZstandardEncoder.GetMaxCompressedLength(Math.Max(1, shorter.Length))];
+            System.IO.Compression.ZstandardEncoder.TryCompress(shorter, frame, out var frameLength, PageCodec.Quality, PageCodec.Window);
+            var prefix = new List<byte> { 1 };
+            for (var value = (uint)shorter.Length; ; value >>= 7)
+            {
+                if (value < 0x80) { prefix.Add((byte)value); break; }
+                prefix.Add((byte)(value | 0x80));
+            }
+            try { PageCodec.Unpack([.. prefix, .. frame.AsSpan(0, frameLength)], pages[3].Length); unexpected.Add("none"); }
+            catch (InvalidDataException) { cutFailures++; }
+            catch (Exception error) { unexpected.Add(error.GetType().Name); }
+        }
+        // A damaged prefix or frame: an unknown marker, a form longer than the page, a page as sealed of the wrong length,
+        // a frame cut short.
+        byte[][] damaged =
+        [
+            [2, .. formed1000.AsSpan(1)],
+            [1, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, .. formed1000.AsSpan(formAt)],
+            [0, .. formed1000.AsSpan(1)],
+            formed1000[..(formed1000.Length - 8)],
+            formed1000[..formAt],
+        ];
+        foreach (var bytes in damaged)
+        {
+            try { PageCodec.Unpack(bytes, pages[3].Length); unexpected.Add("none"); }
+            catch (InvalidDataException) { }
+            catch (Exception error) { unexpected.Add(error.GetType().Name); }
+        }
+        check(unexpected.Count == 0 && failures >= 200 && cutFailures > 10,
+            $"a changed or shortened lengths form unpacks or fails as unreadable ({failures} of 2000 changed and {cutFailures} shortened unreadable; other outcomes: {string.Join(", ", unexpected.Distinct())})");
+
+        // Offsets as lengths: a page of short numbers packs well under Zstandard over the page as sealed.
+        var numbers = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text]);
+        for (var row = 0; row < 4000; row++)
+        {
+            numbers.BeginRow();
+            numbers.AppendText((row * 7919 % 100_000).ToString());
+            numbers.AppendText((row * 104_729L % 1_000_000_007).ToString());
+            numbers.AppendText($"{row % 1000 / 10.0:0.00}");
+            numbers.CommitRow();
+        }
+        var sealedPage = numbers.Seal();
+        var plain = new byte[sealedPage.Length * 2];
+        System.IO.Compression.ZstandardEncoder.TryCompress(sealedPage, plain, out var plainLength, PageCodec.Quality, PageCodec.Window);
+        var asLengths = PageCodec.Pack(sealedPage)!.Length;
+        check(asLengths < plainLength * 0.8, $"offsets packed as lengths take under four fifths of the page packed as sealed ({asLengths} of {plainLength} bytes)");
+
+        // Bytes that are not exactly a sealed page (a byte changed anywhere, a page cut short or doubled) still unpack to
+        // themselves: the codec packs them as they are when the form could not restore them.
+        var random = new Random(11);
+        var page = pages[2];
+        var exact = true;
+        for (var trial = 0; trial < 400 && exact; trial++)
+        {
+            var changed = page.ToArray();
+            changed[random.Next(changed.Length)] ^= (byte)(1 + random.Next(255));
+            exact = PageCodec.Pack(changed) is { } packed && PageCodec.Unpack(packed, changed.Length).AsSpan().SequenceEqual(changed);
+        }
+        foreach (var odd in new[] { page[..(page.Length / 2)], [.. page, .. page], [.. page, 0], [] })
+            exact &= PageCodec.Pack(odd) is { } packed && PageCodec.Unpack(packed, odd.Length).AsSpan().SequenceEqual(odd);
+        check(exact, "bytes that are not exactly a sealed page unpack to themselves");
     }
 
     private static void Codec(Action<bool, string> check)
@@ -149,8 +275,8 @@ internal static class PackingChecks
             && kept.PagesKeptRaw == set.SealedSnapshot().Length && store.PackingSnapshot().PackedInBytes == kept.PackedInBytes,
             "a page that packing saves less than a tenth of stays raw, and is not tried again");
         var every = Store(PagePacking.EveryComplete);
-        var forced = Random(every, "every", 600);
-        check(forced.SealedSnapshot().All(page => page.Stored is PackedPage) && every.UsedBytes - 0 == PageCharges(forced) && Bodies(forced).Length > 0,
+        var forced = Random(every, "every", 4, PageBuilder.SealBytes + 1000);
+        check(forced.SealedSnapshot().All(page => page.Stored is PackedPage packed && packed.Bytes.Length > page.Length) && every.UsedBytes - 0 == PageCharges(forced) && Bodies(forced).Length > 0,
             "the checks' mode packs every page of a complete result, even one that grows, and charges what it holds");
         // Unpacking pages that grew needs no bytes, but they are unpacked all the same, and give back what they grew by.
         bool grownUnpacked;

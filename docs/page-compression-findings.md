@@ -95,7 +95,8 @@ the gate, since a query is waiting.
 Zstandard in the runtime is why the backend targets .NET 11, a short-term-support release; it moves to .NET 12 (LTS)
 when that ships.
 
-A packed page's body is replaced by its Zstandard bytes with the raw length beside it, one page at a time. `FirstRow`,
+A packed page's body is replaced, one page at a time, by a marker byte (lengths form or as sealed), the LEB128 length of what
+the frame holds and a Zstandard frame, with the raw length beside it. `FirstRow`,
 `Rows` and the lengths sidecar (`PageLengths`, 4 bytes a row, 0.3 to 3.4 % of a result) stay raw, so `results.rowBytes`,
 `CellSize` and the row index work without unpacking. The page being built and pages of an open result are always raw.
 A page whose packed size saves less than 10 % stays raw.
@@ -110,6 +111,15 @@ backend moved to .NET 11; a NuGet wrapper would have added a native library. Why
 - **Level 3 and above** add under 3 % for half the compression speed or less.
 - The decoder reads any level, so the level can change later without a format change.
 
+**Lengths form.** Zstandard packs a page's ascending u32 offsets poorly and its cells' lengths well, so `PageCodec`
+packs each page in its lengths form (`PageCodec.Lengths.cs`): each column's offsets become one LEB128 length when every
+non-NULL cell has that length (dates, keys, GUIDs; about 40 % of columns), else each cell's LEB128 length, and the zero
+padding between regions is dropped. Unpacking rebuilds the page as sealed in its own room, so readers never see the
+form. Bytes that are not exactly a sealed page are packed as they are. The form packs 3 to 55 % more rows into the
+same budget (counting the sidecar, below the table). The other integer packings measured (Group Varint, Stream VByte with a SIMD prefix sum,
+128-value frame-of-reference bit packing) came within 1.5 % of LEB128 once Zstandard ran, and rebuilding offsets costs
+about 1 ns a cell against Zstandard's 150 µs a page, so SIMD decoding buys nothing measurable.
+
 1 GiB of each realistic shape on .NET 11, page window 256 KiB (a 4 MiB window gave the same ratio). Ranges run across
 the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 
@@ -117,15 +127,18 @@ the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 | --- | ---: | ---: | ---: | ---: |
 | zstd −1 | 1.15–1.66 | 420–940 MB/s | 2.0–3.8 GB/s | 0.02–0.04 s |
 | zstd 1 | 1.86–2.70 | 370–780 MB/s | 1.4–1.8 GB/s | 0.04–0.05 s |
-| **zstd 2** | **1.93–2.80** | **310–380 MB/s** | **1.3–1.9 GB/s** | **0.05 s** |
+| zstd 2 | 1.93–2.80 | 310–380 MB/s | 1.3–1.9 GB/s | 0.05 s |
+| **zstd 2, lengths form** (`page`) | **2.29–3.24** | **270–330 MB/s** | **1.4–1.7 GB/s** | **0.05 s** |
 | zstd 3 | 1.93–2.82 | 170–190 MB/s | 1.1–1.7 GB/s | 0.05–0.06 s |
 | LZ4 | 1.13–1.51 | 450–680 MB/s | 3.0–3.8 GB/s | 0.02–0.04 s |
 | LZ4 HC 3 | 1.43–2.11 | 67–81 MB/s | 3.1–4.2 GB/s | 0.02 s |
 | Brotli 1 | 1.90–2.68 | 230–280 MB/s | 400–430 MB/s | 0.16–0.19 s |
 | Deflate 6 | 1.96–2.55 | 65–84 MB/s | 400–450 MB/s | 0.16–0.18 s |
 
-Per page, zstd 2 decompresses in a median 136 to 198 µs (p99 0.2 to 0.9 ms) and compresses in 0.7 to 1.0 ms. A packed
-result takes 36 to 52 % of its raw memory in these shapes; random keys, hashes or GUIDs compress 1.1 to 1.5 times or not
+Per page, the store's codec decompresses in a median 146 to 179 µs (p99 0.2 to 0.5 ms) and compresses in 0.7 to 1.0 ms.
+Counting the raw lengths sidecar (the table's ratios count page bodies alone), `numeric` packs 1.87 → 2.90 times, `orders` 2.05 → 2.55, `wide` 2.78 → 3.22 and
+`log` 2.22 → 2.28 (zstd 2 over pages as sealed → the lengths form). A packed result takes 31 to 44 % of its raw memory
+in these shapes; random keys, hashes or GUIDs compress 1.1 to 1.5 times or not
 at all. At 8 GiB the ratios and per-page speeds were the same. Packing on the workers (for room) takes about 0.2 s of 16
 workers a GiB (1.5 to 2.0 s for 8 GiB).
 
@@ -199,7 +212,8 @@ The status bar's Memory panel shows packed figures in its Nerd metrics section (
 
 All on an Intel Core Ultra 9 285K (24 cores, 16 result workers), 64 GB, Windows 11, .NET 11 Release with workstation
 concurrent GC, on 2026-11-12 to 2026-11-14 while other sessions loaded the machine. Times moved by up to 30 % between
-repeats; ratios and memory figures do not depend on load.
+repeats; ratios and memory figures do not depend on load. Except the `--policy` budget row, these ran with zstd 2 over
+pages as sealed; the lengths form unpacks at the same speed and packs smaller (see [Format and codec](#format-and-codec)).
 
 `orders`, zstd 2 (packs 2.05 times). Fused against rehydrating, median seconds, and the most working memory charged
 above the result:
@@ -229,7 +243,7 @@ The policy, with the real `ResultPacker` (`--policy`: one 1 GiB result; `--stage
 | | `orders` | `log` |
 | --- | ---: | ---: |
 | Budget charged, raw → stage 1 → stage 2 (`--stage2`) | 1,043 → 646 → 513 MiB (2.03×) | 1,033 → 607 → 466 MiB (2.22×) |
-| Budget charged, raw → packed (`--policy`) | 1,039 → 506 MiB (2.05×) | 1,030 → 464 MiB (2.22×) |
+| Budget charged, raw → packed (`--policy`, lengths form) | 1,039 → 418 MiB (2.48×) | 1,030 → 442 MiB (2.33×) |
 | Stage 1 pass over 1 GiB, one thread | 2.7 to 3.9 s (275 to 400 MB/s) | 3.4 to 3.5 s (303 to 316 MB/s) |
 | Stage 2 pass over the shown 256 MiB, one thread | 0.86 to 1.27 s (213 to 312 MB/s) | 1.13 s (238 MB/s) |
 | Three pages at random positions, raw → packed, cold cache | 1 µs → 0.63 to 0.70 ms | 1 µs → 0.62 ms |
@@ -260,7 +274,8 @@ not part of `npm run check` or CI. Every run warms the JIT with an untimed pass 
 - `--codecs name,name` picks the codecs run over all pages; `--keep name` (default `brotli1`) is the one kept for the
   memory and rehydrate steps; `--no-ops` skips the operations. Codec names: `brotli<quality>`, `deflate<level>`,
   `zlib<level>`, `zstd<level>` (`zstdm1` is level −1), `zstd<level>r` (one encoder and decoder kept per thread),
-  `lz4`, `lz4hc3`, and `w22` for a 4 MiB window.
+  `lz4`, `lz4hc3`, `w22` for a 4 MiB window, and `page` for the store's own codec (`PageCodec`: zstd 2 over the
+  lengths form).
 - `--fused`: each operation raw, rehydrated and fused, with budget and heap peaks. `--fused --whole`: distinct lists,
   row identities, search and diffs.
 - `--policy`: the real `ResultPacker` over one result. `--stage2`: four results of 256 MiB, the first shown.
