@@ -427,6 +427,32 @@ describe('WindowStateTracker', () => {
     }
   })
 
+  it('on Linux, an early maximized size reported in two steps (at the old position, then moved) is not the normal place', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: 100, y: 50, width: 1920, height: 1040 }; emit('resize')
+    state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('move')
+    state.maximized = true; emit('maximize')
+    vi.advanceTimersByTime(1000)
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
+  })
+
+  it('tries a failed save again when the window closes in the same place', async () => {
+    vi.useFakeTimers()
+    const save = vi.fn().mockRejectedValueOnce(new Error('EPERM')).mockResolvedValue(undefined)
+    const tracker = new WindowStateTracker({ platform: 'win32', save, delayMs: 500 })
+    const { window, state, emit } = fakeWindow({ x: 100, y: 50, width: 1440, height: 960 })
+    tracker.track(window)
+    state.bounds = { x: 300, y: 200, width: 1440, height: 960 }; emit('move')
+    vi.advanceTimersByTime(500)
+    await tracker.flush()
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1440, height: 960, maximized: false })
+  })
+
   it('writes what a window last looked like when it is destroyed before its pending save', async () => {
     const { tracker, save, state, emit } = setup('linux')
     state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')

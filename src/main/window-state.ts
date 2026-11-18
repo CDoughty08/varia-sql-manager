@@ -204,9 +204,11 @@ export interface TrackerOptions {
  */
 export class WindowStateTracker {
   private latest: SavedWindowState | undefined
+  // The state last handed to the store (or read from it); a save that fails clears it, so the same state is tried again.
+  private stored: SavedWindowState | undefined
   private timer: { window: TrackedWindow; handle: ReturnType<typeof setTimeout> } | undefined
   private writes: Promise<void> = Promise.resolve()
-  constructor(private readonly options: TrackerOptions, initial?: SavedWindowState) { this.latest = initial }
+  constructor(private readonly options: TrackerOptions, initial?: SavedWindowState) { this.latest = this.stored = initial }
   current(): SavedWindowState | undefined { return this.latest }
 
   /** `placed` is where the window was created, which a window opened maximized on Linux has no other record of. */
@@ -253,7 +255,9 @@ export class WindowStateTracker {
     }
     /** Nothing changed the size since: the undecided candidate was the maximized size, reported early. */
     const decide = () => {
-      if (undecided?.earlier) normal = undecided.earlier
+      // An earlier candidate of the same size was the same early maximized size, at the position before the window manager moved it.
+      const earlier = undecided?.earlier
+      if (earlier && (earlier.width !== undecided?.candidate.width || earlier.height !== undecided.candidate.height)) normal = earlier
       undecided = undefined
     }
     const capture = (): SavedWindowState | undefined => {
@@ -315,9 +319,10 @@ export class WindowStateTracker {
   }
   private write(state: SavedWindowState | undefined): void {
     if (!state) return
-    const previous = this.latest
     this.latest = state
+    const previous = this.stored
     if (previous && previous.x === state.x && previous.y === state.y && previous.width === state.width && previous.height === state.height && previous.maximized === state.maximized) return
-    this.writes = this.writes.then(() => this.options.save(state)).catch(() => {})
+    this.stored = state
+    this.writes = this.writes.then(() => this.options.save(state)).catch(() => { if (this.stored === state) this.stored = undefined })
   }
 }
