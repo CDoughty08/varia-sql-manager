@@ -208,12 +208,31 @@ describe('local saves in main', () => {
     const edgeJson = (await localExportBytes(edge, { format: 'json', headers: true, nullText: 'NULL' })).data.length
     expect(edgeJson).toBeGreaterThan(localTableLimits.saveBytes)
     expect(localSaveBytes(edge)).toBeGreaterThanOrEqual(edgeJson)
-    // Within the request's own bounds (NULL counts no text) JSON repeats each long key per row, past 64 MiB: refused before any dialog.
+    // Within the request's own bounds (NULL counts no text) JSON repeats each long key per row, past 64 MiB: CSV fits, so the
+    // dialog opens; JSON chosen is refused before its file is built, CSV saves.
     const heavy = { suggestedName: 'Heavy', columns: Array.from({ length: localTableLimits.columns }, (_, i) => ({ name: `${i}`.padEnd(localTableLimits.nameChars, '\u0001') })), rows: Array.from({ length: localTableLimits.rows }, () => Array<string | null>(localTableLimits.columns).fill(null)) }
     expect(localSaveRequestSchema.safeParse(heavy).success).toBe(true)
-    const { jobs, dialog } = host()
-    await expect(jobs.saveLocal(heavy)).rejects.toMatchObject({ code: 'TOO_LARGE', message: 'These rows are too large to save (over 64 MB).' })
-    expect(dialog).not.toHaveBeenCalled()
+    expect(localSaveBytes(heavy, 'json')).toBeGreaterThan(localTableLimits.saveBytes)
+    expect(localSaveBytes(heavy, 'csv')).toBeLessThanOrEqual(localTableLimits.saveBytes)
+    const json = host({ showSaveDialog: async () => ({ canceled: false, filePath: '/home/me/Documents/heavy.json' }) })
+    await expect(json.jobs.saveLocal(heavy)).rejects.toMatchObject({ code: 'TOO_LARGE', message: 'These rows are too large to save (over 64 MB).' })
+    expect(json.written).toEqual([])
+    const csv = host({ showSaveDialog: async () => ({ canceled: false, filePath: '/home/me/Documents/heavy.csv' }) })
+    expect(await csv.jobs.saveLocal(heavy)).toEqual({ fileName: 'heavy.csv', format: 'csv', rows: localTableLimits.rows })
+    expect(csv.written).toHaveLength(1)
+  })
+  it('save wide-character tables whose files fit, bounding each format by its own bytes', async () => {
+    // 10,000 rows of 400 CJK characters: about 12 MB in any format, so the save is not refused.
+    const cjk = { suggestedName: 'CJK', columns: [{ name: 'Text' }], rows: Array.from({ length: localTableLimits.rows }, () => ['日本'.repeat(200)]) }
+    expect(localSaveRequestSchema.safeParse(cjk).success).toBe(true)
+    for (const format of ['csv', 'tsv', 'json'] as const) {
+      const bytes = (await localExportBytes(cjk, { format, headers: true, nullText: 'NULL' })).data.length
+      expect(localSaveBytes(cjk, format)).toBeGreaterThanOrEqual(bytes)
+      expect(localSaveBytes(cjk, format)).toBeLessThan(bytes * 1.01)
+    }
+    const { jobs, written } = host({ showSaveDialog: async () => ({ canceled: false, filePath: '/home/me/Documents/cjk.json' }) })
+    expect(await jobs.saveLocal(cjk)).toEqual({ fileName: 'cjk.json', format: 'json', rows: localTableLimits.rows })
+    expect(written).toHaveLength(1)
   })
 
   it('refuse a second save while one is open, and never recreate a folder deleted since the dialog', async () => {

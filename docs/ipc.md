@@ -1498,8 +1498,9 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   the dialog and never reach the renderer.
 - **Local saves (`ResultsJobHost.saveLocal`).** `varia:results-save-local { suggestedName ≤ 128, columns, rows }` saves a
   table the renderer holds (a local grid's): `trusted()`, strictly validated (1 – 64 columns, names ≤ 128, ≤ 10,000
-  rectangular rows, cells NULL or ≤ 4,000 characters, ≤ 4 Mi characters in all), refused `TOO_LARGE` before the dialog
-  when its file could pass 64 MiB (`localSaveBytes`), and sharing `JOB_BUSY` with results saves. Main formats it with
+  rectangular rows, cells NULL or ≤ 4,000 characters, ≤ 4 Mi characters in all), refused `TOO_LARGE` when its file in the
+  format chosen could pass 64 MiB (`localSaveBytes`, an upper bound per format; before the dialog when no format fits,
+  and always before the file is built), and sharing `JOB_BUSY` with results saves. Main formats it with
   the TypeScript writer a page at a time, yielding between pages, and writes a temporary file renamed over the target
   (`writeLocalSave`): a deleted folder is never recreated (`NOT_FOUND`), and a replaced file keeps its Unix permission
   bits; on Windows it keeps no attributes or ACLs (Node has no `File.Replace`). Failures use the results save's tokens;

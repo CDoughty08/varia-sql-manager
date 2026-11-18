@@ -231,8 +231,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.hasSelection() : !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
         const target = targetOf(args), cells = selected(target), live = liveOf(args)
-        if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
+        // Any copy supersedes a local grid's still formatting (copy-generation.ts); a local grid begins its own after this.
         beginCopy()
+        if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
         if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
@@ -242,8 +243,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const live = liveOf(args); return live ? live.hasSelection() : !!selected(targetOf(args)) },
       run: async args => {
         const live = liveOf(args)
-        if (live) { if (live.hasSelection()) live.copy(true); return }
         beginCopy()
+        if (live) { if (live.hasSelection()) live.copy(true); return }
         const cells = selected(targetOf(args))
         const failure = cells && await results.copy(cells.tabId, cells.key, true)
         if (failure) commands.reportError(failure)
@@ -253,6 +254,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const live = liveColumn(args); return live ? live.live.columnName(live.column) !== undefined : !!sortTarget(args) },
       run: async args => {
         const at = sortTarget(args), live = liveColumn(args), name = live?.live.columnName(live.column)
+        beginCopy()
         if (name !== undefined) unwrap(await api.writeClipboardText(name))
         else if (at) unwrap(await api.writeClipboardText(at.set.descriptor.columns[at.column].name))
       }

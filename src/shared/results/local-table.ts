@@ -17,21 +17,37 @@ export interface LocalTableData { readonly columns: readonly LocalColumn[]; read
 // keys make larger than its text (localSaveBytes).
 export const localTableLimits = Object.freeze({ rows: 10_000, columns: 64, cellChars: 4_000, nameChars: 128, textChars: 4 * 1024 * 1024, saveBytes: 64 * 1024 * 1024 })
 
-const utf8Bytes = (text: string) => { let bytes = 0; for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : 3 } return bytes }
+/** A text's most bytes as JSON writes it: a control character's six-character escape, U+2028 and U+2029 likewise, a quote
+ *  or backslash escaped, else UTF-8 (a surrogate half counted 3, so a pair 6 and a lone one its replacement's 3). */
+function jsonBytes(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    bytes += code < 0x20 || code === 0x2028 || code === 0x2029 ? 6 : code === 0x22 || code === 0x5c ? 2 : code < 0x80 ? 1 : code < 0x800 ? 2 : 3
+  }
+  return bytes
+}
+/** A text's most bytes as CSV writes it, TSV's never more: a quote doubled, else UTF-8. */
+function csvBytes(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); bytes += code === 0x22 ? 2 : code < 0x80 ? 1 : code < 0x800 ? 2 : 3 }
+  return bytes
+}
 /**
- * At least the bytes any save of the table writes, in any format: the header line once (each name as CSV quotes it, a
- * blank one as "(No column name)", with its separator); per row its brackets and line end; per cell its key as JSON
- * writes it (Column{n} for a blank name, _n for a repeated one) with its colon and comma, which also covers a CSV or TSV
- * separator, and its text at JSON's worst escape (a control character's six-character escape, 6 bytes a byte, more than
- * CSV's doubled quotes) or NULL's letters. Cheap and never under, so a save past `saveBytes` is refused before its file
- * is built.
+ * At least the bytes a save of the table writes in `format`, or in any format without one. JSON: per row its brackets
+ * and line end, per cell its key as written (Column{n} for a blank name, _n for a repeated one) with its colon and comma
+ * and its escaped text in quotes or null. CSV and TSV: the header line once (a blank name as "(No column name)"), per row
+ * its line end, per cell a separator and its text quoted or NULL. Cheap and never under, so a save past `saveBytes` is
+ * refused before its file is built.
  */
-export function localSaveBytes(table: LocalTableData): number {
-  const keys = jsonKeyBytes(table.columns).map(key => key + 2)
-  let total = 16 + table.columns.reduce((sum, column) => sum + utf8Bytes(column.name || NO_COLUMN_NAME) * 2 + 3, 0)
+export function localSaveBytes(table: LocalTableData, format?: TextFormat): number {
+  if (format === undefined) return Math.max(localSaveBytes(table, 'csv'), localSaveBytes(table, 'json'))
+  const json = format === 'json', columns = table.columns.length
+  const keys = json ? jsonKeyBytes(table.columns).map(key => key + 2) : table.columns.map(() => 1)
+  let total = 16 + (json ? 0 : table.columns.reduce((sum, column) => sum + csvBytes(column.name || NO_COLUMN_NAME) + 3, 0))
   for (const row of table.rows) {
     total += 4
-    for (let column = 0; column < table.columns.length; column++) total += keys[column] + Math.max(utf8Bytes(row[column] ?? '') * 6 + 2, 4)
+    for (let column = 0; column < columns; column++) { const cell = row[column] ?? ''; total += keys[column] + Math.max((json ? jsonBytes(cell) : csvBytes(cell)) + 2, 4) }
   }
   return total
 }

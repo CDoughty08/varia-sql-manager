@@ -216,6 +216,12 @@ export class ResultsJobHost {
     }
   }
 
+  /**
+   * A later clipboard write from the renderer (a local grid's copy, Copy Column Name, a selection's text) supersedes a
+   * results copy still running: cancelled, it never writes its older selection over the newer one.
+   */
+  supersedeCopy(): void { this.copying?.cancel(cancelReasons.user) }
+
   async save(value: unknown): Promise<SavedResults | null> {
     const parsed = resultsSaveRequestSchema.safeParse(value)
     if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
@@ -282,8 +288,8 @@ export class ResultsJobHost {
     const parsed = localSaveRequestSchema.safeParse(value)
     if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
     const request = parsed.data
-    // Before the dialog: a file past the bound is never built.
-    if (localSaveBytes(request) > localTableLimits.saveBytes) throw new BackendError('TOO_LARGE', jobSentences.saveTooLarge)
+    // Before the dialog when no format could fit; after it, the format chosen. Either way the file is never built.
+    if (Math.min(localSaveBytes(request, 'csv'), localSaveBytes(request, 'json')) > localTableLimits.saveBytes) throw new BackendError('TOO_LARGE', jobSentences.saveTooLarge)
     if (this.saveBusy) throw new BackendError('JOB_BUSY', jobSentences.busy)
     this.saveBusy = true
     let fileName = ''
@@ -292,6 +298,7 @@ export class ResultsJobHost {
       if (!chosen) return null
       const { path, format } = chosen
       fileName = basename(path)
+      if (localSaveBytes(request, format) > localTableLimits.saveBytes) throw new BackendError('TOO_LARGE', jobSentences.saveTooLarge)
       const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] }, () => new Promise(resolve => setImmediate(resolve)))
       try { await (this.deps.writeFile ?? writeLocalSave)(path, data) } catch (error) {
         throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(await this.writeFailure(error, path), fileName))
