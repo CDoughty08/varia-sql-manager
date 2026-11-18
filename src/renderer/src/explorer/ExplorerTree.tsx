@@ -167,6 +167,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     })
   }, [ensureVisible, measure, menuTargets, releaseFollow])
 
+  // Another query tab is where the user went: an expand still loading neither scrolls the tree back nor reveals its end.
+  useLayoutEffect(() => { explorer.holdOpening() }, [explorer, activeQueryId, activeConnectionId])
   useLayoutEffect(() => {
     if (!activeQueryId || !activeConnectionId) { followed.current = undefined; return }
     if (!follow) { followed.current = { query: activeQueryId, connection: activeConnectionId }; return }

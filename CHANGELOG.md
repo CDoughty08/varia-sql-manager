@@ -5,7 +5,7 @@
 ### Changes to everyday use
 
 - **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
-- **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
+- **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child; it never opens a System folder. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
 - **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
 
 ### Fixes

@@ -220,6 +220,9 @@ export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | '
  * collapsed nodes are evicted, least recently used first. A response for a node that was refreshed, filtered, evicted
  * or removed meanwhile is dropped by its generation.
  */
+/** The System folders listed first in Databases, Tables, Views and Stored Procedures, which an auto-expand never walks into. */
+const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(['systemDatabases', 'systemTables', 'systemViews', 'systemStoredProcedures'])
+
 export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements Disposable {
   private readonly connections: ExplorerServiceOptions['connections']
   private readonly events: ExplorerServiceOptions['events']
@@ -1014,6 +1017,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A row lost already (a reconnect under a new handle) has nothing showing: what it showed before stays remembered.
     if (root.targetId && !root.lost) this.remembered.set(root.targetId, this.expandedKeys(root))
     this.restoring.delete(root.id)
+    // An expand on this server ends: its aborted load never settles, and the reconnect's own expand is not the user's.
+    if (this.opened && this.within(this.opened.id, root.id)) this.opened = undefined
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
     Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined, note: undefined })
@@ -1114,7 +1119,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       // Wait for the first page; a folder with more pages to come has more than one child.
       if (node.load === 'none' || node.load === 'loading') return
       const children = node.children ?? [], only = children.length === 1 && !node.cursor ? children[0] : undefined
-      if (!only || node.load === 'error' || !only.hasChildren || only.lost) break
+      // A folder listing only its System folder (Views in a database without views) ends there: system objects are not what the user came for.
+      if (!only || node.load === 'error' || !only.hasChildren || only.lost || (only.folder !== undefined && systemFolders.has(only.folder))) break
       opened.id = only.id
       this.expand(only.id)
     }
@@ -1125,6 +1131,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.select(end, { reveal: !opened.held })
       this.opened.selected = end
     }
+    // Nothing is left to follow below a level that came back empty, or once the user scrolled away.
+    if (opened.held || !this.nodes.get(end)?.expanded) this.opened = undefined
     this.invalidate()
   }
   private ensureLoading(node: TreeNode, priority: LoadPriority): void {

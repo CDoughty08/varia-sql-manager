@@ -2114,15 +2114,40 @@ try {
   await expect(explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables', 'dbo.table10')).resolves.toBeTruthy()
   console.log('Object Explorer checks: expanding a row low in the view scrolls its children into view and keeps the row in view.')
 
-  // 13d. Auto-expand single children: Stored Procedures lists only System Stored Procedures, which the stub lists empty. Right
-  // walks on to it and selects it, the active descendant following, though it collapses again with nothing in it.
-  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData', 'Programmability')
-  await selectRevealed('pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures')
-  await press('ArrowRight', 'System Stored Procedures')
-  await expect(await revealExplorerRow(page, 'pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures')).toHaveAttribute('aria-expanded', 'true')
+  // 13d. Auto-expand single children. Stored Procedures lists only System Stored Procedures, which it leaves closed.
+  const procedures = ['pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures']
+  await expandExplorerPath(page, ...procedures.slice(0, -1))
+  await selectRevealed(...procedures)
+  await press('ArrowRight', 'Stored Procedures')
+  await expect(await revealExplorerRow(page, ...procedures, 'System Stored Procedures')).toHaveAttribute('aria-expanded', 'false')
+  // A procedure's only folder, Parameters, is walked into and selected, the active descendant following, though it
+  // collapses again with nothing in it.
+  await setStub({ procedures: 1 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_ShipOrders')
+  await press('ArrowRight', 'Parameters')
+  await expect(await revealExplorerRow(page, ...procedures, 'dbo.usp_ShipOrders')).toHaveAttribute('aria-expanded', 'true')
   await expect.poll(async () => (await active())?.expanded).not.toBe('true')
   await expect(tree()).toBeFocused()
-  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end.')
+  // Switching query tabs while Parameters loads follows the other server, and the walk's end, selected when it arrives,
+  // does not scroll the tree back.
+  await setStub({ procedures: 2, holdParameters: true })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_1')
+  await page.keyboard.press('ArrowRight')
+  const heldParameters = () => application.evaluate(() => { const stub = globalThis.variaStub; return stub.calls.filter(call => call.method === 'explorer.children' && call.params.node.folder === 'parameters').map(call => call.params.requestId).findLast(id => stub.held.has(id)) ?? null })
+  await expect.poll(heldParameters).not.toBeNull()
+  const expandedAt = await tree().evaluate(element => element.scrollTop)
+  await selectOpenDocument(page, pinQueries[0])
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(expandedAt)
+  const followedTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(followedTo)
+  await setStub({ holdParameters: false, procedures: 0 })
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, and switching query tabs meanwhile keeps the tree where the tab put it.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
