@@ -303,6 +303,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+  // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says; they
+  // re-read the media after each emulateMedia (scripts/fixtures/smoke.mjs).
+  const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
+    media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
+  if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
@@ -640,7 +645,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     help,
     dialogWindows: true,
     attachWindow: target => {
-      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement), reducedMotion.watch(target)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
     },
     dispose: () => {
@@ -764,11 +769,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]
-  // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says; they
-  // re-read the media after each emulateMedia (scripts/fixtures/smoke.mjs).
-  const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
-    media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
-  if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [
     keybindings.attach(window),

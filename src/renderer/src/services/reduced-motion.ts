@@ -28,6 +28,11 @@ export interface ReducedMotion extends Disposable {
    * which a hidden smoke window may not do; the smoke fixture calls this after each emulateMedia.
    */
   refresh(): void
+  /**
+   * Also updates when another window of the workbench (a popout or dialog window) sees the preference change: the main
+   * window reports it only when it renders a frame, which it does not while minimized, and those windows show its class.
+   */
+  watch(view: { matchMedia(query: string): SystemMotion }): Disposable
 }
 
 export function followReducedMotion(root: Pick<HTMLElement, 'classList'>, options: ReducedMotionOptions): ReducedMotion {
@@ -36,5 +41,13 @@ export function followReducedMotion(root: Pick<HTMLElement, 'classList'>, option
   update()
   const unsubscribe = options.subscribe(update)
   media?.addEventListener('change', update)
-  return { refresh: update, dispose: () => { unsubscribe(); media?.removeEventListener('change', update); root.classList.remove(reducedMotionClass) } }
+  return {
+    refresh: update,
+    watch: view => {
+      const other = view.matchMedia(reducedMotionQuery)
+      other.addEventListener('change', update)
+      return { dispose: () => other.removeEventListener('change', update) }
+    },
+    dispose: () => { unsubscribe(); media?.removeEventListener('change', update); root.classList.remove(reducedMotionClass) }
+  }
 }

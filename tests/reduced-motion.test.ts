@@ -80,8 +80,29 @@ describe('reduced motion', () => {
     const workbench = readFileSync('src/renderer/src/core/workbench.ts', 'utf8')
     expect(workbench).toContain("followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,")
     expect(workbench).toContain("media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })")
-    // Disposed with the workbench's other window listeners.
+    // Disposed with the workbench's other window listeners, and every popout and dialog window reports changes too.
     expect(workbench).toMatch(/const listeners = \[[^\]]*\breducedMotion,/)
+    expect(workbench).toMatch(/attachWindow: target => \{\n\s+const attached = \[[^\]]*\breducedMotion\.watch\(target\)\]/)
+  })
+  it('updates when a popout or dialog window sees the preference change, as the main window may not while minimized', async () => {
+    const { api, media, reduced } = await setup({}, false)
+    await api.updateSettings({ [key]: true })
+    const popout = systemMedia(false), queries: string[] = []
+    const { root, reduced: popoutReduced } = rootElement()
+    const follow = followReducedMotion(root, { enabled: () => true, subscribe: () => () => {}, media })
+    const watching = follow.watch({ matchMedia: query => { queries.push(query); return popout } })
+    expect(queries).toEqual([reducedMotionQuery])
+    // The system changed; the main window has not reported it, but its matches already reads the new value.
+    media.matches = true
+    popout.set(true)
+    expect(popoutReduced()).toBe(true)
+    media.matches = false
+    popout.set(false)
+    expect(popoutReduced()).toBe(false)
+    watching.dispose()
+    expect(popout.listeners).toBe(0)
+    follow.dispose()
+    expect(reduced()).toBe(false)
   })
   it('keys every reduced-motion rule off the root class, never the prefers-reduced-motion media query', () => {
     const rules = stylesheetRules()
@@ -104,8 +125,10 @@ describe('reduced motion', () => {
   it('gives Dockview nothing its own prefers-reduced-motion rule would stop', () => {
     // start.tsx imports Dockview's stylesheet, which turns every transition on its tabs and group chips off with
     // !important whenever the system asks for reduced motion, whatever the setting says. Varia animates neither: its dock
-    // themes leave Dockview's tab animation at its default and it makes no tab groups (the only paths that add Dockview's
-    // tab motion classes). Animating either needs rules in styles.css that put the transitions back while the class is off.
+    // themes leave Dockview's tabAnimation unset (only 'smooth' shifts tabs while a tab is dragged over them) and it makes
+    // no tab groups. Dockview still shifts tabs if a tab is added or removed in the middle of a drag from another group,
+    // which the system's preference can make instant. Animating either needs rules in styles.css that put the transitions
+    // back while the class is off.
     expect(readFileSync('src/renderer/src/start.tsx', 'utf8')).toContain("import 'dockview-react/dist/styles/dockview.css'")
     const dockview = cssRules(readFileSync('node_modules/dockview-react/dist/styles/dockview.css', 'utf8'))
     const parts = (selector: string) => selector.split(/,(?![^(]*\))/).map(part => part.trim())

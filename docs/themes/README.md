@@ -243,11 +243,12 @@ bidirectional-text characters are removed from names, and the window chrome only
 - Reduced motion is opt-in: Varia plays every animation unless Environment › General › Reduce motion when the system
   asks (`environment.reduceMotionWithSystem`) is on and the system asks for reduced motion. The renderer then sets the
   root class `varia-reduced-motion` (`reducedMotionClass` in metrics.ts; `src/renderer/src/services/reduced-motion.ts`),
-  which popouts and dialog windows copy from the main window. Every reduced-motion rule in `styles.css` starts with
+  which popouts and dialog windows copy from the main window; their own preference changes update it too, since a
+  minimized main window reports none. Every reduced-motion rule in `styles.css` starts with
   `:root.varia-reduced-motion`, and no stylesheet or renderer module reads `prefers-reduced-motion` itself
   (`tests/reduced-motion.test.ts`). Dockview's stylesheet stops tab and group-chip transitions under the media query
-  itself; Varia gives those elements none and leaves Dockview's tab animation and tab groups off, which the same test
-  checks. Smoke runs emulate reduced motion in every window and follow it without the setting
+  itself; Varia gives those elements none, leaves Dockview's `tabAnimation` unset and makes no tab groups, which the same
+  test checks. Smoke runs emulate reduced motion in every window and follow it without the setting
   (`VARIA_TEST_FOLLOW_SYSTEM_MOTION`), so their checks never read a color partway through a transition.
 - Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
   UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without
