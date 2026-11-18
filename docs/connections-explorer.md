@@ -47,6 +47,8 @@ startup reconnect preference at once to every Explorer connection with the same 
 (Explorer, query tabs and both status bars), changing only the labels the save changed. When History aliases share those settings, only connections still showing
 the saved entry's previous labels follow it. Add favorite and Register server save the same way. Cancel, Escape or the
 close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
+Focus stays in the dialog: a press on its text focuses the dialog, and a button that saving disables or Remove takes
+away gives focus back to the dialog (then to that button once it is enabled), so Escape and Tab always reach it.
 
 Connect applies the labels the user changed in the dialog to a reused target without asking again (only those: a
 connection-only environment set from the server menu stays) and saves them to History. Otherwise, choosing
