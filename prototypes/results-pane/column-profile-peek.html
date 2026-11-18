@@ -81,27 +81,37 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
 .ib { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--textTertiary); }
 .ib:hover { background: var(--hover); }
 .ib[aria-pressed='true'] { background: var(--accentSurface); color: var(--textAccent); }
-.profile-strip { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--border); color: var(--textSecondary); flex: none; }
+.profile-strip { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--border); color: var(--textSecondary); flex: none; }
 .profile-strip.peek { background: var(--accentSurface); color: var(--textAccent); }
 .profile-strip .link { color: var(--textAccent); text-decoration: underline; text-underline-offset: 2px; }
-.profile-cards { flex: 1; min-height: 0; overflow: auto; padding: 6px; scroll-behavior: smooth; }
-@media (prefers-reduced-motion: reduce) { .profile-cards { scroll-behavior: auto; } }
-.profile-card { margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); transition: opacity .12s; }
-.profile-card.selected { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
-.profile-card.current { background: var(--selection); }
-.profile-card.faded { opacity: .45; }
+/* Motion: only transform and opacity animate (compositor-only). Colour changes are cross-fades of overlay layers. */
+:root { --ease: cubic-bezier(.2, 0, 0, 1); --dur: 180ms; }
+.profile-cards { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .profile-cards { scroll-behavior: auto; } :root { --dur: 0ms; } }
+.profile-card { position: relative; isolation: isolate; margin-bottom: 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
+/* The highlight is colour only: the same 1px border, recoloured, and a tint behind the content, both cross-faded. */
+.profile-card::before, .profile-card::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; z-index: -1; opacity: 0; transition: opacity var(--dur) var(--ease); }
+.profile-card::before { border: 1px solid var(--accent); background: var(--selection); }
+.profile-card::after { background: var(--selectionStrong); }
+.profile-card.selected::before { opacity: 1; }
+.profile-card.current::after { opacity: .7; }
+.profile-card.leaving { position: absolute; margin: 0; pointer-events: none; }
 .profile-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-.profile-card-title { display: flex; gap: 8px; justify-content: space-between; align-items: center; min-width: 0; }
-.profile-card-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--textStrong); }
+@media (forced-colors: active) { .profile-card::before { border-color: Highlight; } }
+.profile-card-title { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.profile-card-title b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--textStrong); }
 .profile-card-title span { color: var(--textMuted); white-space: nowrap; }
-.pill { padding: 0 5px; border-radius: var(--radius-pill); background: var(--accentSurface); color: var(--textAccent); font-size: 10px; line-height: 14px; }
+.pill { padding: 0 5px; border-radius: var(--radius-pill); background: var(--accentSurface); color: var(--textAccent); font-size: 10px; line-height: 14px; opacity: 0; transform: scale(.9); transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.pill.on { opacity: 1; transform: none; }
 .profile-figures { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; margin: 3px 0 0; }
 .profile-figures > div { display: contents; }
 .profile-figures dt { color: var(--textMuted); }
 .profile-figures dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .profile-histogram { display: flex; align-items: flex-end; gap: 1px; height: 22px; margin-top: 5px; border-bottom: 1px solid var(--border); }
 .profile-histogram i { flex: 1; background: var(--chartBlue); }
-.peek-hint { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 4px 8px; border: 1px solid var(--borderStrong); border-radius: var(--radius-sm); background: var(--overlay); color: var(--textSecondary); box-shadow: 0 4px 12px #0004; text-align: center; }
+.peek-hint { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 4px 8px; border: 1px solid var(--borderStrong); border-radius: var(--radius-sm); background: var(--overlay); color: var(--textSecondary); box-shadow: 0 4px 12px #0004; text-align: center; z-index: 2; opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.peek-hint.on { opacity: 1; transform: none; }
+.note .motion { color: var(--textSecondary); }
 
 /* ---- Notes below the pane ---- */
 .notes { width: 100%; max-width: 1180px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
@@ -152,7 +162,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
         </div>
         <div class="profile-strip" id="strip" hidden></div>
         <div class="profile-cards" id="cards"></div>
-        <div class="peek-hint" id="hint" hidden></div>
+        <div class="peek-hint" id="hint" aria-hidden="true"></div>
       </aside>
     </div>
   </div>
@@ -171,7 +181,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
     <div class="note" data-for="B">
       <h2>B · The profile follows the selection</h2>
       <ul>
-        <li>Always on, no modifier. The cards of the selected columns get an iris edge; the active cell's column card is shaded and scrolled into view as the selection moves (arrow keys, clicks, header clicks).</li>
+        <li>Always on, no modifier. The cards of the selected columns take an iris border and a selection tint (colour only, the border stays 1px); the active cell's column card is shaded and scrolled into view as the selection moves (arrow keys, clicks, header clicks).</li>
         <li>Two-way: clicking a card selects that column in the grid and scrolls the grid to it (as SSMS-style object sync does).</li>
         <li>A multi-column selection marks each card; the scroll goes to the active column only, so a big selection does not jump around.</li>
         <li class="pro">Con: on a 200-column result you still scroll past unselected cards to compare two columns.</li>
@@ -187,7 +197,7 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
       </ul>
     </div>
     <div class="note" data-for="R">
-      <h2>Recommended · B always, C as the toggle, Ctrl+hover peeks C<span class="rec">Recommended</span></h2>
+      <h2>Recommended · B always, C as the toggle, Ctrl+hover peeks C<span class="rec">Agreed</span></h2>
       <ul>
         <li><b>B</b> by default: highlight and scroll answer "where is this column's profile?" with no learning.</li>
         <li><b>C</b> for comparing a few columns of a wide result, sticky and reachable from the keyboard and the palette.</li>
@@ -196,12 +206,22 @@ table.grid { border-collapse: separate; border-spacing: 0; font-variant-numeric:
       </ul>
     </div>
     <div class="note">
+      <h2>Motion</h2>
+      <ul class="motion">
+        <li>Only <code>transform</code> and <code>opacity</code> animate, so the compositor runs every transition and the grid's frame budget is untouched.</li>
+        <li>Highlight on/off is a cross-fade of two overlay layers (border + tint, current-column shade), not a colour transition.</li>
+        <li>Filtering keeps the card elements: the cards that stay slide from their old place to the new one (FLIP: measure, change, invert with a transform, play); leaving cards lift out of the flow and fade with a slight shrink; arriving cards fade in a beat later. The peek strip slides in and the cards below move down with it.</li>
+        <li>Interrupting (Ctrl released mid-animation, a new selection) starts from where each card is drawn, so nothing snaps.</li>
+        <li>Scrolling the active card into view is smooth scrolling. 180 ms with Calm Pro's ease-out; all of it off with <code>prefers-reduced-motion</code>.</li>
+      </ul>
+    </div>
+    <div class="note">
       <h2>Keyboard and accessibility</h2>
       <ul>
         <li>Keyboard: <em>Column Profile: Selected Columns Only</em> is a catalogue command (no default key proposed; bindable). <em>Column Profile: Reveal Column</em> (<span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">P</span> proposed, grid focus) moves focus to the active column's card; Escape returns to the grid.</li>
         <li>Cards become one Tab stop with Up/Down between them; Enter on a card selects that column in the grid. Each card's name says "selected" (<code>aria-current</code> for the active column).</li>
         <li>Filtering or peeking announces once in a polite live region ("Showing 2 of 10 columns"), never per selection move.</li>
-        <li>Smooth scrolling only without <code>prefers-reduced-motion</code>; the edge and shading use iris and selection tokens, with a 2px edge so forced-colours mode keeps it (Highlight).</li>
+        <li>The highlight uses iris and selection tokens on the existing 1px border; forced-colours mode keeps the border as Highlight.</li>
         <li>Ctrl going up with the window unfocused is handled as Peek does (<code>KeybindingService</code> blur drops the modifier), so the panel never stays stuck filtered.</li>
       </ul>
     </div>
@@ -261,21 +281,48 @@ const peekActive = () => state.ctrl && state.overPanel && (state.option === 'A' 
 const marks = () => state.option === 'B' || state.option === 'R'
 
 let lastAnnounce = ''
+// Cards are kept, never rebuilt, so each one can move from where it was: FLIP (measure, change, invert with a transform,
+// play to none). Leaving cards are lifted out of the flow at their old spot and fade; entering ones fade in. Only transform
+// and opacity animate, through the Web Animations API, so the compositor runs them.
+const cardEls = new Map()
+const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches
+const timing = { duration: 180, easing: 'cubic-bezier(.2, 0, 0, 1)' }
+function buildCard(c) {
+  const [n, type] = cols[c], p = profiles[c], h = hist(c), most = Math.max(...h)
+  const el = document.createElement('section')
+  el.className = 'profile-card'; el.dataset.c = c; el.tabIndex = -1
+  el.innerHTML = `<div class="profile-card-title"><b>${n}</b><span class="pill" aria-hidden="true">selected</span><span>${type}</span></div>
+    <dl class="profile-figures">${Object.entries(p).map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+    <div class="profile-histogram" aria-hidden="true">${h.map(v => `<i style="height:${Math.max(6, v / most * 100)}%"></i>`).join('')}</div>`
+  return el
+}
 function renderPanel(scroll) {
   const only = filtering()
   const list = cols.map((_, c) => c).filter(c => !only || state.selected.has(c))
   const cards = $('cards')
-  cards.innerHTML = list.map(c => {
-    const [n, type] = cols[c]
+  if (!cardEls.size) cols.forEach((_, c) => { const el = buildCard(c); cardEls.set(c, el); cards.append(el) })
+  const animate = motion()
+  // First: where every shown card is now (mid-animation included, so an interrupted move continues from where it is).
+  const before = new Map()
+  for (const [c, el] of cardEls) if (!el.hidden && !el.classList.contains('leaving')) before.set(c, el.getBoundingClientRect())
+  const box = cards.getBoundingClientRect()
+  const entering = [], leaving = []
+  for (const [c, el] of cardEls) {
+    const [n] = cols[c]
     const sel = marks() && state.selected.has(c), cur = marks() && state.active.col === c
-    const p = profiles[c], h = hist(c), most = Math.max(...h)
-    return `<section class="profile-card${sel ? ' selected' : ''}${cur ? ' current' : ''}" data-c="${c}" tabindex="-1" aria-label="${n}${sel ? ', selected' : ''}"${cur ? ' aria-current="true"' : ''}>
-      <div class="profile-card-title"><b>${n}</b>${sel && state.selected.size > 1 ? '<span class="pill">selected</span>' : ''}<span>${type}</span></div>
-      <dl class="profile-figures">${Object.entries(p).map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
-      <div class="profile-histogram" aria-hidden="true">${h.map(v => `<i style="height:${Math.max(6, v / most * 100)}%"></i>`).join('')}</div>
-    </section>`
-  }).join('')
+    el.classList.toggle('selected', sel); el.classList.toggle('current', cur)
+    el.querySelector('.pill').classList.toggle('on', sel && state.selected.size > 1)
+    el.setAttribute('aria-label', n + (sel ? ', selected' : ''))
+    cur ? el.setAttribute('aria-current', 'true') : el.removeAttribute('aria-current')
+    const show = list.includes(c)
+    if (show && (el.hidden || el.classList.contains('leaving'))) {
+      el.getAnimations().forEach(a => a.cancel())
+      el.classList.remove('leaving'); el.style.top = el.style.left = el.style.width = ''; el.hidden = false
+      entering.push(el)
+    } else if (!show && before.has(c)) leaving.push([el, before.get(c)])
+  }
   const strip = $('strip')
+  const stripWasHidden = strip.hidden
   const peek = peekActive()
   strip.className = 'profile-strip' + (peek ? ' peek' : '')
   if (peek) {
@@ -286,15 +333,40 @@ function renderPanel(scroll) {
     strip.hidden = false
     strip.innerHTML = `${list.length} of ${cols.length} columns · <button class="link" id="showAll">Show all</button>`
   } else strip.hidden = true
+  if (animate && stripWasHidden && !strip.hidden) strip.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], timing)
+  // Leaving cards: out of the flow at their old place, then fade and settle.
+  for (const [el, r] of leaving) {
+    if (!animate) { el.hidden = true; continue }
+    el.classList.add('leaving')
+    el.style.top = (r.top - box.top + cards.scrollTop) + 'px'; el.style.left = (r.left - box.left) + 'px'; el.style.width = r.width + 'px'
+    const a = el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.97)' }], { ...timing, duration: 140 })
+    a.onfinish = () => { el.hidden = true; el.classList.remove('leaving'); el.style.top = el.style.left = el.style.width = '' }
+  }
+  // Last, invert, play: every card still shown slides from where it was; entering cards fade in where they land.
+  if (animate) for (const [c, el] of cardEls) {
+    if (el.hidden || el.classList.contains('leaving')) continue
+    if (entering.includes(el)) { el.animate([{ opacity: 0, transform: 'translateY(-4px) scale(.98)' }, { opacity: 1, transform: 'none' }], { ...timing, delay: 40, fill: 'backwards' }); continue }
+    const old = before.get(c); if (!old) continue
+    el.getAnimations().forEach(a => a.cancel())
+    const dy = old.top - el.getBoundingClientRect().top
+    if (Math.abs(dy) > 0.5) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], timing)
+  }
   $('onlyBtn').hidden = !(state.option === 'C' || state.option === 'R')
   $('onlyBtn').setAttribute('aria-pressed', String(state.only))
   const hint = $('hint')
-  hint.hidden = !(state.overPanel && !state.ctrl && (state.option === 'A' || state.option === 'R'))
+  hint.classList.toggle('on', state.overPanel && !state.ctrl && (state.option === 'A' || state.option === 'R'))
   hint.innerHTML = state.option === 'R' && state.only ? 'Hold <span class="kbd">Ctrl</span> to peek at every column' : 'Hold <span class="kbd">Ctrl</span> to peek at the selected columns'
   $('facts').textContent = only ? `${list.length} of ${cols.length} columns · 1,204 rows` : '1,204 rows'
   const announce = only ? `Showing ${list.length} of ${cols.length} columns` : 'Showing all columns'
   if (announce !== lastAnnounce) { $('live').textContent = announce; lastAnnounce = announce }
-  if (scroll && marks()) cards.querySelector(`[data-c="${state.active.col}"]`)?.scrollIntoView({ block: 'nearest' })
+  // Reveal the active card by its layout place (offsetTop ignores the FLIP transform, which scrollIntoView would read as
+  // "already visible"); the smooth scroll runs on the compositor.
+  const active = cardEls.get(state.active.col)
+  if (scroll && marks() && active && !active.hidden) {
+    const top = active.offsetTop - 6, bottom = active.offsetTop + active.offsetHeight + 6
+    const to = top < cards.scrollTop ? top : bottom > cards.scrollTop + cards.clientHeight ? bottom - cards.clientHeight : null
+    if (to !== null) cards.scrollTo({ top: to, behavior: animate ? 'smooth' : 'auto' })
+  }
   document.querySelectorAll('.note[data-for]').forEach(n => n.classList.toggle('current', n.dataset.for === state.option))
 }
 
