@@ -2588,7 +2588,8 @@ try {
   await expect(cell(5, 0, diff)).toHaveText('5')
   for (const name of ['ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   for (const name of ['Change', 'R1', 'R2', 'Old row', 'New row']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(0)
-  await expect(diff.getByRole('columnheader')).toHaveCount(3)
+  // The row-number corner and the three data columns.
+  await expect(diff.getByRole('columnheader')).toHaveCount(4)
   const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, diff).textContent()))))
   expect(await diffRows()).toEqual([
     ['1', 'apple', '1.50'],
