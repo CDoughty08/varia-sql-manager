@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a case- or accent-insensitive column two to five times faster, finding exactly what they found before.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.

@@ -1,0 +1,207 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text;
+
+namespace Varia.Backend.Results;
+
+/// <summary>A culture's search fold: every UTF-16 code unit mapped to the representative of the code units the culture's
+/// collator gives the same sort key under its loosest options (case, accents, kana type and width ignored), with empty keys
+/// dropped. A cell a culture compare finds the text in then holds the text's fold, folded, as an ordinal substring, so an
+/// ordinal search of the folds rules most cells out before the culture compare, which stays the judge
+/// (<see cref="ResultSearcher.MatcherFor"/>). Built from the collator, never by hand: a hand-written fold misses ß, æ,
+/// final sigma, kana, Arabic-Indic digits and more. Only for the cultures <see cref="Verified"/> lists; a character the fold
+/// cannot vouch for (a script whose collation joins letters, a supplementary character) sends its cell to the culture
+/// compare alone.</summary>
+internal sealed class SearchFold
+{
+    internal const CompareOptions Loosest = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth;
+
+    /// <summary>The cultures (LCIDs) whose fold SearchFoldChecks' differential check verifies (and a long run of it, half a
+    /// million cases a culture and option set, found no difference in): Latin1_General and SQL_Latin1_General collations are
+    /// 1033. Danish, Norwegian, Hungarian and Croatian are not: their collations treat a letter as a pair of letters (å as aa,
+    /// dž) in ways a per-character fold cannot follow, and the long run finds misses.</summary>
+    internal static readonly int[] Verified =
+    [
+        1025, 1026, 1028, 1029, 1031, 1032, 1033, 1034, 1035, 1036, 1037, 1039, 1040, 1041, 1042, 1043, 1045, 1046, 1048, 1049,
+        1051, 1052, 1053, 1054, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
+    ];
+
+    private static readonly ConcurrentDictionary<int, Lazy<Task<SearchFold>>> folds = new();
+
+    /// <summary>The fold for a culture once it is built, else null (and the build started on the thread pool, so a search
+    /// never waits for it: until it is ready the culture compare runs alone). Null for a culture that is not verified.</summary>
+    public static SearchFold? For(int lcid)
+    {
+        if (Array.IndexOf(Verified, lcid) < 0) return null;
+        var build = folds.GetOrAdd(lcid, culture => new Lazy<Task<SearchFold>>(() => Task.Run(() => Build(culture)))).Value;
+        return build.IsCompletedSuccessfully ? build.Result : null;
+    }
+
+    /// <summary>The fold for a culture, waiting for its build (the checks and benchmarks).</summary>
+    internal static SearchFold Ready(int lcid)
+    {
+        if (Array.IndexOf(Verified, lcid) < 0) throw new ArgumentOutOfRangeException(nameof(lcid), "The culture's fold is not verified.");
+        return folds.GetOrAdd(lcid, culture => new Lazy<Task<SearchFold>>(() => Task.Run(() => Build(culture)))).Value.GetAwaiter().GetResult();
+    }
+
+    /// <summary>Builds any culture's fold, verified or not (the differential check measures unverified ones).</summary>
+    internal static SearchFold Build(int lcid) => new(CultureInfo.GetCultureInfo(lcid).CompareInfo);
+
+    // Each code unit's fold: one character (the common case), or Multiple when it folds to several (ß to ss) or none.
+    private readonly char[] single = new char[65536];
+    private readonly Dictionary<char, string> multiple = [];
+    private const char Multiple = '￿';
+    // Code units a text of which is NFC already: neither a combining mark, a Hangul vowel or final jamo (which compose with
+    // what comes before them), nor one that normalizing changes (Å as U+212B). A text of only these skips normalizing.
+    private readonly bool[] stable = new bool[65536];
+    // The ASCII range's folds, for the UTF-8 fast path: a byte below 0x80 is its character.
+    private readonly string[] ascii = new string[128];
+
+    private SearchFold(CompareInfo info)
+    {
+        var emptyKey = Key(info, "");
+        // A group's representative: a one to three letter ASCII string with its key if there is one (ß to ss, ﬃ to ffi),
+        // else the compatibility decomposition of its lowest code unit, folded, when that has the key (℃ to °c), else the
+        // lowest code unit. Every member of a group maps to the same representative, so a cell and a text folded agree.
+        var asciiKeys = new Dictionary<string, string>();
+        void Candidate(string s)
+        {
+            var key = Key(info, s);
+            if (key != emptyKey) asciiKeys.TryAdd(key, s);
+        }
+        for (var c = 0x20; c < 0x7F; c++) Candidate(char.ToLowerInvariant((char)c).ToString());
+        for (var a = 'a'; a <= 'z'; a++) for (var b = 'a'; b <= 'z'; b++) Candidate(new string([a, b]));
+        for (var a = 'a'; a <= 'z'; a++) for (var b = 'a'; b <= 'z'; b++) for (var c = 'a'; c <= 'z'; c++) Candidate(new string([a, b, c]));
+        var keys = new string[65536];
+        var lowest = new Dictionary<string, char>();
+        for (var c = 0; c < 65536; c++)
+        {
+            if (char.IsSurrogate((char)c)) continue;
+            var key = keys[c] = Key(info, ((char)c).ToString());
+            if (key != emptyKey) lowest.TryAdd(key, (char)c);
+        }
+        var representatives = new Dictionary<string, string>();
+        string Representative(string key, int depth)
+        {
+            if (key == emptyKey) return "";
+            if (asciiKeys.TryGetValue(key, out var plain)) return plain;
+            if (representatives.TryGetValue(key, out var known)) return known;
+            var low = lowest[key].ToString();
+            var chosen = low;
+            if (depth < 4)
+            {
+                // A noncharacter (U+FFFE) cannot be normalized: it stays itself.
+                string decomposed;
+                try { decomposed = low.Normalize(NormalizationForm.FormKD); }
+                catch (ArgumentException) { decomposed = low; }
+                if (decomposed != low)
+                {
+                    var composed = new StringBuilder();
+                    foreach (var part in decomposed)
+                        if (!char.IsSurrogate(part)) composed.Append(Representative(keys[part], depth + 1));
+                    if (composed.Length > 0 && Key(info, composed.ToString()) == key) chosen = composed.ToString();
+                }
+            }
+            representatives[key] = chosen;
+            return chosen;
+        }
+        for (var c = 0; c < 65536; c++)
+        {
+            var unit = (char)c;
+            if (char.IsSurrogate(unit) || Unsafe(unit))
+            {
+                single[c] = Multiple;
+                continue;
+            }
+            var fold = Representative(keys[c], 0);
+            if (fold.Length == 1 && fold[0] != Multiple) single[c] = fold[0];
+            else
+            {
+                single[c] = Multiple;
+                multiple[unit] = fold;
+            }
+            if (c < 128) ascii[c] = fold;
+            stable[c] = CharUnicodeInfo.GetUnicodeCategory(unit) is not (UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark)
+                && c is not (>= 0x1160 and <= 0x11FF) && Stable(unit);
+        }
+    }
+
+    private static bool Stable(char c)
+    {
+        try { return c.ToString().IsNormalized(NormalizationForm.FormC); }
+        catch (ArgumentException) { return false; }
+    }
+
+    private static string Key(CompareInfo info, string text) => Convert.ToBase64String(info.GetSortKey(text, Loosest).KeyData);
+
+    /// <summary>A code unit the fold cannot vouch for: one of a script whose collation reorders or joins letters into one
+    /// (Indic, Thai, Lao, Tibetan, Myanmar, Khmer, Tai), or half of a supplementary character. Its cell goes to the culture
+    /// compare alone.</summary>
+    internal static bool Unsafe(char c) =>
+        char.IsSurrogate(c) || c is >= 'ऀ' and <= '႟' || c is >= 'ក' and <= '៿' || c is >= 'ᦀ' and <= '᪯'
+        || c is >= '꣠' and <= 'ꣿ' || c is >= 'ꧠ' and <= '꫟';
+
+    /// <summary>A text's fold, or null when it holds a character the fold cannot vouch for, or folds to nothing.</summary>
+    public string? FoldText(string text)
+    {
+        var buffer = new char[Math.Max(16, text.Length * 3)];
+        if (!TryFold(text, ref buffer, out var length) || length == 0) return null;
+        return new string(buffer, 0, length);
+    }
+
+    /// <summary>Folds UTF-16 text (normalized to NFC first, so a letter and its decomposed form fold alike) into
+    /// <paramref name="buffer"/>, grown as needed. False when it holds a character the fold cannot vouch for.</summary>
+    public bool TryFold(ReadOnlySpan<char> text, ref char[] buffer, out int length)
+    {
+        length = 0;
+        // Half of a supplementary character (unvouched in any case) would make normalizing throw.
+        var composed = true;
+        foreach (var c in text)
+        {
+            if (char.IsSurrogate(c)) return false;
+            composed &= stable[c];
+        }
+        if (!composed && !text.IsNormalized(NormalizationForm.FormC))
+        {
+            string normal;
+            try { normal = new string(text).Normalize(NormalizationForm.FormC); }
+            catch (ArgumentException) { return false; }
+            return TryFold(normal.AsSpan(), ref buffer, out length);
+        }
+        if (buffer.Length < text.Length + 16) buffer = new char[Math.Max(text.Length + 16, 2 * buffer.Length)];
+        foreach (var c in text)
+        {
+            var folded = single[c];
+            if (folded != Multiple && length < buffer.Length)
+            {
+                buffer[length++] = folded;
+                continue;
+            }
+            if (folded != Multiple) Append(ref buffer, ref length, folded);
+            else if (!multiple.TryGetValue(c, out var several)) return false;
+            else foreach (var part in several) Append(ref buffer, ref length, part);
+        }
+        return true;
+    }
+
+    /// <summary>Folds an ASCII-only UTF-8 cell straight from its bytes. False when a byte is not ASCII.</summary>
+    public bool TryFoldAscii(ReadOnlySpan<byte> utf8, ref char[] buffer, out int length)
+    {
+        length = 0;
+        if (!System.Text.Ascii.IsValid(utf8)) return false;
+        if (buffer.Length < utf8.Length + 16) buffer = new char[Math.Max(utf8.Length + 16, 2 * buffer.Length)];
+        foreach (var b in utf8)
+        {
+            var fold = ascii[b];
+            if (fold.Length == 1 && length < buffer.Length) buffer[length++] = fold[0];
+            else foreach (var part in fold) Append(ref buffer, ref length, part);
+        }
+        return true;
+    }
+
+    private static void Append(ref char[] buffer, ref int length, char c)
+    {
+        if (length == buffer.Length) Array.Resize(ref buffer, Math.Max(16, buffer.Length * 2));
+        buffer[length++] = c;
+    }
+}

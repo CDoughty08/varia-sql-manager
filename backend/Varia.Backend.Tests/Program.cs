@@ -26,6 +26,12 @@ if (args is [SearchBench.Argument])
     SearchBench.Run();
     return;
 }
+// tests/bench/search.bench.ts: measures only, no checks.
+if (args is [FindBench.Argument])
+{
+    FindBench.Run();
+    return;
+}
 // The pivot benchmark, run by hand (docs/pivot-performance-findings.md): measures only, no checks.
 if (args is [PivotBench.Argument, ..])
 {
@@ -402,6 +408,7 @@ if (liveGroup is null)
         ("Identity", Sync(() => IdentityChecks.Run(Check))),
         ("Diff", Sync(() => DiffChecks.Run(Check))),
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
+        ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),

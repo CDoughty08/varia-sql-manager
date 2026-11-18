@@ -204,7 +204,7 @@ internal static class ResultSearcher
             // Text of only ignorable characters (U+200B, U+00AD) is found at 0 in every string by a culture compare: it is
             // looked for as it is written instead.
             if (ViewSorter.Culture(collation) is { } culture && culture.Info.Compare(text, string.Empty, culture.Options) != 0)
-                return new CultureMatcher(text, culture.Info, culture.Options);
+                return new CultureMatcher(text, culture.Info, culture.Options, SearchFold.For(collation.Lcid));
             return new OrdinalMatcher(text, (collation.Options & 1) != 0 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         return new OrdinalMatcher(text, StringComparison.OrdinalIgnoreCase);
@@ -213,6 +213,8 @@ internal static class ResultSearcher
     internal sealed class Scratch
     {
         public char[] Chars = new char[256];
+        /// <summary>A cell's fold (<see cref="SearchFold"/>), for the pre-check before a culture compare.</summary>
+        public char[] Folded = new char[256];
 
         public ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8)
         {
@@ -245,10 +247,61 @@ internal static class ResultSearcher
         public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => scratch.Decode(cell).Contains(text, comparison);
     }
 
-    private sealed class CultureMatcher(string text, CompareInfo info, CompareOptions options) : Matcher
+    /// <summary>A culture compare (ICU), about 90 MB/s on text that is not ASCII. With the culture's fold, a cell whose fold
+    /// does not hold the text's fold as an ordinal substring cannot hold the text, so it is ruled out without the compare
+    /// (4 to 5.5 times faster on real multilingual text); the compare judges the rest. A cell the fold cannot vouch for goes
+    /// to the compare alone. When most cells pass the pre-check anyway (a common word), it only adds work, so after
+    /// <see cref="PrecheckSample"/> cells the matcher stops pre-checking if more than <see cref="PrecheckKeep"/> of them
+    /// passed.</summary>
+    internal sealed class CultureMatcher : Matcher
     {
-        public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => info.IndexOf(scratch.Decode(cell), text, options) >= 0;
+        private readonly string text;
+        private readonly CompareInfo info;
+        private readonly CompareOptions options;
+        private readonly SearchFold? fold;
+        private readonly string? folded;
+        // Counted while sampling only (shared by the search's threads), then one decision: 0 sampling, 1 pre-check, 2 not.
+        private int sampled, passed, mode;
+
+        public CultureMatcher(string text, CompareInfo info, CompareOptions options, SearchFold? fold)
+        {
+            this.text = text;
+            this.info = info;
+            this.options = options;
+            folded = fold?.FoldText(text);
+            this.fold = folded is null ? null : fold;
+        }
+
+        /// <summary>Whether the pre-check runs: the culture's fold was ready and the text folds.</summary>
+        public bool Prechecks => fold is not null && Volatile.Read(ref mode) != 2;
+
+        public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch)
+        {
+            if (fold is null || Volatile.Read(ref mode) == 2) return info.IndexOf(scratch.Decode(cell), text, options) >= 0;
+            var chars = default(ReadOnlySpan<char>);
+            int length;
+            var vouched = fold.TryFoldAscii(cell, ref scratch.Folded, out length)
+                || fold.TryFold(chars = scratch.Decode(cell), ref scratch.Folded, out length);
+            var maybe = !vouched || scratch.Folded.AsSpan(0, length).IndexOf(folded.AsSpan(), StringComparison.Ordinal) >= 0;
+            if (Volatile.Read(ref mode) == 0) Sample(maybe);
+            if (!maybe) return false;
+            return info.IndexOf(chars.IsEmpty && cell.Length > 0 ? scratch.Decode(cell) : chars, text, options) >= 0;
+        }
+
+        private void Sample(bool maybe)
+        {
+            if (maybe) Interlocked.Increment(ref passed);
+            if (Interlocked.Increment(ref sampled) != PrecheckSample) return;
+            Volatile.Write(ref mode, Volatile.Read(ref passed) > PrecheckSample * PrecheckKeep ? 2 : 1);
+        }
     }
+
+    /// <summary>Cells a culture matcher pre-checks before it decides whether pre-checking pays.</summary>
+    internal const int PrecheckSample = 1024;
+
+    /// <summary>The share of sampled cells passing the pre-check above which it stops: the pre-check costs about a fifth
+    /// of a compare, so with most cells passing it only adds work.</summary>
+    internal const double PrecheckKeep = 0.6;
 
     private sealed class HexMatcher(string text) : Matcher
     {

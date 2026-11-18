@@ -1330,6 +1330,16 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only
   locale-ignored characters (U+200B, U+00AD) matches by code point. Other columns compare display text ignoring case;
   binary matches `0x` and hex, skipped when the text is not hex.
+- **Pre-check.** A culture compare (ICU) reads text that is not ASCII at about 90 MB/s, so a character column of a
+  verified culture first folds the cell with the culture's search fold (`SearchFold`: each character mapped to one
+  representative of the characters its collator treats alike under its loosest options, built from the collator's sort
+  keys in 0.05 – 0.3 s on first use, off the search) and looks for the text's fold by code point; only a cell holding it
+  goes to the compare. The answers are the compare's, 2.5 – 5.5 times sooner on multilingual text. A cell with a character
+  the fold cannot vouch for (Indic, Thai, Lao, Tibetan, Myanmar, Khmer, a supplementary character) goes to the compare
+  alone, and a matcher stops pre-checking once more than 60 % of its first 1,024 cells pass. Danish, Norwegian, Hungarian
+  and Croatian collations are never pre-checked: they treat a letter as a pair of letters in ways a per-character fold
+  cannot follow. `SearchFoldChecks` compares every verified culture's answers with the compare's over fuzzed text. The
+  column filter's value search uses the same matcher.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
@@ -2383,6 +2393,8 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 - **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
   (`backend/Varia.Backend.Tests/SearchBench.cs`): one letter over a synthetic index of 1,000,000 objects in 20 databases
   (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates.
+  Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
+  Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml
