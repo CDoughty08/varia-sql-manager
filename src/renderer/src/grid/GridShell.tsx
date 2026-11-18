@@ -1,4 +1,4 @@
-import { Component, Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type HTMLAttributes, type KeyboardEvent, type ReactNode, type RefCallback } from 'react'
+import { Component, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type HTMLAttributes, type KeyboardEvent, type ReactNode, type RefCallback } from 'react'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { ColumnFilterPopover, type ColumnFilterSource, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
@@ -104,7 +104,19 @@ export interface GridShellBusy { readonly shown: boolean; readonly held: boolean
 
 export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
-  const setting = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
+  const values = useServiceSnapshot(settings).values, setting = values['queryResults.grid.whitespace']
+  const filterWidth = values['queryResults.grid.filterPopupWidth'], filterHeight = values['queryResults.grid.filterPopupHeight']
+  const filterSize = useMemo(() => ({ width: filterWidth ?? 440, height: filterHeight ?? 0 }), [filterWidth, filterHeight])
+  // A drag of the popover's grip remembers its size for every grid's popover, in Options.
+  const filterResized = useCallback((size: { width: number; height: number }) => {
+    const now = settings.getSnapshot().values
+    // One save for both, so the popover never shows the new width with the old height while the second lands.
+    const patch = {
+      ...now['queryResults.grid.filterPopupWidth'] !== size.width ? { 'queryResults.grid.filterPopupWidth': size.width } : {},
+      ...now['queryResults.grid.filterPopupHeight'] !== size.height ? { 'queryResults.grid.filterPopupHeight': size.height } : {}
+    }
+    if (Object.keys(patch).length) void settings.chooseAll(patch)
+  }, [settings])
   const whitespace = ownWhitespace ?? setting
   const rootRef = useRef<HTMLDivElement | null>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const [status, setStatus] = useState<GridStatus>({})
@@ -202,7 +214,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
             </button></> : strip.lead ? <StripLeadText lead={strip.lead} /> : strip.text}
         </div> : null}
     {funnel && !gone && funnels && columnName !== undefined && rootRef.current && <ColumnFilterPopover key={funnel.column} source={funnels.source} target={funnel}
-      columnName={columnName || '(No column name)'} filtered={funnels.filtered.has(funnel.column)} grid={rootRef.current} onClose={closeFunnel} />}
+      columnName={columnName || '(No column name)'} filtered={funnels.filtered.has(funnel.column)} grid={rootRef.current} size={filterSize} onResized={filterResized} onClose={closeFunnel} />}
   </div>
 }
 

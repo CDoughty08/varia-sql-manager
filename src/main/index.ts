@@ -209,6 +209,8 @@ let workspaceSealer: ConnectionWorkspaceSealer | undefined
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
 const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
+// Smoke suites read colours and boxes as soon as a state changes, so they reduce motion under emulated media without the setting.
+const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
@@ -587,7 +589,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     titleBarStyle: 'hidden',
     // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
     ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit'])],
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
   })

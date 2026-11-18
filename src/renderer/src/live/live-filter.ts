@@ -58,10 +58,22 @@ export function facetList(column: number, facet: LiveFacet | undefined, filter: 
       if (order === 'count') shown.sort((a, b) => b.count - a.count || a.group - b.group)
       return { total: shown.length, offset, values: shown.slice(offset, offset + count), checked: checked.size, nullsChecked }
     },
-    tick: async ({ checked: on, groups, all, search, nulls: nullTick }) => {
-      const targets = all ? matching(search).map(value => value.group) : groups ?? []
+    tick: async ({ checked: asked, groups, all, search, nulls: nullTick, order, ranges, toggle, invert }) => {
+      if (invert) {
+        for (let group = 0; group < texts.length; group++) { if (checked.has(group)) checked.delete(group); else checked.add(group) }
+        if (nullTick !== undefined) nullsChecked = nullTick
+        return { checked: checked.size, nullsChecked }
+      }
+      let targets = all ? matching(search).map(value => value.group) : groups ?? []
+      if (ranges) {
+        const listed = matching(search)
+        if (order === 'count') listed.sort((a, b) => b.count - a.count || a.group - b.group)
+        targets = ranges.flatMap(([offset, count]) => listed.slice(offset, offset + count).map(value => value.group))
+      }
+      // A toggle ticks them all when any (or NULL, when named) is cleared, else clears them all, NULL alike.
+      const on = toggle ? (nullTick !== undefined && !nullsChecked) || targets.some(group => !checked.has(group)) : asked
       for (const group of targets) { if (on) checked.add(group); else checked.delete(group) }
-      if (nullTick !== undefined) nullsChecked = nullTick
+      if (nullTick !== undefined) nullsChecked = toggle ? on : nullTick
       return { checked: checked.size, nullsChecked }
     },
     close: async () => {},

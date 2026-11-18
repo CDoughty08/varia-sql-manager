@@ -13,6 +13,7 @@ import '../../../src/renderer/src/styles.css'
 import { DocumentFrameView, type FrameSection, type HeaderVerb } from '../../../src/renderer/src/kit/DocumentFrame'
 import { initialFrameState, type FrameState } from '../../../src/renderer/src/kit/document-frame'
 import StatusPill from '../../../src/renderer/src/kit/StatusPill'
+import { followReducedMotion, reducedMotionQuery } from '../../../src/renderer/src/services/reduced-motion'
 import type { ScriptDestination } from '../../../src/shared/scripting/catalog'
 import { colorKeys, cssVariable } from '../../../src/shared/theme/registry'
 import { resolveBuiltin } from '../../../src/shared/theme/resolve'
@@ -33,6 +34,10 @@ const params = new URLSearchParams(location.search)
 const theme = resolveBuiltin(params.get('theme') === 'light' ? 'light' : 'dark')
 for (const key of colorKeys) document.documentElement.style.setProperty(cssVariable(key), theme.colors[key])
 document.documentElement.dataset.theme = theme.type
+// As the workbench does in smoke runs: reduced motion whenever the emulated media asks (the smoke fixture emulates it and
+// refreshes through __variaMotion), so checks never read a colour partway through a transition.
+const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => true, subscribe: () => () => {}, media: matchMedia(reducedMotionQuery) })
+Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
 
 const rows = (count: number, prefix: string) => <table><tbody>{Array.from({ length: count }, (_, index) => <tr key={index}><td>{`${prefix} ${index + 1}`}</td><td>value</td></tr>)}</tbody></table>
 // Database Properties' pages; Options and Permissions start collapsed. "many" gives a list longer than its box.

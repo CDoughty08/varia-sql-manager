@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { canRememberPassword, connectionKey, connectContextSchema, credentialBinding, type ConnectContext, type ConnectionLibrary } from '../shared/connections'
 import { connectionAuthenticationSchema, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
 import type { ConnectionInfo, ConnectionOptions } from '../shared/contracts'
@@ -41,6 +41,49 @@ export function rejectCredentialReference(store: object, reference: ConnectionCr
   if (!revisions) { revisions = new Map(); rejected.set(store, revisions) }
   revisions.set(reference.revision, { binding: credentialBinding(options), ...options.password ? { secret: rejectedSecret(options.password) } : {} })
   if (revisions.size > 512) revisions.delete(revisions.keys().next().value!)
+}
+/**
+ * Passwords a connections.databases request with `remember` just signed in with, kept as keyed hashes (never the password)
+ * by credential binding for a minute: Save may then remember that password, and no other (takeVerifiedPassword).
+ */
+const verified = new WeakMap<object, Map<string, { secret: string; expires: number }>>()
+const verifiedLifetime = 60_000
+function admitVerifiedPassword(store: object, options: ConnectionOptions): void {
+  let entries = verified.get(store)
+  if (!entries) { entries = new Map(); verified.set(store, entries) }
+  const now = Date.now()
+  for (const [binding, entry] of entries) if (entry.expires <= now) entries.delete(binding)
+  entries.delete(credentialBinding(options))
+  entries.set(credentialBinding(options), { secret: rejectedSecret(options.password!), expires: now + verifiedLifetime })
+  if (entries.size > 64) entries.delete(entries.keys().next().value!)
+}
+/**
+ * Save's remembered password, under the same per-binding gate as a connect's credential write. The caller has proved it
+ * with takeVerifiedPassword. Resolves whether it replaced the password (see SavedPasswordStore.set).
+ */
+export async function rememberCheckedPassword(store: Pick<SavedPasswordStore, 'set'>, profileId: string, options: ConnectionOptions): Promise<boolean> {
+  const release = await acquire(store, `binding:${credentialBinding(options)}`)
+  try { return await store.set(profileId, options) } finally { release() }
+}
+/**
+ * Save's Forget: the entry's remembered password and every one for its credentials, under the per-binding gate. Resolves
+ * false when secret storage is unavailable, so nothing could be forgotten.
+ */
+export async function forgetSavedPassword(store: Pick<SavedPasswordStore, 'forget' | 'forgetCredentials' | 'storageAvailable'>, profileId: string, options: ConnectionOptions): Promise<boolean> {
+  const release = await acquire(store, `binding:${credentialBinding(options)}`)
+  try {
+    if (!await store.storageAvailable()) return false
+    await store.forget(profileId); await store.forgetCredentials(options)
+    return true
+  } finally { release() }
+}
+/** Whether `options.password` is the one a check just verified for these credentials; a match is used up. */
+export function takeVerifiedPassword(store: object, options: ConnectionOptions): boolean {
+  const entries = verified.get(store), binding = credentialBinding(options), entry = entries?.get(binding)
+  if (!entry || !options.password) return false
+  entries!.delete(binding)
+  const expected = Buffer.from(entry.secret), actual = Buffer.from(rejectedSecret(options.password))
+  return entry.expires > Date.now() && expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 /** Only trusted authentication/storage proof can readmit a revision whose exact saved secret is current again. */
 export function admitVerifiedCredentialReference(store: object, reference: ConnectionCredentialReference): void { rejected.get(store)?.delete(reference.revision) }
@@ -219,7 +262,11 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
       return { ...outcome, passwordForgotten: true, credentialRejected: true }
     } catch { return { ...outcome, credentialRejected: true } }
   }
-  if (prepared.method !== 'connections.connect') return outcome
+  if (prepared.method !== 'connections.connect') {
+    // Save checking a typed password it is to remember (Test Connection sends no `remember`): Save may now remember it.
+    if (context?.remember && !prepared.injected && params.password && canRememberPassword(params.authentication)) admitVerifiedPassword(deps.savedPasswords, params)
+    return outcome
+  }
   const info = outcome.value as ConnectionInfo
   const validated = prepared.validated as ConnectionOptions
   try { context = deps.authentication.prepare(validated, context) }
