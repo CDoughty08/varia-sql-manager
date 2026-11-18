@@ -601,7 +601,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   }
   // A hidden smoke window stays hidden: maximize() would show it.
   if (place.maximized || (placement?.maximized && process.env.VARIA_SMOKE_TEST !== '1')) window.maximize()
-  if (windowStateKept) windowTracker.track(window)
+  if (windowStateKept) windowTracker.track(window, placed?.x !== undefined && placed.y !== undefined ? { x: placed.x, y: placed.y, width: placed.width, height: placed.height } : undefined)
   if (testSeams && placement) Object.assign(globalThis, { __variaWindowPlacement: placement })
   // Smoke runs on a virtual display show the window, inactive: Linux sometimes ran no animation frames in a never-shown one
   // (scripts/fixtures/xvfb.mjs).

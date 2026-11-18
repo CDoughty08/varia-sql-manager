@@ -22,7 +22,7 @@ export const mainWindowLimits = {
   maxCoordinate: 1_000_000,
   maxSize: 100_000
 } as const
-export const windowStateLimits = { fileBytes: 4096, saveDelayMs: 750, flushMs: 2000, fullScreenRestoreMs: 1000 } as const
+export const windowStateLimits = { fileBytes: 4096, saveDelayMs: 750, flushMs: 2000 } as const
 
 const coordinate = z.number().finite().min(-mainWindowLimits.maxCoordinate).max(mainWindowLimits.maxCoordinate)
 const size = z.number().finite().min(1).max(mainWindowLimits.maxSize)
@@ -66,6 +66,13 @@ const distance = (rect: Rect, area: Rect) => {
   return dx * dx + dy * dy
 }
 
+/** The smallest rectangle holding every one of `areas`. */
+function span(areas: readonly Rect[]): Rect {
+  const left = Math.min(...areas.map(area => area.x)), top = Math.min(...areas.map(area => area.y))
+  const right = Math.max(...areas.map(area => area.x + area.width)), bottom = Math.max(...areas.map(area => area.y + area.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
 /** The work area that holds a grabbable part of the window's top edge (its title bar), if any. */
 export function grabArea(rect: Rect, workAreas: readonly Rect[]): Rect | undefined {
   const { grabWidth, grabHeight } = mainWindowLimits
@@ -95,7 +102,8 @@ function nearestArea(rect: Rect, workAreas: readonly Rect[], primary: Rect): Rec
 /**
  * Where the main window opens: the saved state when it is still reachable on a connected display, else the nearest display,
  * else the default size centred on the primary display. A window whose title bar is on a display stays where it was, shrunk
- * to that display's work area if it no longer fits (moved inside it if it shrank); one whose display is gone, whose layout or
+ * to the work areas it overlaps if it no longer fits them (moved inside them if it shrank), so one stretched across
+ * adjacent displays keeps its size; one whose display is gone, whose layout or
  * scale changed so its title bar is off every work area, or that sits under the macOS menu bar, is centred on the nearest
  * display at its saved size (clamped to that work area). Sizes never go below the window's minimum unless the work area is
  * smaller still.
@@ -116,10 +124,12 @@ export function placeWindow(saved: SavedWindowState | undefined, displays: Displ
   }
   const home = grabArea(saved, areas)
   if (home) {
-    const width = fit(saved.width, minWidth, home.width), height = fit(saved.height, minHeight, home.height)
+    // A window stretched across adjacent displays may keep that size: the room is every work area it overlaps.
+    const room = span([home, ...areas.filter(area => overlap(saved, area) > 0)])
+    const width = fit(saved.width, minWidth, room.width), height = fit(saved.height, minHeight, room.height)
     if (width === saved.width && height === saved.height) return { bounds: { x: saved.x, y: saved.y, width, height }, maximized, outcome: 'restored' }
-    // It shrank (or grew to its minimum): keep its corner where it was but inside the work area.
-    const x = Math.min(Math.max(saved.x, home.x), home.x + home.width - width), y = Math.min(Math.max(saved.y, home.y), home.y + home.height - height)
+    // It shrank (or grew to its minimum): keep its corner where it was but inside that room.
+    const x = Math.min(Math.max(saved.x, room.x), room.x + room.width - width), y = Math.min(Math.max(saved.y, room.y), room.y + room.height - height)
     return { bounds: { x, y, width, height }, maximized, outcome: 'resized' }
   }
   const area = nearestArea(saved, areas, primary)
@@ -185,7 +195,6 @@ export interface TrackerOptions {
   readonly platform: NodeJS.Platform
   readonly save: (state: SavedWindowState) => Promise<void>
   readonly delayMs?: number
-  readonly now?: () => number
 }
 
 /**
@@ -199,48 +208,62 @@ export class WindowStateTracker {
   constructor(private readonly options: TrackerOptions, initial?: SavedWindowState) { this.latest = initial }
   current(): SavedWindowState | undefined { return this.latest }
 
-  track(window: TrackedWindow): void {
-    const now = this.options.now ?? Date.now
+  /** `placed` is where the window was created, which a window opened maximized on Linux has no other record of. */
+  track(window: TrackedWindow, placed?: Rect): void {
+    const linux = this.options.platform === 'linux'
     const isNormal = () => !window.isMaximized() && !window.isMinimized() && !window.isFullScreen()
-    // The bounds the window had once it last settled while normal. Recorded only when a change has settled: a platform may
-    // report the new size before the new state (an X11 window manager's resize before its maximized flag), and full screen
-    // reports no reliable normal bounds.
-    let normal: Rect | undefined = isNormal() ? window.getBounds() : undefined
+    const same = (a: Rect, b: Rect) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+    // The window's normal bounds, kept up to date because full screen reports none worth having (Windows gives the maximized
+    // rectangle, or one off by a pixel). Windows and macOS report reliable normal bounds while maximized or minimized. On
+    // Linux the bounds of a change can arrive before its state (an X11 window manager's resize before its maximized flag),
+    // so bounds seen while normal are only a candidate until they settle or the window leaves the normal state at bounds
+    // other than these.
+    let normal: Rect | undefined = isNormal() ? window.getBounds() : linux ? placed ?? window.getNormalBounds() : window.getNormalBounds()
+    // The last two: X11's resize to the maximized size, seen while still normal, may follow the move that matters.
+    let candidate: Rect | undefined, earlier: Rect | undefined
     let maximized = window.isMaximized()
-    // Windows restores a maximized window (unmaximize) just before it marks it full screen: entering full screen right after
-    // takes the flag back, so the window reopens maximized as it was before full screen.
-    let unmaximized: { at: number; was: boolean } | undefined
+    const refresh = (settled: boolean) => {
+      if (window.isDestroyed() || window.isFullScreen()) return
+      if (isNormal()) {
+        if (settled || !linux) { normal = window.getBounds(); candidate = earlier = undefined }
+        else { const bounds = window.getBounds(); if (!candidate || !same(candidate, bounds)) { earlier = candidate; candidate = bounds } }
+      } else if (!linux) normal = window.getNormalBounds()
+    }
+    /** The window just left the normal state: a candidate it left from (not the bounds it now has) was its normal place. */
+    const left = () => {
+      const now = window.isDestroyed() ? undefined : window.getBounds()
+      const before = [candidate, earlier].find(bounds => bounds && now && !same(bounds, now))
+      if (before) normal = before
+      candidate = earlier = undefined
+    }
     const capture = (): SavedWindowState | undefined => {
       if (window.isDestroyed()) return undefined
       const fullScreen = window.isFullScreen(), minimized = window.isMinimized()
       if (!fullScreen && !minimized) maximized = window.isMaximized()
       let bounds: Rect
       if (isNormal()) bounds = window.getBounds()
-      else if (fullScreen || this.options.platform === 'linux') bounds = normal ?? window.getNormalBounds()
+      else if (fullScreen || linux) bounds = normal ?? window.getNormalBounds()
       else bounds = window.getNormalBounds()
       return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, maximized }
     }
-    const settled = () => {
-      if (window.isDestroyed()) return undefined
-      if (isNormal()) normal = window.getBounds()
-      return capture()
+    // What the window looked like at its last event, for a window destroyed (not closed) before its pending save ran.
+    let seen: SavedWindowState | undefined
+    const changed = () => {
+      if (window.isDestroyed()) return
+      if (!isNormal()) left()
+      refresh(false)
+      seen = capture()
+      this.schedule(window, () => { refresh(true); return capture() })
     }
-    const changed = () => { if (!window.isDestroyed()) this.schedule(window, settled) }
     window.on('move', changed)
     window.on('resize', changed)
+    // In full screen Windows reports maximize as it enters and leaves; the flag is what the window was before full screen.
     window.on('maximize', () => { if (!window.isFullScreen()) maximized = true; changed() })
-    window.on('unmaximize', () => {
-      if (!window.isFullScreen()) { unmaximized = { at: now(), was: maximized }; maximized = false }
-      changed()
-    })
-    window.on('enter-full-screen', () => {
-      if (unmaximized && now() - unmaximized.at <= windowStateLimits.fullScreenRestoreMs) maximized = unmaximized.was
-      unmaximized = undefined
-      changed()
-    })
+    window.on('unmaximize', () => { if (!window.isFullScreen()) maximized = false; changed() })
+    window.on('enter-full-screen', changed)
     window.on('leave-full-screen', changed)
-    window.on('close', () => { this.cancel(window); this.write(capture()) })
-    window.on('closed', () => this.cancel(window))
+    window.on('close', () => { this.cancel(window); if (!isNormal()) left(); this.write(capture()) })
+    window.on('closed', () => { if (this.cancel(window)) this.write(seen) })
   }
 
   /** Waits for the writes started so far, at most `flushMs`; never rejects. */
@@ -255,11 +278,12 @@ export class WindowStateTracker {
     const handle = setTimeout(() => { this.timer = undefined; this.write(run()) }, this.options.delayMs ?? windowStateLimits.saveDelayMs)
     this.timer = { window, handle }
   }
-  /** Drops `window`'s pending save; a window that replaced it keeps its own. */
-  private cancel(window: TrackedWindow): void {
-    if (this.timer?.window !== window) return
+  /** Drops `window`'s pending save, if it had one; a window that replaced it keeps its own. */
+  private cancel(window: TrackedWindow): boolean {
+    if (this.timer?.window !== window) return false
     clearTimeout(this.timer.handle)
     this.timer = undefined
+    return true
   }
   private write(state: SavedWindowState | undefined): void {
     if (!state) return

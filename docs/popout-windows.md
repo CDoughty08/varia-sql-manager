@@ -118,8 +118,8 @@ once when the window closes, through the atomic preferences writer; a quit waits
 is quarantined and the default place used; a file that cannot be read is never overwritten.
 
 - **Checked against the displays now** (`placeWindow`, in DIPs against every display's work area). A window whose title
-  bar (its top 40 px, at least 160 px wide) is still on a display reopens there, shrunk to that display's work area if it
-  no longer fits. One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
+  bar (its top 40 px, at least 160 px wide) is still on a display reopens there, shrunk to the work areas it overlaps if it
+  no longer fits them (so one stretched across adjacent displays keeps its size). One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
   is off every work area, or that would open under the macOS menu bar, is centred on the nearest display at its saved
   size (clamped to that work area). Sizes never go below the minimum (1024 x 700) unless the work area is smaller. With
   nothing saved it opens at 1440 x 960, fitted to and centred on the primary display.
@@ -127,11 +127,12 @@ is quarantined and the default place used; a file that cannot be read is never o
   before; one closed in full screen reopens as it was before full screen. A maximized window keeps its normal bounds,
   so un-maximizing goes back there.
 - **Platforms.** On Windows, a window placed on a display of another scale factor is placed again once created, as
-  Windows can size it by the wrong factor, and Windows unmaximizes a window just before it goes full screen, so that
-  unmaximize does not count. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland session with Electron's
+  Windows can size it by the wrong factor. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland session with Electron's
   automatic platform; an X11 session that also exports `WAYLAND_DISPLAY`, as WSLg does, stays X11) a window cannot place
-  itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen, and Linux's
-  maximize, report no reliable normal bounds, so main keeps the bounds the window last settled at while it was normal.
+  itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen reports no
+  reliable normal bounds (Windows gives the maximized rectangle), so main keeps the window's normal bounds as it goes:
+  Windows' and macOS's own while maximized, and on Linux, whose window manager may report a maximize's new size before its
+  state, the bounds the window last had while normal other than the ones it left that state at.
 - **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
 - A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
   set `VARIA_TEST_WINDOW_STATE=1`.

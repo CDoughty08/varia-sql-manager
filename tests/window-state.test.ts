@@ -33,6 +33,12 @@ describe('placeWindow', () => {
     expect(placeWindow(saved(-700, 30), on(primary, leftHiDpi), position).outcome).toBe('restored')
   })
 
+  it('keeps the size of a window stretched across two displays, wider than either', () => {
+    expect(placeWindow(saved(-1500, 30, 3000, 900), on(primary, leftHiDpi), position)).toEqual({ bounds: { x: -1500, y: 30, width: 3000, height: 900 }, maximized: false, outcome: 'restored' })
+    // Wider than both together: shrunk to the two, inside them.
+    expect(placeWindow(saved(-1500, 30, 5000, 900), on(primary, leftHiDpi), position).bounds).toEqual({ x: -1920, y: 30, width: 3840, height: 900 })
+  })
+
   it('restores a window on a display above the primary (negative y)', () => {
     expect(placeWindow(saved(1950, -300, 960, 1200), on(primary, portrait), position).outcome).toBe('restored')
   })
@@ -279,27 +285,82 @@ describe('WindowStateTracker', () => {
     expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
   })
 
-  it('reopens maximized after a close in full screen entered from maximized, though Windows unmaximizes first', async () => {
+  it('reopens maximized after a close in full screen entered from maximized, in the order Windows reports it', async () => {
     const { tracker, save, state, emit } = setup('win32')
     state.maximized = true; emit('maximize')
     vi.advanceTimersByTime(5000)
-    // Windows restores the zoomed window, then marks it full screen.
-    state.maximized = false; emit('unmaximize')
-    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('enter-full-screen'); emit('resize')
+    // setFullScreen from maximized: resize and maximize already in full screen, then enter-full-screen; Windows then reports
+    // the maximized rectangle as the normal bounds.
+    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; state.normal = { x: -1, y: -8, width: 1922, height: 1049 }
+    emit('resize'); emit('maximize'); emit('enter-full-screen')
+    vi.advanceTimersByTime(5000)
     emit('close')
     await tracker.flush()
     expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
   })
 
-  it('a real unmaximize long before full screen stays unmaximized', async () => {
+  it('keeps the normal bounds of a window opened maximized and closed in full screen', async () => {
+    vi.useFakeTimers()
+    const save = vi.fn(async (_state: SavedWindowState) => {})
+    const tracker = new WindowStateTracker({ platform: 'win32', save, delayMs: 500 })
+    const { window, state, emit } = fakeWindow({ x: -8, y: -8, width: 1936, height: 1056 })
+    state.maximized = true; state.normal = { x: 200, y: 100, width: 1300, height: 850 }
+    tracker.track(window, { x: 200, y: 100, width: 1300, height: 850 })
+    state.fullScreen = true; state.normal = { x: -1, y: -8, width: 1922, height: 1049 }
+    emit('resize'); emit('enter-full-screen')
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 200, y: 100, width: 1300, height: 850, maximized: true })
+  })
+
+  it('on Linux, starts a window opened maximized from where it was placed', async () => {
+    vi.useFakeTimers()
+    const save = vi.fn(async (_state: SavedWindowState) => {})
+    const tracker = new WindowStateTracker({ platform: 'linux', save, delayMs: 500 })
+    const { window, state, emit } = fakeWindow({ x: 0, y: 0, width: 1920, height: 1040 })
+    state.maximized = true
+    tracker.track(window, { x: 200, y: 100, width: 1300, height: 850 })
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 200, y: 100, width: 1300, height: 850, maximized: true })
+  })
+
+  it('treats an unmaximize just before full screen as real: the window reopens normal', async () => {
     const { tracker, save, state, emit } = setup('win32')
     state.maximized = true; emit('maximize')
     state.maximized = false; emit('unmaximize')
-    vi.advanceTimersByTime(5000)
-    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('enter-full-screen')
+    state.fullScreen = true; state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('resize'); emit('enter-full-screen')
     emit('close')
     await tracker.flush()
     expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: false })
+  })
+
+  it('on Linux, keeps a move made just before maximizing, before its save settled', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: -1700, y: 80, width: 1300, height: 900 }; emit('move')
+    vi.advanceTimersByTime(200)
+    state.maximized = true; state.bounds = { x: -1920, y: 0, width: 1920, height: 1080 }; emit('maximize'); emit('resize')
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: -1700, y: 80, width: 1300, height: 900, maximized: true })
+  })
+
+  it('on Linux, keeps a move followed by a resize to the maximized size reported before the maximized flag', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')
+    state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+    state.maximized = true; emit('maximize')
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1300, height: 900, maximized: true })
+  })
+
+  it('writes what a window last looked like when it is destroyed before its pending save', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')
+    state.destroyed = true; emit('closed')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1300, height: 900, maximized: false })
   })
 
   it('keeps the pending save of a replacement window when the window it replaced closes', async () => {
