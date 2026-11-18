@@ -61,8 +61,9 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
     if (!handler) return false
     try {
       const { precondition } = commandDescriptor(id), state = this.stateFor(args)
-      // A command for another engine than the document's (or the Explorer selection's) is unavailable (`providers`).
-      if (!commandAllowsProvider(id, state)) return false
+      // A command for another engine than the document's, or than the object or Explorer selection it runs on, is
+      // unavailable (`providers`).
+      if (!commandAllowsProvider(id, state, args?.target?.kind === 'explorer' || args?.target?.kind === 'searchHit')) return false
       if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), state)) return false
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }

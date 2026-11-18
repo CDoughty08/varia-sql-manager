@@ -110,7 +110,9 @@ async function migrateConnections({ path, write }: StepContext): Promise<StepRes
     changed = true
     return { ...profile, favorite: profile.favorite || old.favorite, registered: profile.registered || old.registered }
   })
-  const added = legacy.value.profiles.filter(profile => !ids.has(profile.id) && !keys.has(keyOf(profile))).slice(0, Math.max(0, maxProfiles - kept.length))
+  const missing = legacy.value.profiles.filter(profile => !ids.has(profile.id) && !keys.has(keyOf(profile)))
+  const added = missing.slice(0, Math.max(0, maxProfiles - kept.length))
+  if (added.length < missing.length) console.error(`Some 0.9.0 connections did not fit 0.10.0's ${maxProfiles} saved connections; 0.9.0 keeps them.`)
   if (!changed && !added.length) return finished('skipped')
   await write(to, json(connectionLibrarySchema.parse({ ...current, profiles: [...kept, ...added] })))
   return finished('migrated')
@@ -120,7 +122,8 @@ async function migrateConnections({ path, write }: StepContext): Promise<StepRes
  * The saved passwords: ciphertext, unchanged, since the SQL Server binding it is checked against does not change in
  * 0.10.0. Each is keyed to its entry in the 0.10.0 library: the same id, or for an entry the library already had under
  * another id, that entry (an equal connection key means an equal binding). When the 0.10.0 file exists, a password is
- * added only for an entry that has none.
+ * added only for an entry that has none, and only for credentials the file has no password for: the store keeps one
+ * password per binding, so an older one is never replayed beside a newer.
  */
 async function migrateSavedPasswords({ path, write }: StepContext): Promise<StepResult> {
   const legacy = await readLegacy(path(profileFiles.savedPasswords.legacy), savedPasswordFileLimit, savedPasswordFileSchema)
@@ -133,10 +136,10 @@ async function migrateSavedPasswords({ path, write }: StepContext): Promise<Step
   const target = (id: string) => !library || ids.has(id) ? id : (oldProfiles.has(id) ? byKey.get(keyOf(oldProfiles.get(id)!)) : undefined)
   const to = path(profileFiles.savedPasswords.current)
   const current = await readCurrent(to, savedPasswordFileLimit, savedPasswordFileSchema)
-  const taken = new Set(current?.entries.map(entry => entry.profileId))
+  const taken = new Set(current?.entries.map(entry => entry.profileId)), bindings = new Set(current?.entries.map(entry => entry.binding))
   const added = legacy.value.entries.flatMap(entry => {
     const profileId = target(entry.profileId)
-    if (!profileId || taken.has(profileId)) return []
+    if (!profileId || taken.has(profileId) || bindings.has(entry.binding)) return []
     taken.add(profileId)
     return [{ ...entry, profileId }]
   }).slice(0, Math.max(0, 200 - (current?.entries.length ?? 0)))
@@ -152,16 +155,23 @@ async function recordsIn(folder: string): Promise<string[]> {
     throw error
   }
 }
+/** What AutoRecover's caps leave in a folder: records and bytes, as `RecoveryStore.write` counts them. */
+async function recoveryRoom(folder: string): Promise<{ records: number; bytes: number }> {
+  const names = await recordsIn(folder)
+  let bytes = 0
+  for (const name of names) bytes += await stat(join(folder, name)).then(info => info.size, () => 0)
+  return { records: recoveryLimits.records - names.length, bytes: recoveryLimits.totalBytes - bytes }
+}
 async function makeFolder(folder: string): Promise<void> {
   await mkdir(folder, { recursive: true, mode: 0o700 })
   if (posix) await chmod(folder, 0o700)
 }
 
 /**
- * Hot exit's session. Into a folder without a session, the 0.9.0 files are copied whole, through a temporary folder renamed
- * into place, so a failure leaves no half-migrated folder. A folder with a session holds a newer close, written after an
- * unfinished attempt; 0.9.0's tabs that only it holds (text with no file behind it, or unsaved changes) are then offered
- * through AutoRecover instead, as records of their own, when they fit its 64 records.
+ * Hot exit's session. When the new folder does not exist, the 0.9.0 files are copied whole, through a temporary folder
+ * renamed into place, so a failure leaves no half-migrated folder. A folder that exists is 0.10.0's (a close, or a clear
+ * that left it empty, since an unfinished attempt) and newer: 0.9.0's tabs that only 0.9.0 holds (text with no file behind
+ * it, or unsaved changes) are then offered through AutoRecover instead, as records of their own, when they fit its caps.
  */
 async function migrateSession({ path, write, copied }: StepContext): Promise<StepResult> {
   const from = path(profileFiles.session.legacy), to = path(profileFiles.session.current)
@@ -174,22 +184,18 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
   const sessions: { name: string; value: z.infer<typeof storedSessionSchema> }[] = []
   let quarantined = false
   for (const name of names) {
-    if (present?.length && copied.has(`Session/${name}`)) continue
+    if (copied.has(`Session/${name}`)) continue
     const read = await readLegacy(join(from, name), sessionLimits.totalBytes, storedSessionSchema)
     if (read.kind === 'quarantined') quarantined = true
     if (read.kind === 'ok') sessions.push({ name, value: read.value })
   }
-  if (!present?.length) {
+  if (!present) {
     if (!sessions.length) return finished(quarantined ? 'quarantined' : 'skipped')
     const temporary = `${to}.migrating-${randomUUID()}`
     try {
-      if (present) {
-        for (const { name, value } of sessions) await write(join(to, name), record(value), { mode: 0o600 })
-      } else {
-        await makeFolder(temporary)
-        for (const { name, value } of sessions) await write(join(temporary, name), record(value), { mode: 0o600 })
-        await rename(temporary, to)
-      }
+      await makeFolder(temporary)
+      for (const { name, value } of sessions) await write(join(temporary, name), record(value), { mode: 0o600 })
+      await rename(temporary, to)
     } catch (error) {
       await rm(temporary, { recursive: true, force: true }).catch(() => {})
       throw error
@@ -206,7 +212,8 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
     const parsed = read?.kind === 'ok' ? storedSessionSchema.safeParse(read.value) : undefined
     for (const document of parsed?.success ? parsed.data.documents : []) seen.add(JSON.stringify([document.name, document.text]))
   }
-  let room = recoveryLimits.records - (await recordsIn(recover)).length, partial = false, offered = false
+  const room = await recoveryRoom(recover)
+  let partial = false, offered = false
   for (const { name, value } of sessions) {
     const records = value.documents.flatMap(document => {
       const key = JSON.stringify([document.name, document.text])
@@ -220,10 +227,12 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
       // A tab too large for an AutoRecover record stays only in 0.9.0's session.
       return parsed.success ? [parsed.data] : []
     })
-    if (records.length > room) { partial = true; continue }
+    const bytes = records.map(item => record(item)), size = bytes.reduce((sum, item) => sum + item.length, 0)
+    if (records.length > room.records || size > room.bytes) { partial = true; continue }
     if (records.length) await makeFolder(recover)
-    for (const item of records) await write(join(recover, item.id + '.json'), record(item), { mode: 0o600 })
-    room -= records.length
+    for (const [index, item] of records.entries()) await write(join(recover, item.id + '.json'), bytes[index], { mode: 0o600 })
+    room.records -= records.length
+    room.bytes -= size
     offered ||= records.length > 0
     copied.add(`Session/${name}`)
   }
@@ -245,30 +254,35 @@ async function migrateAutoRecover({ path, write, copied }: StepContext): Promise
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return finished('skipped')
     throw error
   }
-  let quarantined = false, failure: unknown
+  let quarantined = false, failure: unknown, full = false
+  let room = { records: Number.POSITIVE_INFINITY, bytes: Number.POSITIVE_INFINITY }
   // One record that cannot be copied (held open, say) fails the step without holding back the others: undefined.
   const copy = async (into: string, name: string): Promise<boolean | undefined> => {
     try {
       const read = await readLegacy(join(from, name), recoveryLimits.recordBytes, recoveryRecordSchema)
       if (read.kind === 'quarantined') quarantined = true
       if (read.kind !== 'ok') return false
-      await write(join(into, name), record(read.value), { mode: 0o600 })
+      const bytes = record(read.value)
+      // Past either of the store's caps it would refuse every new copy; the record waits for room instead.
+      if (room.records < 1 || bytes.length > room.bytes) { full = true; return undefined }
+      await write(join(into, name), bytes, { mode: 0o600 })
+      room = { records: room.records - 1, bytes: room.bytes - bytes.length }
       return true
     } catch (error) { failure ??= error; return undefined }
   }
   if (await exists(to)) {
     const present = new Set(await recordsIn(to))
-    let room = recoveryLimits.records - present.size, partial = false, migrated = false
+    room = await recoveryRoom(to)
+    let migrated = false
     for (const name of names) {
       if (present.has(name) || copied.has(`AutoRecover/${name}`)) continue
-      if (room <= 0) { partial = true; continue }
       const result = await copy(to, name)
       if (result === undefined) continue
-      if (result) { room--; migrated = true }
+      if (result) migrated = true
       copied.add(`AutoRecover/${name}`)
     }
     if (failure) throw failure
-    if (partial) return { outcome: 'partial', finished: false }
+    if (full) return { outcome: 'partial', finished: false }
     return finished(quarantined ? 'quarantined' : migrated ? 'migrated' : 'skipped')
   }
   const temporary = `${to}.migrating-${randomUUID()}`, copiedNow: string[] = []
@@ -289,17 +303,27 @@ async function migrateAutoRecover({ path, write, copied }: StepContext): Promise
   }
   for (const name of copiedNow) copied.add(`AutoRecover/${name}`)
   if (failure) throw failure
+  if (full) return { outcome: 'partial', finished: false }
   return finished(quarantined ? 'quarantined' : 'migrated')
 }
 
-/** The marker; an unreadable one is quarantined (never overwritten) and every step runs again, merging rather than replacing. */
-async function readMarker(path: string): Promise<z.infer<typeof markerSchema> | undefined> {
-  const read = await readJsonFile(path, markerLimit).catch(() => undefined)
-  if (!read || read.kind === 'missing') return undefined
+/**
+ * The marker. One that exists but cannot be used means the migration ran before, and running its steps again would bring
+ * back what the user has since closed, deleted or discarded, so every step counts as done: a newer version's marker (a
+ * later version or step) is left for it, a corrupt one is quarantined (never overwritten) and replaced, and one that
+ * cannot be read this start is left for the next.
+ */
+type Marker = { readonly kind: 'none' } | { readonly kind: 'ok'; readonly value: z.infer<typeof markerSchema> } | { readonly kind: 'done'; readonly record: boolean }
+async function readMarker(path: string): Promise<Marker> {
+  let read: Awaited<ReturnType<typeof readJsonFile>>
+  try { read = await readJsonFile(path, markerLimit) } catch { return { kind: 'done', record: false } }
+  if (read.kind === 'missing') return { kind: 'none' }
   const parsed = read.kind === 'ok' ? markerSchema.safeParse(read.value) : undefined
-  if (parsed?.success) return parsed.data
+  if (parsed?.success) return { kind: 'ok', value: parsed.data }
+  const version = read.kind === 'ok' && typeof read.value === 'object' && read.value !== null ? (read.value as { version?: unknown }).version : undefined
+  if (typeof version === 'number' && version > 1) return { kind: 'done', record: false }
   await quarantine(path).catch(() => {})
-  return undefined
+  return { kind: 'done', record: true }
 }
 
 /**
@@ -315,12 +339,19 @@ export async function migrateProfile(userData: string, options: ProfileMigration
   // A run stopped mid-copy leaves its staging folder; nothing else would ever remove its copies of query text.
   for (const name of await readdir(userData).catch(() => [] as string[])) if (staging.test(name)) await rm(path(name), { recursive: true, force: true }).catch(() => {})
   const marker = await readMarker(path(migrationMarker))
-  const done = new Set<MigrationStep>(marker?.done), copied = new Set<string>(marker?.copied)
+  if (marker.kind === 'done') {
+    if (marker.record) await write(path(migrationMarker), json({ version: 1, done: migrationSteps })).catch(() => {})
+    return Object.fromEntries(migrationSteps.map(step => [step, 'skipped'])) as Record<MigrationStep, MigrationOutcome>
+  }
+  const done = new Set<MigrationStep>(marker.kind === 'ok' ? marker.value.done : []), copied = new Set<string>(marker.kind === 'ok' ? marker.value.copied : [])
   const context: StepContext = { path, write, copied }
   const steps: Record<MigrationStep, (context: StepContext) => Promise<StepResult>> = {
     connections: migrateConnections, savedPasswords: migrateSavedPasswords, session: migrateSession, autoRecover: migrateAutoRecover
   }
   const outcomes = {} as Record<MigrationStep, MigrationOutcome>
+  let unrecorded = false
+  const saveMarker = () => write(path(migrationMarker), json({ version: 1, done: migrationSteps.filter(item => done.has(item)), ...copied.size ? { copied: [...copied] } : {} }))
+    .then(() => true, () => false)
   for (const step of migrationSteps) {
     if (done.has(step)) { outcomes[step] = 'skipped'; continue }
     if (step === 'savedPasswords' && !done.has('connections')) { outcomes[step] = 'failed'; continue }
@@ -335,10 +366,9 @@ export async function migrateProfile(userData: string, options: ProfileMigration
       console.error(`Could not copy the 0.9.0 ${step} file to 0.10.0's (${(error as NodeJS.ErrnoException).code ?? 'error'}); the next start tries again.`)
     }
     if (!done.has(step) && copied.size === before) continue
-    const value = { version: 1, done: migrationSteps.filter(item => done.has(item)), ...copied.size ? { copied: [...copied] } : {} }
-    try { await write(path(migrationMarker), json(value)) } catch (error) {
-      console.error(`Could not record the profile migration (${(error as NodeJS.ErrnoException).code ?? 'error'}).`)
-    }
+    unrecorded = !await saveMarker()
   }
+  // A marker write a brief lock refused gets one more try: without it the next start repeats what this one copied.
+  if (unrecorded && !await saveMarker()) console.error('Could not record the profile migration; the next start copies again what 0.10.0 lacks.')
   return outcomes
 }

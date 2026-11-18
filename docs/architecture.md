@@ -24,11 +24,8 @@ only when a summary line stops being true.
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
   Unknown methods and members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
 - **Providers.** One `ProviderId` (`src/shared/providers.ts`: `sqlserver`, `bigquery`) names the engine everywhere. A
-  `methodPolicies` entry serves SQL Server only unless its `providers` says otherwise. Main refuses a request for another
-  engine's connection with `UNSUPPORTED_PROVIDER` before sending it (the options' `provider` for `connections.connect`,
-  `.databases` and `.preview`; the handle's for a `connectionId`), and `SqlService.DispatchAsync` checks again first
-  thing (`Providers.cs`, whose `BothMethods` mirrors the policies). Methods that name a query, session or result are
-  declared for both engines and checked only in C#.
+  `methodPolicies` entry serves SQL Server only unless its `providers` says otherwise, and a request for another engine is
+  refused with `UNSUPPORTED_PROVIDER` by main and again by `SqlService.DispatchAsync` (docs/ipc.md#providers).
 - **Logs and secrets.** Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text,
   names, values, credentials or connection strings. Passwords never reach disk in clear: not `mssql-connections.json`, process arguments, the
   environment, logs, traces or previews.
@@ -77,12 +74,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   any store reads, each 0.9.0 file or folder is parsed with today's schema and written atomically under the new name (a
   folder through a staging folder); the 0.9.0 files are never written. A 0.10.0 file a store wrote after a failed attempt
   is merged into, never replaced: connections it lacks by id and key are added with their 0.9.0 ids, passwords are keyed
-  to the matching entry, AutoRecover records join within its 64, and a newer session keeps its tabs while 0.9.0's unsaved
-  ones are offered through AutoRecover. Finished steps, and the records already copied, are recorded in
-  `profile-migration.json`, so a store's own file neither hides 0.9.0's nor brings back what the user discarded; a failed
-  or partial step retries at the next start, and saved passwords wait for the connections, whose library their store
-  reconciles against. An unreadable file, the marker included, is quarantined. Logs carry only the step
-  and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session
+  to the matching entry unless the file has one for the same credentials, AutoRecover records join within its caps, and a
+  session folder 0.10.0 made (even empty) keeps what it holds while 0.9.0's unsaved tabs are offered through AutoRecover.
+  Finished steps, and the records already copied, are recorded in `profile-migration.json`, so a store's own file neither
+  hides 0.9.0's nor brings back what the user discarded; a failed or partial step retries at the next start, and saved
+  passwords wait for the connections, whose library their store reconciles against. A marker that exists but cannot be
+  used counts every step done (a newer version's is left alone; a corrupt one is quarantined and replaced). An unreadable
+  0.9.0 file is quarantined. Logs carry only the step and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session
   files are version 3 and AutoRecover records version 2, each with `provider` and BigQuery's 1,024-character datasets.
 - **Targets.** `src/shared/connection-targets.ts`: target ID, saved-profile hint and backend handle are distinct. Persist
   only the strict nonsecret target/workspace shapes, never lifecycle, handles, operation epochs or main-only comparison
@@ -560,10 +558,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 - **Provider gating.** Commands, submenus, Explorer kinds, object actions, live sources, settings pages and Script As
   kinds have `providers`, SQL Server only when absent. Commands (object and server actions' commands take their spec's)
   and submenus are gated at run time: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
-  `explorerSelectionProvider` for an Object Explorer command or one on Object Explorer's or a search result's menu
-  (`commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
+  `explorerSelectionProvider` for an Object Explorer command or one run from an Object Explorer node's or a search
+  result's menu (`commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
   other catalogues' `providers` are read by the lint and by the lanes that add BigQuery's surfaces. What enforces the
-  engine is the method gate (`UNSUPPORTED_PROVIDER`, below). `tests/providers-catalog.test.ts` lints that an entry whose
+  engine is the method gate (docs/ipc.md#providers). `tests/providers-catalog.test.ts` lints that an entry whose
   `when` names a provider declares it, and that one declaring `bigquery` names no method that serves SQL Server only (the
   methods a command lists in `methods`; the other catalogues name theirs).
 - **Commands and keys.** Commands and keybindings are declared only in `src/shared/commands/catalog.ts`.

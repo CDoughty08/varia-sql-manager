@@ -89,10 +89,15 @@ describe('catalogue providers', () => {
     const keys = (activeDocumentProvider: '' | ProviderId, explorerSelectionProvider: '' | ProviderId) => ({ activeDocumentProvider, explorerSelectionProvider })
     expect(commandProviderKey('query.execute')).toBe('activeDocumentProvider')
     expect(commandProviderKey('explorer.refresh')).toBe('explorerSelectionProvider')
-    // Commands of other categories on Object Explorer's menu act on its node, not the document.
-    for (const id of ['connection.disconnect', 'connection.reconnect', 'activity.open', 'ssis.folderProperties'] as const) expect(commandProviderKey(id), id).toBe('explorerSelectionProvider')
-    expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(true)
-    expect(commandAllowsProvider('connection.disconnect', keys('sqlserver', 'bigquery'))).toBe(false)
+    // A command of another category acts on the active document from the toolbar, keys and palette, and on the object its
+    // menu was opened for from Object Explorer's or a search result's menu.
+    for (const id of ['connection.disconnect', 'connection.reconnect', 'activity.open', 'ssis.folderProperties'] as const) {
+      expect(commandProviderKey(id), id).toBe('activeDocumentProvider')
+      expect(commandProviderKey(id, true), id).toBe('explorerSelectionProvider')
+    }
+    expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(false)
+    expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'), true)).toBe(true)
+    expect(commandAllowsProvider('connection.disconnect', keys('sqlserver', 'bigquery'), true)).toBe(false)
     expect(commandAllowsProvider('query.execute', keys('sqlserver', ''))).toBe(true)
     expect(commandAllowsProvider('query.execute', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('query.execute', keys('', 'bigquery'))).toBe(true)
@@ -112,6 +117,11 @@ describe('catalogue providers', () => {
     expect(commands.isEnabled('edit.undo')).toBe(true)
     await expect(commands.execute('query.execute', undefined, 'keybinding')).resolves.toBe(false)
     expect(ran).toEqual([])
+    // From a SQL Server node's menu, a command acts on the node whatever the active document is; from the toolbar, on the document.
+    commands.register('activity.open', { run: () => {} })
+    const onNode = { target: { kind: 'explorer' as const }, state: { explorerSelectionProvider: 'sqlserver' as const } }
+    expect(commands.isEnabled('activity.open', onNode)).toBe(true)
+    expect(commands.isEnabled('activity.open')).toBe(false)
   })
 
   it("Object Explorer's menu leaves out items its node's engine has no use for", () => {

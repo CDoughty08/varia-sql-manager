@@ -404,7 +404,7 @@ export const commandCatalog = {
   // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks;
   // Ctrl+F is the editor's Find everywhere but in the explorer pane, where it is this.
   'explorer.focusSearch': {
-    title: 'Search in Object Explorer', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick', 'objects'], precondition: 'hasConnection', unavailableHint: noServer, providers: both,
+    title: 'Search in Object Explorer', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick', 'objects'], precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.index', 'explorer.search'],
     keybindings: [{ key: 'mod+shift+f' }, { key: 'mod+f', when: "activePanel == 'explorer' && !inputFocus" }]
   },
   'explorer.removeFilter': {
@@ -1373,16 +1373,14 @@ export const actsOnTab = (id: CommandId): boolean => !!commandDescriptor(id).men
 export const paletteLabel = (id: CommandId): string => { const command = commandDescriptor(id); return command.category ? `${command.category}: ${command.title}` : command.title }
 /** The engines a command works for (`providers`, or SQL Server only). */
 export const commandProviders = (id: CommandId): readonly ProviderId[] => providersOf(commandDescriptor(id))
-const selectionMenus: ReadonlySet<string> = new Set(['explorer.context', 'search.hit.context'])
 /**
- * The context key a command's `providers` is checked against: the Object Explorer selection's engine for a command that
- * acts on it (an Object Explorer command, or one on Object Explorer's or a Search Objects result's menu, whose keys stand
- * the result's in), and the active document's for every other.
+ * The context key a command's `providers` is checked against, per invocation: the Explorer selection's engine when it runs
+ * on an object (`onObject`: from an Object Explorer node's or a Search Objects result's menu, whose keys stand the object's
+ * in), and otherwise the selection's for an Object Explorer command and the active document's for every other, as their
+ * handlers act on those.
  */
-export const commandProviderKey = (id: CommandId): 'activeDocumentProvider' | 'explorerSelectionProvider' => {
-  const command = commandDescriptor(id)
-  return command.category === 'Object Explorer' || command.menus?.some(placement => selectionMenus.has(placement.menu)) ? 'explorerSelectionProvider' : 'activeDocumentProvider'
-}
+export const commandProviderKey = (id: CommandId, onObject = false): 'activeDocumentProvider' | 'explorerSelectionProvider' =>
+  onObject || commandDescriptor(id).category === 'Object Explorer' ? 'explorerSelectionProvider' : 'activeDocumentProvider'
 /** Whether a command works for the engine its context names ('' — nothing of an engine — allows every command). */
-export const commandAllowsProvider = (id: CommandId, keys: { readonly activeDocumentProvider: ProviderContext; readonly explorerSelectionProvider: ProviderContext }): boolean =>
-  providerAllows(commandProviders(id), keys[commandProviderKey(id)])
+export const commandAllowsProvider = (id: CommandId, keys: { readonly activeDocumentProvider: ProviderContext; readonly explorerSelectionProvider: ProviderContext }, onObject = false): boolean =>
+  providerAllows(commandProviders(id), keys[commandProviderKey(id, onObject)])

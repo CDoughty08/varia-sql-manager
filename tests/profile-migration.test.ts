@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -8,6 +8,7 @@ import { ConnectionStore } from '../src/main/connection-store'
 import { SessionStore } from '../src/main/session-store'
 import { RecoveryStore } from '../src/main/recovery-store'
 import { writeBytesAtomic } from '../src/main/json-file'
+import { recoveryLimits } from '../src/shared/files/recovery'
 
 let directory: string
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'varia-migration-')) })
@@ -191,14 +192,90 @@ describe('0.9.0 profile migration', () => {
     expect((await read(profileFiles.savedPasswords.current)).entries.map((entry: { profileId: string }) => entry.profileId)).toEqual([ownId, otherId])
   })
 
-  it('quarantines an unreadable marker rather than overwriting it, and merging again adds nothing twice', async () => {
+  it('quarantines an unreadable marker rather than overwriting it, and repeats no step', async () => {
     await seed09()
     await migrateProfile(directory)
     await writeFile(join(directory, migrationMarker), '{ not json')
     expect(await migrateProfile(directory)).toEqual({ connections: 'skipped', savedPasswords: 'skipped', session: 'skipped', autoRecover: 'skipped' })
     expect((await readdir(directory)).some(name => name.startsWith(migrationMarker + '.invalid-'))).toBe(true)
+    // It is replaced with every step done, so the next start repeats nothing either.
+    expect(await read(migrationMarker)).toEqual({ version: 1, done: ['connections', 'savedPasswords', 'session', 'autoRecover'] })
     expect((await read(profileFiles.connections.current)).profiles).toHaveLength(1)
     expect((await read(profileFiles.savedPasswords.current)).entries).toHaveLength(1)
+  })
+
+  it('tries a refused marker write once more at the end, so the next start repeats nothing', async () => {
+    await seed09()
+    let refused = 0
+    const busyMarker: typeof writeBytesAtomic = async (path, bytes, options) => {
+      if (path.endsWith(migrationMarker) && refused++ < 4) throw Object.assign(new Error('locked'), { code: 'EBUSY' })
+      return writeBytesAtomic(path, bytes, options)
+    }
+    await migrateProfile(directory, { write: busyMarker })
+    expect((await read(migrationMarker)).done).toEqual(['connections', 'savedPasswords', 'session', 'autoRecover'])
+  })
+
+  it("leaves a newer version's marker alone and repeats nothing", async () => {
+    await seed09()
+    await migrateProfile(directory)
+    const store = new ConnectionStore(join(directory, profileFiles.connections.current))
+    await store.remove((await read(profileFiles.connections.current)).profiles[0].id)
+    const newer = JSON.stringify({ version: 2, done: ['connections', 'bigQueryConnections'] })
+    await writeFile(join(directory, migrationMarker), newer)
+    expect(await migrateProfile(directory)).toEqual({ connections: 'skipped', savedPasswords: 'skipped', session: 'skipped', autoRecover: 'skipped' })
+    expect(await readFile(join(directory, migrationMarker), 'utf8')).toBe(newer)
+    expect((await read(profileFiles.connections.current)).profiles).toEqual([])
+  })
+
+  it('offers 0.9.0 tabs through AutoRecover once a newer run made the session folder, even when it left it empty', async () => {
+    await seed09()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failFolders: typeof writeBytesAtomic = async (path, bytes, options) => {
+      if (path.includes('.migrating-')) throw Object.assign(new Error('locked'), { code: 'EPERM' })
+      return writeBytesAtomic(path, bytes, options)
+    }
+    expect(await migrateProfile(directory, { write: failFolders })).toMatchObject({ session: 'failed' })
+    // 0.10.0 runs and closes with nothing kept: the folder exists and is empty.
+    const tabs = new SessionStore(join(directory, profileFiles.session.current))
+    await tabs.take(true)
+    await tabs.write({ documents: [{ name: 'New.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'select 5' }], activeIndex: 0 }, 1)
+    await tabs.clear()
+    expect(await readdir(join(directory, profileFiles.session.current))).toEqual([])
+    expect(await migrateProfile(directory)).toMatchObject({ session: 'migrated' })
+    // The newer, empty session stays; 0.9.0's unsaved tab is offered, not reopened.
+    expect(await readdir(join(directory, profileFiles.session.current))).toEqual([])
+    const offered = await new RecoveryStore(join(directory, profileFiles.autoRecover.current)).list(3)
+    expect(offered.map(entry => entry.name)).toContain('Orders.sql')
+  })
+
+  it('adds no 0.9.0 password for credentials the 0.10.0 file already has one for', async () => {
+    const otherId = randomUUID()
+    // Another database on the same server and login: another key, the same binding.
+    const other = { ...library.profiles[0], id: otherId, options: { ...library.profiles[0].options, database: 'Archive' } }
+    await seed09()
+    await writeFile(join(directory, profileFiles.connections.legacy), JSON.stringify({ version: 1, profiles: [other] }))
+    await writeFile(join(directory, profileFiles.savedPasswords.legacy), JSON.stringify({ version: 1, entries: [{ ...passwords.entries[0], profileId: otherId }] }))
+    const newer = { profileId, revision: randomUUID(), binding: passwords.entries[0].binding, cipher: Buffer.from('newer').toString('base64'), savedAt: '2026-11-18T10:00:00.000Z' }
+    await writeFile(join(directory, profileFiles.connections.current), JSON.stringify(library))
+    await writeFile(join(directory, profileFiles.savedPasswords.current), JSON.stringify({ version: 1, entries: [newer] }))
+    expect(await migrateProfile(directory)).toMatchObject({ connections: 'migrated', savedPasswords: 'skipped' })
+    expect((await read(profileFiles.connections.current)).profiles.map((profile: { id: string }) => profile.id)).toEqual([profileId, otherId])
+    expect((await read(profileFiles.savedPasswords.current)).entries).toEqual([newer])
+  })
+
+  it('copies no AutoRecover record past the store\'s byte cap', async () => {
+    await seed09()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const into = join(directory, profileFiles.autoRecover.current)
+    await mkdir(into)
+    // A record file that leaves a few bytes under the 256 MB cap (its size is all the count reads).
+    const big = join(into, randomUUID() + '.json')
+    await writeFile(big, '')
+    await truncate(big, recoveryLimits.totalBytes - 16)
+    expect((await migrateProfile(directory)).autoRecover).toBe('partial')
+    expect(await readdir(into)).not.toContain(recordId + '.json')
+    await rm(big)
+    expect((await migrateProfile(directory)).autoRecover).toBe('migrated')
   })
 
   it('copies AutoRecover records only while the folder has room, and the rest at a later start', async () => {
