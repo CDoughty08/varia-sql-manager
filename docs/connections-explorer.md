@@ -60,6 +60,8 @@ server, the login and how many databases it sees, fills the Database Name list, 
 not among them; a failure shows the same error, details, Copy details and fixes as a failed Connect. While it runs the
 form is locked, the button reads Stop, and Escape stops the test without closing the dialog. Cancel, Escape or the
 close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
+For a connection that is not saved yet, they ask **Save *server* to History?** once the user has changed the form
+(server, login, settings or labels) and Save could save it. A typed password alone does not ask.
 Focus stays in the dialog: a press on its text focuses the dialog, and a button that saving disables or Remove takes
 away gives focus back to the dialog (then to that button once it is enabled), so Escape and Tab always reach it.
 

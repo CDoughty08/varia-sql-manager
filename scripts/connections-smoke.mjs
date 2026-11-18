@@ -110,6 +110,13 @@ try {
   dialog = await open()
   await dialog.getByLabel('Server Name', { exact: true }).fill('focus-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  // A new connection the user filled in is not closed without asking either; Cancel there keeps editing.
+  await page.keyboard.press('Escape')
+  let unsaved = page.getByRole('dialog', { name: 'Save focus-server to History?', exact: true })
+  await expect(unsaved).toBeVisible()
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unsaved).toHaveCount(0)
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('focus-server')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused()
   // Save keeps a connection that never connected, in History's Saved group, and says what it saved.
@@ -124,10 +131,20 @@ try {
   await dialog.getByRole('button', { name: 'Remove saved focus-server', exact: true }).click()
   await expect(savedConnections(dialog, 'focus-server')).toHaveCount(0)
   await expect(dialog).toBeFocused()
+  // Save in the prompt saves the new connection to History, then closes; a password alone would not have asked.
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('prompt-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save prompt-server to History?', exact: true })
+  await unsaved.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(dialog).toHaveCount(0)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'prompt-server')).toBe(true)
   dialog = await open()
+  // It waits in History's Saved group; removing it leaves History as the rest of the suite expects.
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Remove saved prompt-server', exact: true }).click()
+  await expect(savedConnections(dialog, 'prompt-server')).toHaveCount(0)
   await expect(dialog.getByText('recent-server', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Favorite recent-server', exact: true }).click()
   // The row pressed was Recent Connections'; Favorites now lists it first.
@@ -973,6 +990,8 @@ async function rememberPassword() {
   await dialog.getByLabel('Database Name', { exact: true }).focus()
   await expect(loading).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  // The connection was never saved: closing asks first, and Don't Save closes.
+  await page.getByRole('dialog', { name: 'Save entra-wait to History?', exact: true }).getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
   await app.close(); app = undefined
