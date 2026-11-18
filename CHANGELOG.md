@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changes to everyday use
+
+- **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
+- **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
+
 ## [0.9.1] - 2026-11-16
 
 A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.

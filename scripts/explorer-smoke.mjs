@@ -2087,6 +2087,27 @@ try {
   await sampleScroll(0)
   console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
 
+  // 13c. Expanding a row low in the view scrolls its children in as they arrive, as far as keeps the row itself in view.
+  await toolbarButton('Collapse All').click()
+  await tree().focus()
+  await press('Home', 'pin-a')
+  for (let server = 0; server < 6; server++) { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown') }
+  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData')
+  await select('pin-f', 'Databases', 'AppData', 'Tables')
+  const treeTop = (await tree().boundingBox()).y, scrolledFrom = await tree().evaluate(element => element.scrollTop)
+  const tablesTop = async () => (await (await explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables')).boundingBox()).y - treeTop
+  expect(await tablesTop()).toBeGreaterThan(200)
+  await press('ArrowRight', 'Tables')
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeGreaterThan(scrolledFrom)
+  // Tables ends just under the pinned server headers above it, with its tables below it.
+  const above = page.getByRole('group', { name: 'Servers above', exact: true })
+  await expect(above).toBeVisible()
+  const aboveBottom = async () => { const box = await above.boundingBox(); return box.y + box.height - treeTop }
+  await expect.poll(async () => Math.round(await aboveBottom() - await tablesTop())).toBeGreaterThanOrEqual(-22)
+  expect(await tablesTop()).toBeGreaterThanOrEqual(Math.floor(await aboveBottom()))
+  await expect(explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables', 'dbo.table10')).resolves.toBeTruthy()
+  console.log('Object Explorer checks: expanding a row low in the view scrolls its children into view and keeps the row in view.')
+
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
     await application.close()

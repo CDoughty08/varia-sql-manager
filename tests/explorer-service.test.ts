@@ -55,6 +55,8 @@ function fakeBackend() {
     appData: {} as Partial<ExplorerNode>, subtypes: {} as Record<string, NodeSubtype>, tableFields: {} as Record<string, Partial<ExplorerNode>>,
     /** Locked cannot be opened while this holds; `leafTables` lists tables without a chevron. */
     lockedDenied: true, leafTables: false,
+    /** Views lists only its System Views folder, which lists two views: a chain for Auto-expand single children. */
+    viewsChain: false,
     /** sa's row fields in Logins. */
     sa: {} as Partial<ExplorerNode>
   }
@@ -83,6 +85,8 @@ function fakeBackend() {
         const filtered = params.filter?.name ? rows.filter(row => row.label.includes(params.filter!.name!.value)) : rows
         return ok([...statics, ...filtered], { total: statics.length + filtered.length })
       }
+      case 'views': return ok(state.viewsChain ? [folder(owner, 'systemViews')] : [])
+      case 'systemViews': return ok(['sys.objects', 'sys.tables'].map(name => { const [schema, view] = name.split('.'); return object({ kind: 'view', database: owner.database, schema, name: view }, name, { subtype: 'system' }) }))
       case 'systemDatabases': return ok(['master', 'model'].map(name => object({ kind: 'database', name }, name, { subtype: 'system' })))
       case 'serverSecurity': return ok([folder(owner, 'logins'), folder(owner, 'audits')])
       case 'logins': return ok([object({ kind: 'login', name: 'sa' }, 'sa', state.sa)])
@@ -214,6 +218,79 @@ async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, mat
     return pages
   } finally { table.get = get }
 }
+
+describe('ExplorerService: expanding as the user', () => {
+  const appData = async (f: ReturnType<typeof fixture>) => {
+    f.state.viewsChain = true
+    f.connect()
+    await settle()
+    return f.open('Databases', 'AppData')
+  }
+  it('auto-expands only children down to the first node with more than one child, loading each level, and selects it', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database)
+    f.explorer.open(views, true)
+    expect(f.explorer.opening).toMatchObject({ id: views, settled: false })
+    await settle(); await settle()
+    const system = f.find('System Views', views)
+    expect(f.explorer.node(system)!.expanded).toBe(true)
+    expect(f.explorer.getSnapshot().selected).toBe(system)
+    const shown = f.labels(), at = shown.indexOf('        System Views')
+    expect(shown.slice(at, at + 3)).toEqual(['        System Views', '          sys.objects', '          sys.tables'])
+    // The tree keeps System Views' children in view until it has shown them.
+    expect(f.explorer.opening).toMatchObject({ id: system, settled: true })
+    f.explorer.endOpening()
+    expect(f.explorer.opening).toBeUndefined()
+    // Down then goes to its first child, as if the user had walked there.
+    const rows = f.rows(), index = rowIndex(rows, system)
+    expect(treeKey(rows, index, 'down', 1)).toEqual({ type: 'select', index: index + 1 })
+  })
+  it('expands only the node itself when the setting is off, or when its only child is a leaf', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const selected = f.explorer.getSnapshot().selected
+    const views = f.find('Views', database)
+    f.explorer.open(views, false)
+    await settle(); await settle()
+    expect(f.explorer.node(f.find('System Views', views))!.expanded).toBe(false)
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+    const logins = await f.open('Security')
+    f.explorer.open(f.find('Logins', logins), true)
+    await settle()
+    expect(f.labels()).toContain('      sa')
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+  })
+  it('walks levels already loaded at once', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database)
+    f.explorer.open(views, true)
+    await settle(); await settle()
+    const system = f.find('System Views', views)
+    f.explorer.collapse(system)
+    f.explorer.collapse(views)
+    f.explorer.select(database)
+    f.explorer.open(views, true)
+    expect(f.explorer.node(system)!.expanded).toBe(true)
+    expect(f.explorer.getSnapshot().selected).toBe(system)
+  })
+  it('stops when the user selects another row while a level loads', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database), tables = f.find('Tables', database)
+    f.hold(isFolder('systemViews'))
+    f.explorer.open(views, true)
+    await settle()
+    const system = f.find('System Views', views)
+    expect(f.explorer.node(system)!.expanded).toBe(true)
+    f.explorer.select(tables)
+    f.unhold(); f.release()
+    await settle()
+    expect(f.explorer.getSnapshot().selected).toBe(tables)
+    expect(f.explorer.opening).toBeUndefined()
+  })
+})
 
 describe('ExplorerService: loading', () => {
   it('expands a new server, loads nothing below its static folders, and selects it', async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealPinnedScroll, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealChildrenScroll, revealPinnedScroll, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
@@ -233,6 +233,27 @@ describe('pinned server bands', () => {
     }
   })
 
+  it('scrolls the children of an expanded row in only as far as keeps the row clear of the top overlays', () => {
+    // A server (0), its folders 1-8, a second server (9) with a folder (10) whose 40 children follow.
+    const layout = layoutFor([1, ...Array<number>(8).fill(2), 1, 2, ...Array<number>(40).fill(3)])
+    const viewport = 300, last = layout.count - 1
+    // Children overflow: the folder ends just under the pinned second server.
+    const destination = revealChildrenScroll(layout, 10, last, 0, viewport, 2, 2)!
+    const bands = pinnedServerBands(layout, destination, viewport, 2, 2)
+    expect(layout.top(10)).toBeGreaterThanOrEqual(destination + bands.top.height)
+    expect(destination).toBe(revealPinnedScroll(layout, 10, Number.MAX_SAFE_INTEGER, viewport, 2, 2, true))
+    expect(destination).toBeLessThan(revealPinnedScroll(layout, last, 0, viewport, 2, 2)!)
+    // A few children that fit: just enough to show the last one, the row staying where it was in view.
+    const few = layoutFor([1, ...Array<number>(8).fill(2), 1, 2, 3, 3])
+    const short = revealChildrenScroll(few, 10, few.count - 1, 0, 230, 2, 2)!
+    expect(short).toBeGreaterThan(0)
+    expect(revealPinnedScroll(few, few.count - 1, short, 230, 2, 2)).toBeUndefined()
+    expect(revealPinnedScroll(few, 10, short, 230, 2, 2)).toBeUndefined()
+    // Already in view, or nothing below the row: no scroll, and never up.
+    expect(revealChildrenScroll(few, 10, few.count - 1, short, 230, 2, 2)).toBeUndefined()
+    expect(revealChildrenScroll(layout, 10, 10, 0, viewport, 2, 2)).toBeUndefined()
+    expect(revealChildrenScroll(layout, 1, 2, 100, viewport, 2, 2)).toBeUndefined()
+  })
   it('reveals every row clear of the destination overlays, including real server headers', () => {
     const layout = layoutFor([1, ...Array<number>(8).fill(2), 1, 1, ...Array<number>(10).fill(2), 1, ...Array<number>(30).fill(2), 1])
     for (const viewport of [74, 100, 160, 400]) {

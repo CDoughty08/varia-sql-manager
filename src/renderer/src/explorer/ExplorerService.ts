@@ -267,6 +267,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   /** The node `seek` walks towards, re-tried as each page arrives. */
   private seeking?: Seeking
+  /**
+   * The user's last expand (`open`): the node whose children the tree scrolls into view and, with `chain`, the node an
+   * auto-expand has reached, walking on through only children as their pages arrive. `selected` is the row it last
+   * selected (or the selection it started from): another selection, a collapse or a refresh ends it.
+   */
+  private opened?: { id: number; readonly chain: boolean; readonly start: number; selected: number | undefined; readonly seq: number }
+  private opens = 0
   private readonly unsubscribe: () => void
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
@@ -340,6 +347,32 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
   toggle(id: number): void { if (this.nodes.get(id)?.expanded) this.collapse(id); else this.expand(id) }
+  /**
+   * The user's expand (a click, Right, Enter or Numpad +): expands the node and, with `chain` (Auto-expand single
+   * children), every only child below it that can expand, down to the first node with more than one child, loading each
+   * level as it goes. That node is then selected, as if the user had walked down to it. The tree keeps the children of
+   * the node reached in view (`opening`).
+   */
+  open(id: number, chain = false): void {
+    const node = this.nodes.get(id)
+    if (!node || !node.hasChildren || node.lost || !this.attached(node)) return
+    this.opened = { id, chain, start: id, selected: this.selected, seq: ++this.opens }
+    this.expand(id)
+    this.advanceOpen()
+  }
+  /** Toggles as the user's own click does: an expand is `open`. */
+  toggleOpen(id: number, chain = false): void { if (this.nodes.get(id)?.expanded) this.collapse(id); else this.open(id, chain) }
+  /**
+   * The node whose children the tree keeps in view after the user's expand, while its first page is still to come or an
+   * auto-expand still walks (`settled` false). Undefined once the user does anything else.
+   */
+  get opening(): { readonly id: number; readonly settled: boolean; readonly seq: number } | undefined {
+    const opened = this.opened, node = opened && this.nodes.get(opened.id)
+    if (!opened || !node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) return undefined
+    return { id: opened.id, settled: !opened.chain && node.load !== 'none' && node.load !== 'loading', seq: opened.seq }
+  }
+  /** The tree has shown the opened node's children: it stops following them. */
+  endOpening(): void { if (this.opened && !this.opened.chain) this.opened = undefined }
 
   /** `*`: expands every collapsed sibling; at most 50 of those that need a query are loaded, the rest are skipped. */
   expandSiblings(id: number): { expanded: number; queued: number; skipped: number } {
@@ -1060,6 +1093,29 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   // Loading
 
+  /** Walks an auto-expand on from the node it has reached once that node's children are in. */
+  private advanceOpen(): void {
+    const opened = this.opened
+    if (!opened?.chain) return
+    for (;;) {
+      const node = this.nodes.get(opened.id)
+      if (!node || !node.expanded || !this.attached(node) || this.selected !== opened.selected) { this.opened = undefined; return }
+      // Wait for the first page; a folder with more pages to come has more than one child.
+      if (node.load === 'none' || node.load === 'loading') return
+      const children = node.children ?? [], only = children.length === 1 && !node.cursor ? children[0] : undefined
+      if (!only || node.load === 'error' || !only.hasChildren || only.lost) break
+      opened.id = only.id
+      this.expand(only.id)
+    }
+    // The walk ends here: the node reached is selected if the walk went below the node the user expanded.
+    const end = opened.id
+    this.opened = { ...opened, chain: false }
+    if (end !== opened.start) {
+      this.select(end, { reveal: true })
+      this.opened.selected = end
+    }
+    this.invalidate()
+  }
   private ensureLoading(node: TreeNode, priority: LoadPriority): void {
     if (!node.expanded || this.running.has(node.id)) return
     if (node.load === 'none' || node.load === 'loading') { const state = this.state(node); this.loadFirst(node, state.pendingMode ?? 'keep', priority, !!state.deep) }
@@ -1167,6 +1223,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.enforceBudget()
     this.invalidate()
     this.advanceSeek()
+    if (this.opened?.chain) this.advanceOpen()
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
     const truncated = this.replaceChildren(node, wires)

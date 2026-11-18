@@ -122,6 +122,7 @@ Sections: **Hidden views** (Live views in tabs that are not shown, or in a minim
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | When switching query tabs, bring the server into view if its header is off-screen. Not in SSMS. |
+| `objectExplorer.autoExpandSingleChild` | Auto-expand single children | Boolean | True |  | All | At once | When you expand a node whose only child can expand too, keep expanding down to the first node with more than one child, and select it. Each level loads as it goes; selecting another row stops it. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
 
@@ -340,4 +341,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (117 today).
+A patch holds at most one entry per setting (118 today).
