@@ -128,6 +128,44 @@ h1 { font-size: 16px; margin: 0 0 4px }
   .play .tab.drop .srv .now { animation: none }
 }
 
+.eov { position: absolute; z-index: 3; left: 0; right: 0; top: 44px; bottom: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  background: color-mix(in srgb, var(--accentSurface) 62%, transparent); backdrop-filter: blur(1.5px); animation: eov-in .18s cubic-bezier(.2,.8,.2,1) both }
+@keyframes eov-in { from { opacity: 0 } }
+/* Marching dashed frame, inset from the editor's edges, in the accent. */
+.eov::before { content: ""; position: absolute; inset: 10px; border-radius: 8px; padding: 2px;
+  background: repeating-linear-gradient(135deg, var(--accent) 0 8px, transparent 8px 16px); background-size: 22.6px 22.6px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: ants 1s linear infinite }
+@keyframes ants { to { background-position: 22.6px 0 } }
+.eov .plate { position: relative; width: 360px; text-align: center; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 10px; box-shadow: 0 12px 32px #0008; padding: 18px 20px 14px; animation: plate-in .24s .04s cubic-bezier(.2,.9,.3,1.2) both }
+@keyframes plate-in { from { opacity: 0; transform: translateY(8px) scale(.96) } }
+.eov .plug { position: relative; width: 52px; height: 52px; margin: 0 auto 10px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--raised); border: 1px solid var(--border); color: var(--srvB); font-size: 22px }
+.eov .plug::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--srvB); animation: halo 1.4s ease-out infinite }
+@keyframes halo { from { opacity: .8; transform: scale(1) } to { opacity: 0; transform: scale(1.7) } }
+.eov .t { font-size: 14px; font-weight: 600; color: var(--strong) }
+.eov .move { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 10px 0 6px }
+.eov .note { color: var(--text3); font-size: 12px; line-height: 17px }
+.eov .hint { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sep); color: var(--muted); font-size: 11.5px }
+.eov.refuse { background: color-mix(in srgb, var(--raised) 70%, transparent) }
+.eov.refuse::before { background: repeating-linear-gradient(135deg, var(--muted) 0 8px, transparent 8px 16px); animation: none }
+.eov.refuse .plug { color: var(--muted) }
+.eov.refuse .plug::after { display: none }
+/* Ctrl held: the overlay steps aside for the editor's own text drop (the name at the caret). */
+.eov.insert { background: transparent; backdrop-filter: none; align-items: flex-end; padding-bottom: 18px }
+.eov.insert::before { display: none }
+.eov.insert .plate { width: auto; padding: 6px 12px; border-radius: 6px; font-size: 12px; text-align: left; animation: none }
+.dropcaret { position: absolute; z-index: 4; width: 2px; height: 18px; background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); animation: socket .8s ease-in-out infinite }
+.eov.held, .eov.held .plate { animation: none }
+/* Dropping on the editor: the plate shrinks into the tab, then the tab plays the same swap as a drop on it. */
+.play .eov { animation: eov-out .45s .25s ease-in forwards }
+@keyframes eov-out { to { opacity: 0 } }
+.play .eov .plate { animation: into-tab .5s cubic-bezier(.5,0,.75,0) forwards }
+@keyframes into-tab { to { transform: translate(var(--dx), var(--dy)) scale(.12); opacity: .2 } }
+.play .eov .plug::after { animation: none }
+@media (prefers-reduced-motion: reduce) {
+  .eov, .eov .plate, .play .eov .plate, .eov::before, .eov .plug::after { animation: none }
+  .play .eov { animation: none; display: none }
+}
+
 .notes { max-width: 1100px; margin: 14px 0 0; color: var(--text2); font-size: 12.5px; line-height: 19px }
 .notes h3 { font-size: 13px; margin: 12px 0 4px }
 .notes li { margin: 2px 0 }
@@ -136,7 +174,7 @@ h1 { font-size: 16px; margin: 0 0 4px }
 </head>
 <body>
 <h1>Drag a server onto a query tab</h1>
-<p class="lead">Dragging a server from Object Explorer onto a query tab moves that query to the server, as Query › Change Connection… does.
+<p class="lead">Dragging a server from Object Explorer onto a query tab, or onto its editor, moves that query to the server, as Query › Change Connection… does.
 Pick a scene; <b>Play the drop</b> runs the animation (the reduced-motion setting swaps the server at once instead).</p>
 <div class="pick" role="toolbar" aria-label="Mock controls">
   <button data-theme="dark" aria-pressed="true">Dark</button><button data-theme="light" aria-pressed="false">Light</button>
@@ -149,6 +187,11 @@ Pick a scene; <b>Play the drop</b> runs the animation (the reduced-motion settin
   <button data-scene="same" aria-pressed="false">6 · Same server</button>
   <button data-scene="other" aria-pressed="false">7 · Not a query</button>
   <button data-scene="prod" aria-pressed="false">8 · Production</button>
+  <span class="sep"></span>
+  <button data-scene="editor" aria-pressed="false">9 · Over the editor</button>
+  <button data-scene="editorPlay" aria-pressed="false">10 · Drop on the editor</button>
+  <button data-scene="editorInsert" aria-pressed="false">11 · Ctrl: insert the name</button>
+  <button data-scene="editorRunning" aria-pressed="false">12 · Editor, running</button>
 </div>
 
 <div class="win" id="win">
@@ -193,6 +236,8 @@ Pick a scene; <b>Play the drop</b> runs the animation (the reduced-motion settin
     <li><b>Same server:</b> refused quietly; the card says the query is already there, so the session and its temp tables are kept.</li>
     <li><b>Not a query</b> (Activity Monitor, Table Designer, Properties, Peek, SSIS pages): refused; they keep the server they were opened for.</li>
     <li><b>Production:</b> the card shows the server's environment tag; no extra confirmation (the move itself changes nothing on either server).</li>
+    <li><b>Over the query editor</b> the whole editor becomes the drop target: it tints with the accent behind a marching dashed frame, and a plate in the middle names the move (the server's glyph with a halo in its colour, old → new server, the database). Dropping shrinks the plate into the query's tab, which then plays the same swap as a drop on the tab. Running, same-server, not-a-query and Production cases show on the plate as on the tab card.</li>
+    <li><b>Ctrl held over the editor</b> (⌥ on macOS) steps the overlay aside for a text drop: the server's name goes in at the caret shown, as dragging a table into the editor inserts its name. The plate's last line says so, and pressing or releasing Ctrl mid-drag switches at once.</li>
     <li><b>Disconnected servers</b> cannot be dragged onto tabs (their rows offer Reconnect instead). A server dropped on the tab strip's empty space opens a new query on it.</li>
     <li><b>Keyboard and screen readers:</b> Change Connection… stays the keyboard path; the drop is announced ("Orders report.sql moved to REPORTING-SQL").</li>
   </ul>
@@ -202,6 +247,7 @@ Pick a scene; <b>Play the drop</b> runs the animation (the reduced-motion settin
     <li><b>Empty tab-strip space:</b> should dropping a server there open a new query on it (shown above), or do nothing?</li>
     <li><b>Database rows:</b> should dragging a database onto a query tab move the query to its server <em>and</em> that database?</li>
     <li><b>Production:</b> is the environment tag in the card enough, or should moving a query to a Production server ask first?</li>
+    <li><b>Editor drop default:</b> move the query (Ctrl inserts the name, as shown), or the other way round? Today a server row dragged into the editor inserts its name only when it is the only server.</li>
     <li><b>Animation:</b> keep the full sequence (fly-in, ring, stripe, roll-over, ≈ 0.9 s), or only the stripe and roll-over (≈ 0.5 s)?</li>
   </ol>
 </div>
@@ -237,6 +283,7 @@ function show(scene) {
   win.classList.add('dragging-server')
   document.getElementById('dragRow').classList.add('dragging')
   if (scene === 'drag') { overlay.innerHTML = ghost(250, 150); return }
+  if (scene.startsWith('editor')) { showEditor(scene); return }
   const card = cards[scene === 'play' ? 'hover' : scene], tab = document.getElementById(card.tab), { x, w } = at(card.tab)
   tab.classList.add(card.accept ? 'target' : 'refuse')
   const pointer = card.accept ? `<svg class="cursor" style="left:${x + w / 2 + 10}px;top:18px" viewBox="0 0 14 20"><path d="M1 1v15l4-4 3 7 2-1-3-7h6z" fill="var(--strong)" stroke="var(--canvas)"/></svg>` : `<span class="no-cursor" style="left:${x + w / 2 + 10}px;top:20px"></span>`
@@ -251,6 +298,36 @@ function show(scene) {
   }
   document.getElementById('status').firstElementChild.textContent = '● SALES-SQL01'
   overlay.innerHTML = ghost(x + w / 2 + 30, 36, card.name, card.color) + pointer + `<div class="card" style="left:${Math.max(4, x)}px">${card.html}</div>`
+}
+const plate = (title, body, hint, refuse) => `<div class="plate"><div class="plug">${refuse ? '⊘' : '⏻'}</div><div class="t">${title}</div>${body}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`
+const moveLine = `<div class="move"><span class="chipsrv old"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="arrow">→</span><span class="chipsrv"><i style="background:var(--srvB)"></i>REPORTING-SQL</span></div>`
+function showEditor(scene) {
+  const host = overlay.parentElement.getBoundingClientRect(), tabId = scene === 'editorRunning' ? 't3' : 't1', tab = document.getElementById(tabId), { x, w } = at(tabId)
+  if (scene === 'editorRunning') { document.getElementById('t1').classList.remove('on'); tab.classList.add('on') }
+  const pointer = scene === 'editorRunning' ? `<span class="no-cursor" style="left:520px;top:226px"></span>` : `<svg class="cursor" style="left:520px;top:224px" viewBox="0 0 14 20"><path d="M1 1v15l4-4 3 7 2-1-3-7h6z" fill="var(--strong)" stroke="var(--canvas)"/></svg>`
+  if (scene === 'editorInsert') {
+    overlay.innerHTML = `<div class="eov insert"><div class="plate">Insert <b>[REPORTING-SQL]</b> at the caret · release Ctrl to move the query instead</div></div>`
+      + `<span class="dropcaret" style="left:300px;top:${44 + 10 + 19 * 3}px"></span>` + ghost(530, 220) + pointer
+    return
+  }
+  if (scene === 'editorRunning') {
+    overlay.innerHTML = `<div class="eov refuse">${plate('Nightly load.sql is executing', `<div class="note" style="margin-top:6px">Stop the query (Alt+Break) to move it to another server.</div>`, 'Hold Ctrl to insert the name instead', true)}</div>` + ghost(530, 220) + pointer
+    return
+  }
+  overlay.innerHTML = `<div class="eov${scene === 'editorPlay' ? ' held' : ''}">${plate('Move this query to REPORTING-SQL', moveLine + `<div class="note">Database: <b>master</b> (REPORTING-SQL's default). The query's session on SALES-SQL01 ends.</div>`, 'Hold Ctrl to insert the name instead')}</div>` + ghost(530, 220) + pointer
+  tab.classList.add('target')
+  if (scene === 'editorPlay') {
+    const card = overlay.querySelector('.plate'), box = card.getBoundingClientRect()
+    card.style.setProperty('--dx', `${x + w / 2 - (box.left - host.left + box.width / 2)}px`)
+    card.style.setProperty('--dy', `${22 - (box.top - host.top + box.height / 2)}px`)
+    overlay.querySelectorAll('.ghost, .cursor').forEach(node => node.remove())
+    overlay.insertAdjacentHTML('beforeend', `<span class="ring" style="left:${x + w / 2 - 12}px;top:10px"></span>`)
+    win.classList.remove('dragging-server')
+    document.getElementById('dragRow').classList.remove('dragging')
+    requestAnimationFrame(() => requestAnimationFrame(() => win.classList.add('play')))
+    setTimeout(() => { tab.classList.remove('target'); tab.classList.add('drop') }, 380)
+    setTimeout(() => { overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`); document.getElementById('status').firstElementChild.textContent = '● REPORTING-SQL' }, 1400)
+  }
 }
 document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('[data-scene]').forEach(other => other.setAttribute('aria-pressed', other === button))
