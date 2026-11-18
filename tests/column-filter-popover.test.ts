@@ -536,6 +536,13 @@ describe('column filter popover', () => {
       expect(shown.at(-1)).toBe('Tick all (10,000)')
       view.key(actionsOf(view), 'End')
       expect(shown.at(-1)).toBe('Invert ticks')
+      // A press from elsewhere scrolls nowhere but to the pressed action, so the list never moves under the pointer.
+      act(() => view.valueList().focus())
+      shown.length = 0
+      runAction(view, 'Tick all (10,000)')
+      expect(shown).toEqual(['Tick all (10,000)'])
+      await answerTicks(view)
+      expect(tickCalls(view).at(-1)).toEqual({ checked: true, all: true })
     } finally { Element.prototype.scrollIntoView = own }
     view.unmount()
   })

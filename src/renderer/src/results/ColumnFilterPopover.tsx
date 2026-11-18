@@ -607,7 +607,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
       event.preventDefault()
       if (listRows > 0) setSelection(selectRange(0, listRows - 1))
     } else if (mod) return
-    else if (event.key === 'ArrowLeft') { event.preventDefault(); actionsBox.current?.focus({ preventScroll: true }) }
+    else if (event.key === 'ArrowLeft') { event.preventDefault(); actionsBox.current?.focus({ preventScroll: true }); showAction() }
     else if (event.key === 'Enter') { event.preventDefault(); void apply() }
     else if (typed(event)) { event.preventDefault(); typeIntoSearch(event.key) }
   }
@@ -647,7 +647,8 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     else if (typed(event)) { event.preventDefault(); typeIntoSearch(event.key) }
   }
   /** Scrolls the highlighted action into view while the action list has the focus (it stays on the list, which does not
-   *  scroll for its active descendant): as the arrows move it, and when the focus arrives on it. */
+   *  scroll for its active descendant): as the arrows move it, and when Left brings the focus. Never for a press, which
+   *  would move the list under the pointer and lose the click. */
   const showAction = () => {
     const box = actionsBox.current
     if (!box || box.ownerDocument.activeElement !== box) return
@@ -687,7 +688,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     <div className="column-filter-body">
     {/* Reached with Left from the values (no Tab stop of its own, so Tab still goes from the search to the values). */}
     <div ref={actionsBox} className="column-filter-actionlist" role="listbox" aria-label="Actions" tabIndex={-1} aria-disabled={!acting || undefined}
-      aria-activedescendant={actionList.length ? `${rowId}-act-${actHere}` : undefined} onKeyDown={actionsKeyDown} onFocus={showAction}>
+      aria-activedescendant={actionList.length ? `${rowId}-act-${actHere}` : undefined} onKeyDown={actionsKeyDown}>
       {(() => {
         let at = -1
         return actionGroups.map((group, index) => <div key={group.label ?? 'every'} role="group" aria-label={group.label} className="column-filter-actiongroup">
