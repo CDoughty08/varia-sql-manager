@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (24)
+## Gestures (26)
 
 ### Global
 
@@ -23,6 +23,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Zoom Editor Text | `editor.wheelZoom` | Scroll up to enlarge editor text or down to shrink it for this session. | Fixed | Ctrl+Wheel editor text | Ctrl+Wheel editor text | ⌃ Wheel editor text | Locked: Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work. | — |
 | Peek Definition on Hover | `editor.peekHover` | Peeks the object whose name the pointer rests on (a table, view, procedure, function and so on) in a card beside it. | Modifier | Ctrl+Hover an object name | Ctrl+Hover an object name | ⌘ Hover an object name | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek Definition (`edit.peekDefinition`) |
 | Open Definition in Peek Tab | `editor.goToDefinition` | Opens Peek on the object whose name is clicked (a table, view, procedure, function and so on) in a document tab. | Command | Ctrl+Click an object name | Ctrl+Click an object name | ⌘ Click an object name | Choose: Ctrl / ⌘, Alt / ⌥ | Open Definition in Peek Tab (`edit.openPeekTab`) |
+| Insert Server Name | `explorer.dropServerName` | Holding the modifier while dropping a server or database on a query's editor inserts its name at the caret instead of moving the query. | Modifier | Ctrl+Drag a server or database | Ctrl+Drag a server or database | ⌥ Drag a server or database | Choose: Ctrl / ⌥, Alt / ⇧, Shift / ⌘, Off | Copy Name (`explorer.copyName`) |
 
 ### Results Grid
 
@@ -49,6 +50,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Open Peek as Tab | `explorer.openPeekTab` | Opens Peek on the object (a table, procedure, index, login and so on) in a document tab. | Command | Ctrl+Click an object | Ctrl+Click an object | ⌘ Click an object | Choose: Ctrl / ⌘, Shift / ⇧ | Open Peek as Tab (`explorer.openPeekTab`) |
 | Insert Name | `explorer.dragName` | Dropping an object in a query inserts its quoted name. | Fixed | Drag an object | Drag an object | Drag an object | Locked: Dragging is the only way to drop text; Copy Name does the same from the keyboard. | Copy Name (`explorer.copyName`) |
 | Reorder Servers | `explorer.reorderServer` | Dropping a server above or below another server moves it there; the order is kept for the next start. | Fixed | Drag a server | Drag a server | Drag a server | Locked: Dragging is the pointer's way to reorder; Move Up and Move Down in the server's menu do the same from the keyboard. | Move Up (`explorer.moveServerUp`), Move Down (`explorer.moveServerDown`) |
+| Move Query to Server (also Document Tabs, SQL Query Editor) | `explorer.moveQueryToServer` | Dropping a server or database on a query's tab or editor moves the query there, as Change Connection does; on a tab strip's empty space it opens a new query. | Fixed | Drag a server or database | Drag a server or database | Drag a server or database | Locked: Dragging is the pointer's way to move a query; Change Connection does the same from the keyboard. | — |
 
 ### Panels and Editor Tabs
 

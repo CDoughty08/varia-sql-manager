@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../core/errors'
 import { observeResize, requestFrame } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, explorerServerDragType, maxDropText, serverDragOf } from './drop'
+import { explorerTargetDragType } from '../editor-groups/server-drop'
 import type { Announcement } from './ExplorerService'
 import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
@@ -30,7 +31,7 @@ interface FollowedQuery {
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId, activeQueryId }: { readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
-  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets, peek, gestures } = useWorkbench()
+  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets, peek, gestures, serverDrop } = useWorkbench()
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
@@ -215,22 +216,26 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
-    // carries only its own type, so dropping it anywhere but on another server does nothing.
+    // also carries its own type when there are servers to reorder among, and a connected server or database row carries
+    // the retarget type: dropped on a query's tab or editor it moves the query there (ServerDropService).
     dragStart: (rowId, transfer) => {
-      // A server drag whose dragend never arrived (its row unmounted mid-drag) must not carry over into this one.
+      // A drag whose dragend never arrived (its row unmounted mid-drag) must not carry over into this one.
       dragging.current = undefined
-      if ((explorer.serverPlace(rowId)?.count ?? 0) > 1) {
-        dragging.current = rowId
-        peek.cancelHover()
-        transfer.effectAllowed = 'move'
-        transfer.setData(explorerServerDragType, '')
-        return true
+      serverDrop.end()
+      const node = explorer.menuNode(rowId), target = node && (node.kind === 'server' || node.kind === 'database') ? explorer.queryTarget(rowId) : undefined
+      const connection = target && connections.get(target.connectionId)
+      const reorder = (explorer.serverPlace(rowId)?.count ?? 0) > 1
+      // A server inserts its name (Ctrl over a query's editor), as its databases insert theirs.
+      const text = explorer.insertText(rowId) ?? (node?.kind === 'server' ? connection?.server : undefined), insertable = text !== undefined && text.length <= maxDropText
+      if (!reorder && !connection && !insertable) return false
+      if (reorder) { dragging.current = rowId; transfer.setData(explorerServerDragType, '') }
+      if (connection && target) {
+        transfer.setData(explorerTargetDragType, '')
+        serverDrop.start({ connectionId: connection.id, ...target.database ? { database: target.database } : {}, label: target.database ?? connection.displayName ?? connection.server, server: connection.displayName ?? connection.server })
       }
-      const text = explorer.insertText(rowId)
-      if (text === undefined || text.length > maxDropText) return false
-      transfer.effectAllowed = 'copy'
-      transfer.setData('text/plain', text)
-      transfer.setData(explorerDragType, JSON.stringify({ v: 1, text }))
+      if (reorder || connection) peek.cancelHover()
+      if (insertable) { transfer.setData('text/plain', text); transfer.setData(explorerDragType, JSON.stringify({ v: 1, text })) }
+      transfer.effectAllowed = reorder || connection ? insertable ? 'copyMove' : 'move' : 'copy'
       return true
     },
     // Enter and Escape return focus to the tree; leaving the box for elsewhere does not take it back.
@@ -260,7 +265,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(rowId)
       if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
     },
-    dragEnd: () => { dragging.current = undefined; setDropMark(undefined) },
+    dragEnd: () => { dragging.current = undefined; setDropMark(undefined); serverDrop.end() },
     // The pointer's row stays known while it rests, so pressing Peek on Hover's modifier peeks it without a move.
     peekHover: (rowId, held) => {
       if (held) peek.pointer(() => explorer.menuNode(rowId), gestures.matches('explorer.peekHover', held))
@@ -273,7 +278,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (peek.getSnapshot().open?.source === 'hover') peek.close()
       run('explorer.openPeekTab', rowId)
     }
-  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
+  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark, serverDrop, connections])
   // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -377,7 +382,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
           const recovery = kind === RowKind.Node ? undefined : treeKey(rows, index, 'enter', 1)
           const label = recovery && recoveryLabel(recovery)
           return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
-            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1)}
+            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1 || (node?.kind === 'server' && explorer.queryTarget(rowId) !== undefined))}
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
             status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}

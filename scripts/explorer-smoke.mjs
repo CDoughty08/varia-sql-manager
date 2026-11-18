@@ -10,6 +10,7 @@ import {
   dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
+import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -2086,6 +2087,68 @@ try {
   await setPins(2, 2)
   await sampleScroll(0)
   console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
+
+  // 13d. Dragging a server onto a query moves it there, through Change Connection: onto its tab (a card says what the drop
+  // will do), onto its editor (the overlay's plate), and with Ctrl over the editor the name goes in at the caret instead.
+  // Dropped on a tab strip's empty space, a server opens a new query on it.
+  // A fresh window and profile, so the step starts from six connected servers and their queries alone.
+  {
+    await application.close()
+    application = undefined
+    env.VARIA_TEST_USER_DATA = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
+    await launch()
+    await application.evaluate(installExplorerStub, explorerStubData())
+    for (const server of ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']) await connect(server)
+    const serverOf = () => queryServer(page).evaluate(select => select.selectedOptions[0]?.textContent ?? '')
+    // Synthetic drag events with a real DataTransfer, as step 7's fallback: with the Chromium sandbox on Windows, the
+    // platform's drag loop does not deliver Playwright's pointer moves as dragover.
+    const dragOnto = async (name, to, { ctrl = false, card } = {}) => {
+      const id = await (await explorerRow(page, name)).getAttribute('id')
+      await page.evaluate(({ id, to, ctrl }) => {
+        const row = document.getElementById(id), dataTransfer = new DataTransfer()
+        const at = { clientX: to.x, clientY: to.y, bubbles: true, cancelable: true, ctrlKey: ctrl, dataTransfer }
+        row.dispatchEvent(new DragEvent('dragstart', at))
+        const target = document.elementFromPoint(to.x, to.y)
+        for (const type of ['dragenter', 'dragover']) target.dispatchEvent(new DragEvent(type, at))
+        window.__variaServerDrag = { row, target, at }
+      }, { id, to, ctrl })
+      if (card) await expect(serverDropCard(page)).toContainText(card)
+      await page.evaluate(() => {
+        const { row, target, at } = window.__variaServerDrag
+        target.dispatchEvent(new DragEvent('drop', at))
+        row.dispatchEvent(new DragEvent('dragend', at))
+        delete window.__variaServerDrag
+      })
+      await expect(serverDropCard(page)).toHaveCount(0)
+    }
+    const centre = async locator => { const box = await locator.boundingBox(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 } }
+    // Only the last server's query stays open, so its tab and the strip's empty space are in view.
+    const query = await activeDocumentName(page)
+    await activeDocument(page).click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
+    await expect.poll(serverOf).toContain('pin-f')
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: `Move ${query} to pin-b` })
+    await expect.poll(serverOf).toContain('pin-b')
+    // The same server is refused: nothing changes, and the card says why.
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: 'already on pin-b' })
+    await expect.poll(serverOf).toContain('pin-b')
+    const editorPoint = await centre(page.locator(part.activeEditorGroup).locator(part.editorPane).first())
+    await dragOnto('pin-c', editorPoint, { card: `Move ${query} to pin-c` })
+    await expect.poll(serverOf).toContain('pin-c')
+    const before = await queryEditorText(page)
+    await dragOnto('pin-d', editorPoint, { ctrl: true, card: 'Insert the name' })
+    await expect.poll(() => queryEditorText(page)).toContain('pin-d')
+    expect(await serverOf()).toContain('pin-c')
+    expect(before).not.toContain('pin-d')
+    await page.keyboard.press('Control+Z')
+    const strip = await emptyQueryStripPoint(page.locator(part.activeEditorGroup))
+    expect(strip).not.toBeNull()
+    await dragOnto('pin-e', strip, { card: 'Open a new query on pin-e' })
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
+    await expect.poll(serverOf).toContain('pin-e')
+    console.log('Object Explorer checks: a server dropped on a query tab or its editor moves the query there, the same server is refused, Ctrl inserts the name, and the strip opens a new query.')
+  }
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

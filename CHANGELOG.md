@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Drag a server onto a query:** Drag a server or database from Object Explorer onto a query's tab or editor to move the query there, as Change Connection does; a card shows what the drop will do, Ctrl \(⌥ on macOS\) over the editor inserts the name instead, and a server dropped on a tab strip's empty space opens a new query on it\.
+
 ### Changes to everyday use
 
 - **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
