@@ -75,7 +75,7 @@ system or departed). It is the results grid with live rows: the same header, who
 and funnels on the facet columns ask the backend, which sorts and filters each sample, and the same selection, keys,
 column sizing, Copy (Ctrl+C), Copy with Headers (Ctrl+Shift+C) and Query Output's context menu (Copy, Select All, Save
 Results As, Sort, Filter › Filter Column Values… and Clear Filters, Fit Column, White space). A funnel (or Alt+Down) lists the column's values with their counts from the facets
-and (Blanks), with a search, Select all and Select none; OK filters by the ticked values. The toolbar holds the view chips,
+and (Blanks), with a search and the results grid action list (Tick all, Untick all, the matches, the selected values); OK filters by the ticked values. The toolbar holds the view chips,
 the Show chips (System, Varia's own), the filter box (sent when typing pauses, on Enter or on leaving it; Escape puts
 back what was sent) and Clear filters, which keeps the Show chips. All of them travel as the source's args and the
 backend filters the sample, so the SQL never changes. A status line counts the sessions shown and says what is hidden or
@@ -462,7 +462,7 @@ Filters run in the backend over the sample; the SQL never changes.
 
 Toggles: System sessions (`activityMonitor.showSystemSessions`, off by default), Varia's own (`activityMonitor.showVariaSessions`, off by default). The filter box matches
 case-insensitively against Login, Database, Application, Host Name, Command, Wait Type, Status.
-Header funnels (or Alt+Down in a cell) list each value with its count, and (Blanks), with Select all and Select none, for Login, Database, Application, Host Name, Wait Type, Command, Status.
+Header funnels (or Alt+Down in a cell) list each value with its count, and (Blanks), with the results grid's action list, for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
 Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
 

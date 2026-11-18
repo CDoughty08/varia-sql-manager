@@ -11,7 +11,7 @@ import Skeleton, { maxSkeletonRows } from '../src/renderer/src/kit/Skeleton'
 import StatusPill, { toneIcons } from '../src/renderer/src/kit/StatusPill'
 import Tile, { tileName } from '../src/renderer/src/kit/Tile'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
-import { motion } from '../src/shared/theme/metrics'
+import { motion, reducedMotionRoot } from '../src/shared/theme/metrics'
 import { colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
 import { isStatusTone, statusTones, tileTones, toneKeys } from '../src/shared/theme/tones'
 import { computed, specificity } from './fixtures/css-cascade'
@@ -190,7 +190,7 @@ describe('states kit styles and colors', () => {
   })
   it('pulse only a collecting live dot, and stop it under reduced motion', () => {
     expect(valueOf('.live-pill[data-state="live"] .live-dot', 'animation')).toContain('var(--varia-motion-pulse)')
-    expect(valueOf('.live-pill[data-state="live"] .live-dot', 'animation', ['@media (prefers-reduced-motion: reduce)'])).toBe('none')
+    expect(valueOf(`${reducedMotionRoot} .live-pill[data-state="live"] .live-dot`, 'animation')).toBe('none')
     expect(declarationsOf('.live-dot').some(({ property }) => property.startsWith('animation'))).toBe(false)
     // Only the collecting states keep the plain label color; the rest are muted beside their glyph.
     expect(valueOf('.live-pill:not([data-state="live"], [data-state="slowed"])', 'color')).toBe('var(--varia-live-pausedForeground)')

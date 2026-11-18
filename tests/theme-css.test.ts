@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { colorKeys, colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
-import { densityVariables, metricVariables, reducedMotionVariables } from '../src/shared/theme/metrics'
+import { densityVariables, metricVariables, reducedMotionRoot, reducedMotionVariables } from '../src/shared/theme/metrics'
 import { editorFontFamily, monoFontFamily, uiFontFamily } from '../src/renderer/src/fonts'
 import { stylesheetRules } from './fixtures/css-rules'
 import { liveTones } from '../src/shared/live/catalog'
@@ -57,12 +57,12 @@ describe('theme tokens in the renderer', () => {
   })
   it('defines only the font stacks and the metric tokens of metrics.ts, never a color key', () => {
     // Colors are set at runtime from the registry; the stylesheet defines the fixed font stacks and the metrics on :root,
-    // and reduced motion turns the transitions off there.
+    // and reduced motion (a root class) turns the transitions off there.
     const defined = stylesheetRules().flatMap(({ at, selector, declarations }) => declarations.filter(({ property }) => property.startsWith('--varia-')).map(({ property, value }) => ({ at: at.join(' '), selector, property, value })))
     const root = defined.filter(({ at, selector }) => !at && selector === ':root')
     expect(root.map(({ property }) => property)).toEqual([...fontVariables, ...metricNames])
     expect(Object.fromEntries(root.filter(({ property }) => metricNames.includes(property)).map(({ property, value }) => [property, value]))).toEqual(metrics)
-    const reduced = defined.filter(({ at, selector }) => at === '@media (prefers-reduced-motion: reduce)' && selector === ':root')
+    const reduced = defined.filter(({ at, selector }) => !at && selector === reducedMotionRoot)
     expect(Object.fromEntries(reduced.map(({ property, value }) => [property, value]))).toEqual(reducedMotionVariables())
     // The Comfortable density, once styles.css offers it, overrides exactly the bar and row heights.
     const comfortable = defined.filter(({ at, selector }) => !at && selector === ':root[data-density="comfortable"]')

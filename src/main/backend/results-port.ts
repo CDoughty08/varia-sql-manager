@@ -653,6 +653,10 @@ export class ResultsPortHost {
     if (request.all) params.all = true
     if (request.search !== undefined) params.search = request.search
     if (request.nulls !== undefined) params.nulls = request.nulls
+    if (request.order !== undefined) params.order = request.order
+    if (request.ranges) params.ranges = request.ranges.map(([offset, count]) => [offset, count])
+    if (request.toggle) params.toggle = true
+    if (request.invert) params.invert = true
     this.counted(request.rid, request.generation, request.resultId, () => this.backend.distinctTick(request.generation, params), result => {
       const parsed = distinctTickResultSchema.safeParse(result)
       return parsed.success ? parsed.data : undefined

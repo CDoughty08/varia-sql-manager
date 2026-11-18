@@ -225,9 +225,12 @@ internal sealed record DistinctValue(int Group, int Row, string Text, long Count
 /// <summary>Total counts the values the search kept (every value without one); Values are the window asked, at most Count
 /// of them from Offset; Checked and NullsChecked are the ticks as results.distinct reports them.</summary>
 internal sealed record ResultsDistinctReadResult(long Total, long Offset, DistinctValue[] Values, long Checked, bool NullsChecked);
-/// <summary>results.distinctTick: ticks (Checked) or clears 1 to 512 Groups, or every value (All), only those whose text
-/// contains Search with one; Nulls sets NULL's tick, alone or with either.</summary>
-internal sealed record ResultsDistinctTickArgs(uint ResultId, uint SnapshotId, bool Checked, int[]? Groups = null, bool? All = null, string? Search = null, bool? Nulls = null);
+/// <summary>results.distinctTick: ticks (Checked) or clears values in one mode at most: 1 to 512 Groups; every value (All),
+/// only those whose text contains Search with one; 1 to 512 sorted, disjoint Ranges of [offset, count] in the list Order
+/// reads (searched with Search), which Toggle ticks when any of them, or NULL when Nulls is given, is cleared and else clears;
+/// or Invert, which flips every value. Nulls sets NULL's tick, alone or with a mode.</summary>
+internal sealed record ResultsDistinctTickArgs(uint ResultId, uint SnapshotId, bool Checked, int[]? Groups = null, bool? All = null, string? Search = null, bool? Nulls = null,
+    string? Order = null, long[][]? Ranges = null, bool? Toggle = null, bool? Invert = null);
 internal sealed record ResultsDistinctTickResult(long Checked, bool NullsChecked);
 /// <summary>results.distinctClose: 1 to 64 snapshot ids of one result.</summary>
 internal sealed record ResultsDistinctCloseArgs(uint ResultId, uint[] SnapshotIds);

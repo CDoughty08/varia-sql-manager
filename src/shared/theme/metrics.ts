@@ -51,8 +51,8 @@ export const shadows = {
 /**
  * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
  * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
- * `prefers-reduced-motion: reduce` sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live
- * dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
+ * reduced motion (`reducedMotionClass` on the root) sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners
+ * and the live dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
  * placeholder back (as an animation delay) and is not motion, so reduced motion leaves it alone.
  */
 export const motion = {
@@ -65,6 +65,14 @@ export const motion = {
 export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
 export const reducedMotion = ['fast', 'base'] as const satisfies readonly (keyof typeof motion)[]
+/**
+ * The root class that turns reduced motion on. The renderer sets it only while the user follows the system's preference
+ * (`environment.reduceMotionWithSystem`) and the system asks for reduced motion, so by default every animation plays.
+ * styles.css keys its reduced-motion rules off it, never off the `prefers-reduced-motion` media query.
+ */
+export const reducedMotionClass = 'varia-reduced-motion'
+/** The selector every reduced-motion rule in styles.css starts with. */
+export const reducedMotionRoot = `:root.${reducedMotionClass}`
 
 /**
  * `--varia-glyph-<name>`, in px: icon sizes (src/shared/icons.ts). Icons are drawn on the 16 px grid, md, which is also
@@ -135,7 +143,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   documentTab: ['.query-shelf-more'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],
-  row: ['.explorer-row', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
+  row: ['.explorer-row', '.column-filter-action', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
@@ -179,7 +187,7 @@ export function densityVariables(density: Density): Readonly<Record<string, stri
   return Object.fromEntries(Object.entries(densities[density]).map(([name, value]) => [`--varia-${name}`, px(value)]))
 }
 
-/** What styles.css's `prefers-reduced-motion: reduce` block sets on :root. */
+/** What styles.css's reduced-motion rule (`reducedMotionRoot`) sets on :root. */
 export function reducedMotionVariables(): Readonly<Record<string, string>> {
   return Object.fromEntries(reducedMotion.map(name => [`--varia-motion-${name}`, ms(0)]))
 }
@@ -224,7 +232,7 @@ export function renderMetricDocs(): string {
     '',
     '## Motion',
     '',
-    `One easing curve, \`--varia-motion-ease\` (\`${motionEasing}\`). Under \`prefers-reduced-motion: reduce\`, ${reducedMotion.map(name => `\`--varia-motion-${name}\``).join(' and ')} are 0 ms, and every looping animation stops, Monaco's codicon spinners included.`,
+    `One easing curve, \`--varia-motion-ease\` (\`${motionEasing}\`). With reduced motion on (Tools › Options › Environment › General › Reduce motion when the system asks, off by default, while the system asks for it), ${reducedMotion.map(name => `\`--varia-motion-${name}\``).join(' and ')} are 0 ms, and every looping animation stops, Monaco's codicon spinners included. The renderer marks it with the root class \`${reducedMotionClass}\`; styles.css never reads \`prefers-reduced-motion\` itself.`,
     '',
     'Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.',
     '',

@@ -97,18 +97,58 @@ internal sealed class DistinctSnapshot
         }
     }
 
-    /// <summary>Ticks or clears the groups named, or every value (those matching <paramref name="search"/> with one), and
-    /// NULL when <paramref name="nulls"/> says; INVALID_PARAMS for a group it does not have or once a filter froze it.</summary>
-    public (int Checked, bool NullChecked) Tick(bool check, int[]? groups, bool all, string? search, bool? nulls, CancellationToken token)
+    /// <summary>Ticks or clears the groups named, or every value (those matching <paramref name="search"/> with one), or the
+    /// values at <paramref name="ranges"/> (offset and count) of the list in <paramref name="order"/>, searched with a search,
+    /// and NULL when <paramref name="nulls"/> says. <paramref name="toggle"/> (with ranges) ticks them all when any of them, or
+    /// NULL when <paramref name="nulls"/> is given, is cleared, else clears them all, NULL alike; <paramref name="invert"/>
+    /// flips every value. INVALID_PARAMS for a group or a range it does not have, or once a filter froze it.</summary>
+    public (int Checked, bool NullChecked) Tick(bool check, int[]? groups, bool all, string? search, bool? nulls, CancellationToken token,
+        DistinctOrder order = DistinctOrder.Value, long[][]? ranges = null, bool toggle = false, bool invert = false)
     {
         if (groups is not null && groups.Any(group => group < 0 || group >= reps.Length))
             throw new RequestException("INVALID_PARAMS", "A value to tick is not one of the list's.");
         // A search's matches are found before the ticks' lock is taken.
         var matched = all && search is not null ? Matches(search, token).ByValue : null;
+        int[]? listed = null;
+        var total = reps.Length;
+        if (ranges is not null)
+        {
+            listed = search is null ? (order == DistinctOrder.Count ? byCount : null) : order == DistinctOrder.Count ? Matches(search, token).ByCount : Matches(search, token).ByValue;
+            total = listed?.Length ?? reps.Length;
+            if (ranges.Any(range => range[0] + range[1] > total))
+                throw new RequestException("INVALID_PARAMS", "A range of values to tick is past the list's end.");
+        }
+        int GroupAt(long at) => listed?[at] ?? (int)at;
         lock (gate)
         {
             if (frozen is not null) throw new RequestException("INVALID_PARAMS", "These values already filter the grid. Open the column's filter again to change them.");
-            if (all && search is null)
+            if (invert)
+            {
+                for (var group = 0; group < ticks.Length; group++) ticks[group] = !ticks[group];
+                ticked = reps.Length - ticked;
+            }
+            else if (ranges is not null)
+            {
+                if (toggle)
+                {
+                    check = nulls is not null && !nullTicked;
+                    for (var r = 0; r < ranges.Length && !check; r++)
+                        for (long at = ranges[r][0], end = ranges[r][0] + ranges[r][1]; at < end; at++)
+                            if (!ticks[GroupAt(at)]) { check = true; break; }
+                    if (nulls is not null) nulls = check;
+                }
+                foreach (var range in ranges)
+                {
+                    for (long at = range[0], end = range[0] + range[1]; at < end; at++)
+                    {
+                        var group = GroupAt(at);
+                        if (ticks[group] == check) continue;
+                        ticks[group] = check;
+                        ticked += check ? 1 : -1;
+                    }
+                }
+            }
+            else if (all && search is null)
             {
                 Array.Fill(ticks, check);
                 ticked = check ? reps.Length : 0;

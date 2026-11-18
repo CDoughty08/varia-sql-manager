@@ -577,7 +577,9 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 - **Metrics.** Sizes, radii, shadows and motion are tokens in `src/shared/theme/metrics.ts`, mirrored on `:root` in
   `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (renderer font sizes too), keeps text at
   11 px or more, lets only hover fills fade, and stops every animation under reduced motion (Monaco's codicon spinners
-  included).
+  included). Reduced motion is opt-in (Environment › General › Reduce motion when the system asks): only
+  `services/reduced-motion.ts` reads `prefers-reduced-motion`, and it sets the root class `varia-reduced-motion` that
+  every reduced-motion rule keys off and popouts copy (`tests/reduced-motion.test.ts`).
 - **Icons** live only in `src/shared/icons.ts` (codicons and Varia's SVGs, by id); catalogues name icons by id and the
   renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
   (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs). Fonts are fixed in
