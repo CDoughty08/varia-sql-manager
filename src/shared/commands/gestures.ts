@@ -153,6 +153,18 @@ export const gestureCatalog = {
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'a server', modifiers: [], keyboard: ['explorer.moveServerUp', 'explorer.moveServerDown'],
     locked: 'Dragging is the pointer\'s way to reorder; Move Up and Move Down in the server\'s menu do the same from the keyboard.'
   },
+  'explorer.moveQueryToServer': {
+    title: 'Move Query to Server', description: 'Dropping a server or database on a query\'s tab or editor moves the query there, as Change Connection does; on a tab strip\'s empty space it opens a new query.',
+    // Not listed in the query editor: Insert Server Name's modifier is that drop's variant there, and the Mouse view would call a shared scope a clash.
+    kind: 'fixed', scope: 'objectExplorer', alsoIn: ['documentTabs'], action: 'drag', target: 'a server or database', modifiers: [],
+    locked: 'Dragging is the pointer\'s way to move a query; Change Connection does the same from the keyboard.'
+  },
+  'explorer.dropServerName': {
+    title: 'Insert Server Name', description: 'Holding the modifier while dropping a server or database on a query\'s editor inserts its name at the caret instead of moving the query.',
+    kind: 'modifier', scope: 'queryEditor', action: 'drag', target: 'a server or database', modifiers: ['ctrl'],
+    // macOS: ⌥, its own copy modifier while dragging (Control-drag opens the context menu there).
+    choices: [['ctrl'], ['alt'], ['shift']], darwin: { modifiers: ['alt'], choices: [['alt'], ['shift'], ['meta']] }, keyboard: ['explorer.copyName']
+  },
   'dock.floatWhileDragging': {
     title: 'Float While Dragging', description: 'Holding the modifier while dragging a tab floats it instead of docking it on a guide.',
     kind: 'modifier', scope: 'panels', action: 'drag', target: 'a tab', modifiers: ['ctrl'],

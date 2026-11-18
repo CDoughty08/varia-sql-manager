@@ -3028,3 +3028,36 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row[data-drop="before"] { box-shadow: inset 0 2px 0 var(--varia-focusBorder); }
 .explorer-row[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--varia-focusBorder); }
 .explorer-tree[data-peek-armed] .explorer-row[data-peekable], .explorer-tree[data-peek-armed] .explorer-row[data-peekable] * { cursor: zoom-in; }
+/* A server or database dragged from Object Explorer onto a query (ServerDropLayer.tsx). Query tabs show a dashed socket,
+   other documents dim; the tab under the pointer fills with the drop color, or shows a plain border when it refuses. */
+.editor-groups-root[data-server-drag] .query-tab[data-query]::after { content: ""; position: absolute; left: var(--varia-space-2); right: var(--varia-space-2); bottom: 3px; height: 2px; border-radius: var(--varia-radius-sm); background: repeating-linear-gradient(90deg, var(--varia-focusBorder) 0 6px, transparent 6px 10px); opacity: 0.7; pointer-events: none; }
+.editor-groups-root[data-server-drag] .query-tab:not([data-query]) { opacity: 0.5; }
+.editor-groups .dv-tab[data-server-drop="accept"] .query-tab { background: var(--varia-editorGroup-dropBackground); box-shadow: inset 0 0 0 1px var(--varia-focusBorder); }
+.editor-groups .dv-tab[data-server-drop="accept"] .query-tab::after { opacity: 1; background: var(--varia-focusBorder); }
+.editor-groups .dv-tab[data-server-drop="refuse"] .query-tab { box-shadow: inset 0 0 0 1px var(--varia-editorWidget-border); }
+.server-drop-anchor { position: fixed; z-index: 13000; pointer-events: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) both; }
+.server-drop-insert { translate: -50% 0; }
+.server-drop-card, .server-drop-plate { max-width: 340px; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.server-drop-title { font-weight: 600; }
+.server-drop-move { display: flex; align-items: center; gap: var(--varia-space-1); margin-top: var(--varia-space-1); }
+.server-drop-from { color: var(--varia-descriptionForeground); text-decoration: line-through; }
+.server-drop-note, .server-drop-hint { margin-top: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.server-drop-hint { padding-top: var(--varia-space-1); border-top: 1px solid var(--varia-editorWidget-border); }
+.server-drop-overlay { position: fixed; z-index: 12000; display: grid; place-items: center; pointer-events: none; background: var(--varia-editorGroup-dropBackground); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) both; }
+.server-drop-overlay::before { content: ""; position: absolute; inset: var(--varia-space-2); border: 2px dashed var(--varia-focusBorder); border-radius: var(--varia-radius-lg); }
+.server-drop-overlay[data-refused] { background: transparent; }
+.server-drop-overlay[data-refused]::before { border-color: var(--varia-editorWidget-border); }
+.server-drop-plate { position: relative; width: 340px; padding: var(--varia-space-4); text-align: center; }
+.server-drop-plate .server-drop-move { justify-content: center; }
+.server-drop-plug { display: inline-grid; place-items: center; width: 40px; height: 40px; margin-bottom: var(--varia-space-2); border-radius: var(--varia-radius-pill); border: 1px solid var(--varia-editorWidget-border); color: var(--varia-focusBorder); }
+.server-drop-plate[data-refused] .server-drop-plug { color: var(--varia-descriptionForeground); }
+/* The drop: a chip flies into the tab (ServerDropLayer animates it); once the query has moved, a wash in the server's color
+   passes behind the tab's text while its details cross-fade, and the color rule on the tab's top edge eases out from the
+   center. The tab's --tab-accent is its connection color. */
+.server-drop-chip { position: fixed; z-index: 13001; display: inline-flex; align-items: center; gap: var(--varia-space-1); translate: -50% -50%; padding: 2px var(--varia-space-2); border: 1px solid var(--varia-focusBorder); border-radius: var(--varia-radius-sm); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-weight: 600; white-space: nowrap; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .query-tab::before { content: ""; position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: var(--tab-accent, var(--varia-tab-activeBorderTop)); transform-origin: center; animation: server-drop-stripe calc(var(--varia-motion-base) * 4) var(--varia-motion-base) var(--varia-motion-ease) both; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .query-tab::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--tab-accent, var(--varia-tab-activeBorderTop)) 50%, transparent) no-repeat; background-size: 60% 100%; animation: server-drop-wash calc(var(--varia-motion-base) * 6) var(--varia-motion-ease) both; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .tab-metadata { animation: server-drop-details calc(var(--varia-motion-base) * 4.5) var(--varia-motion-ease) both; }
+@keyframes server-drop-stripe { from { transform: scaleX(0); opacity: 0.4; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes server-drop-wash { 0% { opacity: 0; background-position: -60% 0; } 20%, 70% { opacity: 0.18; } 100% { opacity: 0; background-position: 160% 0; } }
+@keyframes server-drop-details { 0% { opacity: 1; } 35% { opacity: 0; filter: blur(2px); } 100% { opacity: 1; } }

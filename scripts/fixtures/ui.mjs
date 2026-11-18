@@ -386,6 +386,8 @@ export const queryConnection = page => queryBar(page).getByRole('group', { name:
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
 export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
+/** What a server dragged from Object Explorer onto a query will do (the card under a tab, the editor's plate, the insert hint). */
+export const serverDropCard = page => page.getByRole('status', { name: 'Server drop', exact: true })
 export const banner = page => page.locator(part.banner)
 /** The command and file banners: errors are alerts, warnings are statuses. */
 export const errorBanner = page => page.locator(part.banner + '[role="alert"]')

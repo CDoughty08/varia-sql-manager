@@ -39,6 +39,24 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   tree, only keeps it from scrolling there. Restoring a server's expansion, `*` and Refresh never
   auto-expand.
 
+## Moving a query by dragging a server
+
+- Drag a connected server, or one of its databases, from Object Explorer onto a query's tab or onto its editor to move
+  that query there. The drop runs Query › Change Connection…, so its session ends first (an open transaction asks Commit,
+  Roll Back or Cancel, and Cancel leaves the query where it was) and the query opens on the server's default database;
+  a database row then also changes the database. A database on the query's own server only changes the database.
+- While dragging, query tabs show a dashed line underneath and other documents dim. Over a tab, a card says what the drop
+  will do: the old and new server, the database, and the server's environment tag. Over the editor, the whole editor is
+  the target, with the same details in the middle.
+- Holding Ctrl (⌥ on macOS) over the editor inserts the name at the caret instead, as dragging a table does.
+- Refused drops say why on the card: the query is executing (stop it first; it is never stopped for you), it is already
+  on that server, or the document is not a query (Activity Monitor, Table Designer, Properties and the like keep the
+  server they were opened for).
+- Dropped on a tab strip's empty space, the server opens a new query in that editor group.
+- On a drop, a chip with the server's name flies into the tab; once the query has moved, a wash in the server's color
+  passes behind the tab while its details cross-fade, and its top edge takes the server's color. The animation is off
+  only when motion is reduced.
+
 ## Sessions and authentication
 
 - Connect retry settings apply to initial attempts. Once connected, idle-session recovery is off so a lost session cannot

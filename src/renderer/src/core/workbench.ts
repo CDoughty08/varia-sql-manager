@@ -49,6 +49,7 @@ import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { EditorGroupService } from '../services/editor-groups'
 import { ExplorerService } from '../explorer/ExplorerService'
+import { ServerDropService } from '../editor-groups/server-drop'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
@@ -199,6 +200,8 @@ export interface Workbench extends Disposable {
   readonly inputMode: InputModeService
   /** Rename Tab's inline edit in the document strip. */
   readonly tabRename: TabRenameService
+  /** A server or database dragged from Object Explorer onto a query's tab or editor (docs/connections-explorer.md). */
+  readonly serverDrop: ServerDropService
   /** The query editor's editor groups (docs/editor-groups.md). */
   readonly editorGroups: EditorGroupService
   readonly panes: PaneService
@@ -386,6 +389,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const serverDrop = new ServerDropService({ documents, queries, targets, connections })
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
@@ -614,6 +618,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editorStatus,
     inputMode,
     tabRename,
+    serverDrop,
     editorGroups,
     panes,
     explorer,
