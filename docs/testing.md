@@ -13,6 +13,8 @@ rules.
   shard. The fixture launches the hidden smoke window with `--disable-frame-rate-limit` (Chromium otherwise draws it at
   one frame a second, and every Playwright press waits for frames). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
   of each launch there; it holds the environment, so never upload one from a run with secrets.
+- `npm run test:smoke:wsl -- <suite>...` runs smoke suites on Linux from a Windows checkout, through WSL (below). Run
+  it for a change that can behave differently on Linux (window state, menus, clipboard, file paths) before pushing.
 - `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3`
   runs one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`); `-- --live-suite <Name>` runs one live
   suite (names in `LiveGroups.Suites`). `backend-sidecar.test.ts` and `*-live.test.ts` start the
@@ -67,6 +69,35 @@ benchmarks only when a change can move them. CI runs everything on every PR.
 - CI (`CI=true`) skips the lock; `VARIA_LOCK=off` skips it locally. A process started under a holder (`VARIA_LOCK_HELD`,
   set by the holder) never waits, so the check's own vitest cannot wait on it.
 - `node scripts/machine-lock.mjs shared|exclusive <executable> [args...]` runs any other command under the lock.
+- `npm run test:smoke:wsl` takes the Windows lock for its WSL work (shared for the build, exclusive for the suites) and
+  tells the Linux side it holds it, since WSL's `/tmp` lock does not span the Windows sessions.
+
+## Linux smoke through WSL
+
+`scripts/smoke-wsl.mjs` (Linux half: `scripts/smoke-wsl.sh`) runs smoke suites under `xvfb-run` in WSL2, so a Linux-only
+failure turns up before a push instead of in CI's `smoke-linux` jobs.
+
+```bash
+npm run test:smoke:wsl -- --setup
+npm run test:smoke:wsl -- options menus
+npm run test:smoke:wsl -- --all
+```
+
+- `--setup`, once per machine: installs Node 24 and the .NET SDK pinned by `global.json` under `~/.varia-wsl` inside WSL
+  (Node's checksum is verified). It names any missing apt packages (`xvfb`, `libgssapi-krb5-2`), which need `sudo apt-get
+  install` by hand.
+- Each run snapshots HEAD plus uncommitted and untracked, unignored files as an unreferenced commit (through a temporary
+  index; the worktree, index and stash are untouched; `--committed` takes HEAD alone), fetches it into one clone on the
+  Linux filesystem (`~/.varia-wsl/clone`, never `/mnt/c`), runs `npm ci` only when `package-lock.json` changed, then
+  `npm run build:smoke`, then each suite, all of them even after one fails. It exits non-zero if any failed.
+- Suites are named as `options`, `options-smoke` or `scripts/options-smoke.mjs`. `--no-build` reruns the suites on the
+  last build; `--distro <name>` (or `VARIA_WSL_DISTRO`) picks a distro other than WSL's default.
+- Every worktree shares the clone, so runs queue on a lock of their own (`wsl-clone` in the lock directory) before taking
+  the machine lock.
+- `VARIA_TEST_*` and `VARIA_SMOKE_*` variables pass into WSL by name through `WSLENV`; their values are never printed.
+  Under WSL2's default NAT networking `localhost` is the Linux VM, so point `VARIA_TEST_SQL_SERVER` at the Windows
+  host's address, or enable mirrored networking, for the suites that need SQL Server.
+- `VARIA_WSL_HOME` and `VARIA_WSL_CLONE` move the toolchain and the clone.
 
 ## Environment
 
@@ -127,7 +158,10 @@ benchmarks only when a change can move them. CI runs everything on every PR.
   (with `VARIA_PACKAGED_PROFILE`) and `VARIA_PORTABLE_EXECUTABLE`. Only in unpackaged smoke runs main also honours:
   - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
-    prompts stay; docs/hot-exit.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
+    prompts stay; docs/hot-exit.md), `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (the fixture's default unless a launch passes
+    `motion: true`: the renderer reduces motion whenever the emulated `prefers-reduced-motion` asks, without the
+    Reduce motion when the system asks setting), `VARIA_TEST_WINDOW_STATE=1` (the main window keeps its place between
+    launches, and main sets `globalThis.__variaWindowPlacement`; docs/popout-windows.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
     cipher);
   - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
     holdNextRenderer and releaseHolders);
@@ -135,7 +169,8 @@ benchmarks only when a change can move them. CI runs everything on every PR.
     AutoRecover's copies at once), `window.__variaLive` (opens views on the synthetic live source, stands in for a hidden
     window, mounts a `LiveGridPane` with `mountGrid`, `grid`, `sortGrid`, `saveGrid`, `unmountGrid`) and
     `window.__variaTestShellFault()` (the workbench's next render throws), `window.__variaTestExplorerFault()`,
-    `window.__variaServerFiles`, `window.__variaRestore` and `window.__variaFailures`;
+    `window.__variaServerFiles`, `window.__variaRestore`, `window.__variaFailures` and `window.__variaMotion.refresh()`
+    (re-reads the reduced-motion preference; the fixture calls it after each `emulateMedia`);
   - and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`.
 - **Smoke fixture.** Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on
   Windows (its runners can take seconds to write a file), and closing the app logs main's file operations of 500 ms or

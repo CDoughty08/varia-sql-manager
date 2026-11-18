@@ -14,10 +14,11 @@ only when a summary line stops being true.
   origin reaches every local file. Packaged builds set the fuses in `build/fuses.cjs` (flipped in afterPack, read back by
   `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
   checked.
-  The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
-  `about:blank` child named `varia-popout-<uuid>`, exact bounds on a display, no preload, sandboxed, isolated, no popups
-  or navigation of its own, closed with the page. Its content is the page's DOM through React portals, so it sends no
-  IPC, and `trusted()` still accepts only the main window's main frame.
+  The only windows the page may open are popouts and dialog windows (`src/main/popout-windows.ts`, docs/popout-windows.md):
+  same-origin `about:blank` children named `varia-popout-<uuid>` or `varia-dialog-<kind>-<uuid>` (Options, About), exact
+  bounds on a display, no preload, sandboxed, isolated, no popups or navigation of its own, closed with the page. Their
+  content is the page's DOM through React portals, so they send no IPC, and `trusted()` still accepts only the main
+  window's main frame.
 - **Backend methods.** Add one in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema in
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
@@ -29,7 +30,9 @@ only when a summary line stops being true.
     `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
-    for a matching binding. Remember password is disabled where safeStorage is unavailable, Linux's backend is
+    for a matching binding. Save remembers a typed password only when a `connections.databases` check with `remember`
+    just signed in with it: main keeps a keyed hash of that password per binding for a minute (never the password), and
+    Save without a match saves nothing. Remember password is disabled where safeStorage is unavailable, Linux's backend is
     `basic_text`/`unknown`, or its keyring is unreachable: only tags `v11`/`v12` count (`v10` is Electron's fallback key; the tags are not yet confirmed on a Linux desktop).
   - Entra tokens stay in backend memory for its lifetime (MSAL and Azure.Identity through Varia's
     `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main
@@ -54,7 +57,7 @@ only when a summary line stops being true.
   64 MiB.
 - **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - **Preferences files** (`settings.json`, `appearance.json`, `connections.json`, `workspace-layouts.json`,
-  `saved-passwords.json` (0600), `shortcuts.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+  `saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
   quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
   `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
 
@@ -151,11 +154,18 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `QUOTENAME(@db)`; default schema, then dbo, then sys; server-level objects in the login's default database) within
     10 s. Not found or unavailable is `null` (a status-bar notice, never an error banner); an unreachable server or login
     is an error. A newer F12 supersedes one waiting; a query with no connection says so.
-  - F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
-    `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions; each editor drops
-    Monaco's Ctrl+hover link (`create-editor.ts`), which would query the backend for every word. F12 scripts CREATE to a
-    new query through Script As, Alt+F12 opens a Peek tab; both run on `editorTextFocus || peekEditorFocus` with no
-    query-tab precondition.
+  - F12, Alt+F12, Ctrl+hover and Ctrl+click are Varia's (`edit.goToDefinition`, `edit.peekDefinition`, gestures
+    `editor.peekHover` and `editor.goToDefinition`, through `EditorPeekService`); `KeybindingService` takes the keys before
+    Monaco's gotoSymbol actions, and each editor drops Monaco's Ctrl+hover link (`create-editor.ts`), which would query the
+    backend for every word crossed. F12 scripts CREATE to a new query through Script As; Alt+F12 and Ctrl+hover open
+    Object Explorer's Peek card (`PeekService.peekAt`, one card for both, drawn beside its `PeekAnchor` by the workbench's
+    `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
+    timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
+    `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+- **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
+  `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
+  change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
+  `textOpLimits.characters`, and are tested in `tests/sql-transforms.test.ts`.
 - **Peek's language service** serves query documents and Peek's read-only definition models (`peekModelContext`:
   connection, database and the model's UUID as document id), nothing else. A Peek model gets hover and Go To Definition
   only, never completion or diagnostics, from its first request; its `onWillDispose` ends it as closing a query does
@@ -199,8 +209,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   Options limit changes, as each generation becomes ready and after each successful settings read,
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
-  its working memory before it builds (search reserves only its rooms for a packed result, or what unpacking takes
-  through a sorted view); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
+  of one the view's inverse, 4 bytes a row of the result); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
@@ -267,7 +277,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   wait for credit. Copy and Save lease, so a release never cuts them short. Nothing else touches `StoredPage.Stored`
   (`tests/result-page-access.test.ts`), and the .NET checks refuse reads of an unpinned, unleased set
   (`ResultSetBuffer.RequirePins`).
-- **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`).
+- **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`),
+  over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
   - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2
@@ -275,14 +286,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
   - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). A shown result with an open view stays raw; one packed before its view, or shown
-    again with one, is unpacked on the workers' gate when the budget has room for it twice over and no query waits
-    (`UnpackViewed`, woken by `AddView`; counted in `ViewUnpacks`, not as a use, lengthening a hidden viewed result's
-    delay), and closing its last view wakes the policy. An open distinct snapshot does not prevent packing.
+    saving under a tenth stays raw). An open view (a sorted or filtered grid) does not prevent packing, nor does an open
+    distinct snapshot: their sorts and screens read the packed pages, and a view never unpacks a result whole
+    (`node.packedSort.budgetGrowthMb`, `node.viewTile.packedP99Ms`).
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
     allocates only at normal priority, so a starved packer never holds a lock a read or query waits on. It wakes only on
     a deadline, a completed result of 1 MiB or more, a visibility change, the end of a pin or lease that stopped it or
-    of an operation that unpacked it, or a view's close (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
+    of an operation that unpacked it (signalled through `ResultStore.Settled`), never on a poll, and stops between pages when the result is shown (stage 1), touched (stage 2),
     held, released or the service disposed.
   - Charges: a packed page costs its packed length plus `PageOverhead` plus its sidecar; the saving returns to the budgets
     at once and counts toward `CollectNow`'s next collection, never a compacting one.
@@ -291,7 +301,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `SqlService.WaitAndCommitAsync`; bounded by `RoomWaitMs`, `SqlService.MaxRoomWaits` and `MaxRoomWaitMs`; rows committed before the waiting row
     are sealed only once it ends) while the
     policy packs at normal priority on the workers' gate the complete, unheld results of 1 MiB or more that could make
-    room, never one the user is working with (a shown result with an open view, or one an operation unpacked and still uses)
+    room, never one an operation unpacked and still uses
     (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
     With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
@@ -310,7 +320,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     eighth) unpack ahead in two batches of rooms. A diff keeps `ResultDiffer.LeftSlots`/`RightSlots` and past
     `UnpacksPerPage` (counted by `ResultDiffer.Local`) unpacks the first result in place (`TryUnpackAll`). A distinct
     snapshot keeps pages, not bytes (`KeptPages`), reading in row order through one `ReadRoom`. A search through a far
-    (sorted) view (`ResultSearcher.Local`) unpacks in place first (`SqlService.Unpack`: `UnpackNeed`, then `UnpackAll`).
+    (sorted) view (`ResultSearcher.Local`) reads in page order instead, each row placed at its view position through the
+    view's inverse, and keeps per run only the rows the answer may take (`ResultSearcher.ByPages`); it never unpacks.
   - A transposed Copy or Save holds the pages its rows lie on (`BodiesTogether`, `TOO_LARGE` when refused); a plain one
     reads through one `ReadRoom` (refused, through the accessor and cache).
   - The Memory panel's state is `partial` while some pages are packed and no whole pass has ended since the last unpack
@@ -526,10 +537,14 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
   the role, custom menus and the palette run it through `varia:run-role`. Varia's two-part chords are `bridge`
-  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. User shortcuts reach the
+  keybindings, registered with Monaco by `registerEditorBridge`, which Monaco dispatches. The one other Monaco rule is
+  Escape closing Peek's card (`registerPeekCardEscape`), while a query editor's `variaPeekCard` key is set (never in Peek's
+  own editor); an added rule outranks Monaco's defaults, so its clause steps aside for each Monaco widget that takes Escape
+  (`monacoEscapeContextKeys`, pinned by `tests/monaco-keybindings.test.ts`). User shortcuts reach the
   renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which hands `effectiveRules`
   to `KeybindingService.setRules` and the file's gestures to `GestureService.setModifiers`; the Shortcuts page records
-  keys only through `KeybindingService.capture`. Monaco's defaults (the modules `start.tsx` imports, all platforms) are
+  keys only through `KeybindingService.capture`. Peek's Ctrl state, and the column profile's (`ProfilePeekService`), comes from
+  `KeybindingService`'s `keyDown`, `keyUp` and `blur` hooks (`PeekService.keyDown`), never a listener of its own; its cursor is CSS (`data-peek-armed`). Monaco's defaults (the modules `start.tsx` imports, all platforms) are
   generated into `src/shared/commands/monaco-keys.generated.ts` by `tests/fixtures/monaco-runtime.ts`.
 - **Output yield.** While the active document is not a query, `OutputYield` (`src/renderer/src/output-yield.ts`) hides
   the grid group of output panels directly below the query editor, across its width and at the bottom of the dock (so Dockview gives its
@@ -562,7 +577,9 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 - **Metrics.** Sizes, radii, shadows and motion are tokens in `src/shared/theme/metrics.ts`, mirrored on `:root` in
   `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (renderer font sizes too), keeps text at
   11 px or more, lets only hover fills fade, and stops every animation under reduced motion (Monaco's codicon spinners
-  included).
+  included). Reduced motion is opt-in (Environment › General › Reduce motion when the system asks): only
+  `services/reduced-motion.ts` reads `prefers-reduced-motion`, and it sets the root class `varia-reduced-motion` that
+  every reduced-motion rule keys off and popouts copy (`tests/reduced-motion.test.ts`).
 - **Icons** live only in `src/shared/icons.ts` (codicons and Varia's SVGs, by id); catalogues name icons by id and the
   renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
   (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs). Fonts are fixed in

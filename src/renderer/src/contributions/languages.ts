@@ -3,24 +3,21 @@ import type { Workbench } from '../core/workbench'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
 import { triggerEditorAction } from '../editor/actions'
-import { definitionNode, definitionMessages, definitionLabel } from '../languages/definition'
-import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
-import { displayText } from '../../../shared/explorer/refs.ts'
+import { definitionMessages } from '../languages/definition'
+import { registerPeekCardEscape, type DefinitionMode } from '../languages/EditorPeekService'
 
 type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections'> & {
-  readonly sqlLanguage: Pick<Workbench['sqlLanguage'], 'refreshCache'> & Partial<Pick<Workbench['sqlLanguage'], 'definition'>>
-  readonly monaco?: { readonly editor: Pick<typeof Monaco.editor, 'getEditors'> }
-  readonly scripting?: Pick<Workbench['scripting'], 'run' | 'inform'>
-  readonly peekTabs?: Pick<Workbench['peekTabs'], 'open'>
+  readonly sqlLanguage: Pick<Workbench['sqlLanguage'], 'refreshCache'>
+  readonly monaco?: { readonly editor: Pick<typeof Monaco.editor, 'getEditors'> & Partial<Pick<typeof Monaco.editor, 'registerCommand' | 'addKeybindingRules'>> }
+  readonly editorPeek?: Pick<Workbench['editorPeek'], 'run' | 'closeCard'>
 }
 
 /**
- * Refresh metadata for the chosen query while keeping its execution session and unsaved SQL; Go To Definition (F12) and Peek
- * Definition (Alt+F12) for the SQL editor that has focus: a query tab's, or Peek's read-only one. F12 scripts the object as
- * CREATE to a new query (Script As, as SSMS does), Alt+F12 opens it in a Peek tab. A name that resolves to nothing, or a
- * lookup that fails, is a quiet status-bar notice, never an error banner.
+ * Refresh metadata for the chosen query while keeping its execution session and unsaved SQL; Go To Definition (F12), Peek
+ * Definition (Alt+F12) and Open Definition in Peek Tab for the SQL editor that has focus: a query tab's, or Peek's read-only
+ * one (`EditorPeekService` has the rules). Escape in a query editor closes Peek's card, or drops its own Alt+F12 lookup.
  */
-export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, scripting, peekTabs }: LanguageWorkbench): Disposable {
+export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
   const refresh = commands.register('edit.refreshIntelliSense', {
     when: args => { const document = target(args?.tabId); return isQueryDocument(document) && !!document?.connectionId && connections.isLive(document.connectionId) },
@@ -34,30 +31,17 @@ export function languagesContribution({ commands, documents, connections, sqlLan
   const focused = () => {
     const editor = monaco?.editor.getEditors?.().find(editor => editor.hasWidgetFocus())
     const model = editor?.getModel(), position = editor?.getPosition()
-    return editor && model && position && model.getLanguageId() === 'sql' ? { model, position } : undefined
+    return editor && model && position && model.getLanguageId() === 'sql' ? { editor, model, position } : undefined
   }
-  const definition = async (mode: 'script' | 'peek') => {
-    const at = focused()
-    if (!at || !sqlLanguage.definition || !scripting) return
-    const word = at.model.getWordAtPosition(at.position)?.word
-    let found
-    try { found = await sqlLanguage.definition(at.model, at.position) }
-    catch (error) { scripting.inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return }
-    if (found === undefined) return
-    if (found === null || !connections.isLive(found.connectionId)) { scripting.inform(definitionMessages.notFound(word === undefined ? undefined : displayText(word))); return }
-    const node = definitionNode(found)
-    if (mode === 'peek') {
-      if (!peekTabs?.open(node)) scripting.inform(definitionMessages.notPeekable(definitionLabel(found)))
-      return
-    }
-    if (scriptMenuState({ kind: node.kind, ...node.subtype ? { subtype: node.subtype } : {} }).verbs.create !== 'enabled') {
-      scripting.inform(definitionMessages.notScriptable(definitionLabel(found)))
-      return
-    }
-    try { await scripting.run('create', 'newQuery', node) }
-    catch (error) { scripting.inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)) }
+  const definition = (mode: DefinitionMode) => async () => { const place = focused(); if (place && editorPeek) await editorPeek.run(mode, place) }
+  const registrations = [
+    commands.register('edit.goToDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: definition('script') }),
+    commands.register('edit.peekDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: definition('card') }),
+    commands.register('edit.openPeekTab', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: definition('tab') })
+  ]
+  const editorApi = monaco?.editor
+  if (editorPeek && editorApi?.registerCommand && editorApi.addKeybindingRules) {
+    registrations.push(registerPeekCardEscape({ editor: { registerCommand: editorApi.registerCommand, addKeybindingRules: editorApi.addKeybindingRules, getEditors: editorApi.getEditors } }, editorPeek))
   }
-  const goTo = commands.register('edit.goToDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: () => definition('script') })
-  const peek = commands.register('edit.peekDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: () => definition('peek') })
-  return { dispose: () => { refresh.dispose(); next.dispose(); previous.dispose(); goTo.dispose(); peek.dispose() } }
+  return { dispose: () => { refresh.dispose(); next.dispose(); previous.dispose(); for (const registration of registrations) registration.dispose() } }
 }

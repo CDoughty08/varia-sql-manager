@@ -9,10 +9,12 @@ interface SettingBase {
   readonly key: string
   /** The page id (`settingPages`) whose rows show it. */
   readonly page: string
-  /** A category label inside the page. */
+  /** The page section it shows in: one of its page's `sections` labels, or a free category on a page without them. */
   readonly group?: string
   /** SSMS's wording. */
   readonly label: string
+  /** The full name where the label leans on its section ("Show outline" under Execution plan): salvage warnings and help guides use it. */
+  readonly title?: string
   /** For the description pane and docs/settings.md. */
   readonly description: string
   /** Extra search terms. */
@@ -31,6 +33,8 @@ interface SettingBase {
   readonly hidden?: true
   /** The default is 'immediately'. */
   readonly applies?: SettingApplies
+  /** A short note after the control, such as '0 = no limit'; after the unit when there is one. */
+  readonly hint?: string
 }
 export interface BooleanSettingDef extends SettingBase {
   readonly type: 'boolean'
@@ -52,6 +56,13 @@ export interface EnumSettingDef extends SettingBase {
 }
 export type SettingDef = BooleanSettingDef | IntegerSettingDef | EnumSettingDef
 
+/** A heading inside an Options page that groups its rows; the page's `sections` give their order. */
+export interface SettingSection {
+  readonly label: string
+  /** One line under the heading. */
+  readonly description?: string
+}
+
 /**
  * A node of the Options tree. One without a layout is a category: selecting it shows its first child page. A page with
  * a provider shows the provider's rows first, then its catalogue settings.
@@ -64,4 +75,9 @@ export interface SettingPage {
   readonly provider?: 'theme'
   /** Shown in the description pane while no row is focused, and in docs/settings.md. */
   readonly description?: string
+  /**
+   * The page's sections in order. When given, every setting on the page names one as its `group`, and each has at least
+   * one setting (tests/settings-catalog.test.ts). Pages of one or two settings leave them out and show a plain list.
+   */
+  readonly sections?: readonly SettingSection[]
 }

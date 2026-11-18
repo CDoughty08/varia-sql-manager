@@ -559,7 +559,7 @@ try {
   await selectToken.click({ button: 'right', force: true })
   const editorMenu = menu('Query editor')
   await expect(editorMenu).toBeVisible()
-  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Go To Definition', 'Peek Definition', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
+  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Go To Definition', 'Peek Definition', 'Open Definition in Peek Tab', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', 'Cut', 'Copy', 'Paste', 'Toggle Brackets', 'Move Commas to Front', 'Move Commas to End', 'Command Palette…'])
   // The query is not connected: Execute connects it first; nothing is running to cancel.
   await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Cancel Executing Query', exact: true })).toHaveAttribute('aria-disabled', 'true')
@@ -860,7 +860,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await openExplorerRowMenu('server-a')
-  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Refresh'])
+  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Move Up', 'Move Down', 'Refresh'])
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
@@ -1340,7 +1340,7 @@ try {
   // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
   await (await explorerRow(page, 'server-a')).click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(4)
-  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', '---', 'Copy Name', '---', 'Refresh'])
+  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', '---', 'Copy Name', '---', 'Move Up', 'Move Down', '---', 'Refresh'])
   const queriesBefore = await tabs().count()
   await application.evaluate(() => { globalThis.variaPopups[2].menu.getMenuItemById('explorer.copyName').click() })
   await pick('explorer.newQuery')

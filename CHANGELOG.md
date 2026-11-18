@@ -2,9 +2,63 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **The column profile follows your selection:** The cards of the columns selected in the grid are highlighted, the active column's card scrolls into view as you move, and clicking a card selects its column in the grid. **Selected Columns Only**, on the panel's filter button or the results ⋯ menu, lists just the selected columns, and holding Ctrl (Cmd on macOS) over the panel peeks at them, or at every column while Selected Columns Only is on, until you let go.
+- **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
+- **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\. Unchecking Remember password and saving forgets the saved password, as Connect does\.
+- **Column filters beside their column:** The list a header's funnel or Alt\+Down opens now sits to the column's right, or its left when there is no room, instead of over the values it filters\. Drag its corner to resize it; the size is remembered and can be set in Options › Query Results › SQL Server › Results to Grid\.
+- **Clear all filters from the keyboard:** Ctrl\+Shift\+L \(⇧⌘L on macOS\) in a results grid takes every filter off, as Filter › Clear Filters does\.
+- **Column filter actions and selection:** Select all and Select none are now a list of actions beside the values that changes with a search \(Tick the matches, Tick only the matches, Untick the matches\) or a selection, and each says how many values it touches, so a search no longer makes Select none untick only the matches\. Select values apart from their ticks with Ctrl\+click, Shift\+click, Shift with the arrows or Ctrl\+A; Space ticks the selection, and Left and Right move between the actions and the values, so the filter works from the keyboard alone\.
+- **Drag a server onto a query:** Drag a server or database from Object Explorer onto a query's tab or editor to move the query there, as Change Connection does; a card shows what the drop will do, Ctrl \(⌥ on macOS\) over the editor inserts the name instead, and a server dropped on a tab strip's empty space opens a new query on it\.
+
 ### Changes to everyday use
 
+- **The window reopens where you left it:** Varia's main window opens at the position and size it was closed at, maximized if it was. If that place is no longer on a screen (a monitor was disconnected, or a display's resolution, scale or arrangement changed), it opens on the nearest display instead, fitted to it; a window closed minimized or in full screen reopens as a normal (or maximized) window. On Linux under Wayland only the size and maximized state come back.
+- **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
+- **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child; it never opens a System folder. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
+- **Ctrl+F in Object Explorer:** With focus in Object Explorer, Ctrl+F (Cmd+F on macOS) jumps to its search box, as Ctrl+Shift+F does. In the query editor Ctrl+F is still Find.
+- **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
+- **More rows fit in result memory:** Compressed results take less memory, so more of them fit before Varia has to make room: a fifth less for a typical query, over a third less for results of numbers and dates. Reading them is as fast as before.
+- **Animations play unless you ask Varia to follow the system:** Menus, dialogs, hover fills, spinners and the live dot now animate even when the operating system asks for reduced motion. To have Varia follow that preference again, turn on Tools › Options › Environment › General › Reduce motion when the system asks; popouts and dialog windows follow it too.
+- **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a column with a linguistic (not binary) collation about three times faster, finding exactly what they found before.
+
+### Fixes
+
+- **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
+- **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
+- **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.
+- **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
+- **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
+- **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, instead of cancelling the move. The drop line always shows where the server lands: below the tree's last row, and above an expanded server rather than under its name, and it no longer lingers over loading and error rows.
+
+## [0.9.1] - 2026-11-16
+
+A clearer Tools › Options in a window of its own, servers you can arrange that reopen as you left them, IntelliSense that ranks exact matches first, quicker Peek and new editor commands, and keyboard and multi\-column filtering in the results\.
+
+### New and improved
+
+- **A clearer Tools › Options:** Every page lines its labels, fields and lists up in columns, and longer pages group their settings under headings, such as Results to Grid's Grid display, Copy and save, Limits and memory, and Execution plan\. Units and hints such as "0 = no limit" sit beside the field, and searching a heading's name finds its settings\.
+- **Options and About in their own windows:** Tools › Options and Help › About open in themed windows of their own that you can move anywhere, even to another monitor\. Options can be resized, opens at the size you last left it, and lets you keep working in the main window while it is open\.
+- **Arrange your servers:** Drag servers in Object Explorer to reorder them, or use Move Up and Move Down \(Alt\+Up and Alt\+Down\)\. The order is kept across restarts\.
+- **Object Explorer opens as you left it:** Servers that reconnect at startup expand only the nodes you had open when you closed Varia, instead of every server expanding\.
+- **Quicker Peek:** Holding Ctrl \(Cmd on macOS\) over Object Explorer shows a zoom cursor on rows you can peek, and pressing it with the pointer already resting on a row peeks it without moving the mouse\. Releasing it keeps the card open so you can move into it\.
+- **Toggle Brackets:** Ctrl\+\[ \(Cmd\+\[ on macOS\), the editor's context menu or Edit › Advanced brackets every name in the selection or the whole query, or takes the brackets off again where they are not needed\. Strings, comments, variables and keywords are never touched\.
+- **Commas to front or end:** Move Commas to Front and Move Commas to End restyle SELECT lists, GROUP BY, ORDER BY, INSERT column lists, VALUES and parameter lists in the selection or the current statement, keeping trailing comments in place\.
+- **Filter for Selected Values across columns:** Select cells in several columns, side by side or with Ctrl\+click, and Filter for Selected Values \(and Exclude Selected Values or Filter Between Lowest and Highest Selected\) adds one filter per column from the cells selected in it, and a row must pass every column's filter\.
+- **A keyboard\-driven column filter list:** In the list Alt\+Down opens, Down moves from the search into the values, the arrow keys, Page Up, Page Down, Home and End move through them, Space ticks or unticks one and Enter filters\. Screen readers hear it as a list of checkable options\.
+
+### Changes to everyday use
+
+- **Peek from the query editor:** Hold Ctrl \(Cmd on macOS\) and rest the pointer on a table or other object name to Peek it in a card beside the name, as in Object Explorer\. Alt\+F12 opens the same card at the caret, and Ctrl\+click now opens a Peek tab instead of scripting the object; F12 still scripts it as CREATE\.
 - **Room for documents that are not queries:** Activity Monitor, Properties, Table Designer, the SSIS pages and values opened from the results now fill the document area instead of sharing it with an empty Results pane\. The Results pane comes back at its size when you switch to a query; panels you moved, floated or popped out stay where they are\.
+
+### Fixes
+
+- **Connection labels update at once:** Changing a saved connection's name, color, environment or startup reconnect in Connect now updates its Object Explorer connection, query tabs and status bar straight away, without disconnecting and connecting again\. Connect no longer asks whether to use labels you just changed, and changes only those\.
+- **No more lost connection edits:** Save moves to Connect's footer beside Connect and Cancel\. Closing Connect with unsaved changes to a saved connection asks whether to save them\.
+- **Sorting a compressed result keeps it compressed:** Sorting or filtering a result that was compressed while shown no longer decompresses all of it afterwards, so the memory it saved stays saved\.
+- **IntelliSense ranks exact matches first and brackets columns consistently:** A name you type exactly, in any case, is now first in the completion list instead of below names that only start with it, fuzzy matches or system objects, and it is no longer missing from the visible list\. Every column suggestion shows and inserts its bracketed name, so a column of the alias \`\[bob\]\` inserts \`\[bob\]\.\[columnName\]\` just as the list shows\.
 
 ## [0.9.0] - 2026-11-15
 
@@ -103,7 +157,8 @@ Explore execution plans, compare results, and arrange your SQL workspace around 
 
 Release notes for [0.6.0 and earlier](https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.6.0) are available on GitHub.
 
-[Unreleased]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.9.1
 [0.9.0]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.9.0
 [0.8.0]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.8.0
 [0.7.0]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.7.0

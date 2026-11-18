@@ -99,10 +99,12 @@ export class SavedPasswordStore {
     this.secrets = next.catch(() => {})
     return next
   }
-  async set(profileId: string, options: ConnectionOptions): Promise<void> {
+  /** Remembers `options.password` for `profileId`. Resolves true when it replaced the password (a new revision every entry
+   *  with these credentials shares, so references to the old one ask again), false when the password was unchanged. */
+  async set(profileId: string, options: ConnectionOptions): Promise<boolean> {
     return this.secret(() => this.setSecret(profileId, options))
   }
-  private async setSecret(profileId: string, options: ConnectionOptions): Promise<void> {
+  private async setSecret(profileId: string, options: ConnectionOptions): Promise<boolean> {
     const password = options.password
     if (!canRememberPassword(options.authentication) || !password || !await this.available()) throw new Error(savedPasswordMessages.notSaved)
     let cipher: Buffer
@@ -126,6 +128,7 @@ export class SavedPasswordStore {
       if (others.length >= maxEntries) throw new Error(savedPasswordMessages.notSaved)
       return { entries: [...others, entry], value: undefined }
     })
+    return !unchanged
   }
   /**
    * The password remembered for `profileId`, only when `options` has the credentials it was saved with: a request for

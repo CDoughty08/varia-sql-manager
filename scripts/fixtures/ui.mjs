@@ -322,6 +322,8 @@ export const gridPart = {
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
+  /** The funnel popover's corner resize grip, pointer only (Options sets the same size), hidden from screen readers. */
+  funnelGrip: '.column-filter-grip',
   /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
    *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
   searchMatch: '.rg-c.is-hit',
@@ -384,6 +386,8 @@ export const queryConnection = page => queryBar(page).getByRole('group', { name:
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
 export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
+/** What a server dragged from Object Explorer onto a query will do (the card under a tab, the editor's plate, the insert hint). */
+export const serverDropCard = page => page.getByRole('status', { name: 'Server drop', exact: true })
 export const banner = page => page.locator(part.banner)
 /** The command and file banners: errors are alerts, warnings are statuses. */
 export const errorBanner = page => page.locator(part.banner + '[role="alert"]')
@@ -576,6 +580,28 @@ export const queryEditorText = page => page.locator(part.activeEditorGroup).loca
 export const peekDefinitionText = scope => scope.getByRole('textbox', { name: /^Definition text/ })
 /** The body-level hosts of Peek editors' hover and message widgets in a window (createQueryEditor's widget host). */
 export const peekEditorWidgetHosts = page => page.locator('.editor-overflow-widgets[data-peek-editor]')
+/** Peek's card on an object (`dbo.Orders`), beside an Object Explorer row or a name in a query editor. */
+export const peekCard = (page, name) => page.getByRole('dialog', { name: `Peek: ${name}`, exact: true })
+/** Whether a Peek card is drawn beside a name in a query editor rather than beside an Object Explorer row. */
+export const peekCardInEditor = card => card.evaluate(element => element.getAttribute('data-peek-placement') === 'editor')
+/** The window point in the middle of `word`'s first appearance in the text of the editor inside `scope`, for pointer gestures. */
+export const editorWordPoint = (scope, word) => editorSurface(scope).evaluateAll((editors, word) => {
+  for (const editor of editors) {
+    const lines = editor.querySelector('.view-lines')
+    if (!lines || !editor.getClientRects().length) continue
+    const walker = editor.ownerDocument.createTreeWalker(lines, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.nodeValue.indexOf(word)
+      if (at < 0) continue
+      const range = editor.ownerDocument.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + word.length)
+      const box = range.getBoundingClientRect()
+      if (box.width) return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    }
+  }
+  throw new Error('No editor shows ' + word + '.')
+}, word)
 
 // Panes: the dock's panels, each with a tab in its group's header
 
@@ -814,6 +840,8 @@ export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
+/** The row a dragged server's drop line is drawn on (its data-drop says above or below it); none while no line shows. */
+export const explorerDropLine = page => explorerTree(page).locator('[role="treeitem"][data-drop]')
 /** Offline roots may name a concise recovery reason and their environment after Disconnected. */
 export const lostServerRows = page => serverRows(page).and(explorerTree(page).getByRole('treeitem', { name: /\(Disconnected(?: · [^)\r\n]{1,80})?\)(?:, [^\r\n]{1,256})?$/ }))
 export const explorerLabel = row => row.locator(part.explorerLabel)
@@ -925,6 +953,31 @@ export const attachFileNameShown = cell => cell.evaluate((td, selector) => {
 }, part.attachPathName)
 /** Whether a text input shows the end of its value (an Attach Databases path's file name) rather than its start. */
 export const inputShowsEnd = input => input.evaluate(element => element.scrollLeft + element.clientWidth >= element.scrollWidth - 1)
+/**
+ * A dialog window (Tools › Options, Help › About): the page of the window that shows the dialog named `name`. Those dialogs
+ * open in OS windows of their own (popouts/DialogWindow.tsx), each a page of the application; where main refuses the
+ * window, the dialog shows over the main window and that page is returned.
+ */
+export async function dialogWindow(application, name, timeout = 15000) {
+  let found
+  await expect.poll(async () => {
+    for (const candidate of application.windows()) {
+      if (candidate.isClosed()) continue
+      if (await candidate.getByRole('dialog', named(name)).count().catch(() => 0)) { found = candidate; return true }
+    }
+    return false
+  }, { timeout }).toBe(true)
+  return found
+}
+/** Presses `key` in a dialog's view where it closes the dialog: its window may close on the key going down, before the key comes up. */
+export const pressToClose = (view, key) => view.keyboard.press(key).catch(error => { if (!view.isClosed()) throw error })
+/** Clicks `target`, a button that closes its dialog window: the window may close before Playwright finishes the click. */
+export const clickToClose = target => target.click().catch(error => { if (!target.page().isClosed()) throw error })
+/** Waits until the dialog window `view` has closed or, where the dialog showed over the main window, the dialog named `name` is gone. */
+export const dialogClosed = (view, name) => expect.poll(async () => view.isClosed() || (!view.url().startsWith('about:') && !(await view.getByRole('dialog', named(name)).count().catch(() => 0)))).toBe(true)
+/** An Options form page's sections (role group, named by their headings) and the fields and lists of its control column. */
+export const optionsSection = (dialog, name) => optionsForm(dialog).getByRole('group', named(name))
+export const optionsControls = dialog => optionsForm(dialog).locator('input[type="number"], select')
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)

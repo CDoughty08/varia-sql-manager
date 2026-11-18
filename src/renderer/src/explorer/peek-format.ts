@@ -39,3 +39,25 @@ export function placePeek(row: { top: number; height: number } | undefined, pane
   return { left, top, width, height }
 }
 
+/** The shortest card worth opening below or above a name; with less room either side, it covers the name. */
+export const minAnchoredHeight = 200
+
+/**
+ * Where a card anchored at a name goes (a query editor's Ctrl+hover): below the name, or above it when there is more room
+ * there, starting at its left edge, inside the window; while the name is scrolled out of view it stays where it was.
+ */
+export function placePeekAt(word: { left: number; top: number; bottom: number } | undefined, view: { width: number; height: number }, last?: { left: number; top: number; width: number; height: number }) {
+  if (!word && last) return last
+  const width = Math.max(0, Math.min(cardWidth, view.width - 2 * gap))
+  if (!word) return { left: gap, top: gap, width, height: Math.max(0, Math.min(cardHeight, view.height - 2 * gap)) }
+  const left = Math.min(Math.max(gap, word.left), Math.max(gap, view.width - gap - width))
+  const below = view.height - gap - (word.bottom + 2), above = word.top - 2 - gap
+  const room = Math.max(below, above)
+  if (room < minAnchoredHeight) {
+    const height = Math.max(0, Math.min(cardHeight, view.height - 2 * gap))
+    return { left, top: Math.min(Math.max(gap, word.bottom + 2), Math.max(gap, view.height - gap - height)), width, height }
+  }
+  const height = Math.min(cardHeight, room)
+  return { left, top: below >= above || below >= cardHeight ? word.bottom + 2 : word.top - 2 - height, width, height }
+}
+

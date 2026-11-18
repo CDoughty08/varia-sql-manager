@@ -322,6 +322,8 @@ internal static partial class PageCompressionBench
         ZstdCodec(-5, 18), ZstdCodec(-1, 18), ZstdCodec(1, 18), ZstdCodec(2, 18), ZstdCodec(3, 18), ZstdCodec(6, 18), ZstdCodec(1, 22),
         ZstdReusedCodec(-1), ZstdReusedCodec(1), ZstdReusedCodec(3),
         Lz4Codec(K4os.Compression.LZ4.LZ4Level.L00_FAST, "lz4"), Lz4Codec(K4os.Compression.LZ4.LZ4Level.L03_HC, "lz4hc3"),
+        // The store's own codec: zstd 2 over the page's lengths form (PageCodec.Lengths.cs).
+        new("page", (source, _) => PageCodec.Pack(source) ?? throw new InvalidOperationException("PageCodec failed."), (packed, destination) => PageCodec.UnpackInto(packed, destination)),
     ];
 
     /// <summary>A Save's output: counts the bytes and drops them, so only formatting and page reads are timed.</summary>

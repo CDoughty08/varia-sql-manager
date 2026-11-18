@@ -1,11 +1,12 @@
 import { z } from 'zod'
-import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type SecretStorageState } from '../shared/connections'
+import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionSaveView, type SecretStorageState } from '../shared/connections'
+import { forgetSavedPassword, rememberCheckedPassword, takeVerifiedPassword } from './connection-requests'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 
 export interface ConnectionLibraryDeps {
-  connections: Pick<ConnectionStore, 'load' | 'save' | 'remove' | 'setEnvironment'>
-  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'state'>
+  connections: Pick<ConnectionStore, 'load' | 'save' | 'saveEntry' | 'remove' | 'setEnvironment'>
+  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'forgetCredentials' | 'state' | 'set' | 'storageAvailable'>
 }
 
 /**
@@ -26,9 +27,32 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
       const { library, warning } = await deps.connections.load()
       return { ...await view(library), passwordStorage: await deps.savedPasswords.state(), ...(warning ? { warning } : {}) }
     },
-    async save(value: unknown): Promise<ConnectionLibraryView> {
-      const { library, savedPasswords } = await view(await deps.connections.save(connectionProfileInputSchema.parse(value)))
-      return { library, savedPasswords }
+    /**
+     * Save. With `rememberPassword`, the typed password is remembered under the saved entry only when a check signed in
+     * with it moments ago (the dialog checks it first); otherwise nothing is saved, so the settings and password agree.
+     */
+    async save(value: unknown): Promise<ConnectionSaveView> {
+      const input = connectionProfileInputSchema.parse(value)
+      if (input.forgetPassword) {
+        const { forgetPassword: _forget, ...entry } = input
+        const saved = await deps.connections.saveEntry(entry)
+        // Unavailable storage forgets nothing, so it is reported rather than claimed, as Connect's Forget does.
+        let passwordForgotten = false
+        try { passwordForgotten = await forgetSavedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordForgotten = false }
+        const { library, savedPasswords } = await view(saved.library)
+        return { library, savedPasswords, passwordForgotten }
+      }
+      if (!input.rememberPassword) {
+        const { library, savedPasswords } = await view(await deps.connections.save(input))
+        return { library, savedPasswords }
+      }
+      if (!takeVerifiedPassword(deps.savedPasswords, input.options)) throw new Error('The password was not checked with the server. Save again to check it.')
+      const { rememberPassword: _remember, ...entry } = input
+      const saved = await deps.connections.saveEntry(entry)
+      let passwordSaved = true, passwordReplaced = false
+      try { passwordReplaced = await rememberCheckedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordSaved = false }
+      const { library, savedPasswords } = await view(saved.library)
+      return { library, savedPasswords, passwordSaved, passwordReplaced }
     },
     async setEnvironment(value: unknown): Promise<ConnectionLibraryView> {
       const { library, savedPasswords } = await view(await deps.connections.setEnvironment(connectionEnvironmentInputSchema.parse(value)))

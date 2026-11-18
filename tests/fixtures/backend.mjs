@@ -2021,6 +2021,9 @@ async function workbench(id, method, params, credit) {
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    // Peek's card on dbo.Orders from a query editor (Ctrl+hover, Alt+F12): a table's facts; its script comes from scripting.script.
+    case 'explorer.peek': return respond(id, { facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', rowCount: 3 }, elapsedMs: 1 })
+    case 'explorer.cancel': return respond(id, { cancelled: 0 })
     case 'explorer.index': {
       const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
       event({ type: 'explorer.index.progress', done: 0, total: 1, objects: 0 })

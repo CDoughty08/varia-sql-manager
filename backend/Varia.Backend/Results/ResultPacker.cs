@@ -13,13 +13,14 @@ namespace Varia.Backend.Results;
 /// <remarks>
 /// Scheduling is the backend's alone: one thread that sleeps until the next result falls due or until something may have
 /// made one packable or asked for room (a set completed, the visible set changed, a pin or lease that stopped packing
-/// ended, a view opened on a packed result or a result's last view closed, a query's row waits for room), so an idle
+/// ended, a query's row waits for room), so an idle
 /// backend does no work. Idle packing (both stages) packs one result at a time, page by page, compressing each at the
 /// lowest thread priority (and doing everything that takes a lock or allocates at normal priority, so it is never
 /// preempted holding a lock; only Windows honours the lowered priority, and on Linux and macOS compression competes as an
 /// ordinary thread), on its own thread rather than the results' workers: the worker gate shares its threads fairly and has
 /// no lower priority, so packing there would take a share from a visible sort for a saving nobody waits on. Packing for
-/// room, which a query waits on, and unpacking a shown result for its view's screens run on the gate at normal priority.
+/// room, which a query waits on, runs on the gate at normal priority. Opening a view never unpacks a packed result: its
+/// sort and its screens read the packed pages in place.
 /// One thread packs about 200 to 400 MB/s (a 1 GiB result in three to five seconds), and reads, operations and new
 /// queries never wait for it: a page switches under the set's lock when its packed copy is ready, and an idle pass stops
 /// between pages once a hidden result is shown again, a shown one is read, it is held or released, a query asks for room,
@@ -35,7 +36,7 @@ internal sealed class ResultPacker : IDisposable
     /// <summary>The smallest result packed: four pages. Below it there is little to save.</summary>
     public const long FloorBytes = 1L << 20;
     /// <summary>How long a shown result goes untouched before it is packed (stage 2). Reading a packed result costs about
-    /// 0.2 to 1 ms more a 1,000-row read (a sorted grid is never packed while shown), so the wait is not for the reads' sake: it
+    /// 0.2 to 1 ms more a 1,000-row read in order, and a sorted grid's 128-row tile about 3 ms more, so the wait is not for the reads' sake: it
     /// keeps a result the user is working with from being packed (three to five seconds of one low-priority thread a GiB) only for an
     /// operation that unpacks it to undo that.</summary>
     public const long VisibleIdleMs = 30_000;
@@ -50,11 +51,9 @@ internal sealed class ResultPacker : IDisposable
     private readonly AutoResetEvent wake = new(false);
     private Thread? thread;
     private volatile bool stopping;
-    /// <summary>Cancelled on disposal: a view's unpack in flight stops rather than running on for a backend that is ending.</summary>
-    private readonly CancellationTokenSource ending = new();
     private int passes;
     /// <summary>Each result an operation has unpacked: its unpack count when the policy noticed it, and when. An operation's
-    /// unpack counts as a use, so a hidden result an unpacking operation (a search through a sorted grid, a far-ordered comparison) reads again and again is not packed between runs.
+    /// unpack counts as a use, so a hidden result an unpacking operation (a far-ordered comparison, say) reads again and again is not packed between runs.
     /// Only results still stored are kept.</summary>
     private readonly Dictionary<uint, (int Unpacks, long At, bool Held)> used = [];
     /// <summary>Who asked for room since the last pass for it: some query for the global budget, and queries for their own half.</summary>
@@ -165,8 +164,7 @@ internal sealed class ResultPacker : IDisposable
     {
         Interlocked.Increment(ref passes);
         if (store.Packing == PagePacking.Off) return null;
-        // A pass that packed for a waiting query leaves the room to it: unpacking for a view would take it straight back.
-        var unpackLater = UnpackViewed(PackForRoom());
+        PackForRoom();
         var now = visibility.Now;
         var wait = Delay;
         var idle = VisibleDelay;
@@ -179,17 +177,17 @@ internal sealed class ResultPacker : IDisposable
             // Asked about every stored query result a pass sees, open ones too, so one hidden while it stores rows starts its
             // delay then rather than when it completes. Live tables are never packed and the renderer never reports them.
             if (set.Budget.Live is not null || !visibility.State(set.ResultId, out var hidden, out var since)) continue;
-            // A shown result whose grid is sorted or filtered (an open view) stays raw: each screen of a view reads a page or
-            // so a row: a 256-row screen of a 256 MiB result took 1.2 ms raw and 30 to 55 ms packed on 16 workers (measured). Closing
-            // its last view pokes the policy. Pressure for room packs it all the same.
-            if (!hidden && (idle is null || store.HasViews(set))) continue;
+            // A shown result whose grid is sorted or filtered (an open view) is packed once idle like any other: a view's
+            // 128-row tile reads a page or so a row, about 3 ms packed against 0.5 ms raw (p99 7 against 1.3 ms through main,
+            // node.viewTile.*, with room for a tile's unpack group; about 45 ms a screen on one thread when the budget refuses
+            // it), which the grid's prefetch hides while scrolling and a jump pays once. Its sort and screens
+            // read the packed pages; nothing unpacks it whole for its view.
+            if (!hidden && idle is null) continue;
             if (!set.NeedsPacking || set.BytesStored is var bytes && bytes < floor) continue;
             var (touches, held, unpacks, touchedAt) = set.Activity();
             var usedAt = UsedAt(set, unpacks, held, now);
             long at;
-            // A hidden result whose grid is sorted or filtered was unpacked for its view each time it was shown again: switching
-            // back and forth to it waits longer each time, so it is not unpacked and packed again on every switch.
-            if (hidden) at = Math.Max(since, usedAt) + (store.HasViews(set) ? wait << Math.Min(set.ViewUnpacks, MaxBackoff) : wait);
+            if (hidden) at = Math.Max(since, usedAt) + wait;
             // A shown result waits from when it was shown, completed, last read or held (now, while held) and last unpacked,
             // longer each time an operation has unpacked it whole: such an operation would otherwise undo each packing.
             else at = Math.Max(Math.Max(since, usedAt), held ? now : touchedAt) + (idle!.Value << Math.Min(unpacks, MaxBackoff));
@@ -219,50 +217,7 @@ internal sealed class ResultPacker : IDisposable
             }
         }
         Forget(sets);
-        // A shown result left packed under its view for want of room looks again after the delay: freeing memory pokes nothing.
-        if (unpackLater) next = Math.Min(next ?? now + wait, now + wait);
         return roomWanted ? visibility.Now : next;
-    }
-
-    /// <summary>Unpacks again each shown result that has an open view (its grid sorted or filtered after it was packed, or
-    /// shown again with one): a view's screens read a page or so a row, 30 to 55 ms a 256-row screen of a 256 MiB result
-    /// packed against about 1 ms raw (measured), which an open view is meant to spare. Only when the budget has room for it, as an operation's
-    /// unpack (<see cref="ResultSetBuffer.TryUnpackAll"/>, on the workers' gate, at normal priority since the user is
-    /// looking at it); refused, its screens still read the packed pages. Never while a query waits for room, nor a result
-    /// held, and only with as much room again left over, so it never takes the room a
-    /// running query is about to need. It is not a use (<see cref="ResultSetBuffer.ViewUnpacks"/>): closing the view leaves
-    /// the result's waits, and whether packing for room may take it, as they were.</summary>
-    /// <param name="forRoom">This pass packed for a waiting query: leave the room to it.</param>
-    /// <returns>Whether a result was left packed for want of room (no headroom, a query waiting, this pass's room): the
-    /// policy looks again after the delay, since memory freed later pokes nothing. One left because a read or operation
-    /// holds it is looked at again when the hold ends (<see cref="ResultSetBuffer.NotifyWhenIdle"/>): the view's own build
-    /// still holds it when <see cref="ResultStore.AddView"/> pokes.</returns>
-    private bool UnpackViewed(bool forRoom)
-    {
-        var later = false;
-        foreach (var set in store.Sets())
-        {
-            if (stopping) return false;
-            if (set.Budget.Live is not null || set.IsReleased || !set.HasPacked || !store.HasViews(set)) continue;
-            if (!visibility.State(set.ResultId, out var hidden, out _) || hidden) continue;
-            if (forRoom || roomWanted || store.RoomWaiting)
-            {
-                later = true;
-                continue;
-            }
-            if (set.NotifyWhenIdle()) continue;
-            try
-            {
-                using (set.Pin())
-                {
-                    if (store.UsedBytes + 2 * set.UnpackNeed() > store.GlobalBytes) later = true;
-                    else if (!set.TryUnpackAll(ending.Token, forView: true)) later = true;
-                }
-            }
-            catch (OutOfMemoryException) { later = true; }
-            catch (OperationCanceledException) { return false; }
-        }
-        return later;
     }
 
     /// <summary>After a candidate was packed for room: whether a query still waits for it. The waits ask again on every page's
@@ -331,9 +286,8 @@ internal sealed class ResultPacker : IDisposable
     /// waits, which ask again while they still have no room). A read that ends between two pages does not stop it; one
     /// that holds the result as a page is replaced stops the pass there (<see cref="ResultSetBuffer.Pack"/>), and the waits ask
     /// again once it ends.</summary>
-    private bool PackForRoom()
+    private void PackForRoom()
     {
-        var any = false;
         while (roomWanted && !stopping)
         {
             bool all;
@@ -347,7 +301,6 @@ internal sealed class ResultPacker : IDisposable
                 roomWanted = false;
             }
             Interlocked.Increment(ref roomPasses);
-            any = true;
             var candidates = store.Sets()
                 .Where(set => ForRoom(set, all, queries))
                 .Select(set => (Set: set, Hidden: visibility.IsHidden(set.ResultId, out _), Bytes: set.BytesStored))
@@ -357,15 +310,14 @@ internal sealed class ResultPacker : IDisposable
             {
                 if (stopping) break;
                 // Packing one candidate takes seconds: one later in the list may have become one the user works with since
-                // (a view opened, an operation's unpack), so it is asked again now, and again before each
-                // page. An operation that unpacks it during its pass stops it too (Pack's unpacks).
+                // (an operation holds it or has unpacked it), so it is asked again now, and again before each page. An
+                // operation that unpacks it during its pass stops it too (Pack's unpacks).
                 if (!ForRoom(set, all, queries)) continue;
                 var unpacks = set.Unpacks;
-                var hidden = visibility.IsHidden(set.ResultId, out _);
                 long got;
                 // One candidate's failure (out of memory compressing a page) skips it rather than every other candidate and
                 // the scheduled passes after this one.
-                try { got = set.Pack(() => Page(set) && (hidden || !store.HasViews(set)), unpacks: unpacks, workers: RoomGate); }
+                try { got = set.Pack(() => Page(set), unpacks: unpacks, workers: RoomGate); }
                 catch (OutOfMemoryException) { continue; }
                 saved += got;
                 // A candidate that saved something wakes the waits, which ask again while they still have no room: carry on
@@ -378,7 +330,6 @@ internal sealed class ResultPacker : IDisposable
             if (candidates.Count == 0 || saved > 0) store.RoomChanged();
             if (candidates.Count == 0 || saved == 0) break;
         }
-        return any;
     }
 
     /// <summary>Whether packing the set could make room for these queries: complete, not live, not packed yet, of
@@ -386,17 +337,17 @@ internal sealed class ResultPacker : IDisposable
     /// at once and stall the others), and any query's for the global budget (<paramref name="all"/>), else theirs. One rule
     /// for <see cref="MakeRoom"/> and <see cref="PackForRoom"/>, so a wait is never told there is room to make that the
     /// pass then skips.
-    /// <para>Never a result the user is working with: a shown one with an open view (a sorted or filtered grid, whose
-    /// screens would then read a page or so a row with no room left for the cache), nor one an operation unpacked whole
-    /// and that is still in use (touched within the wait the policy would give it), whose next operation would need its
-    /// unpack's room again and could be refused. Packing such a result would trade the result the user is looking at for
-    /// the rows of a new query; that query is truncated instead, as without the policy.</para></summary>
+    /// <para>Never one an operation unpacked whole and that is still in use (touched within the wait the policy would give
+    /// it): its next operation would need its unpack's room again and could be refused, so the new query is truncated
+    /// instead, as without the policy. A shown result with a sorted or filtered grid is a candidate like any other: its
+    /// screens read the packed pages, and while the budget stays full (the room went to the new query) a tile unpacks each
+    /// row's page on one thread (<see cref="ViewPages.UnpackTogether"/>), tens of milliseconds, instead of a few: the
+    /// price of the new query keeping its rows.</para></summary>
     private bool ForRoom(ResultSetBuffer set, bool all, QueryBudget[] queries)
     {
         if (set.Budget.Live is not null || !all && !queries.Contains(set.Budget) || !set.NeedsPacking || set.BytesStored < floor) return false;
         var (_, held, unpacks, touchedAt) = set.Activity();
         if (held || !visibility.State(set.ResultId, out var hidden, out _)) return false;
-        if (!hidden && store.HasViews(set)) return false;
         var wait = hidden || VisibleDelay is not { } idle ? Delay : idle << Math.Min(unpacks, MaxBackoff);
         return unpacks == 0 || store.Now - touchedAt >= wait;
     }
@@ -463,7 +414,6 @@ internal sealed class ResultPacker : IDisposable
     public void Dispose()
     {
         stopping = true;
-        ending.Cancel();
         store.Settled = null;
         store.RoomMaker = null;
         // A query waiting for room stops waiting: nothing more will pack for it.

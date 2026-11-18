@@ -14,6 +14,7 @@ editor.context, for the query editor
   ---
   &Go To Definition  F12  ----
   Pee&k Definition  ⌥F12  ----
+  Open De&finition in Peek Tab  ----
   ---
   E&xecute  F5  ++--
   Ca&ncel Executing Query  --+-
@@ -23,6 +24,10 @@ editor.context, for the query editor
   Cu&t  ⌘X  ++++
   &Copy  ⌘C  ++++
   &Paste  ⌘V  ++++
+  ---
+  Toggle &Brackets  ⌘[  ++++
+  &Move Commas to Front  ++++
+  Mo&ve Commas to End  ++++
   ---
   Comm&and Palette…  ⇧⌘P  ++++
 documentTab.context, for a saved query's tab
@@ -180,11 +185,17 @@ explorer.context, for a server
   ---
   Copy N&ame  -+++
   ---
+  Move &Up  ⌥↑  ----
+  Move Do&wn  ⌥↓  ----
+  ---
   Re&fresh  F5  -+++
 explorer.context, for a server whose connection was lost
   &Connect…  ++++
   &Reconnect…  ++++
   Rem&ove from Explorer  +++-
+  ---
+  Move &Up  ⌥↑  ----
+  Move Do&wn  ⌥↓  ----
 explorer.context, for the Databases folder
   &Attach…  -+++
   &Restore Database…  -+++
@@ -366,7 +377,7 @@ output.context, for a results grid with selected cells
     ---
     &Keep Selected Rows  ++++
     ---
-    &Clear Filters  ----
+    &Clear Filters  ⇧⌘L  ----
   Hi&ghlight >
     &Yellow  ++++
     &Green  ++++
@@ -424,7 +435,7 @@ output.context, for a results grid without
     ---
     &Keep Selected Rows  ----
     ---
-    &Clear Filters  ----
+    &Clear Filters  ⇧⌘L  ----
   Hi&ghlight >
     &Yellow  ++++
     &Green  ++++

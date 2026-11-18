@@ -3,6 +3,7 @@ import type { Workbench } from '../core/workbench'
 import type { Disposable } from '../core/types'
 import { editorFontFamily } from '../fonts'
 import { bindExplorerDrop } from '../explorer/drop'
+import { bindPeekCardKey } from '../languages/EditorPeekService'
 
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
 export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; contains(target: Node | null): boolean; setVisible(visible: boolean): void }
@@ -33,7 +34,7 @@ export interface QueryEditorUse {
  * Creates a query editor in `container`. Each editor group has one, which shows the group's active text document; Peek has
  * one per card or tab, read-only (`use`).
  */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'> & Partial<Pick<Workbench, 'gestures' | 'commands'>>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'> & Partial<Pick<Workbench, 'gestures' | 'commands' | 'editorPeek'>>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
   const readOnly = use.readOnly
   // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
   // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
@@ -97,32 +98,50 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   // Object Explorer rows dropped on the editor insert their names, where it takes text.
   const drop = readOnly ? undefined : bindExplorerDrop(instance)
   if (use.contextKey) instance.createContextKey(use.contextKey, true)
-  const definition = bindDefinitionClick(workbench, instance)
+  const definition = bindDefinitionPointer(workbench, instance, !use.contextKey)
+  // An open Peek card (or Alt+F12 looking one up here) makes Escape in this editor close it. Not in Peek's own editor: it is
+  // inside the card, whose Esc closes it and puts focus back where the peek came from.
+  const card = workbench.editorPeek && !use.contextKey ? bindPeekCardKey(instance, workbench.editorPeek) : undefined
   return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
-    dispose: () => { visibility(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+    dispose: () => { visibility(); card?.dispose(); definition.dispose(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }
 
 /** Monaco's Ctrl+hover definition link (`GotoDefinitionAtPositionEditorContribution.ID`). */
 export const monacoDefinitionLink = 'editor.contrib.gotodefinitionatposition'
 
 /**
- * Go to Definition's click (gestures.ts `editor.goToDefinition`, Ctrl+click or ⌘-click by default): a plain click on a name with
- * the gesture's modifiers runs F12's command once Monaco has put the caret there. A click with Monaco's multi-cursor key held
- * (Tools › Options) stays Monaco's, even when the gesture's own keys are held too, so adding a cursor never scripts an object.
+ * The definition gestures (gestures.ts): a plain click on a name with `editor.goToDefinition`'s modifiers (Ctrl+click or
+ * ⌘-click by default) opens it in a Peek tab once Monaco has put the caret there, and the pointer resting on a name with
+ * `editor.peekHover`'s (Ctrl or ⌘) opens Peek's card beside it after the hover delay (`hover`; not in Peek's own editors,
+ * whose card the new one would replace). A click with Monaco's multi-cursor key held (Tools › Options) stays Monaco's, even
+ * when the gesture's own keys are held too, so adding a cursor never opens Peek.
  */
-export function bindDefinitionClick(workbench: Partial<Pick<Workbench, 'gestures' | 'commands' | 'monaco'>>, instance: editor.IStandaloneCodeEditor): Disposable {
-  const { gestures, commands, monaco } = workbench
+export function bindDefinitionPointer(workbench: Partial<Pick<Workbench, 'gestures' | 'commands' | 'monaco' | 'editorPeek'>>, instance: editor.IStandaloneCodeEditor, hover = true): Disposable {
+  const { gestures, commands, monaco, editorPeek } = workbench
   // The hover contribution loads Monaco's own Ctrl+hover link (gotoSymbol), which would ask the definition provider for every
-  // word the pointer crosses with Ctrl held, a catalog lookup each, and follow a click a second time. The click is Varia's.
+  // word the pointer crosses with Ctrl held, a catalog lookup each, and follow a click a second time. The pointer is Varia's.
   instance.getContribution<Disposable>(monacoDefinitionLink)?.dispose()
   if (!gestures || !commands || !monaco) return { dispose() {} }
-  return instance.onMouseUp(event => {
+  const up = instance.onMouseUp(event => {
     const pointer = event.event
     if (!pointer.leftButton || pointer.detail !== 1 || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return
     if (!gestures.matches('editor.goToDefinition', pointer.browserEvent)) return
     const cursor = instance.getOption(monaco.editor.EditorOption.multiCursorModifier)
     if (pointer.browserEvent[cursor]) return
     if (!instance.getSelection()?.isEmpty()) return
-    void commands.execute('edit.goToDefinition', undefined, 'keybinding')
+    editorPeek?.cancelHover()
+    void commands.execute('edit.openPeekTab', undefined, 'keybinding')
   })
+  if (!hover || !editorPeek) return up
+  // Only a still pointer with the modifier held and no button down rests on a name; anything else forgets the hover.
+  const move = instance.onMouseMove(event => {
+    const model = instance.getModel(), position = event.target.position
+    if (!model || !position || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT || event.event.browserEvent.buttons || !gestures.matches('editor.peekHover', event.event.browserEvent)) {
+      editorPeek.cancelHover()
+      return
+    }
+    editorPeek.hover({ editor: instance, model, position })
+  })
+  const leave = instance.onMouseLeave(() => editorPeek.cancelHover())
+  return { dispose: () => { up.dispose(); move.dispose(); leave.dispose() } }
 }

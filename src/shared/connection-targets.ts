@@ -4,7 +4,9 @@ import { authenticationModes, requiresUser, showsIdentity, usesPassword } from '
 import { advancedConnectionSchema, connectionOptionsSchema, savedConnection } from './connections'
 import { environmentSchema } from './environments'
 
-export const connectionTargetLimits = { targets: 200, principalChars: 256, databaseChars: 128 } as const
+/** `explorerExpanded*`: Object Explorer's expanded nodes kept per server for the next start, bounded so the session file
+ *  stays small (`explorerExpandedChars` across every server). */
+export const connectionTargetLimits = { targets: 200, principalChars: 256, databaseChars: 128, explorerExpanded: 128, explorerKeyChars: 1024, explorerExpandedChars: 262_144 } as const
 const hidden = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 const uuid = z.uuid()
 const optionalText = (schema: z.ZodType<string>) => z.preprocess(value => typeof value === 'string' && !value.trim() ? undefined : value, schema.optional())
@@ -55,15 +57,45 @@ export type ConnectionAuthentication = z.infer<typeof connectionAuthenticationSc
 export const persistedConnectionTargetSchema = z.object({
   id: uuid, options: connectionTargetOptionsSchema, details: connectionDetailsSchema,
   inExplorer: z.boolean(), resumeWanted: z.boolean(), profileId: uuid.optional(),
-  credential: connectionCredentialReferenceSchema.optional(), expectedPrincipal: expectedConnectionPrincipalSchema.optional()
+  credential: connectionCredentialReferenceSchema.optional(), expectedPrincipal: expectedConnectionPrincipalSchema.optional(),
+  /** Object Explorer's expanded nodes below this server at the last close (connection-free ref keys, outermost first):
+   *  a hint the tree restores as far as it still finds the nodes. */
+  explorerExpanded: z.array(z.string().min(1).max(connectionTargetLimits.explorerKeyChars)).max(connectionTargetLimits.explorerExpanded).readonly().optional()
 }).strict().refine(value => !value.expectedPrincipal || value.expectedPrincipal.authentication === value.options.authentication, 'The expected account must use the target authentication mode.')
   .refine(value => !value.credential || usesPassword(value.options.authentication), 'This authentication does not use a remembered password.').readonly()
 export type PersistedConnectionTarget = z.infer<typeof persistedConnectionTargetSchema>
 
 export const connectionWorkspaceSchema = z.object({
-  version: z.literal(1), targets: z.array(persistedConnectionTargetSchema).max(connectionTargetLimits.targets).readonly()
+  version: z.literal(1), targets: z.array(persistedConnectionTargetSchema).max(connectionTargetLimits.targets).readonly(),
+  /** Written with Object Explorer's expansion: a target without `explorerExpanded` then had none to keep, not an older file. */
+  explorerExpansion: z.literal(true).optional()
 }).strict().refine(value => new Set(value.targets.map(target => target.id)).size === value.targets.length, 'Duplicate connection target IDs.').readonly()
 export type ConnectionWorkspace = z.infer<typeof connectionWorkspaceSchema>
+
+/**
+ * The workspace with Object Explorer's expanded nodes for the servers `expansion` names; the others keep what they had (a
+ * server not connected this run). Keys past the per-key, per-server or total bounds are left out, outermost kept first.
+ */
+export function withExplorerExpansion(workspace: ConnectionWorkspace, expansion: ReadonlyMap<string, readonly string[] | null>): ConnectionWorkspace {
+  let budget: number = connectionTargetLimits.explorerExpandedChars
+  const bounded = (keys: readonly string[]) => {
+    const kept: string[] = []
+    for (const key of keys) {
+      if (kept.length >= connectionTargetLimits.explorerExpanded) break
+      if (!key || key.length > connectionTargetLimits.explorerKeyChars || key.length > budget) continue
+      budget -= key.length
+      kept.push(key)
+    }
+    return kept
+  }
+  const targets = workspace.targets.map(target => {
+    // null: the tree dropped what it had for this server; absent: keep the last close's.
+    const given = expansion.get(target.id), keys = given === null ? undefined : given ?? target.explorerExpanded
+    const { explorerExpanded: _old, ...rest } = target
+    return keys === undefined ? rest : { ...rest, explorerExpanded: bounded(keys) }
+  })
+  return connectionWorkspaceSchema.parse({ ...workspace, explorerExpansion: true, targets })
+}
 
 /** attachWanted distinguishes an attached query from a query deliberately disconnected while retaining its target. */
 export const queryConnectionAssociationSchema = z.object({
