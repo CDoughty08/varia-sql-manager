@@ -26,6 +26,8 @@ internal sealed class SearchFold
         1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
+    // About 200 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
+    // a handful (at most 35 cultures times 16 option sets, if every one were searched).
     private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
     /// <summary>The fold for a culture and compare options once it is built, else null (and the build started on the thread
@@ -79,7 +81,7 @@ internal sealed class SearchFold
         // A group's representative: a one or two letter ASCII string with its key if there is one (ß to ss, æ to ae), else
         // the compatibility decomposition of its lowest vouched code unit, folded, when that has the key, else that code unit.
         // Every member of a group maps to the same representative, so a cell and a text folded agree. (No vouched code unit
-        // has the key of three ASCII letters.)
+        // has the key of three ASCII letters; the compatibility decomposition covers the rest.)
         var asciiKeys = new Dictionary<string, string>();
         void Candidate(string s)
         {
@@ -148,16 +150,16 @@ internal sealed class SearchFold
     /// key-class scan in SearchFoldChecks finds no two strings of them alike to the compare and folded apart): tab, line
     /// breaks and printable ASCII; no-break space, Latin-1 and Extended-A letters, and Extended-B's Vietnamese ơ ư, pinyin ǎ
     /// to ǜ and Romanian ș ț; Greek and Cyrillic letters; Hebrew letters; Arabic letters from أ and Arabic-Indic digits;
-    /// dashes and quotes; hiragana and katakana letters, full-width and half-width; CJK ideographs; Hangul syllables;
+    /// dashes (U+2010 to U+2015) and quotes (U+2018 to U+201F); hiragana and katakana letters, full-width and half-width; CJK ideographs; Hangul syllables;
     /// full-width ASCII; and, but in Japanese, the <see cref="Repeating"/> marks. Not ·, which root joins with l, nor the
-    /// digraph letters (ǆ, ǉ, ǌ), ء and آ (آ is ءء to an accent-insensitive compare), the voiced marks, ligatures,
+    /// digraph letters (ǆ, ǉ, ǌ), ء and آ (آ is ءء to an accent-insensitive compare), the voiced marks, the dot leaders (‥ is ․․ to a case-sensitive compare), ligatures,
     /// presentation forms, enclosed or squared characters, jamo or combining marks left after NFC.</summary>
     internal static bool Vouched(char c) =>
         (c is '\t' or '\n' or '\r' or (>= ' ' and <= '~') or '\u00A0' or (>= '\u00C0' and <= '\u017F')
         or '\u01A0' or '\u01A1' or '\u01AF' or '\u01B0' or (>= '\u01CD' and <= '\u01DC') or (>= '\u0218' and <= '\u021B')
         or (>= '\u0386' and <= '\u03CE' and not '\u0387') or (>= '\u0400' and <= '\u0482') or (>= '\u048A' and <= '\u04FF')
         or (>= '\u05D0' and <= '\u05EA') or (>= '\u0623' and <= '\u063A') or (>= '\u0641' and <= '\u064A') or (>= '\u0660' and <= '\u0669')
-        or (>= '\u2010' and <= '\u2027') or (>= '\u3041' and <= '\u3096') or (>= '\u30A1' and <= '\u30FA')
+        or (>= '\u2010' and <= '\u2015') or (>= '\u2018' and <= '\u201F') or (>= '\u3041' and <= '\u3096') or (>= '\u30A1' and <= '\u30FA')
         or (>= '\u4E00' and <= '\u9FFF') or (>= '\uAC00' and <= '\uD7A3') or (>= '\uFF01' and <= '\uFF5E')
         or (>= '\uFF66' and <= '\uFF9D')) || Repeating(c);
 

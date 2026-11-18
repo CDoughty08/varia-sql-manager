@@ -201,15 +201,15 @@ internal static class SearchFoldChecks
 
     /// <summary>Cells where collation is not per character, each found by the culture compare under its options (but the
     /// noncharacter's, which it finds nothing in): with the pre-check the matcher finds them too. (Japanese ゞ, ゝ and ー repeat or prolong the sound before them, root joins l·l,
-    /// Yiddish ligatures, 〆 is しめ, enclosed and presentation forms, Arabic madda and hamza, digraph letters, a mark NFC
-    /// cannot compose, and a noncharacter.)</summary>
+    /// Yiddish ligatures, 〆 is しめ, enclosed and presentation forms, Arabic madda and hamza, digraph letters, dot leaders,
+    /// a mark NFC cannot compose, and a noncharacter.)</summary>
     internal static readonly (int Lcid, int Options, string Cell, string Text)[] Contextual =
     [
         (1041, 1 | 8 | 16, "いすゞ自動車", "いすず"), (1041, 1 | 8 | 16, "サーバー", "サアバア"), (1041, 1 | 8 | 16, "かゝ", "かか"),
         (1033, 1 | 2 | 8 | 16, "Col·legi", "collegi"), (1037, 1 | 8 | 16, "ייִדיש װָארט", "ווָארט"), (1033, 1 | 8 | 16, "ייִדיש װָארט", "ווָארט"),
         (1041, 1 | 8 | 16, "〆切", "しめ切"), (1033, 1 | 8 | 16, "㉊", "30"), (1025, 1 | 8 | 16, "ﻵ", "لآ"), (1025, 1 | 2 | 8 | 16, "qآ\u0655z", "qآz"),
         (1025, 1 | 2 | 8 | 16, "آ", "ءء"), (1061, 1 | 2 | 8 | 16, "ǄW", "Dƍ"), (1052, 1 | 8 | 16, "Ǌ", "nJ"),
-        (1053, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1035, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1033, 1 | 8 | 16, "ab\uFFFEc", "abc"),
+        (1053, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1035, 1 | 2 | 8 | 16, "Ä", "Ä\u0323"), (1033, 1 | 8 | 16, "ab\uFFFEc", "abc"), (1033, 8 | 16, "Wait…", "․․․"), (1041, 8 | 16, "x‥y", "․․"),
     ];
 
     private static void Contexts(Action<bool, string> check)
@@ -236,7 +236,7 @@ internal static class SearchFoldChecks
     {
         var sample = new List<char>();
         for (var c = ' '; c <= '~'; c++) if (char.IsLetterOrDigit(c) || c is ' ' or '-' or '\'') sample.Add(c);
-        sample.AddRange("ÀÄÅÆÇÐÑÖØÞßàäåæçðñöøþÿĀČĐĞİıĲĳŁŉŊŒœŘŠſŸŽơưǍǜșțΆΐΣάήίΰςόώЁЙЪЫЬЭЯёйъыьэяґҐӼӽӾӿאבךכשתاأبةتلمىي٠٢あかがっゔゕゖゝゞアカガッヴヵヶヷヺーヽヾ一數数가힣！０ＡＩＹＺａｉｙｚ～ｶｰ‐–’…");
+        sample.AddRange("ÀÄÅÆÇÐÑÖØÞßàäåæçðñöøþÿĀČĐĞİıĲĳŁŉŊŒœŘŠſŸŽơưǍǜșțΆΐΣάήίΰςόώЁЙЪЫЬЭЯёйъыьэяґҐӼӽӾӿאבךכשתاأبةتلمىي٠٢あかがっゔゕゖゝゞアカガッヴヵヶヷヺーヽヾ一數数가힣！０ＡＩＹＺａｉｙｚ～ｶｰ‐–’…․‥•†");
         sample.RemoveAll(c => !SearchFold.Vouched(c));
         var conflicts = new string?[SearchFold.Verified.Length * OptionSets.Length];
         Parallel.For(0, conflicts.Length, index =>
