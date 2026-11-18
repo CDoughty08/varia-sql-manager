@@ -1,6 +1,6 @@
 # Result comparison UX pass: plan
 
-Status: revision 16, after review rounds 1 – 15 (round 15: no blockers or majors). Mock: [prototypes/results-pane/compare-diff-ux.html](../prototypes/results-pane/compare-diff-ux.html).
+Status: revision 17, after review rounds 1 – 15 (round 15: no blockers or majors); adds Coordination with BigQuery and Agent. Mock: [prototypes/results-pane/compare-diff-ux.html](../prototypes/results-pane/compare-diff-ux.html).
 Where the mock and this plan disagree, this plan wins (see "Mock differences").
 
 This reworks how a finished comparison (`results.diff`, kind `diff`) is stored, shown and driven. It keeps the Compare
@@ -517,6 +517,34 @@ why not, CHANGELOG Unreleased, and records its guide/sample impact.
 2 follows 1 (its emphasis reads the new cell numbering and styles PR 1's gutter); 3 is independent; 4 follows 1–3. 4, 5 and 6 land in that order (4 with its small renderer part); 7, 8 and 9 follow in
 order. The grouped plan § Comparisons is updated in each PR that changes a fact it states (1 stored columns, 4 alignment,
 7 identity, 8 default context and the remembered match).
+
+## Coordination with BigQuery and Agent
+
+BigQuery (docs/bigquery-plan.md, 0.10.0) and SQL Server Agent (docs/agent-plan.md, 0.11.0) run at the same time. BQ-0
+(provider foundation) is in progress and touches every registry plus the `sortKind` factory, which rewrites the type-name
+checks in `ViewSorter`/`KindOf`, `ResultTextWriter`, `RowIdentity`, `HighlightsService`, `ColumnProfiles` and
+`ResultsService`. Comparison work must not slow either down:
+
+- **Before BQ-0 merges, only PRs 1 – 3.** They register no method, context key, command, menu or setting. PR 1's edits
+  to `ResultTextWriter`, `HighlightsService`, `ResultsService` and `results.identify` stay small and local (the hidden
+  roles, entry identity), so they rebase onto BQ-0's `sortKind` edits without rework; whichever merges second merges
+  main. No refactor of those files inside a comparison PR.
+- **PR 4 waits for BQ-0.** Composite keys build on `RowIdentity`, and float/approximate detection and key typing read
+  `sortKind` instead of type names (so BigQuery's in-memory results, and its samples, compare by the same rules). Its
+  error codes join the enums after BQ-0's.
+- **PRs 5 – 9 wait for BQ-0.** `results.diffSeek` and the `kind` filter op go through BQ-0's method `providers`; the
+  comparison's commands, context keys, menu entries and settings are engine-neutral and declare both engines, as BQ-0's
+  lint asks for neutral entries.
+- **BQ-3c-1's remote-result refusal.** Every page reader refuses a remote result with `REMOTE_RESULT`. `results.diffSeek`
+  and the change index are new readers: whichever of PR 5 and BQ-3c-1 merges second adds the case, and
+  `tests/result-page-access.test.ts` covers it. BigQuery already disables Compare on a windowed result, so a diff's
+  inputs are always in memory.
+- **PR 6 before BQ-3c-1 starts.** PR 6 changes `ResultStore`'s limit readers (`store.Allow`, `QueryLimit`); BQ-3c-1
+  adds the block cache and residence beside them. BQ-3c-1 is late on BigQuery's critical path, so PR 6 lands first or
+  rebases onto it.
+- **Agent** does not touch the results pipeline. Shared files are append-only for both (commands catalogue, context
+  keys, settings, CHANGELOG, architecture.md, ipc.md).
+- After each BigQuery lane merges, open comparison branches merge main.
 
 ## Mock differences
 
