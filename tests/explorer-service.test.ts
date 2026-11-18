@@ -383,6 +383,21 @@ describe('ExplorerService: expanding as the user', () => {
     expect(f.explorer.getSnapshot().reveal).toBe(reveal)
     expect(f.explorer.opening).toBeUndefined()
   })
+  it('forgets an expand that listed nothing, so Varia opening the folder later does not follow it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const database = await f.open('Databases', 'AppData')
+    const views = f.find('Views', database)
+    f.explorer.open(views, false)
+    await settleAll()
+    expect(f.explorer.node(views)).toMatchObject({ expanded: false, hasChildren: false })
+    f.state.viewsChain = true
+    f.explorer.reconcile(views)
+    await settleAll()
+    expect(f.explorer.node(views)!.expanded).toBe(true)
+    expect(f.explorer.opening).toBeUndefined()
+  })
   it('forgets an expand on a server lost before its page arrives, so reconnecting does not follow it', async () => {
     const f = fixture()
     f.connect()

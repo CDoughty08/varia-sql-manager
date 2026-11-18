@@ -2125,6 +2125,8 @@ try {
 
   // 13d. Auto-expand single children. Stored Procedures lists only System Stored Procedures, which it leaves closed.
   const procedures = ['pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures']
+  // pin-f's own query tab is active, whichever an earlier step left, so switching to pin-a's below is a switch.
+  await selectOpenDocument(page, pinQueries[5])
   await expandExplorerPath(page, ...procedures.slice(0, -1))
   await selectRevealed(...procedures)
   await press('ArrowRight', 'Stored Procedures')
@@ -2139,6 +2141,12 @@ try {
   await expect(await revealExplorerRow(page, ...procedures, 'dbo.usp_ShipOrders')).toHaveAttribute('aria-expanded', 'true')
   await expect.poll(async () => (await active())?.expanded).not.toBe('true')
   await expect(tree()).toBeFocused()
+  // Enter expands as Right does.
+  await setStub({ procedures: 3 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_2')
+  await press('Enter', 'Parameters')
   // Switching query tabs while Parameters loads follows the other server, and the walk's end, selected when it arrives,
   // does not scroll the tree back.
   await setStub({ procedures: 2, holdParameters: true })

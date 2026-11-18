@@ -1107,6 +1107,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   // Loading
 
+  /** A node whose listing came back empty and closed: nothing to follow, and a reconcile that opens it again later (Varia's own DDL) is not the user's expand. */
+  private forgetOpened(node: TreeNode): void { if (this.opened?.id === node.id && !this.opened.chain) this.opened = undefined }
   /** Walks an auto-expand on from the node it has reached once that node's children are in. */
   private advanceOpen(): void {
     const opened = this.opened
@@ -1253,6 +1255,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
+      this.forgetOpened(node)
       this.announce(`${node.label}: no items`)
     } else if (cursor && total !== undefined) this.announce(`${node.label}: loaded ${count(node.children!.length)} of ${count(total)}`)
     if (!truncated) this.capOrContinue(node)
@@ -1279,6 +1282,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
+      this.forgetOpened(node)
       this.announce(`${node.label}: no items`)
     }
     if (!truncated) this.capOrContinue(node)
