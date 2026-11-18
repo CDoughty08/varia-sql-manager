@@ -14,6 +14,7 @@
 
 ### Changes to everyday use
 
+- **Comparisons named for themselves:** A comparison's Column Profile is titled Column profile with the comparison's name under it, and its grid, splitter and the toolbar's progress name it the same way to a screen reader and on screen, instead of a "Result 3" seen nowhere else; a Pivot's are named for the Pivot. A comparison's tab reads old → new ("Result 1 → Result 3"), long names shortened in the middle, with the full name in its tooltip.
 - **The window reopens where you left it:** Varia's main window opens at the position and size it was closed at, maximized if it was. If that place is no longer on a screen (a monitor was disconnected, or a display's resolution, scale or arrangement changed), it opens on the nearest display instead, fitted to it; a window closed minimized or in full screen reopens as a normal (or maximized) window. On Linux under Wayland only the size and maximized state come back.
 - **Expanding shows the children:** Expanding a node in Object Explorer scrolls to show as many of its children as fit, without scrolling the node out of view.
 - **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child; it never opens a System folder. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.

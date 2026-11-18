@@ -952,6 +952,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-panel { display: flex; flex: 0 0 300px; flex-direction: column; min-height: 0; max-width: 45%; border-left: 1px solid var(--varia-panel-border); background: var(--varia-sideBar-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .profile-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 26px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--varia-panel-border); }
 .profile-title { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.profile-head.with-subject { border-bottom: 0; }
+.profile-subject { flex-shrink: 0; padding: 0 8px 4px; border-bottom: 1px solid var(--varia-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); }
 .profile-note { flex-shrink: 0; padding: 4px 8px; color: var(--varia-descriptionForeground); }
 .profile-note.error { color: var(--varia-errorForeground); }
@@ -1032,7 +1034,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
 .rt-tab[data-selected] > [role="tab"] { font-weight: 600; }
 /* A tab that shows a name the query gave ends it in an ellipsis at its widest (--varia-resultTab); its tooltip has it
-   whole. An unnamed result's or comparison's tab is as wide as its words, as before. */
+   whole. An unnamed result's tab is as wide as its words, as before, and so is a comparison's, whose sides are shortened
+   in the middle instead. */
 .rt-tab[data-named] { max-width: var(--varia-resultTab); }
 .rt-tab .rt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rt-tab > [role="tab"] > .codicon, .rt-tab > .rt-close { flex: none; }

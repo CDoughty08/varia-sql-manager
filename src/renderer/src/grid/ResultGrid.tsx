@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, entryName, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareDetails, compareSources, compareText } from '../results/CompareService'
@@ -16,6 +16,11 @@ import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridS
 import { gridOperation, operationNoun } from '../results/operations'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
+
+/** The name a grid's accessible label starts with for a Pivot or a comparison: its own ("Differences: Result 1 → Result 3"),
+ *  never "Result N of M" by the number Varia gave it (D8). Undefined for an original result, which keeps "Result N of M". */
+export const derivedGridName = (entry: Pick<ResultSetEntry, 'label' | 'number' | 'descriptor'>): string | undefined =>
+  entry.descriptor.kind === 'diff' || entry.descriptor.kind === 'pivot' ? entryName(entry) : undefined
 
 export interface ResultGridProps {
   readonly tabId: string
@@ -126,9 +131,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     const current = results.sortOf(tabId, key), sorted = current?.view
     shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(current) : '' }
     results.viewShown(tabId, key, sorted)
+    const label = derivedGridName(entry)
     const view = create({
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
-      entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
+      entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, ...label ? { label } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
@@ -250,7 +256,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind,
+      // A Pivot's or comparison's grid is named for itself, so its number ("Result 4" in a save's name) is kept here.
+      ...derivedGridName(entry) ? { 'data-result-number': entry.number } : {}, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
       ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
       // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
       // menus' toggle and the pivot builder follow.
