@@ -1309,9 +1309,14 @@ try {
     await expect.poll(headerHeight).toBeCloseTo(narrowHeight, 0)
     await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: Array.from({ length: 40 }, (_, i) => [`row ${i}`]) })
     const tallFrame = localGridFrame(page, 'Local header'), tallHeight = await headerHeight()
-    const content = await tallFrame.locator(gridPart.head).evaluate(element => element.getBoundingClientRect().width)
-    await tallFrame.evaluate((element, width) => { element.parentElement.style.width = `${width}px` }, content + scrollbar / 2)
-    await expect.poll(() => tallFrame.locator(gridPart.scroller).evaluate(element => element.scrollWidth > element.clientWidth && element.offsetWidth > element.scrollWidth)).toBe(true)
+    // The scroller as wide as the columns and half a scroll bar, whatever the frame's border: beside the vertical bar they
+    // overflow, without it they would fit.
+    await tallFrame.evaluate((element, [half, parts]) => {
+      const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
+      element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
+    }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
+    const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
+    await expect.poll(async () => { const [scroll, client, offset] = (await sizes()).split(/ in | of /).map(Number); return scroll > client && offset > scroll || await sizes() }).toBe(true)
     await expect.poll(headerHeight).toBeCloseTo(tallHeight + scrollbar, 0)
     await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
     await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)

@@ -30,7 +30,7 @@ describe('clipboard writes supersede a running copy', () => {
   it('cancels main\'s results copy before main writes the text', () => {
     const source = readFileSync('src/main/index.ts', 'utf8')
     const handler = /handle\('varia:clipboard-write',[^\n]*/.exec(source)?.[0] ?? ''
-    expect(handler).toMatch(/jobs\.supersedeCopy\(\);\s*clipboard\.writeText\(text\)/)
+    expect(handler).toMatch(/jobs\.supersedeCopy\(\);\s*return clipboard\.writeText\(text\)/)
   })
   it('starts a copy generation for a live grid copying without the menu (SSIS Operations), as output.copy does', () => {
     const source = readFileSync('src/renderer/src/live/LiveGridPane.tsx', 'utf8')
