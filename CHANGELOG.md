@@ -13,7 +13,7 @@
 - **Auto-expand single children:** Expanding a node whose only child can expand keeps going down to the first node with more than one child and selects it, so Down Arrow lands on its first child; it never opens a System folder. Turn it off with Tools › Options › Environment › Object Explorer › Auto-expand single children.
 - **Ctrl+F in Object Explorer:** With focus in Object Explorer, Ctrl+F (Cmd+F on macOS) jumps to its search box, as Ctrl+Shift+F does. In the query editor Ctrl+F is still Find.
 - **Sorted and filtered grids are compressed too:** A large result on screen whose grid is sorted or filtered is now compressed once idle like any other, and packing to make room for a new query can take it. Scrolling it reads the compressed pages a few milliseconds slower a jump, which reading ahead hides while you scroll; while result memory is full, as when a new query needed the room, a jump takes tens of milliseconds. Find searches it as it is.
-- **More rows fit in result memory:** Compressed results take less memory, so more of them fit before Varia has to make room: a fifth less for a typical query, up to a third less for results of numbers and dates. Reading them is as fast as before.
+- **More rows fit in result memory:** Compressed results take less memory, so more of them fit before Varia has to make room: a fifth less for a typical query, over a third less for results of numbers and dates. Reading them is as fast as before.
 - **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a column with a linguistic (not binary) collation about three times faster, finding exactly what they found before.
 
 ### Fixes

@@ -95,7 +95,8 @@ the gate, since a query is waiting.
 Zstandard in the runtime is why the backend targets .NET 11, a short-term-support release; it moves to .NET 12 (LTS)
 when that ships.
 
-A packed page's body is replaced by its Zstandard bytes with the raw length beside it, one page at a time. `FirstRow`,
+A packed page's body is replaced, one page at a time, by a marker byte (lengths form or as sealed), the LEB128 length of what
+the frame holds and a Zstandard frame, with the raw length beside it. `FirstRow`,
 `Rows` and the lengths sidecar (`PageLengths`, 4 bytes a row, 0.3 to 3.4 % of a result) stay raw, so `results.rowBytes`,
 `CellSize` and the row index work without unpacking. The page being built and pages of an open result are always raw.
 A page whose packed size saves less than 10 % stays raw.
@@ -115,7 +116,7 @@ packs each page in its lengths form (`PageCodec.Lengths.cs`): each column's offs
 non-NULL cell has that length (dates, keys, GUIDs; about 40 % of columns), else each cell's LEB128 length, and the zero
 padding between regions is dropped. Unpacking rebuilds the page as sealed in its own room, so readers never see the
 form. Bytes that are not exactly a sealed page are packed as they are. The form packs 3 to 55 % more rows into the
-same budget (table below). The other integer packings measured (Group Varint, Stream VByte with a SIMD prefix sum,
+same budget (counting the sidecar, below the table). The other integer packings measured (Group Varint, Stream VByte with a SIMD prefix sum,
 128-value frame-of-reference bit packing) came within 1.5 % of LEB128 once Zstandard ran, and rebuilding offsets costs
 about 1 ns a cell against Zstandard's 150 µs a page, so SIMD decoding buys nothing measurable.
 
@@ -135,7 +136,7 @@ the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 | Deflate 6 | 1.96–2.55 | 65–84 MB/s | 400–450 MB/s | 0.16–0.18 s |
 
 Per page, the store's codec decompresses in a median 146 to 179 µs (p99 0.2 to 0.5 ms) and compresses in 0.7 to 1.0 ms.
-With the lengths sidecar, which stays raw, `numeric` packs 1.87 → 2.90 times, `orders` 2.05 → 2.55, `wide` 2.78 → 3.22 and
+Counting the raw lengths sidecar (the table's ratios count page bodies alone), `numeric` packs 1.87 → 2.90 times, `orders` 2.05 → 2.55, `wide` 2.78 → 3.22 and
 `log` 2.22 → 2.28 (zstd 2 over pages as sealed → the lengths form). A packed result takes 31 to 44 % of its raw memory
 in these shapes; random keys, hashes or GUIDs compress 1.1 to 1.5 times or not
 at all. At 8 GiB the ratios and per-page speeds were the same. Packing on the workers (for room) takes about 0.2 s of 16

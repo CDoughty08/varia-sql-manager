@@ -43,7 +43,7 @@ internal static partial class PageCodec
                     var (offset, length) = (layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
                     if (r == 1)
                     {
-                        var validity = blob.Slice(layout[c * Stride + 1], layout[c * Stride + 2]);
+                        var validity = layout[c * Stride + 2] == 0 ? default : blob.Slice(layout[c * Stride + 1], layout[c * Stride + 2]);
                         var written = WriteLengths(blob.Slice(offset, length), validity, layout[c * Stride + 6], rows, form[at..]);
                         if (written < 0) return -1;
                         at += written;
@@ -109,30 +109,37 @@ internal static partial class PageCodec
             var read = at + blobStart;
             var written = blobStart;
             var lengths = lengthsRoom.AsSpan(0, rows);
+            var bitmap = (rows + 7) / 8;
             for (var c = 0; c < columns; c++)
                 for (var r = 0; r < Regions; r++)
                 {
-                    var (offset, length) = (blobStart + layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
-                    if (r != 1 && length == 0) continue;
+                    var (offset, length) = (blobStart + (long)layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
+                    if (r == 1 ? length != 4 * (rows + 1) : r != 2 && length != 0 && length != bitmap) throw Unreadable();
+                    if (Skipped(r, length)) continue;
                     if (offset < written || offset > read || offset + length > room.Length) throw Unreadable();
-                    room[written..offset].Clear();
+                    room[written..(int)offset].Clear();
                     if (r == 1)
                     {
                         // The whole column's form is read before its offsets are written over it. Its validity bitmap
                         // precedes its offsets, so it is already in place.
                         var validity = layout[c * Stride + 2] == 0 ? default : room.Slice(blobStart + layout[c * Stride + 1], layout[c * Stride + 2]);
+                        if (read >= room.Length) throw Unreadable();
                         read += ReadLengths(room[read..], validity, lengths);
-                        var offsets = MemoryMarshal.Cast<byte, uint>(room.Slice(offset, length))[..(rows + 1)];
-                        uint end = 0;
+                        // A form Pack wrote never needs its offsets written past the bytes read so far.
+                        if (offset + length > read) throw Unreadable();
+                        var offsets = MemoryMarshal.Cast<byte, uint>(room.Slice((int)offset, length));
+                        ulong end = 0;
                         offsets[0] = 0;
-                        for (var row = 0; row < lengths.Length; row++) offsets[row + 1] = end += lengths[row];
+                        for (var row = 0; row < lengths.Length; row++) offsets[row + 1] = (uint)(end += lengths[row]);
+                        if (end != (ulong)layout[c * Stride + 6]) throw Unreadable();
                     }
                     else
                     {
-                        room.Slice(read, length).CopyTo(room.Slice(offset, length));
+                        if (length > room.Length - read) throw Unreadable();
+                        room.Slice(read, length).CopyTo(room.Slice((int)offset, length));
                         read += length;
                     }
-                    written = offset + length;
+                    written = (int)offset + length;
                 }
             if (read != room.Length || written != room.Length) throw Unreadable();
         }
@@ -220,12 +227,17 @@ internal static partial class PageCodec
             {
                 var (offset, length) = (layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
                 if (r == 1 ? length != 4 * (rows + 1) : r != 2 && length != 0 && length != bitmap) return false;
-                if (r != 1 && length == 0) continue;
+                if (Skipped(r, length)) continue;
                 if (offset < end || (long)offset + length > blob.Length || blob[end..offset].ContainsAnyExcept((byte)0)) return false;
                 end = offset + length;
             }
         return end == blob.Length;
     }
+
+    /// <summary>Whether a region has no place in the blob: an empty validity, truncated or errors bitmap. Seal places
+    /// every offsets and data region, an empty data region too (8-aligned after its offsets, so a page whose last column
+    /// holds no data can end in padding after the offsets).</summary>
+    private static bool Skipped(int region, int length) => region is not (1 or 2) && length == 0;
 
     private static void WriteLeb(Span<byte> to, ref int at, uint value)
     {
