@@ -60,6 +60,7 @@
   .lg th .sort { float: right; color: var(--accent); margin-left: 6px; }
   .lg th .grip { position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
   .lg th.hot { box-shadow: inset 0 -2px var(--accent); color: var(--textStrong); }
+  .lg .rn { color: var(--textMuted); text-align: right; background: var(--chrome); }
   .lg td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .lg td.null { color: var(--textMuted); font-style: italic; }
   .lg td.sel { background: var(--selection); }
@@ -127,13 +128,13 @@
         </div>
       </div>
       <div style="position:relative">
-        <p class="cap">Proposed: a card grid with real columns; a column block selected, context menu open</p>
+        <p class="cap">Proposed: a card grid with real columns and a Definition column; Definition selected, context menu open</p>
         <div class="peek">
           <div class="peek-head"><b>Sales.Orders</b><span class="muted">Table</span></div>
           <div class="tabs"><span>Properties</span><span class="on">Columns</span><span>Indexes</span><span>Top rows</span></div>
-          <div class="lg focus" role="grid" aria-label="Columns, 7 rows, 5 columns">
+          <div class="lg focus" role="grid" aria-label="Columns, 7 rows, 6 columns">
             <table>
-              <thead><tr><th class="hot">Name<span class="grip"></span></th><th>Type</th><th>Null</th><th>Key</th><th>Default</th></tr></thead>
+              <thead><tr><th class="hot">Name<span class="grip"></span></th><th>Type</th><th>Null</th><th>Key</th><th>Default</th><th>Definition</th></tr></thead>
               <tbody id="peekCols"></tbody>
             </table>
           </div>
@@ -152,8 +153,8 @@
         </div>
       </div>
     </div>
-    <p class="clip-cap">Clipboard after Copy (the Name column), formatted by ResultTextWriter as a results grid's copy is:</p>
-    <div class="clip mono">OrderId&#10;CustomerId&#10;OrderDate&#10;Status&#10;Total&#10;Notes&#10;RowVer</div>
+    <p class="clip-cap">Clipboard after Copy (the Definition column), formatted by the shared writer exactly as a results grid's copy is: valid T-SQL lines.</p>
+    <div class="clip mono" id="defClip"></div>
   </section>
 
   <!-- 2: Peek list tab (Files) promoted to a Peek tab: page preset, Save. -->
@@ -276,7 +277,7 @@
 </main>
 <script>
   const notes = {
-    1: ['Peek: Columns', '<p>The owner\'s example. Today the tab lists the tree\'s labels; nothing selects or copies except a text drag.</p><ul><li>Card preset: height follows the rows (up to 12), no row numbers, no Save.</li><li>Real columns come from a Peek list served with the facts, not the tree\'s "(…)" text (question 2).</li><li>Escape still closes the card; Ctrl+Enter still promotes it.</li></ul>'],
+    1: ['Peek: Columns', '<p>The owner\'s example. Today the tab lists the tree\'s labels; nothing selects or copies except a text drag.</p><ul><li>Card preset: height follows the rows (up to 12), row numbers as in results, no Save.</li><li>Real columns come from a Peek list served with the facts, not the tree\'s "(…)" text.</li><li>Definition is valid T-SQL built in the backend: QUOTENAME, types as Script As writes them, COLLATE when not the default, IDENTITY, AS (…) PERSISTED, DEFAULT (…).</li><li>Escape still closes the card; Ctrl+Enter still promotes it.</li></ul>'],
     2: ['Peek list tab, promoted', '<p>Index columns, Events, Files, Server roles and User mapping are HTML tables today. In the card they are card grids; in a Peek tab they are page grids, which add Save Results As (Ctrl+S while the grid has focus, as in results).</p>'],
     3: ['Table Properties', '<p>Permissions, Partitions and Security predicates; Database Properties\' Files and Filegroups likewise. Page preset: fills the page, Save Results As, multi-key sort. Extended properties stays an editable table.</p>'],
     4: ['SSIS Properties', '<p>Packages, Parameters, References and Variables replace PropertiesList\'s own virtualization. The table is built from the text on screen, so a sensitive value is masked in the grid, in Copy and in Save.</p>'],
@@ -285,9 +286,11 @@
   }
   const $ = id => document.getElementById(id)
   const td = (v, o = {}) => `<td class="${[o.num ? 'num' : '', v === null ? 'null' : '', o.sel ? 'sel' : '', o.cur ? 'cur' : ''].join(' ')}">${v === null ? 'NULL' : v}</td>`
-  const rows = (id, data, f) => { $(id).innerHTML = data.map((r, i) => `<tr>${r.map((v, c) => td(v, f(i, c))).join('')}</tr>`).join('') }
-  const cols = [['OrderId', 'int', 'No', 'PK', null], ['CustomerId', 'int', 'No', 'FK', null], ['OrderDate', 'datetime2(3)', 'No', '', '(sysutcdatetime())'], ['Status', 'varchar(20)', 'No', '', "('New')"], ['Total', 'decimal(12,2)', 'Yes', '', null], ['Notes', 'nvarchar(max)', 'Yes', '', null], ['RowVer', 'timestamp', 'No', '', null]]
-  rows('peekCols', cols, (i, c) => ({ sel: c === 0, cur: c === 0 && i === 0 }))
+  const rows = (id, data, f) => { $(id).innerHTML = data.map((r, i) => `<tr><td class="rn">${i + 1}</td>${r.map((v, c) => td(v, f(i, c))).join('')}</tr>`).join('') }
+  document.querySelectorAll('.lg thead tr').forEach(tr => tr.insertAdjacentHTML('afterbegin', '<th class="rn"></th>'))
+  const cols = [['OrderId', 'int', 'No', 'PK', null, '[OrderId] int NOT NULL IDENTITY(1, 1)'], ['CustomerId', 'int', 'No', 'FK', null, '[CustomerId] int NOT NULL'], ['OrderDate', 'datetime2(3)', 'No', '', '(sysutcdatetime())', '[OrderDate] datetime2(3) NOT NULL DEFAULT (sysutcdatetime())'], ['Status', 'varchar(20)', 'No', '', "('New')", "[Status] varchar(20) NOT NULL DEFAULT ('New')"], ['Total', 'decimal(12,2)', 'Yes', '', null, '[Total] decimal(12, 2) NULL'], ['Notes', 'nvarchar(max)', 'Yes', '', null, '[Notes] nvarchar(max) NULL'], ['RowVer', 'timestamp', 'No', '', null, '[RowVer] timestamp NOT NULL']]
+  rows('peekCols', cols, (i, c) => ({ sel: c === 5, cur: c === 5 && i === 0 }))
+  $('defClip').textContent = cols.map(r => r[5]).join('\n')
   rows('files', [['Warehouse_data', 'Rows', '18,432 MB', 'By 512 MB, unlimited', 'D:\\Data\\Warehouse.mdf'], ['Warehouse_fact', 'Rows', '9,216 MB', 'By 512 MB, unlimited', 'D:\\Data\\Warehouse_fact.ndf'], ['Warehouse_log', 'Log', '4,096 MB', 'By 256 MB, to 32,768 MB', 'L:\\Log\\Warehouse.ldf'], ['Warehouse_fs', 'FILESTREAM', '512 MB', 'None', 'D:\\Data\\Warehouse_fs']], (i, c) => ({ num: c === 2 }))
   const perms = [['app_reader', 'Database role', 'SELECT', null, 'Grant', 'dbo'], ['app_writer', 'Database role', 'DELETE', null, 'Deny', 'dbo'], ['app_writer', 'Database role', 'INSERT', null, 'Grant', 'dbo'], ['app_writer', 'Database role', 'UPDATE', null, 'Grant', 'dbo'], ['auditor', 'SQL user', 'SELECT', 'Total', 'Grant', 'dbo'], ['etl_svc', 'Windows user', 'ALTER', null, 'Grant', 'dbo'], ['etl_svc', 'Windows user', 'INSERT', null, 'Grant', 'dbo'], ['public', 'Database role', 'VIEW DEFINITION', null, 'Deny', 'dbo'], ['report_user', 'SQL user', 'SELECT', null, 'Grant with grant', 'dbo']]
   rows('perms', perms, (i, c) => ({ sel: i >= 1 && i <= 3, cur: i === 1 && c === 0 }))
