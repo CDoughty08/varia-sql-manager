@@ -168,7 +168,8 @@ npm run test:smoke:wsl -- --all
     AutoRecover's copies at once), `window.__variaLive` (opens views on the synthetic live source, stands in for a hidden
     window, mounts a `LiveGridPane` with `mountGrid`, `grid`, `sortGrid`, `saveGrid`, `unmountGrid`) and
     `window.__variaTestShellFault()` (the workbench's next render throws), `window.__variaTestExplorerFault()`,
-    `window.__variaServerFiles`, `window.__variaRestore` and `window.__variaFailures`;
+    `window.__variaServerFiles`, `window.__variaRestore`, `window.__variaFailures` and `window.__variaMotion.refresh()`
+    (re-reads the reduced-motion preference; the fixture calls it after each `emulateMedia`);
   - and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results) and `VARIA_RESULT_BUDGET_BYTES`.
 - **Smoke fixture.** Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions wait 15 s on
   Windows (its runners can take seconds to write a file), and closing the app logs main's file operations of 500 ms or
