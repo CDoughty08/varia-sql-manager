@@ -839,7 +839,7 @@ export const serverFileTypesLabel = (purpose: ServerFilePurpose): string | undef
 /** Why an action failed, as a value; `retryable` says whether trying again can help. */
 export const actionErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false,
-  // The connection's engine has no object actions (src/shared/providers.ts).
+  // The connection's engine has no object actions (src/shared/providers.ts): an error response, before the action runs.
   UNSUPPORTED_PROVIDER: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
   // The server file picker's folder does not exist, or the server's account cannot see it.
   PATH_NOT_FOUND: false,

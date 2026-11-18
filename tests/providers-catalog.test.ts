@@ -14,6 +14,7 @@ import type { BackendMethod } from '../src/shared/contracts'
 import { resolveMenu } from '../src/renderer/src/menus/resolve'
 import { KeybindingService } from '../src/renderer/src/core/keybindings'
 import { CommandService } from '../src/renderer/src/core/commands'
+import { argsFor, type ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 
 const providerKeys: readonly ContextKey[] = ['activeDocumentProvider', 'explorerProvider', 'explorerSelectionProvider']
 /** The providers a when clause compares a provider key with; an entry naming one must declare it. */
@@ -117,11 +118,18 @@ describe('catalogue providers', () => {
     expect(commands.isEnabled('edit.undo')).toBe(true)
     await expect(commands.execute('query.execute', undefined, 'keybinding')).resolves.toBe(false)
     expect(ran).toEqual([])
-    // From a SQL Server node's menu, a command acts on the node whatever the active document is; from the toolbar, on the document.
+    // On a SQL Server node (its menu, row buttons or jump menu, selected or not), a command acts on the node whatever the active
+    // document and the selection are; from the toolbar, on the document; from the empty area's menu, as from the toolbar.
     commands.register('activity.open', { run: () => {} })
-    const onNode = { target: { kind: 'explorer' as const }, state: { explorerSelectionProvider: 'sqlserver' as const } }
-    expect(commands.isEnabled('activity.open', onNode)).toBe(true)
+    const server: ExplorerMenuNode = { id: 1, connectionId: 'c', kind: 'server', label: 'sql-prod-01', ref: { type: 'server' }, lost: false } as unknown as ExplorerMenuNode
+    state = contextRecord('win32', { ...state, explorerSelectionProvider: 'bigquery' })
+    expect(commands.isEnabled('activity.open', argsFor({ kind: 'explorer', node: server }))).toBe(true)
     expect(commands.isEnabled('activity.open')).toBe(false)
+    expect(commands.isEnabled('activity.open', argsFor({ kind: 'explorer' }))).toBe(false)
+    // A command that finds its own object (a Peek card, a search hit) is checked by neither key.
+    commands.register('search.copyName', { run: () => {} })
+    expect(commandProviderKey('search.copyName')).toBeUndefined()
+    expect(commandAllowsProvider('peek.refresh', { activeDocumentProvider: 'bigquery', explorerSelectionProvider: 'bigquery' })).toBe(true)
   })
 
   it("Object Explorer's menu leaves out items its node's engine has no use for", () => {

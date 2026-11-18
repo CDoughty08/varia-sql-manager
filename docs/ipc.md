@@ -693,8 +693,8 @@ another grantor's row left in place) fails `NOT_SUPPORTED`.
 
 Each `methodPolicies` entry may declare `providers` (`src/shared/providers.ts`); absent, the method serves SQL Server
 only. `connections.connect`, `.databases` and `.preview` take an optional `provider` in their options (`sqlserver`;
-absent means SQL Server, an unknown one is `INVALID_PARAMS`); `bigquery` is refused, since no method serves BigQuery
-yet. Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
+absent means SQL Server, an unknown one is `INVALID_PARAMS`); `bigquery` is refused, since no method that opens a
+connection serves BigQuery yet. Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
 with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `system.health`, `query.cancel`,
 `query.session.close`, `query.session.state` and every `results.*` method name no connection and are declared for both
 engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request

@@ -338,7 +338,7 @@ export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuI
 /** Failures come back as values in the result; `retryable` says whether trying again can help. */
 export const scriptErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false,
-  // The connection's engine has no such Script As kind (src/shared/providers.ts).
+  // The connection's engine has no such Script As kind (src/shared/providers.ts): an error response, before scripting runs.
   UNSUPPORTED_PROVIDER: false, ENCRYPTED: false, NO_DEFINITION: false, PERMISSION_DENIED: true, DATABASE_UNAVAILABLE: true, TOO_LARGE: false,
   EMPTY: false, BLOCKED: true, TIMEOUT: true, CONNECTION_LOST: true, UNREPRESENTABLE: false, SMO_ERROR: true, SQL_ERROR: true,
   // Off Windows, a pool connection that could not sign in with Kerberos: an expired ticket (run kinit, then retry) or a

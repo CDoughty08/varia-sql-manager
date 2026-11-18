@@ -438,7 +438,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     /// <summary>Main refuses a method for a connection of another engine before sending it; this checks again first thing,
-    /// answering UNSUPPORTED_PROVIDER as a value.</summary>
+    /// before any service runs, and answers UNSUPPORTED_PROVIDER as an error response.</summary>
     internal void CheckProvider(string method, JsonElement parameters)
     {
         if (!Providers.Of(method).Contains(ProviderOf(method, parameters)))

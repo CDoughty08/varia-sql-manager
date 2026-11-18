@@ -88,6 +88,12 @@ export interface CommandDescriptor {
   readonly providers?: readonly ProviderId[]
   /** The backend methods it runs, for the providers lint: an entry that declares `bigquery` runs only methods that serve it. */
   readonly methods?: readonly BackendMethod[]
+  /**
+   * `own`: its handler acts on an object it finds itself (a Peek card, a Search Objects tab or hit), not the active document
+   * or the Explorer selection, so no context key names its engine; only a menu opened on an object checks it, and the method
+   * gate refuses another engine's request.
+   */
+  readonly providerContext?: 'own'
 }
 
 /** Provider-neutral entries (editing, results, layout, help): they work the same for every engine. */
@@ -404,6 +410,7 @@ export const commandCatalog = {
   // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks;
   // Ctrl+F is the editor's Find everywhere but in the explorer pane, where it is this.
   'explorer.focusSearch': {
+    providerContext: 'own',
     title: 'Search in Object Explorer', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick', 'objects'], precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.index', 'explorer.search'],
     keybindings: [{ key: 'mod+shift+f' }, { key: 'mod+f', when: "activePanel == 'explorer' && !inputFocus" }]
   },
@@ -508,6 +515,7 @@ export const commandCatalog = {
   // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
   // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
   'explorer.openPeekTab': {
+    providerContext: 'own',
     title: 'Open Peek as Tab', category: 'Object Explorer', icon: 'link-external', keywords: ['peek', 'definition', 'properties', 'preview', 'document', 'promote'],
     // The open card, else the menu's or Ctrl+click's row, else the selection: the handler's own condition says which applies.
     precondition: 'backendReady',
@@ -525,6 +533,7 @@ export const commandCatalog = {
   },
   // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
   'peek.refresh': {
+    providerContext: 'own',
     title: 'Refresh Peek', category: 'Object Explorer', icon: 'refresh',
     // The card has no state key of its own: the handler's condition asks whether one is open.
     precondition: 'backendReady', unavailableHint: 'Open Peek first.',
@@ -1323,6 +1332,7 @@ export const commandCatalog = {
   },
   // Search Objects: a tab that searches a server's object index (names and module definitions), loaded in the tree or not.
   'explorer.searchObjects': {
+    providerContext: 'own',
     title: 'Search Objects…', category: 'Object Explorer', icon: 'search', keywords: ['find', 'objects', 'definitions', 'text', 'procedures', 'index', 'regex', 'grep'], methods: ['explorer.search'],
     precondition: 'hasConnection', unavailableHint: noServer,
     menus: [
@@ -1331,6 +1341,7 @@ export const commandCatalog = {
     ]
   },
   'explorer.rebuildIndex': {
+    providerContext: 'own',
     title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
     precondition: 'hasConnection', unavailableHint: noServer
   },
@@ -1343,18 +1354,22 @@ export const commandCatalog = {
   },
   // Ctrl+C (and Edit › Copy) on a focused result runs it from SearchPanel's list, as the results grid's does; the rule only labels the key.
   'search.copyName': {
+    providerContext: 'own',
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]
   },
   'search.copySchemaName': {
+    providerContext: 'own',
     title: 'Copy Schema-Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
     menus: [{ menu: 'search.copy', group: '1_names', order: 2, title: 'Schema-Qualified Name', mnemonic: 's', when: 'searchHitSchema' }]
   },
   'search.copyQualifiedName': {
+    providerContext: 'own',
     title: 'Copy Fully Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
     keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema' }]
   },
   'search.copyBracketedName': {
+    providerContext: 'own',
     title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
   }
@@ -1374,13 +1389,16 @@ export const paletteLabel = (id: CommandId): string => { const command = command
 /** The engines a command works for (`providers`, or SQL Server only). */
 export const commandProviders = (id: CommandId): readonly ProviderId[] => providersOf(commandDescriptor(id))
 /**
- * The context key a command's `providers` is checked against, per invocation: the Explorer selection's engine when it runs
- * on an object (`onObject`: from an Object Explorer node's or a Search Objects result's menu, whose keys stand the object's
- * in), and otherwise the selection's for an Object Explorer command and the active document's for every other, as their
- * handlers act on those.
+ * The context key a command's `providers` is checked against, per invocation: `explorerSelectionProvider` when it runs on an
+ * object (`onObject`: from an Object Explorer node's or a Search Objects result's menu, whose arguments stand the object's
+ * engine in), and otherwise the selection's for an Object Explorer command and the active document's for every other, as
+ * their handlers act on those; none for a command that finds its own object (`providerContext`).
  */
-export const commandProviderKey = (id: CommandId, onObject = false): 'activeDocumentProvider' | 'explorerSelectionProvider' =>
-  onObject || commandDescriptor(id).category === 'Object Explorer' ? 'explorerSelectionProvider' : 'activeDocumentProvider'
+export const commandProviderKey = (id: CommandId, onObject = false): 'activeDocumentProvider' | 'explorerSelectionProvider' | undefined =>
+  onObject ? 'explorerSelectionProvider' : commandDescriptor(id).providerContext === 'own' ? undefined
+    : commandDescriptor(id).category === 'Object Explorer' ? 'explorerSelectionProvider' : 'activeDocumentProvider'
 /** Whether a command works for the engine its context names ('' — nothing of an engine — allows every command). */
-export const commandAllowsProvider = (id: CommandId, keys: { readonly activeDocumentProvider: ProviderContext; readonly explorerSelectionProvider: ProviderContext }, onObject = false): boolean =>
-  providerAllows(commandProviders(id), keys[commandProviderKey(id, onObject)])
+export const commandAllowsProvider = (id: CommandId, keys: { readonly activeDocumentProvider: ProviderContext; readonly explorerSelectionProvider: ProviderContext }, onObject = false): boolean => {
+  const key = commandProviderKey(id, onObject)
+  return key === undefined || providerAllows(commandProviders(id), keys[key])
+}

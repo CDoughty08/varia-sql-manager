@@ -191,7 +191,9 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
+  // An Object Explorer node's engine stands in for the selection's: its row buttons and jump menu act on a node that is not selected.
+  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed }
+    : target.kind === 'explorer' && target.node ? { explorerSelectionProvider: targetKeys(target).explorerProvider } : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined

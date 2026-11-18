@@ -67,7 +67,7 @@ export const contextKeys = {
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
   activeDocumentProvider: {
     type: 'enum', scope: 'state', values: ['', ...providerIds],
-    description: "The engine of the active document (`src/shared/providers.ts`): 'sqlserver' or 'bigquery', or '' with no document open. A command's `providers` is checked against it, except an Object Explorer command's and one run from an Object Explorer node's or a search result's menu (`commandProviderKey`)."
+    description: "The engine of the active document (`src/shared/providers.ts`): 'sqlserver' or 'bigquery', or '' with no document open. A command's `providers` is checked against it, except an Object Explorer command's, one run on an Object Explorer node or search result, and one that finds its own object (`commandProviderKey`)."
   },
   activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor.' },
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
@@ -141,7 +141,7 @@ export const contextKeys = {
   explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
   explorerSelectionProvider: {
     type: 'enum', scope: 'state', values: ['', ...providerIds],
-    description: "The engine of the server the selected Object Explorer node is on: 'sqlserver' or 'bigquery', or '' with no selection. The `providers` of an Object Explorer command, and of any command run from an Object Explorer node's or a search result's menu (whose keys stand the object's in), is checked against it (`commandProviderKey`). Keep it out of keybinding `when` clauses."
+    description: "The engine of the server the selected Object Explorer node is on: 'sqlserver' or 'bigquery', or '' with no selection. The `providers` of an Object Explorer command, and of any command run on an Object Explorer node or a search result (whose arguments stand the object's engine in), is checked against it (`commandProviderKey`). Keep it out of keybinding `when` clauses."
   },
   explorerSelectionKind: {
     type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],

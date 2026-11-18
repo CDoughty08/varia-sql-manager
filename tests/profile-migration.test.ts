@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, truncate, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -213,6 +213,72 @@ describe('0.9.0 profile migration', () => {
     }
     await migrateProfile(directory, { write: busyMarker })
     expect((await read(migrationMarker)).done).toEqual(['connections', 'savedPasswords', 'session', 'autoRecover'])
+  })
+
+  it('retries moving a staging folder that Windows briefly refuses', async () => {
+    await seed09()
+    let refused = 0
+    const move: typeof rename = async (from, to) => {
+      if (refused++ < 2) throw Object.assign(new Error('held'), { code: 'EPERM' })
+      return rename(from, to)
+    }
+    expect(await migrateProfile(directory, { move, platform: 'win32' })).toMatchObject({ session: 'migrated', autoRecover: 'migrated' })
+    expect((await read(join(profileFiles.session.current, 'session.json'))).documents).toEqual(session.documents)
+  })
+
+  it('offers each 0.9.0 tab once when an attempt to offer them fails part-way', async () => {
+    await seed09()
+    const two = { ...session, documents: [...session.documents, { name: 'Lines.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'select 7' }] }
+    await writeFile(join(directory, profileFiles.session.legacy, 'session.json'), JSON.stringify(two))
+    await mkdir(join(directory, profileFiles.session.current))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let records = 0
+    const failSecond: typeof writeBytesAtomic = async (path, bytes, options) => {
+      if (path.includes(profileFiles.autoRecover.current) && !path.includes('.migrating-') && records++ === 1) throw Object.assign(new Error('full'), { code: 'ENOSPC' })
+      return writeBytesAtomic(path, bytes, options)
+    }
+    expect((await migrateProfile(directory, { write: failSecond })).session).toBe('failed')
+    expect((await migrateProfile(directory)).session).toBe('migrated')
+    const offered = await new RecoveryStore(join(directory, profileFiles.autoRecover.current)).list(4)
+    expect(offered.map(entry => entry.name).filter(name => name !== 'Query 1').sort()).toEqual(['Lines.sql', 'Orders.sql'])
+  })
+
+  it('leaves 0.9.0 tabs waiting while AutoRecover has no room for them', async () => {
+    await seed09()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await mkdir(join(directory, profileFiles.session.current))
+    const into = join(directory, profileFiles.autoRecover.current)
+    const store = new RecoveryStore(into)
+    for (let index = 0; index < 64; index++) await store.write({ id: randomUUID(), name: `Query ${index}`, kind: 'sql', eol: 'lf', text: 'select 6' }, 1)
+    expect((await migrateProfile(directory)).session).toBe('partial')
+    await rm(join(into, (await readdir(into))[0]))
+    expect((await migrateProfile(directory)).session).toBe('migrated')
+  })
+
+  it.skipIf(process.platform === 'win32')('writes folders 0700 and query and password files 0600', async () => {
+    await seed09()
+    await migrateProfile(directory)
+    const mode = async (name: string) => (await stat(join(directory, name))).mode & 0o777
+    expect(await mode(profileFiles.session.current)).toBe(0o700)
+    expect(await mode(profileFiles.autoRecover.current)).toBe(0o700)
+    expect(await mode(join(profileFiles.session.current, 'session.json'))).toBe(0o600)
+    expect(await mode(join(profileFiles.autoRecover.current, recordId + '.json'))).toBe(0o600)
+    expect(await mode(profileFiles.savedPasswords.current)).toBe(0o600)
+  })
+
+  it('copies saved passwords as they are when there is no library to key them to', async () => {
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, profileFiles.savedPasswords.legacy), JSON.stringify(passwords))
+    expect(await migrateProfile(directory)).toMatchObject({ connections: 'skipped', savedPasswords: 'migrated' })
+    expect(await read(profileFiles.savedPasswords.current)).toEqual(passwords)
+  })
+
+  it("leaves a marker naming a later version's step alone", async () => {
+    await seed09()
+    const later = JSON.stringify({ version: 1, done: ['connections', 'bigQueryConnections'] })
+    await writeFile(join(directory, migrationMarker), later)
+    expect(await migrateProfile(directory)).toEqual({ connections: 'skipped', savedPasswords: 'skipped', session: 'skipped', autoRecover: 'skipped' })
+    expect(await readFile(join(directory, migrationMarker), 'utf8')).toBe(later)
   })
 
   it("leaves a newer version's marker alone and repeats nothing", async () => {

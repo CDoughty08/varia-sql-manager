@@ -36,7 +36,7 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly creditedEvents?: boolean
   /** The engines it serves; absent, SQL Server only (`defaultProviders`), so a new method is SQL Server's until it says
    *  otherwise. Main refuses a request whose connection is another provider's with UNSUPPORTED_PROVIDER before sending it
-   *  (`requestProvider`), and SqlService.DispatchAsync checks again (its MethodProviders mirrors this). Methods that name a
+   *  (`requestProvider`), and SqlService.DispatchAsync checks again (`Providers.BothMethods` mirrors this). Methods that name a
    *  query, session or result rather than a connection are declared for both and checked only in C#. */
   readonly providers?: readonly ProviderId[]
 }

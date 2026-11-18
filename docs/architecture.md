@@ -59,8 +59,7 @@ only when a summary line stops being true.
   most one backend generation and never re-sent. UI result caches are 256 windows and 16 Mi units; the worker cache is
   64 MiB.
 - **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- **Preferences files** (`settings.json`, `appearance.json`, `mssql-connections.json`, `bigquery-connections.json`,
-  `workspace-layouts.json`, `mssql-saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+- **Preferences files** (`settings.json`, `appearance.json`, `mssql-connections.json`, `workspace-layouts.json`, `mssql-saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
   quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
   `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
 
@@ -558,8 +557,9 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 - **Provider gating.** Commands, submenus, Explorer kinds, object actions, live sources, settings pages and Script As
   kinds have `providers`, SQL Server only when absent. Commands (object and server actions' commands take their spec's)
   and submenus are gated at run time: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
-  `explorerSelectionProvider` for an Object Explorer command or one run from an Object Explorer node's or a search
-  result's menu (`commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
+  `explorerSelectionProvider` for an Object Explorer command or one run on an Object Explorer node or search result (whose
+  arguments stand the object's engine in), and not at all for one that finds its own object (`providerContext`;
+  `commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
   other catalogues' `providers` are read by the lint and by the lanes that add BigQuery's surfaces. What enforces the
   engine is the method gate (docs/ipc.md#providers). `tests/providers-catalog.test.ts` lints that an entry whose
   `when` names a provider declares it, and that one declaring `bigquery` names no method that serves SQL Server only (the

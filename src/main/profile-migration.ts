@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { connectionKey, connectionLibrarySchema } from '../shared/connections'
 import { recoveryLimits } from '../shared/files/recovery'
 import { sessionLimits } from '../shared/files/session'
-import { quarantine, readJsonFile, writeBytesAtomic } from './json-file'
+import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { recoveryRecordSchema } from './recovery-store'
 import { savedPasswordFileSchema, savedPasswordFileLimit } from './saved-passwords'
 import { storedSessionSchema } from './session-store'
@@ -34,6 +34,9 @@ export type MigrationOutcome = 'migrated' | 'skipped' | 'quarantined' | 'partial
 export interface ProfileMigrationOptions {
   /** Writes a file atomically; tests replace it to fail a write. */
   readonly write?: typeof writeBytesAtomic
+  /** Moves a staging folder into place, through `replaceFile`'s retries; tests replace it, and the platform, to refuse a move. */
+  readonly move?: typeof rename
+  readonly platform?: NodeJS.Platform
 }
 
 /**
@@ -63,6 +66,8 @@ interface StepResult { readonly outcome: MigrationOutcome; readonly finished: bo
 const finished = (outcome: MigrationOutcome): StepResult => ({ outcome, finished: true })
 interface StepContext {
   readonly path: (name: string) => string
+  /** Moves a staging folder into place. Windows refuses while a scanner holds a file just written in it, briefly. */
+  readonly place: (from: string, to: string) => Promise<void>
   readonly write: typeof writeBytesAtomic
   /** `copied` from the marker; a step adds what it copied, and the caller records it even when the step fails later. */
   readonly copied: Set<string>
@@ -155,6 +160,11 @@ async function recordsIn(folder: string): Promise<string[]> {
     throw error
   }
 }
+/** A 0.9.0 tab's AutoRecover id, the same at every attempt (a uuid's shape, from its session file, save time and place). */
+function offeredId(file: string, savedAt: string, index: number): string {
+  const hex = createHash('sha256').update(JSON.stringify(['varia-session-tab', file, savedAt, index])).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${(8 + (parseInt(hex[16], 16) & 3)).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
 /** What AutoRecover's caps leave in a folder: records and bytes, as `RecoveryStore.write` counts them. */
 async function recoveryRoom(folder: string): Promise<{ records: number; bytes: number }> {
   const names = await recordsIn(folder)
@@ -173,7 +183,7 @@ async function makeFolder(folder: string): Promise<void> {
  * that left it empty, since an unfinished attempt) and newer: 0.9.0's tabs that only 0.9.0 holds (text with no file behind
  * it, or unsaved changes) are then offered through AutoRecover instead, as records of their own, when they fit its caps.
  */
-async function migrateSession({ path, write, copied }: StepContext): Promise<StepResult> {
+async function migrateSession({ path, write, copied, place }: StepContext): Promise<StepResult> {
   const from = path(profileFiles.session.legacy), to = path(profileFiles.session.current)
   let names: string[]
   try { names = (await readdir(from)).filter(name => sessionName.test(name)) } catch (error) {
@@ -195,7 +205,7 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
     try {
       await makeFolder(temporary)
       for (const { name, value } of sessions) await write(join(temporary, name), record(value), { mode: 0o600 })
-      await rename(temporary, to)
+      await place(temporary, to)
     } catch (error) {
       await rm(temporary, { recursive: true, force: true }).catch(() => {})
       throw error
@@ -212,20 +222,20 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
     const parsed = read?.kind === 'ok' ? storedSessionSchema.safeParse(read.value) : undefined
     for (const document of parsed?.success ? parsed.data.documents : []) seen.add(JSON.stringify([document.name, document.text]))
   }
-  const room = await recoveryRoom(recover)
+  const room = await recoveryRoom(recover), written = new Set(await recordsIn(recover))
   let partial = false, offered = false
   for (const { name, value } of sessions) {
-    const records = value.documents.flatMap(document => {
+    const records = value.documents.flatMap((document, index) => {
       const key = JSON.stringify([document.name, document.text])
       if (document.text === undefined || document.text === '' || (!document.dirty && document.path) || seen.has(key)) return []
       seen.add(key)
       const parsed = recoveryRecordSchema.safeParse({
-        version: 2, id: randomUUID(), owner: { instance: randomUUID(), generation: 0 }, name: document.name, kind: document.kind,
+        version: 2, id: offeredId(name, value.savedAt, index), owner: { instance: randomUUID(), generation: 0 }, name: document.name, kind: document.kind,
         ...document.path ? { path: document.path } : {}, eol: document.eol, ...document.server ? { server: document.server } : {},
         ...document.database ? { database: document.database } : {}, savedAt: value.savedAt, text: document.text, provider: 'sqlserver'
       })
-      // A tab too large for an AutoRecover record stays only in 0.9.0's session.
-      return parsed.success ? [parsed.data] : []
+      // A tab too large for an AutoRecover record stays only in 0.9.0's session; one an attempt that failed part-way wrote is there.
+      return parsed.success && !written.has(parsed.data.id + '.json') ? [parsed.data] : []
     })
     const bytes = records.map(item => record(item)), size = bytes.reduce((sum, item) => sum + item.length, 0)
     if (records.length > room.records || size > room.bytes) { partial = true; continue }
@@ -247,7 +257,7 @@ async function migrateSession({ path, write, copied }: StepContext): Promise<Ste
  * it since), while the folder has room for it under the store's 64 records. An unreadable record is quarantined beside
  * the original, as the store would.
  */
-async function migrateAutoRecover({ path, write, copied }: StepContext): Promise<StepResult> {
+async function migrateAutoRecover({ path, write, copied, place }: StepContext): Promise<StepResult> {
   const from = path(profileFiles.autoRecover.legacy), to = path(profileFiles.autoRecover.current)
   let names: string[]
   try { names = (await readdir(from)).filter(name => recordName.test(name)) } catch (error) {
@@ -296,7 +306,7 @@ async function migrateAutoRecover({ path, write, copied }: StepContext): Promise
     }
     // Nothing copied: no folder, so a failed step leaves none behind.
     if (failure && !wrote) throw failure
-    await rename(temporary, to)
+    await place(temporary, to)
   } catch (error) {
     await rm(temporary, { recursive: true, force: true }).catch(() => {})
     throw error
@@ -321,7 +331,9 @@ async function readMarker(path: string): Promise<Marker> {
   const parsed = read.kind === 'ok' ? markerSchema.safeParse(read.value) : undefined
   if (parsed?.success) return { kind: 'ok', value: parsed.data }
   const version = read.kind === 'ok' && typeof read.value === 'object' && read.value !== null ? (read.value as { version?: unknown }).version : undefined
-  if (typeof version === 'number' && version > 1) return { kind: 'done', record: false }
+  const done = read.kind === 'ok' && typeof read.value === 'object' && read.value !== null ? (read.value as { done?: unknown }).done : undefined
+  const laterStep = Array.isArray(done) && done.some(step => typeof step === 'string' && /^[A-Za-z]{1,64}$/.test(step) && !(migrationSteps as readonly string[]).includes(step))
+  if ((typeof version === 'number' && version > 1) || (version === 1 && laterStep)) return { kind: 'done', record: false }
   await quarantine(path).catch(() => {})
   return { kind: 'done', record: true }
 }
@@ -344,7 +356,8 @@ export async function migrateProfile(userData: string, options: ProfileMigration
     return Object.fromEntries(migrationSteps.map(step => [step, 'skipped'])) as Record<MigrationStep, MigrationOutcome>
   }
   const done = new Set<MigrationStep>(marker.kind === 'ok' ? marker.value.done : []), copied = new Set<string>(marker.kind === 'ok' ? marker.value.copied : [])
-  const context: StepContext = { path, write, copied }
+  const move = options.move ?? rename, platform = options.platform ?? process.platform
+  const context: StepContext = { path, write, copied, place: (from, to) => replaceFile(from, to, platform, move) }
   const steps: Record<MigrationStep, (context: StepContext) => Promise<StepResult>> = {
     connections: migrateConnections, savedPasswords: migrateSavedPasswords, session: migrateSession, autoRecover: migrateAutoRecover
   }
