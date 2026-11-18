@@ -343,9 +343,11 @@ try {
     // Test Connection signs in with the form as it is, against the real server, and opens nothing.
     await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
     await expect(dialog.getByText('Connected to ' + process.env.VARIA_TEST_SQL_SERVER + (liveUser ? ' as ' + liveUser : ''), { exact: false })).toBeVisible({ timeout: 35000 })
-    if (liveUser) {
+    const liveRemember = dialog.getByLabel('Remember password', { exact: true })
+    if (liveUser && await liveRemember.isEnabled()) {
       // Save checks a typed password with the server, then remembers it only as ciphertext; the field shows it is saved.
-      await dialog.getByLabel('Remember password', { exact: true }).check()
+      await liveRemember.check()
+      await expect(dialog.getByText(/^Save checks this password with the server/)).toBeVisible()
       await dialog.getByRole('button', { name: 'Save', exact: true }).click()
       await expect(dialog.getByText(/The new password is remembered/)).toBeVisible({ timeout: 35000 })
       await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
@@ -354,7 +356,12 @@ try {
       expect(await readFile(join(profile, 'saved-passwords.json'), 'utf8')).not.toContain(process.env.VARIA_TEST_SQL_PASSWORD)
       // The rest of the suite connects with a typed password and nothing remembered: unchecking forgets it on Connect.
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
-      await dialog.getByLabel('Remember password', { exact: true }).uncheck()
+      await liveRemember.uncheck()
+    } else if (liveUser) {
+      // No keyring (as on CI's Linux): Save keeps the settings and says the password was not kept.
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(dialog.getByText('Saved to History. The password was not kept.', { exact: true })).toBeVisible()
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_PASSWORD)
     }
     // Development servers have self-signed certificates: without Trust server certificate the connect fails with the fix,
     // and the fix connects. A server whose certificate this computer trusts connects at once.
