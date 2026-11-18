@@ -72,7 +72,9 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
 
   Down in the search goes to the values. The values list is one Tab stop, between the search and the condition.
 - The funnel opens beside its column, on the right when it fits and otherwise on the left (above or below a
-  transposed grid's row), so it never covers the values it filters. Drag its corner grip to resize it; the size is kept
+  transposed grid's row), narrower than its kept width when neither side has room for that, so it covers the values it
+  filters only when a column leaves too little room on both sides. Drag its corner grip to resize it; it stays on the
+  side it was on while you drag. The size is kept
   for every grid as **Column filter width** and **Column filter height** in Options › Query Results › SQL Server ›
   Results to Grid.
 - **Clear Filters** (grid menu › Filter, Ctrl+Shift+L in a grid, ⇧⌘L on macOS) takes every filter off the grid; the

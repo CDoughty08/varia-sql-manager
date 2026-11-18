@@ -165,11 +165,13 @@ describe('column filter', () => {
     expect(popoverPlace({ band: row, width: 400, height: 700, view, side: 'below' })).toMatchObject({ side: 'below', top: 322, maxHeight: 470 })
     // A side with no room for the smallest popover is not kept (the last resort over the column).
     expect(keepsSide({ left: 0, right: 1600, top: 0, bottom: 800 }, view, 'right')).toBe(false)
-    // Over the column for want of room beside it, even with room for a smaller popover on its right: marked, so a resize
-    // keeps no side (it would jump beside the column at the first move).
+    // Too wide for either side at its remembered width: narrower beside the column on the roomier side, not over it.
     const tall = { left: 400, right: 500, top: 100, bottom: 760 }, small = { width: 1024, height: 768 }
-    expect(popoverPlace({ band: tall, width: 600, height: 420, view: small })).toMatchObject({ side: 'right', left: 8, width: 600, over: true })
-    expect(keepsSide(tall, small, 'right')).toBe(true)
+    expect(popoverPlace({ band: tall, width: 600, height: 420, view: small })).toEqual({ side: 'right', left: 502, top: 100, width: 514, maxHeight: 660 })
+    expect(popoverPlace({ band: { left: 600, right: 700, top: 100, bottom: 760 }, width: 700, height: 420, view: small })).toMatchObject({ side: 'left', left: 8, width: 590 })
+    // Only a column with no room for the smallest popover on either side is covered, and that placement is marked, so a
+    // resize keeps no side (it would jump beside the column at the first move).
+    expect(popoverPlace({ band: { left: 100, right: 950, top: 100, bottom: 760 }, width: 600, height: 420, view: small })).toMatchObject({ side: 'right', left: 350, over: true })
     expect(popoverPlace({ band, width: 400, height: 420, view }).over).toBeUndefined()
     expect(popoverPlace({ band: { left: 0, right: 1600, top: 0, bottom: 800 }, width: 400, height: 420, view, side: 'right' }).left).toBe(1192)
   })

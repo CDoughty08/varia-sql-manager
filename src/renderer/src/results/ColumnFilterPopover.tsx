@@ -646,6 +646,12 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
     else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (acting) runAt(actHere) }
     else if (typed(event)) { event.preventDefault(); typeIntoSearch(event.key) }
   }
+  // The highlighted action stays in view as the arrows move it (the focus stays on the list, which does not scroll itself).
+  useLayoutEffect(() => {
+    const box = actionsBox.current
+    if (!box || box.ownerDocument.activeElement !== box) return
+    box.ownerDocument.getElementById(`${rowId}-act-${actHere}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [actHere, rowId])
   useLayoutEffect(() => {
     if (!caretToEnd.current) return
     caretToEnd.current = false

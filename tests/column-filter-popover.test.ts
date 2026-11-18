@@ -505,21 +505,36 @@ describe('column filter popover', () => {
   })
 
   it('keeps no side when it opened over its column, and saves no size below the settings\' least', async () => {
-    // A column from 400 to 500 down the window, 600 px remembered: over the column (514 px on its right is too little).
+    // A column from 100 to 950: too little room on either side, so it opens over the column at its right end.
     const resized = vi.fn()
-    const view = fixture({ anchor: rect(400, 100, 100, 660), size: { width: 600, height: 400 }, onResized: resized })
+    const view = fixture({ anchor: rect(100, 100, 850, 660), size: { width: 600, height: 400 }, onResized: resized })
     await view.settle()
-    expect([view.dialog().style.left, view.dialog().style.width]).toEqual(['8px', '600px'])
+    expect([view.dialog().style.left, view.dialog().style.width]).toEqual(['350px', '600px'])
     const grip = view.dialog().querySelector('.column-filter-grip') as HTMLElement
-    view.dialog().getBoundingClientRect = () => rect(8, 100, 600, 400)
+    view.dialog().getBoundingClientRect = () => rect(350, 100, 600, 400)
     const pointer = (type: string, x: number, y: number) => act(() => { grip.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y })) })
-    pointer('pointerdown', 600, 500)
-    pointer('pointermove', 610, 500)
-    // It grows where it is rather than jumping beside the column.
-    expect([view.dialog().style.left, view.dialog().style.width]).toEqual(['8px', '610px'])
+    pointer('pointerdown', 950, 500)
+    pointer('pointermove', 960, 500)
+    // It grows where it is, its right end at the column's, rather than jumping beside the column.
+    expect([view.dialog().style.left, view.dialog().style.width, view.dialog().dataset.side]).toEqual(['340px', '610px', 'right'])
     pointer('pointermove', -2000, -2000)
     pointer('pointerup', -2000, -2000)
     expect(resized).toHaveBeenLastCalledWith({ width: 340, height: 240 })
+    view.unmount()
+  })
+
+  it('opens narrower beside its column when its remembered width fits neither side, and scrolls the action list to its highlight', async () => {
+    const view = fixture({ anchor: rect(400, 100, 100, 660), size: { width: 600, height: 0 } })
+    await view.settle()
+    expect([view.dialog().dataset.side, view.dialog().style.left, view.dialog().style.width]).toEqual(['right', '502px', '514px'])
+    const shown: string[] = [], own = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) { shown.push(this.getAttribute('aria-label') ?? '') }
+    try {
+      act(() => view.valueList().focus())
+      view.key(view.valueList(), 'ArrowLeft')
+      view.key(actionsOf(view), 'End')
+      expect(shown.at(-1)).toBe('Invert ticks')
+    } finally { Element.prototype.scrollIntoView = own }
     view.unmount()
   })
 
