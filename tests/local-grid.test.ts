@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -291,12 +291,18 @@ describe('local saves in main', () => {
     expect(localSaveMode(link, { isFile: () => true, mode: 0o100444 })).toEqual({ mode: 0o444, umask: true })
     expect(localSaveMode(link, { isFile: () => false, mode: 0o40755 })).toEqual({})
     expect(localSaveMode(undefined, undefined)).toEqual({})
-    // On Windows the target is not read for a mode: over a read-only file the new one is writable until it replaces it.
+    // On Windows the target is not read for a mode: a file replacing a read-only one is writable. Shown where the rename
+    // over a read-only file succeeds (Windows itself refuses it, mapped to ACCESS above).
     const folder = await mkdtemp(join(tmpdir(), 'varia-local-win-'))
     try {
       const path = join(folder, 'new.csv')
-      await writeLocalSave(path, new TextEncoder().encode('new'), 'win32')
-      expect((await stat(path)).mode & 0o200).toBe(0o200)
+      await writeFile(path, 'old')
+      if (process.platform !== 'win32') {
+        await chmod(path, 0o444)
+        await writeLocalSave(path, new TextEncoder().encode('new'), 'win32')
+        expect((await stat(path)).mode & 0o200).toBe(0o200)
+        expect(await readFile(path, 'utf8')).toBe('new')
+      }
       // A folder is refused before anything is written, on every platform.
       await mkdir(join(folder, 'dir.csv'))
       await expect(writeLocalSave(join(folder, 'dir.csv'), new TextEncoder().encode('new'))).rejects.toMatchObject({ code: 'EISDIR' })

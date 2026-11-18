@@ -303,7 +303,7 @@ export class GridView {
   private lastTop = 0
   private lastLeft = 0
   private viewportWidth = 0
-  /** The scroller's width with its vertical scroll bar: a grid sized to its rows has none. */
+  /** The scroller's width with its vertical scroll bar, if any. */
   private outerWidth = 0
   private wide: boolean | undefined
   private viewportHeight = 0
@@ -1500,7 +1500,9 @@ export class GridView {
       this.head.style.width = total + 'px'
       columnsMoved = true
     }
-    const wide = total > this.outerWidth
+    // Against the width beside a vertical scroll bar when there is one (a card past its rows): a grid sized to its rows
+    // has none, and measuring it with one it only shows while short of room would flip back and forth.
+    const wide = total > Math.min(this.viewportWidth, this.outerWidth)
     if (wide !== this.wide && this.outerWidth > 0) { this.wide = wide; this.o.onWide?.(wide) }
     if (model.spacerHeight !== this.spacerHeight) { this.spacerHeight = model.spacerHeight; this.spacer.style.height = model.spacerHeight + 'px' }
     if ((model.mode === 'virtual') !== this.wheelAttached) {

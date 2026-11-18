@@ -874,6 +874,8 @@ export interface VariaApi {
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
+  /** How many times this page has called `writeClipboardText`: a copy still formatting stops once another text was written. */
+  clipboardWrites(): number
   /** Brings one of the page's popout windows (by the `varia-popout-<uuid>` name it opened it with) to the top, restored, without
    *  activating it, so keyboard focus stays in the main window. */
   raisePopout(name: string): Promise<ApiResult<void>>
