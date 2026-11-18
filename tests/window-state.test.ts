@@ -60,6 +60,13 @@ describe('placeWindow', () => {
     expect(placeWindow(saved(300, 200, 1440, 960), on(laptop), position)).toEqual({ bounds: { x: 0, y: 0, width: 1366, height: 728 }, maximized: false, outcome: 'resized' })
   })
 
+  it('moves a shrunk window whose title bar would land in a gap between staggered displays', () => {
+    const a: Rect = { x: 0, y: 0, width: 1920, height: 1080 }, b: Rect = { x: 1920, y: 500, width: 1920, height: 1080 }
+    const placed = placeWindow(saved(1900, 520, 1900, 1700), on(a, b), position)
+    expect(placed.outcome).toBe('moved')
+    expect(grabArea(placed.bounds as Rect, [a, b])).toBeDefined()
+  })
+
   it('grows a window smaller than the minimum to the minimum, within the work area', () => {
     expect(placeWindow(saved(100, 100, 200, 150), on(primary), position)).toEqual({ bounds: { x: 100, y: 100, width: mainWindowLimits.minWidth, height: mainWindowLimits.minHeight }, maximized: false, outcome: 'resized' })
   })
@@ -353,6 +360,46 @@ describe('WindowStateTracker', () => {
     emit('close')
     await tracker.flush()
     expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1300, height: 900, maximized: true })
+  })
+
+  it('on Linux, keeps a move made just before minimizing, which reports no new bounds', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: 480, y: 290, width: 1300, height: 900 }; emit('move')
+    state.bounds = { x: 500, y: 300, width: 1300, height: 900 }; emit('move')
+    vi.advanceTimersByTime(200)
+    state.minimized = true; emit('minimize')
+    vi.advanceTimersByTime(1000)
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 500, y: 300, width: 1300, height: 900, maximized: false })
+    emit('close')
+    await tracker.flush()
+    expect(tracker.current()).toEqual({ x: 500, y: 300, width: 1300, height: 900, maximized: false })
+  })
+
+  it('on Linux, keeps a move made just before a maximize whose flag comes before its new size', async () => {
+    const { tracker, save, state, emit } = setup('linux')
+    state.bounds = { x: 500, y: 300, width: 1300, height: 900 }; emit('move')
+    vi.advanceTimersByTime(200)
+    state.maximized = true; emit('maximize')
+    state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+    vi.advanceTimersByTime(1000)
+    emit('close')
+    await tracker.flush()
+    expect(save).toHaveBeenLastCalledWith({ x: 500, y: 300, width: 1300, height: 900, maximized: true })
+  })
+
+  it('on Linux, the maximized size reported before the flag is not taken for the normal place, settled or closed at once', async () => {
+    for (const close of [false, true]) {
+      const { tracker, save, state, emit } = setup('linux')
+      state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')
+      state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+      state.maximized = true; emit('maximize')
+      if (!close) vi.advanceTimersByTime(1000)
+      emit('close')
+      await tracker.flush()
+      expect(save).toHaveBeenLastCalledWith({ x: 300, y: 200, width: 1300, height: 900, maximized: true })
+      vi.useRealTimers()
+    }
   })
 
   it('writes what a window last looked like when it is destroyed before its pending save', async () => {

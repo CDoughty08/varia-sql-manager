@@ -119,7 +119,8 @@ is quarantined and the default place used; a file that cannot be read is never o
 
 - **Checked against the displays now** (`placeWindow`, in DIPs against every display's work area). A window whose title
   bar (its top 40 px, at least 160 px wide) is still on a display reopens there, shrunk to the work areas it overlaps if it
-  no longer fits them (so one stretched across adjacent displays keeps its size). One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
+  no longer fits them (so one stretched across adjacent displays keeps its size), unless shrinking would leave its title
+  bar between staggered displays. One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
   is off every work area, or that would open under the macOS menu bar, is centred on the nearest display at its saved
   size (clamped to that work area). Sizes never go below the minimum (1024 x 700) unless the work area is smaller. With
   nothing saved it opens at 1440 x 960, fitted to and centred on the primary display.
@@ -131,8 +132,9 @@ is quarantined and the default place used; a file that cannot be read is never o
   automatic platform; an X11 session that also exports `WAYLAND_DISPLAY`, as WSLg does, stays X11) a window cannot place
   itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen reports no
   reliable normal bounds (Windows gives the maximized rectangle), so main keeps the window's normal bounds as it goes:
-  Windows' and macOS's own while maximized, and on Linux, whose window manager may report a maximize's new size before its
-  state, the bounds the window last had while normal other than the ones it left that state at.
+  Windows' and macOS's own while maximized, and on Linux, whose window manager may report a maximize's new size before or after
+  its state, the bounds the window last had while normal, told apart from an early maximized size by whether the size
+  changes after the state does.
 - **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
 - A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
   set `VARIA_TEST_WINDOW_STATE=1`.

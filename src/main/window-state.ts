@@ -128,9 +128,10 @@ export function placeWindow(saved: SavedWindowState | undefined, displays: Displ
     const room = span([home, ...areas.filter(area => overlap(saved, area) > 0)])
     const width = fit(saved.width, minWidth, room.width), height = fit(saved.height, minHeight, room.height)
     if (width === saved.width && height === saved.height) return { bounds: { x: saved.x, y: saved.y, width, height }, maximized, outcome: 'restored' }
-    // It shrank (or grew to its minimum): keep its corner where it was but inside that room.
+    // It shrank (or grew to its minimum): keep its corner where it was but inside that room, as long as its title bar is
+    // still on a display there (a room spanning staggered displays has gaps); otherwise it moves like a lost window.
     const x = Math.min(Math.max(saved.x, room.x), room.x + room.width - width), y = Math.min(Math.max(saved.y, room.y), room.y + room.height - height)
-    return { bounds: { x, y, width, height }, maximized, outcome: 'resized' }
+    if (grabArea({ x, y, width, height }, areas)) return { bounds: { x, y, width, height }, maximized, outcome: 'resized' }
   }
   const area = nearestArea(saved, areas, primary)
   return { bounds: centred(area, fit(saved.width, minWidth, area.width), fit(saved.height, minHeight, area.height)), maximized, outcome: 'moved' }
@@ -189,7 +190,7 @@ export interface TrackedWindow {
   isMinimized(): boolean
   isFullScreen(): boolean
   isDestroyed(): boolean
-  on(event: 'move' | 'resize' | 'maximize' | 'unmaximize' | 'enter-full-screen' | 'leave-full-screen' | 'close' | 'closed', listener: () => void): unknown
+  on(event: 'move' | 'resize' | 'maximize' | 'unmaximize' | 'minimize' | 'restore' | 'enter-full-screen' | 'leave-full-screen' | 'close' | 'closed', listener: () => void): unknown
 }
 export interface TrackerOptions {
   readonly platform: NodeJS.Platform
@@ -229,12 +230,25 @@ export class WindowStateTracker {
         else { const bounds = window.getBounds(); if (!candidate || !same(candidate, bounds)) { earlier = candidate; candidate = bounds } }
       } else if (!linux) normal = window.getNormalBounds()
     }
-    /** The window just left the normal state: a candidate it left from (not the bounds it now has) was its normal place. */
+    // Linux, a candidate the window left the normal state at: either the maximized size reported before the flag (it stays
+    // the window's size, and `earlier` was the normal place) or the normal place itself with the new size still to come.
+    let undecided: { candidate: Rect; earlier?: Rect } | undefined
+    /** The window is not normal: decide what its last bounds while normal were. */
     const left = () => {
-      const now = window.isDestroyed() ? undefined : window.getBounds()
-      const before = [candidate, earlier].find(bounds => bounds && now && !same(bounds, now))
-      if (before) normal = before
+      if (window.isDestroyed()) return
+      const now = window.getBounds()
+      if (undecided && !same(now, undecided.candidate)) { normal = undecided.candidate; undecided = undefined }
+      if (!candidate) return
+      // Minimizing keeps the window's bounds, so the bounds it has are the place it was minimized from.
+      if (window.isMinimized() && !window.isMaximized() && !window.isFullScreen()) normal = candidate
+      else if (!same(candidate, now)) normal = candidate
+      else undecided = { candidate, earlier }
       candidate = earlier = undefined
+    }
+    /** Nothing changed the size since: the undecided candidate was the maximized size, reported early. */
+    const decide = () => {
+      if (undecided?.earlier) normal = undecided.earlier
+      undecided = undefined
     }
     const capture = (): SavedWindowState | undefined => {
       if (window.isDestroyed()) return undefined
@@ -253,7 +267,13 @@ export class WindowStateTracker {
       if (!isNormal()) left()
       refresh(false)
       seen = capture()
-      this.schedule(window, () => { refresh(true); return capture() })
+      this.schedule(window, () => {
+        if (window.isDestroyed()) return undefined
+        if (isNormal()) undecided = undefined
+        else { left(); decide() }
+        refresh(true)
+        return capture()
+      })
     }
     window.on('move', changed)
     window.on('resize', changed)
@@ -262,7 +282,9 @@ export class WindowStateTracker {
     window.on('unmaximize', () => { if (!window.isFullScreen()) maximized = false; changed() })
     window.on('enter-full-screen', changed)
     window.on('leave-full-screen', changed)
-    window.on('close', () => { this.cancel(window); if (!isNormal()) left(); this.write(capture()) })
+    window.on('minimize', changed)
+    window.on('restore', changed)
+    window.on('close', () => { this.cancel(window); if (!isNormal()) { left(); decide() } this.write(capture()) })
     window.on('closed', () => { if (this.cancel(window)) this.write(seen) })
   }
 
