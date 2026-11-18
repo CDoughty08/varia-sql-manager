@@ -567,6 +567,23 @@ try {
   await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeEnabled()
   await expect(dialog).toBeVisible()
   await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
+  // Stopping Save's password check saves nothing and says so. Only where a keyring lets Save remember passwords.
+  const authBefore = await dialog.getByLabel('Authentication', { exact: true }).inputValue()
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await dialog.getByLabel('Password', { exact: true }).fill('typed-for-save')
+  const rememberBox = dialog.getByLabel('Remember password', { exact: true })
+  if (await rememberBox.isEnabled()) {
+    await rememberBox.check()
+    await expect(dialog.getByText('Save checks this password with the server, then remembers it.', { exact: true })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(dialog.getByText('Checking the password with entra-wait…', { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog.getByText('Save cancelled. Nothing was saved.', { exact: true })).toBeVisible()
+    expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'entra-wait')).toBe(false)
+    await rememberBox.uncheck()
+  }
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption(authBefore)
   await dialog.getByLabel('Database Name', { exact: true }).fill(databaseBefore)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   // A failure shows above the footer: Connect and Cancel stay where they were before it.

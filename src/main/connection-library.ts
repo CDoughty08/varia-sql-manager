@@ -6,7 +6,7 @@ import type { SavedPasswordStore } from './saved-passwords'
 
 export interface ConnectionLibraryDeps {
   connections: Pick<ConnectionStore, 'load' | 'save' | 'saveEntry' | 'remove' | 'setEnvironment'>
-  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'state' | 'set'>
+  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'forgetCredentials' | 'state' | 'set'>
 }
 
 /**
@@ -33,6 +33,14 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
      */
     async save(value: unknown): Promise<ConnectionSaveView> {
       const input = connectionProfileInputSchema.parse(value)
+      if (input.forgetPassword) {
+        const { forgetPassword: _forget, ...entry } = input
+        const saved = await deps.connections.saveEntry(entry)
+        let passwordForgotten = true
+        try { await deps.savedPasswords.forget(saved.id); await deps.savedPasswords.forgetCredentials(input.options) } catch { passwordForgotten = false }
+        const { library, savedPasswords } = await view(saved.library)
+        return { library, savedPasswords, passwordForgotten }
+      }
       if (!input.rememberPassword) {
         const { library, savedPasswords } = await view(await deps.connections.save(input))
         return { library, savedPasswords }

@@ -50,8 +50,9 @@ and never reconnects. A connection saved before it ever connected stays in Histo
 listed under Favorites only) and moves to Recent Connections once it connects; Saved entries do not count toward the 30
 recent ones. A password typed into the form is kept only when Remember password is checked: Save first signs in with it
 (as Load databases does, so a wrong password saves nothing and shows the failure at Connect), then remembers it, and the
-field goes back to the saved-password dots. While Object Explorer has connections that use the saved password for that
-login, Save keeps the settings but not the new password, and says to Connect with it, which updates those connections. Without Remember password, Save keeps the settings and says the password was not kept. A line under
+field goes back to the saved-password dots. Object Explorer connections that used the old password keep their sessions
+but need the new one entered when they next connect, as after Connect with a new password. Unchecking Remember password
+and saving forgets the saved password, as Connect does. Without Remember password, Save keeps the settings and says the password was not kept. A line under
 Password says which applies.
 
 **Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
