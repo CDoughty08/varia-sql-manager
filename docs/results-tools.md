@@ -301,7 +301,7 @@ A [named result](#named-results) shows its name wherever an unnamed one says "Re
 | Comparison | "Differences: Open orders → Result 3" (its tab "Open orders → Result 3"), strip links, columns not compared ("Price (Open orders)"); closed: "Open orders (closed)". |
 | Compare popover | Name with "Result 2"; sides "Open orders · Result 2". |
 | Go to Result, picker | Name with "Result 2" lighter ("Open orders, Result 2, Table"); filter matches either. |
-| Grid | Accessible name "Open orders, Result 2 of 5, …". |
+| Grid | Accessible name "Open orders, Result 2 of 5, …"; a Pivot's or comparison's starts with its own name ("Differences: Open orders → Result 3, …"). |
 | Column Profile, splitter, plans | "Resize Open orders, Result 2", "Open orders, Result 2, plan 1"; a Pivot or comparison by its own name ("Resize Differences: Open orders → Result 3"). |
 | Memory details | "Query 3 · Open orders · Result 2"; narrow panels cut the query part first. |
 

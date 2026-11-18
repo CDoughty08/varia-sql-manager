@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { derivedGridName } from '../src/renderer/src/grid/ResultGrid'
 import { entryTitle, resultTitle } from '../src/renderer/src/results/ResultsService'
 
 const root = join(__dirname, '../src/renderer/src')
@@ -19,14 +20,34 @@ describe('result names', () => {
     expect(entryTitle({ number: 1, descriptor: { kind: 'rows' as const } })).toBe('Result 1')
   })
 
-  // Every surface that names a result by `resultTitle` would call a comparison "Result N". These are the only callers:
-  // `entryTitle` (for an original result) and a save's or copy's job label, which picks by view. A new surface uses `entryTitle` or `entryName`.
+  it('announces the grid of a comparison or a Pivot by its own name, and leaves an original result "Result N of M"', () => {
+    const named = (kind: 'diff' | 'pivot' | 'rows', label?: string) => derivedGridName({ number: 3, ...label ? { label } : {}, descriptor: { kind } } as Parameters<typeof derivedGridName>[0])
+    expect(named('diff', 'Differences: Result 1 → Result 2')).toBe('Differences: Result 1 → Result 2')
+    expect(named('pivot', 'Pivot of Result 2')).toBe('Pivot of Result 2')
+    expect(named('rows')).toBeUndefined()
+    expect(named('rows', 'Totals')).toBeUndefined()
+  })
+
+  // The ways a surface names a result by its number, which would call a comparison "Result N": `resultTitle`, and a grid's
+  // `resultNumber` ("Result N of M"). These are the only callers; a new surface uses `entryTitle` or `entryName`. Text
+  // built from `entryNumber` or `entry.number` by hand is not caught here.
+  const callers = (pattern: RegExp) => sources(root).flatMap(file => readFileSync(file, 'utf8').split('\n').flatMap(line =>
+    pattern.test(line) ? [`${relative(root, file).replaceAll('\\', '/')}: ${line.trim().split(/ = | === |, /)[0]}`] : []))
   it('lists every caller of resultTitle', () => {
-    const callers = sources(root).flatMap(file => readFileSync(file, 'utf8').split('\n').flatMap(line =>
-      /\bresultTitle\(/.test(line) ? [`${relative(root, file).replaceAll('\\', '/')}: ${line.trim().split(/ = | === /)[0]}`] : []))
-    expect(callers).toEqual([
+    // `entryTitle` (for an original result) and a save's or copy's job label, which picks by view.
+    expect(callers(/\bresultTitle\(/)).toEqual([
       'results/ResultsService.ts: export const entryTitle',
       'results/ResultsService.ts: return run.slots.get(set.key)?.view'
     ])
+  })
+
+  it('lists every grid named by a result number', () => {
+    // A results grid, which passes `derivedGridName` as its label for a comparison or Pivot, and a live grid, which always
+    // passes its own label.
+    expect(callers(/(?<!readonly )\bresultNumber: /)).toEqual([
+      'grid/ResultGrid.tsx: entry: key',
+      'live/LiveGridPane.tsx: entry: \'live\''
+    ])
+    expect(readFileSync(join(root, 'grid/ResultGrid.tsx'), 'utf8')).toMatch(/resultNumber: entry\.number, .*\.\.\.label \? \{ label \} : \{\}/)
   })
 })

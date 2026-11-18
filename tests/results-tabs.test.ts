@@ -17,7 +17,7 @@ import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, 
 import { comparisonSideChars, comparisonTabLabel, filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, shortenMiddle, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
-import { distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
+import { comparedNames, comparisonName, distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { formatCount } from '../src/renderer/src/results/status'
@@ -66,7 +66,8 @@ function fixture(queryNames: readonly (string | undefined)[] = []) {
   // Titled as PivotService titles it: by Result 3's name, with its number when another result has that name.
   const made = results.getSnapshot().t1.sets
   const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${distinctName(made[2], made)}`, ['1:3'])!
-  const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 1 → Result 2', ['1:1', '1:2'])!
+  // Titled as CompareService titles it: by the two results' names, old first.
+  const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), comparisonName(...comparedNames(made[0], made[1], made)), ['1:1', '1:2'])!
   const [one, two, three] = results.getSnapshot().t1.sets.map(set => set.key)
   const listeners = new Set<() => void>()
   let search: Record<string, Partial<TabSearch>> = {}
@@ -996,10 +997,10 @@ describe('named results as tabs', () => {
   it('name a named result\'s tab by its name, with its whole name and number in the tooltip, and an unnamed one as before', () => {
     const { results, draw, resultTabs, names, closer, all } = fixture([long, undefined, 'Totals'])
     const tab = results.getSnapshot().t1
-    expect(topItems(tab).map(item => [item.name, item.number])).toEqual([[long, 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Differences: Result 1 → Result 2', undefined]])
+    expect(topItems(tab).map(item => [item.name, item.number])).toEqual([[long, 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], [`Differences: ${long} → Result 2`, undefined]])
     draw()
     expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Open ord…quarter → Result 2'])
-    expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Differences: Result 1 → Result 2'])
+    expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', `Differences: ${long} → Result 2`])
     // Only a tab that shows a name the query gave is capped and may end in an ellipsis (the fixture's comparison is made from
     // Result 1, named here); the rest are laid out as before.
     expect(all('.rt-tab').map(element => element.dataset.named ?? null)).toEqual(['true', null, 'true', 'true'])
@@ -1007,7 +1008,7 @@ describe('named results as tabs', () => {
     expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
     expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
     // A named result's tab and close button are named with its number too, for a screen reader; others as before.
-    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', 'Differences: Result 1 → Result 2'])
+    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', `Differences: ${long} → Result 2`])
     expect(closer(`${long}, Result 1`)).toBeTruthy()
     expect(closer('Result 2')).toBeTruthy()
     // The view tabs keep their words; a Pivot's accessible name uses the Table's name.
@@ -1035,12 +1036,12 @@ describe('named results as tabs', () => {
     const { results, one, three } = fixture(['Totals', undefined, 'Totals'])
     const tab = results.getSnapshot().t1
     const rows = pickerRows(tab)
-    expect(rows.map(row => [row.name, row.number])).toEqual([['Totals', 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Pivot', undefined], ['Differences: Result 1 → Result 2', undefined]])
+    expect(rows.map(row => [row.name, row.number])).toEqual([['Totals', 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Pivot', undefined], ['Differences: Totals (Result 1) → Result 2', undefined]])
     // Two results of one name are told apart by their numbers, which their accessible names carry.
-    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)', 'Differences: Result 1 → Result 2, Comparison'])
-    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
+    expect(rows.map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Result 2, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)', 'Differences: Totals (Result 1) → Result 2, Comparison'])
+    expect(filterRows(rows, 'totals').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Totals, Result 3, Table', 'Pivot of Totals (Result 3)', 'Differences: Totals (Result 1) → Result 2, Comparison'])
     expect(filterRows(rows, 'result 3').map(row => row.label)).toEqual(['Totals, Result 3, Table', 'Pivot of Totals (Result 3)'])
-    expect(filterRows(rows, 'totals 1').map(row => row.label)).toEqual(['Totals, Result 1, Table'])
+    expect(filterRows(rows, 'totals 1').map(row => row.label)).toEqual(['Totals, Result 1, Table', 'Differences: Totals (Result 1) → Result 2, Comparison'])
     // Go to Result N counts the top row's places, whatever the results are called.
     expect(jumpResult(tab, 1)).toBe(one)
     expect(jumpResult(tab, 3)).toBe(three)
@@ -1086,8 +1087,8 @@ describe('a comparison of named results as tabs', () => {
     const tabs = resultTabs()
     // The tab says "old → new" from its inputs' names; its full name is its accessible name and tooltip.
     expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Open orders → Result 2', 'Result 2 → Result 3'])
-    expect(tabs.map(button => button.getAttribute('aria-label')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
-    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('aria-label')).slice(-2)).toEqual(['Differences: Open orders → Result 2', 'Differences: Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Open orders → Result 2', 'Differences: Result 2 → Result 3'])
     expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual(['true', null])
   })
 
