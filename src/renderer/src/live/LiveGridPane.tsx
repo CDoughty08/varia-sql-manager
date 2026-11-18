@@ -3,6 +3,7 @@ import { liveProbes, type LiveProbeId, type LiveTone } from '../../../shared/liv
 import type { LiveFacet } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
+import { beginCopy } from '../grid/copy-generation'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from '../grid/GridShell'
 import type { GridView } from '../grid/GridView'
 import { registerLiveOutput, type LiveOutput, type LiveRowActions } from '../menus/targets'
@@ -103,7 +104,7 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
         // Edit › Copy's copy event: output.copy, as in a results grid, or the grid's own copy without the menu.
         onCopy: headers => {
           if (contextMenu) void commands.execute(headers ? 'output.copyWithHeaders' : 'output.copy', undefined, 'keybinding')
-          else void created.copy(!!headers).then(report('copy the rows'), onUnexpectedError)
+          else { beginCopy(); void created.copy(!!headers).then(report('copy the rows'), onUnexpectedError) }
         },
         onEscape: () => false,
         toneLabel: tone => latest.current.toneLabel?.(tone)

@@ -25,7 +25,7 @@ export type LocalGridPreset = 'card' | 'page'
 export interface LocalGridProps {
   /** The rows as the surface shows them (display text: a masked value stays masked). A new object is a new table. */
   readonly table: LocalTableData
-  /** The grid's accessible name ("Columns"), which its label starts with ("Columns, 7 rows, 6 columns"). */
+  /** The grid's accessible name ("Columns"), which its label starts with ("Columns, 7 rows, 6 columns"); a new one remounts the grid. */
   readonly label: string
   readonly preset: LocalGridPreset
   /** What the frame says when the table has no rows: the surface's own words ("No security predicates apply."). */
@@ -184,7 +184,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
   // than it and for its strip.
   const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
-  return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}`} mount={mount} onApi={onApi} contents="rows"
+  return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
