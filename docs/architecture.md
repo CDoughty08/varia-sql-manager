@@ -55,7 +55,7 @@ only when a summary line stops being true.
   64 MiB.
 - **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - **Preferences files** (`settings.json`, `appearance.json`, `connections.json`, `workspace-layouts.json`,
-  `saved-passwords.json` (0600), `shortcuts.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+  `saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
   quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
   `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
 

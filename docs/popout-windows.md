@@ -110,6 +110,31 @@ panels dock back. A moved or resized window is saved within a second. The close 
 popouts the close itself takes (a quit closes every window, in any order) change nothing, unless the close is cancelled,
 when their panels dock back.
 
+## Main window place
+
+The main window reopens where it was closed: its normal bounds and whether it was maximized, kept in
+`<userData>/window-state.json` by main (`src/main/window-state.ts`). It is saved 750 ms after a move or resize settles and at
+once when the window closes, through the atomic preferences writer; a quit waits up to 2 s for that write. An invalid file
+is quarantined and the default place used; a file that cannot be read is never overwritten.
+
+- **Checked against the displays now** (`placeWindow`, in DIPs against every display's work area). A window whose title
+  bar (its top 40 px, at least 160 px wide) is still on a display reopens there, shrunk to that display's work area if it
+  no longer fits. One whose monitor is gone, whose display changed resolution, scale factor or arrangement so its title bar
+  is off every work area, or that would open under the macOS menu bar, is centred on the nearest display at its saved
+  size (clamped to that work area). Sizes never go below the minimum (1024 x 700) unless the work area is smaller. With
+  nothing saved it opens at 1440 x 960, fitted to and centred on the primary display.
+- **Never minimized or full screen.** A window minimized at close reopens normal, or maximized if it was maximized
+  before; one closed in full screen reopens as it was before full screen. A maximized window keeps its normal bounds,
+  so un-maximizing goes back there.
+- **Platforms.** On Windows, a window placed on a display of another scale factor is placed again once created, as
+  Windows can size it by the wrong factor. On Linux under Wayland (`--ozone-platform=wayland`, or a Wayland display with
+  Electron's automatic platform) a window cannot place itself: only the size and the maximized flag are restored and the
+  compositor chooses where. Linux's maximized windows report no reliable normal bounds, so main keeps the last bounds it
+  saw while the window was normal.
+- **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
+- A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
+  set `VARIA_TEST_WINDOW_STATE=1`.
+
 ## Limits
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker

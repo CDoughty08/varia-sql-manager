@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
@@ -47,6 +47,47 @@ async function ready(editorVisible = true) {
   await dialogs()
 }
 const pane = id => paneOf(page, id)
+// The main window's place (window-state.ts), on launches that ask for it: the other launches above open at the default place.
+const windowStatePath = resolve(profile, 'window-state.json')
+const windowStateLaunch = { ...launchOptions, env: { ...env, VARIA_TEST_WINDOW_STATE: '1' } }
+const mainBounds = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds())
+const placement = () => application.evaluate(() => globalThis.__variaWindowPlacement)
+async function windowStateChecks() {
+  // Saved on a monitor that is no longer connected: the window opens on a display, title bar reachable.
+  await writeFile(windowStatePath, JSON.stringify({ version: 1, main: { x: -60000, y: -60000, width: 1100, height: 760, maximized: false } }))
+  application = await electron.launch(windowStateLaunch)
+  await ready()
+  const moved = await placement()
+  expect(['moved', 'sizeOnly']).toContain(moved.outcome)
+  if (moved.outcome === 'moved') {
+    const reachable = await application.evaluate(({ BrowserWindow, screen }) => {
+      const bounds = BrowserWindow.getAllWindows()[0].getBounds()
+      return screen.getAllDisplays().some(({ workArea: area }) => bounds.y >= area.y && bounds.y < area.y + area.height - 40 && Math.min(bounds.x + bounds.width, area.x + area.width) - Math.max(bounds.x, area.x) >= 160)
+    })
+    expect(reachable).toBe(true)
+  }
+  // Moved and resized, then closed: the next launch opens there.
+  await application.evaluate(({ BrowserWindow, screen }) => {
+    const area = screen.getPrimaryDisplay().workArea
+    BrowserWindow.getAllWindows()[0].setBounds({ x: area.x + 20, y: area.y + 20, width: Math.max(1024, Math.min(1100, area.width - 40)), height: Math.max(700, Math.min(760, area.height - 40)) })
+  })
+  const placed = await mainBounds()
+  await application.close()
+  expect(JSON.parse(await readFile(windowStatePath, 'utf8'))).toEqual({ version: 1, main: { ...placed, maximized: false } })
+  application = await electron.launch(windowStateLaunch)
+  await ready()
+  const restored = await placement(), bounds = await mainBounds()
+  if (restored.outcome === 'sizeOnly') expect([bounds.width, bounds.height]).toEqual([placed.width, placed.height])
+  else { expect(restored.outcome).toBe('restored'); expect(bounds).toEqual(placed) }
+  // A corrupt file is kept aside and the window opens at the default place.
+  await application.close()
+  await writeFile(windowStatePath, '{"version":1,"main":{"x":"left"}}')
+  application = await electron.launch(windowStateLaunch)
+  await ready()
+  expect((await placement()).outcome).toBe('default')
+  expect((await readdir(profile)).some(name => name.startsWith('window-state.json.invalid-'))).toBe(true)
+  console.log('Layout checks: the main window reopens where it was closed, a place on a missing monitor lands on a display, and a corrupt place opens at the default.')
+}
 async function text() { return editorText(page) }
 async function typeSql(sql) {
   await page.locator('.monaco-editor [role="textbox"]').focus()
@@ -428,6 +469,8 @@ try {
   await expect.poll(async () => (await pane('explorer').boundingBox()).width).toBeGreaterThan(compactWidth + 30)
   await expect.poll(() => page.locator(part.explorerPane).evaluate(element => element.clientWidth === element.parentElement.clientWidth)).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'default-dock-layout.png') })
+  await application.close()
+  await windowStateChecks()
   console.log('Layout checks passed: splitters, nine-cell docking guides and previews, local/whole-workspace splits, tab drops, plain floating-titlebar redocking, Ctrl-drag and Ctrl-double-click, close/reopen without losing Monaco undo, named layouts, file round trips and invalid import recovery, closed-panel and empty-workspace restart persistence, Window recovery, selection rules, and reset.')
 } catch (error) {
   if (page) {
