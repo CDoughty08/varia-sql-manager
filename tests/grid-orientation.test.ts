@@ -438,9 +438,18 @@ describe('a grid transposed', () => {
     grid.view.update({ resultCount: 1, filterable: new Set([0, 2]) })
     await grid.frame()
     expect(grid.names().map(mark => mark.classList.contains('fb'))).toEqual([true, false, true, false, false, false])
-    // Alt+Down's popover opens beside the name, in the column's drawn row.
+    // Alt+Down's popover opens beside the column's drawn row (across the grid), so it covers none of its values.
     const anchor = grid.view.filterAnchor(2)
-    expect([anchor.right, anchor.top, anchor.height]).toEqual([grid.nameWidth(), 22 + 2 * 20, 20])
+    expect([anchor.left, anchor.right, anchor.top, anchor.height]).toEqual([0, 900, 22 + 2 * 20, 20])
+    grid.view.dispose()
+  })
+  it('opens a funnel popover beside its column header and cells, not over them', async () => {
+    const grid = mount({ rows: 50, columns: 6, transposed: false })
+    await grid.frame()
+    const first = grid.view.filterAnchor(0), second = grid.view.filterAnchor(1)
+    expect([first.top, first.height, second.top, second.height]).toEqual([0, 300, 0, 300])
+    expect(first.width).toBeGreaterThan(0)
+    expect(second.left).toBe(first.right)
     grid.view.dispose()
   })
   it('says what a name is on hover, and which row a header stands for', async () => {

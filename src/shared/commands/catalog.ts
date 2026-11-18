@@ -1092,8 +1092,10 @@ export const commandCatalog = {
     title: 'Keep Selected Rows', category: 'Query', icon: 'filter', keywords: ['filter', 'keep', 'selected', 'rows', 'only', 'subset', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '3_rows', order: 1, mnemonic: 'k', when: "outputView == 'grid'" }]
   },
+  // Ctrl+Shift+L: Excel's key that turns a sheet's filters off.
   'output.clearFilters': {
-    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
+    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'remove', 'reset', 'grid'], palette: false,
+    keybindings: [{ key: 'mod+shift+l', when: 'outputGridFocus' }],
     menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputLiveFilterable" }]
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.

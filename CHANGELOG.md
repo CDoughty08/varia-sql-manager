@@ -7,6 +7,8 @@
 - **The column profile follows your selection:** The cards of the columns selected in the grid are highlighted, the active column's card scrolls into view as you move, and clicking a card selects its column in the grid. **Selected Columns Only**, on the panel's filter button or the results ⋯ menu, lists just the selected columns, and holding Ctrl (Cmd on macOS) over the panel peeks at them, or at every column while Selected Columns Only is on, until you let go.
 - **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
 - **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\. Unchecking Remember password and saving forgets the saved password, as Connect does\.
+- **Column filters beside their column:** The list a header's funnel or Alt\+Down opens now sits to the column's right, or its left when there is no room, instead of over the values it filters\. Drag its corner to resize it; the size is remembered and can be set in Options › Results to Grid\.
+- **Clear all filters from the keyboard:** Ctrl\+Shift\+L \(⇧⌘L on macOS\) in a results grid takes every filter off, as Filter › Clear Filters does\.
 
 ### Changes to everyday use
 

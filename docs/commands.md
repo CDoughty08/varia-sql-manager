@@ -185,7 +185,7 @@ keys it uses are listed below.
 | Filter for Duplicates in Selected Columns (not in the palette) | `output.filterDuplicates` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicates in Selected Columns |
 | Filter for Duplicate Rows (not in the palette) | `output.filterDuplicateRows` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicate Rows |
 | Keep Selected Rows (not in the palette) | `output.keepSelectedRows` | — | — | — | Always | Query Output context menu › Filter › Keep Selected Rows |
-| Clear Filters (not in the palette) | `output.clearFilters` | — | — | — | Always | Query Output context menu › Filter › Clear Filters |
+| Clear Filters (not in the palette) | `output.clearFilters` | Ctrl+Shift+L (`outputGridFocus`) | Ctrl+Shift+L (`outputGridFocus`) | ⇧⌘L (`outputGridFocus`) | Always | Query Output context menu › Filter › Clear Filters |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | Results toolbar › More results tools › Sort Text by Characters |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | Results toolbar › More results tools › Sort Text by Bytes |
 | Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |

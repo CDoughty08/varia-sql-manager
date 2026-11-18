@@ -322,6 +322,8 @@ export const gridPart = {
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
+  /** The funnel popover's corner resize grip, pointer only (Options sets the same size), hidden from screen readers. */
+  funnelGrip: '.column-filter-grip',
   /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
    *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
   searchMatch: '.rg-c.is-hit',
