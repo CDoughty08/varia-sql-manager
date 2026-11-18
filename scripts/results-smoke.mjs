@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
 } from './fixtures/ui.mjs'
@@ -1155,6 +1155,69 @@ try {
   await outputTab(/^Messages/).click()
   await expect(messages(page)).toContainText('Completion time:')
   console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
+
+  // 8b. Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid. Ctrl+A,
+  // Ctrl+C and Ctrl+Shift+C are the catalogue's commands and write the text a results grid copies; a header sorts numbers
+  // by value; the menu is Query Output's without what only query results do; a card has no Save, a page saves through
+  // main's dialog; an empty table says so in its owner's words.
+  const localTable = { columns: [{ name: 'Name' }, { name: 'Type' }, { name: 'Rows', kind: 'number' }, { name: 'Note' }], rows: [['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab\there'], ['Order Lines', 'table', '9000', 'a,"b"']] }
+  const mountLocal = (table, o) => page.evaluate(([value, options]) => window.__variaGrid.mountLocal(value, options), [table, o])
+  await mountLocal(localTable, { label: 'Local list', preset: 'card' })
+  const local = localGrid(page, 'Local list'), localFrame = localGridFrame(page, 'Local list')
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 3 rows, 4 columns')
+  await expect(local.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Type', 'Rows', 'Note'])
+  // A card is as tall as its rows: no empty band under three rows.
+  expect(await localFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  await gridCell(local, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+C')
+  const localTsv = rows => rows.map(row => row.map(value => value ?? 'NULL').join('\t')).join(eol)
+  await expect.poll(clipboard).toBe(localTsv([['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(localTsv([['Name', 'Type', 'Rows', 'Note'], ['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  // Rows sorts by value (80, 1,200, 9000), then descending; the header says so and the selection follows its rows.
+  // From the grid's menu: a short column's header is too narrow to show its sort button, as in a results grid.
+  const localSort = async (column, item, of = local) => {
+    await gridCell(of, 0, column).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  await gridCell(local, 0, 0).click()
+  await localSort(2, 'Sort Ascending')
+  await expect(gridCell(local, 0, 0)).toHaveText('customers')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(local, 2, 0)).toHaveText('Order Lines')
+  await expect.poll(async () => (await local.evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.textContent))).toBe('1,200')
+  await localSort(2, 'Sort Descending')
+  await expect(gridCell(local, 0, 0)).toHaveText('Order Lines')
+  // Copy follows the order shown.
+  await gridCell(local, 0, 0).click()
+  await gridCell(local, 2, 0).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['Order Lines', 'Orders', 'customers'].join(eol))
+  // Query Output's menu, without what only query results do; a card has no Save.
+  await gridCell(local, 1, 1).click({ button: 'right' })
+  const localMenu = page.getByRole('menu', { name: 'Query output', exact: true })
+  const localItems = await menuItemNames(localMenu)
+  for (const item of ['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Clear Sort', 'Fit Column']) expect(localItems).toContain(item)
+  for (const item of ['Filter', 'Pivot Results…', 'Transpose', 'Column Profile', 'Close Results']) expect(localItems).not.toContain(item)
+  expect(await menuItemNames(localMenu, { disabled: true })).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  // A page saves through main's dialog: the same CSV a results grid writes, in the order shown.
+  await mountLocal(localTable, { label: 'Local page', preset: 'page', suggestedName: 'Orders-Columns' })
+  const localPage = localGrid(page, 'Local page')
+  await localSort(0, 'Sort Ascending', localPage)
+  await choose(join(saveDir, 'local.csv'))
+  await gridCell(localPage, 0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Saved 3 rows to local.csv.')
+  expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Orders-Columns\.csv$/) })
+  expect(await readFile(join(saveDir, 'local.csv'), 'utf8')).toBe('﻿' + ['customers,view,80,tab\there', 'Order Lines,table,9000,"a,""b"""', 'Orders,table,"1,200",'].map(line => line + '\r\n').join(''))
+  // An empty table says so in its owner's words.
+  await mountLocal({ columns: localTable.columns, rows: [] }, { label: 'Local empty', preset: 'card', empty: 'No predicates apply.' })
+  await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
+  await page.evaluate(() => window.__variaGrid.unmountLocal())
+  await expect(page.locator(part.localGrid)).toHaveCount(0)
+  console.log('Results checks: local grids select, copy and copy with headers as results grids do, sort numbers by value, show Query Output\'s menu, save a page through main and say when they are empty.')
 
   // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
   // names it, in its language, not dirty and with no connection, where Execute and F5 do nothing and the output pane

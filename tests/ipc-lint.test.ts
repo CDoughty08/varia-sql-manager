@@ -72,7 +72,8 @@ await import(${JSON.stringify(core)})`
       [join('src', 'shared', 'live', 'schema.ts'), 'metrics: z.array(z.number().nullable())', 'array elements, whose nulls the backend keeps'],
       [join('src', 'shared', 'settings', 'schema.ts'), 'settingsPatchSchema = z.object(', 'a patch the renderer sends, where null resets a setting'],
       [join('src', 'shared', 'theme', 'choice.ts'), 'themePreviewSchema = z.object(', 'the renderer\'s own value, never a backend answer'],
-      [join('src', 'main', 'index.ts'), 'recoveryIds: z.array(', 'array elements of a request the renderer sends']
+      [join('src', 'main', 'index.ts'), 'recoveryIds: z.array(', 'array elements of a request the renderer sends'],
+      [join('src', 'main', 'validation.ts'), 'rows: z.array(z.array(z.string().max(localTableLimits.cellChars).nullable())', 'NULL cells of a local table the renderer sends to save, never a backend answer']
     ]
     const names = (line: string, text: string | RegExp) => typeof text === 'string' ? line.includes(text) : text.test(line)
     const nulls = (line: string) => [...line.matchAll(/\.nullable\(\)(?!\.(?:optional|default)\()|\bz\.nullable\(|\bz\.null\(\)|\bz\.literal\(null\)/g)].length

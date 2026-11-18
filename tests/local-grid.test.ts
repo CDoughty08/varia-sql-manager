@@ -1,0 +1,137 @@
+import { describe, expect, it, vi } from 'vitest'
+import { decodePage, encodePage } from '../src/shared/ipc/wire/pages'
+import { boundTable, localCopyText, localExportBytes, localPage, localTableLimits, textColumns, type LocalTableData } from '../src/shared/results/local-table'
+import { copyText } from '../src/shared/results/text-writer'
+import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
+import { FLAG_CAPPED, FLAG_NULL } from '../src/renderer/src/results/worker-protocol'
+import { localSaveRequestSchema } from '../src/main/validation'
+import { ResultsJobHost, type JobHostDeps } from '../src/main/results-jobs'
+import { BackendError } from '../src/main/backend/errors'
+
+const table: LocalTableData = {
+  columns: [{ name: 'Name' }, { name: 'Rows', kind: 'number' }, { name: 'Note' }],
+  rows: [['Orders', '1,200', null], ['customers', '80', 'tab\there'], ['Order Lines', '9000', 'a,"b"'], ['order', null, 'line\r\nbreak']]
+}
+const all = [{ rows: [[0, Number.MAX_SAFE_INTEGER]] as [number, number][], columns: [[0, 2]] as [number, number][] }]
+
+describe('local tables', () => {
+  it('hold to their bounds, keeping the first rows and cutting long cells', () => {
+    const wide = boundTable({ columns: Array.from({ length: 70 }, (_, i) => ({ name: 'c'.repeat(200) + i })), rows: [Array.from({ length: 70 }, () => 'x'.repeat(5000))] })
+    expect(wide.columns).toHaveLength(localTableLimits.columns)
+    expect(wide.columns[0].name).toHaveLength(localTableLimits.nameChars)
+    expect(wide.rows[0]).toHaveLength(localTableLimits.columns)
+    expect(wide.rows[0][0]).toHaveLength(localTableLimits.cellChars)
+    expect(wide.cutCells).toBe(localTableLimits.columns)
+    const long = boundTable({ columns: [{ name: 'a' }], rows: Array.from({ length: localTableLimits.rows + 5 }, (_, i) => [String(i)]) })
+    expect(long.rows).toHaveLength(localTableLimits.rows)
+    expect(long.truncatedRows).toBe(5)
+    // Short rows are filled with NULL; the text bound stops before the row that would pass it.
+    expect(boundTable({ columns: [{ name: 'a' }, { name: 'b' }], rows: [['x']] }).rows).toEqual([['x', null]])
+    const heavy = boundTable({ columns: [{ name: 'a' }], rows: Array.from({ length: 2000 }, () => ['y'.repeat(localTableLimits.cellChars)]) })
+    expect(heavy.rows.length * localTableLimits.cellChars).toBeLessThanOrEqual(localTableLimits.textChars)
+    expect(heavy.truncatedRows).toBe(2000 - heavy.rows.length)
+  })
+
+  it('copy the text a results grid copies: the page they build is the page a result would have', async () => {
+    const built = localPage(table)
+    const encoded = decodePage(encodePage({ resultId: 1, firstRow: 0, columns: textColumns(table.columns), rows: table.rows.map(row => [...row]) }), textColumns(table.columns))
+    const request = { columns: textColumns(table.columns), available: 4, parts: all, headers: true, crlf: true }
+    const fromBuilt = await copyText({ ...request, pageAt: () => built }), fromEncoded = await copyText({ ...request, pageAt: () => encoded })
+    expect(fromBuilt.text).toEqual(fromEncoded.text)
+    const copied = await localCopyText(table, all, { headers: true, crlf: false })
+    expect(copied.text).toBe('Name\tRows\tNote\nOrders\t1,200\tNULL\ncustomers\t80\ttab here\nOrder Lines\t9000\ta,"b"\norder\tNULL\tline break')
+    expect(copied.rows).toBe(4)
+  })
+
+  it('copy in the order shown, and only the parts selected', async () => {
+    const order = sortOrder(table, [{ column: 1, descending: false }])!
+    const copied = await localCopyText(table, [{ rows: [[0, 1]], columns: [[0, 0]] }, { rows: [[3, 3]], columns: [[1, 1]] }], { headers: false, crlf: true, order })
+    // NULL first, then 80, 1,200 and 9000 by value.
+    expect(order).toEqual([3, 1, 0, 2])
+    expect(copied.text).toBe('order\r\ncustomers\r\n9000')
+  })
+
+  it('save as a results grid saves: a BOM and CRLF for CSV and TSV, numbers as numbers in JSON', async () => {
+    const decode = (data: Uint8Array) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(data)
+    const csv = await localExportBytes(table, { format: 'csv', headers: true, nullText: 'empty' })
+    expect(decode(csv.data)).toBe('﻿Name,Rows,Note\r\nOrders,"1,200",\r\ncustomers,80,tab\there\r\nOrder Lines,9000,"a,""b"""\r\norder,,"line\r\nbreak"\r\n')
+    expect(csv.rows).toBe(4)
+    const tsv = await localExportBytes(table, { format: 'tsv', headers: false, nullText: 'NULL' })
+    expect(decode(tsv.data)).toBe('﻿Orders\t1,200\tNULL\r\ncustomers\t80\ttab here\r\nOrder Lines\t9000\ta,"b"\r\norder\tNULL\tline break\r\n')
+    const json = JSON.parse(decode((await localExportBytes(table, { format: 'json', headers: true, nullText: 'NULL' })).data))
+    expect(json).toEqual([{ Name: 'Orders', Rows: '1,200', Note: null }, { Name: 'customers', Rows: 80, Note: 'tab\there' }, { Name: 'Order Lines', Rows: 9000, Note: 'a,"b"' }, { Name: 'order', Rows: null, Note: 'line\r\nbreak' }])
+  })
+
+  it('sort stably: NULL first, numbers by value, text by the locale with digits as numbers', () => {
+    const names: LocalTableData = { columns: [{ name: 'Name' }, { name: 'Group' }], rows: [['Item 10', 'b'], ['item 9', 'a'], [null, 'b'], ['Item 9', 'b'], ['Ítem 1', 'a']] }
+    expect(sortOrder(names, [])).toBeUndefined()
+    // Base sensitivity: case and accents tie, and ties keep the table's order.
+    expect(sortOrder(names, [{ column: 0, descending: false }])).toEqual([2, 4, 1, 3, 0])
+    expect(sortOrder(names, [{ column: 0, descending: true }])).toEqual([0, 1, 3, 4, 2])
+    expect(sortOrder(names, [{ column: 1, descending: false }, { column: 0, descending: true }])).toEqual([1, 4, 0, 3, 2])
+    // A number column sorts text that is not a number after the numbers.
+    expect(sortOrder({ columns: [{ name: 'n', kind: 'number' }], rows: [['n/a'], ['10'], ['9'], ['-1.5']] }, [{ column: 0, descending: false }])).toEqual([3, 2, 1, 0])
+  })
+
+  it('serve windows as a result does: NULL and capped cells flagged, display text, the order shown', async () => {
+    const source = new LocalSource(table, [2, 0, 1, 3])
+    const window = source.peekWindow(1, 3, { colStart: 1, colEnd: 3, maxCellChars: 5, display: true })
+    expect(window).toMatchObject({ first: 1, count: 3, colStart: 1, colEnd: 3 })
+    // Rows shown 1-3 are the table's 0, 1 and 3; "line\r\nbreak" is cut at 5 characters and drawn with its break visible.
+    expect(window.text.filter((_, i) => i % 2 === 0)).toEqual(['1,200', '80', ''])
+    expect(window.flags[0]).toBe(0)
+    expect(window.flags[1]).toBe(FLAG_NULL)
+    expect(window.flags[3]).toBe(FLAG_CAPPED)
+    expect(window.flags[4]).toBe(FLAG_NULL)
+    expect(window.flags[5]).toBe(FLAG_CAPPED)
+    // The same window again is the cached one; past the rows it shrinks.
+    expect(source.peekWindow(1, 3, { colStart: 1, colEnd: 3, maxCellChars: 5, display: true })).toBe(window)
+    expect((await source.getWindow(3, 10)).count).toBe(1)
+    expect(source.getSnapshot()).toMatchObject({ rowsAvailable: 4, state: 'complete', incomplete: false })
+    const { widths } = await source.measure(0, 4, 0, 3)
+    // The widest text of each column in the grid's monospace columns; NULL counts as its four letters.
+    expect(widths[0]).toBe('Order Lines'.length)
+    expect(widths[1]).toBe(5)
+    expect(widths[2]).toBeGreaterThanOrEqual('line break'.length)
+    expect(localDescriptor(table).columns.map(column => column.dataType)).toEqual(['nvarchar', 'decimal', 'nvarchar'])
+  })
+})
+
+describe('local saves in main', () => {
+  const request = { suggestedName: 'Orders-Columns', columns: [{ name: 'Name' }, { name: 'Rows', kind: 'number' as const }], rows: [['Orders', '12'], ['Lines', null]] }
+  it('take only bounded, rectangular tables', () => {
+    expect(localSaveRequestSchema.safeParse(request).success).toBe(true)
+    for (const bad of [{ ...request, rows: [['Orders']] }, { ...request, columns: [] }, { ...request, extra: 1 }, { ...request, rows: [['x'.repeat(localTableLimits.cellChars + 1), null]] },
+      { ...request, rows: Array.from({ length: localTableLimits.rows + 1 }, () => ['a', 'b']) }, { ...request, rows: Array.from({ length: 1100 }, () => ['y'.repeat(localTableLimits.cellChars), null]) }])
+      expect(localSaveRequestSchema.safeParse(bad).success).toBe(false)
+  })
+
+  function host(patch: Partial<JobHostDeps> = {}) {
+    const written: { path: string; text: string }[] = []
+    const dialog = vi.fn<JobHostDeps['showSaveDialog']>(async () => ({ canceled: false, filePath: '/home/me/Documents/cols.txt' }))
+    const deps = {
+      backend: {} as JobHostDeps['backend'], owns: () => true, writeClipboard: () => {}, showSaveDialog: dialog, documentsDir: () => '/home/me/Documents', progress: () => {}, platform: 'linux' as const,
+      exportHeaders: async () => true, writeFile: async (path: string, data: Uint8Array) => { written.push({ path, text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(data) }) }, ...patch
+    } satisfies JobHostDeps
+    return { jobs: new ResultsJobHost(deps), written, dialog }
+  }
+
+  it('write the format the chosen file names, through the same dialog as a results grid', async () => {
+    const { jobs, written, dialog } = host()
+    expect(await jobs.saveLocal(request)).toEqual({ fileName: 'cols.txt', format: 'tsv', rows: 2 })
+    expect(dialog.mock.calls[0][0]).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Orders-Columns\.csv$/) })
+    expect(written).toEqual([{ path: '/home/me/Documents/cols.txt', text: '﻿Name\tRows\r\nOrders\t12\r\nLines\tNULL\r\n' }])
+    // The next save starts in that folder with that format.
+    await jobs.saveLocal(request)
+    expect(dialog.mock.calls[1][0].defaultPath.replaceAll('\\', '/')).toBe('/home/me/Documents/Orders-Columns.txt')
+  })
+
+  it('answer null when the dialog is cancelled, refuse bad requests and say why a write failed', async () => {
+    expect(await host({ showSaveDialog: async () => ({ canceled: true }) }).jobs.saveLocal(request)).toBeNull()
+    await expect(host().jobs.saveLocal({ ...request, rows: [['x']] })).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    const failing = host({ writeFile: async () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }) } })
+    const error = await failing.jobs.saveLocal(request).catch((value: unknown) => value)
+    expect(error).toBeInstanceOf(BackendError)
+    expect(error).toMatchObject({ code: 'EXPORT_FAILED', message: 'Could not save the results: cols.txt is open in another program.' })
+  })
+})

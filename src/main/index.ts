@@ -1119,6 +1119,7 @@ app.whenReady().then(async () => {
   // clipboard or chooses the file, and only the file's name goes back.
   handle('varia:results-copy', value => jobs.copy(value))
   handle('varia:results-save', value => jobs.save(value))
+  handle('varia:results-save-local', value => jobs.saveLocal(value))
   handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.

@@ -34,6 +34,7 @@ import Tile from './kit/Tile'
 import { LiveChart } from './live/LiveChart'
 import { liveTestHooks } from './live/test-hooks'
 import { mountTestGrid } from './live/test-grid'
+import { mountTestLocalGrid, unmountTestLocalGrid } from './grid/test-local-grid'
 import { serverFilesTestHook } from './server-files/test-hook'
 import { restoreTestHook } from './restore/test-hook'
 import 'dockview-react/dist/styles/dockview.css'
@@ -63,6 +64,9 @@ export async function start(root: Root): Promise<void> {
         stats: async () => ({ ...stats?.snapshot(), client: await workbench.resultClient.stats() }),
         reset: () => stats?.reset(),
         setScrollCap: (px?: number) => stats?.setScrollCap(px),
+        // A local grid over a table in renderer memory, as a Peek list or a Properties page shows one (results-smoke.mjs).
+        mountLocal: (table: Parameters<typeof mountTestLocalGrid>[1], o: Parameters<typeof mountTestLocalGrid>[2]) => mountTestLocalGrid(workbench, table, o),
+        unmountLocal: () => unmountTestLocalGrid(),
         // Draws results grids transposed or as tables again (every grid, or one tab's or entry's), with an optional header
         // column, as the transpose commands do (ResultsService.setOrientation): the grid benchmark turns its grid with it.
         setOrientation: (transposed: boolean, o: { headerColumn?: number; tabId?: string; entry?: string } = {}) => {

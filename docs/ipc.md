@@ -15,7 +15,7 @@ SSMS display formats, and benchmarks. The code is the reference implementation; 
 | Generations and restarts | `src/main/backend/supervisor.ts` | — |
 | Results port | `src/main/backend/results-port.ts`, `src/shared/ipc/port-messages.ts` | — |
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
-| Copy and Save Results As | `src/main/results-jobs.ts`; fake backend `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
+| Copy and Save Results As | `src/main/results-jobs.ts`; TypeScript twin `src/shared/results/text-writer.ts` (local tables, fake backend) | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
 | Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; `LiveService` in `src/renderer/src/live/` | `Live/` (`LiveService.cs` registry and scheduler, `LiveCatalog.cs`, `SqlSampler.cs`, `LiveSql.cs`, `LiveSqlReader.cs`, `LiveTables.cs`, `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs`), `Activity/ActivityReader.cs`, `ActivityRows.cs` |
 
@@ -2347,7 +2347,7 @@ docs/testing.md has the environment variables and rules; the protocol-specific p
   `fail-commit`, `silent-<generation>`). Each session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK and notes SET
   NOEXEC, PARSEONLY, FMTONLY and SHOWPLAN_*, so `query.session.state` answers as SQL Server would. A script whose first line is
   `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92 hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`;
-  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page
+  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `src/shared/results/text-writer.ts`, and `hold/results.export` pauses an export after each page
   (or line of a transposed one) so a test can cancel it mid-save.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets with the exact Copy, CSV,
   TSV and JSON bytes; the C# writer (through the real jobs) and the JavaScript twin are both checked against them.

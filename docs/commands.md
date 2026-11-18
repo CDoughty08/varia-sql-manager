@@ -1203,7 +1203,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
-| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
+| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a grid with its own source: a live view's (an Activity Monitor pane) or a local table's (a Peek list). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |
 | `outputGridBare` | boolean | target | The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it. |
 | `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |

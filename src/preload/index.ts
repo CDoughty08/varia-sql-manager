@@ -137,6 +137,7 @@ const api: VariaApi = {
   openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
   copyResults: request => ipcRenderer.invoke('varia:results-copy', request),
   saveResults: request => ipcRenderer.invoke('varia:results-save', request),
+  saveLocalResults: request => ipcRenderer.invoke('varia:results-save-local', request),
   cancelResultsJob: jobId => ipcRenderer.invoke('varia:results-job-cancel', jobId),
   onResultsJob: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ResultsJobProgress) => callback(progress)

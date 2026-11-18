@@ -29,7 +29,8 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * Windows); Messages copy the text selected in them. The commands act on the menu's target, else on the view that has
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell. A live
- * view's grid (view `live`) is the same grid with a live source: the commands it takes act through its `LiveOutput`.
+ * view's grid (view `live`) is the same grid with a live source, and a local grid (LocalGrid: a Peek list, a Properties
+ * table) the same grid over rows the renderer holds: the commands either takes act through its `LiveOutput`.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   // The setting changes once main has saved it, so a second toggle meanwhile toggles the layout still being saved: two quick
@@ -268,10 +269,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,
       // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
-      when: args => { const live = liveOf(args); return live ? live.hasRows() : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
+      when: args => { const live = liveOf(args); return live ? live.hasRows() && (live.canSave?.() ?? true) : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
       run: async args => {
         const live = liveOf(args)
-        if (live) { if (live.hasRows()) live.save(); return }
+        if (live) { if (live.hasRows() && (live.canSave?.() ?? true)) live.save(); return }
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return

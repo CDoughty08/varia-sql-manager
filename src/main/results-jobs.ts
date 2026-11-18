@@ -2,14 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { z } from 'zod'
-import type { ResultsCopyParams, ResultsExportParams, ResultsFormat, ResultsJobProgress, ResultsJobResult, SavedResults } from '../shared/contracts'
+import type { ResultsCopyParams, ResultsExportParams, ResultsFormat, ResultsJobProgress, ResultsJobResult, SavedLocalResults, SavedResults } from '../shared/contracts'
 import type { JobProgressEvent } from '../shared/ipc/port-messages'
 import { cancelReasons, limits as wire, type CancelReason } from '../shared/ipc/wire/protocol'
 import type { StreamSink } from './backend/connection'
 import { BackendError, sentences } from './backend/errors'
 import type { BackendSupervisor } from './backend/supervisor'
 import { sanitizeFileName } from './file-names'
-import { resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
+import { localExportBytes } from '../shared/results/local-table'
+import { writeBytesAtomic } from './json-file'
+import { localSaveRequestSchema, resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
 
 /** How Save Results As writes NULL: CSV as an empty field (an empty string is ""), tab-delimited text as NULL; JSON always
  *  writes null. Copy keeps SSMS's NULL. The header row follows Tools › Options (`exportHeaders`). */
@@ -84,9 +86,14 @@ export interface JobHostDeps {
   exportHeaders(): Promise<boolean>
   platform: NodeJS.Platform
   now?: () => number
+  /** writeBytesAtomic (a local table's save), replaced in tests. */
+  writeFile?: (path: string, data: Uint8Array) => Promise<void>
   /** removeExportLeftovers, replaced in tests. */
   removeLeftovers?: (target: string, temporaryId: string) => Promise<void>
 }
+
+/** A failed local save's error code as the backend's EXPORT_FAILED tokens name it. */
+const errnoTokens: Partial<Record<string, string>> = { EACCES: 'ACCESS', EPERM: 'ACCESS', ENOSPC: 'DISK_FULL', EBUSY: 'IN_USE', ENOENT: 'NOT_FOUND', EISDIR: 'IS_DIRECTORY' }
 
 /** What a request of a grid drawn transposed adds to the backend's parameters. */
 const turnedParams = (request: { transposed?: boolean; headerColumn?: number }): { transposed?: true; headerColumn?: number } =>
@@ -195,21 +202,14 @@ export class ResultsJobHost {
       this.check(request.generation, request.resultId)
       // A view is of one result: a live table's newer revision has none of its views.
       const newest = request.viewId === undefined ? this.deps.liveNewest?.(request.generation, request.resultId) : undefined
-      const requested = request.format ?? this.lastFormat ?? 'csv'
       // '{tab}-Result{n}-Pivot', '{tab}-Open orders' (save-names.ts): a long name gives way, never the suffix that tells
       // results apart. A request without one keeps a '-Result{n}' it ends in, as before suffixes were sent.
-      const suffix = request.suggestedSuffix ?? /-Result\d+$/.exec(request.suggestedName)?.[0] ?? '', base = request.suggestedName.slice(0, request.suggestedName.length - suffix.length)
-      const name = sanitizeFileName(base + '.' + extensions[requested], suffix)
-      const order: ResultsFormat[] = [requested, ...(['csv', 'tsv', 'json'] as const).filter(format => format !== requested)]
-      const selection = await this.deps.showSaveDialog({
-        title: 'Save Grid Results', defaultPath: join(this.lastDir ?? this.deps.documentsDir(), name),
-        filters: [...order.map(format => filters[format]), { name: 'All Files', extensions: ['*'] }], properties: ['showOverwriteConfirmation', 'createDirectory']
-      })
-      if (selection.canceled || !selection.filePath) return null
-      // No extension is appended: the dialog's overwrite confirmation was for exactly this path.
-      const path = selection.filePath
+      const suffix = request.suggestedSuffix ?? /-Result\d+$/.exec(request.suggestedName)?.[0] ?? ''
+      const chosen = await this.chooseFile(request.suggestedName, suffix, request.format)
+      if (!chosen) return null
+      const { path, format } = chosen
       fileName = basename(path)
-      const format = formatFromPath(path) ?? requested, headers = await this.deps.exportHeaders()
+      const headers = await this.deps.exportHeaders()
       // A live table retires each revision two samples on, sooner than most dialogs close: its newest revision is saved,
       // the one the grid shows now. Any other result must still be there.
       const resultId = newest?.() ?? request.resultId
@@ -230,6 +230,50 @@ export class ResultsJobHost {
       this.saving = undefined
       this.saveBusy = false
     }
+  }
+
+  /**
+   * Save Results As of a local table (a Peek list, a Properties table): the same dialog, folder and format memory as a
+   * results grid's save, and the same text, written here by the TypeScript twin of ResultTextWriter from the rows the
+   * renderer holds; a temporary file renamed over the target, so a failed write leaves no partial file.
+   */
+  async saveLocal(value: unknown): Promise<SavedLocalResults | null> {
+    const parsed = localSaveRequestSchema.safeParse(value)
+    if (!parsed.success) throw new BackendError('INVALID_REQUEST', jobSentences.invalid)
+    const request = parsed.data
+    if (this.saveBusy) throw new BackendError('JOB_BUSY', jobSentences.busy)
+    this.saveBusy = true
+    let fileName = ''
+    try {
+      const chosen = await this.chooseFile(request.suggestedName, '')
+      if (!chosen) return null
+      const { path, format } = chosen
+      fileName = basename(path)
+      const { data, rows } = await localExportBytes(request, { format, headers: await this.deps.exportHeaders(), nullText: exportDefaults.nullText[format] })
+      try { await (this.deps.writeFile ?? writeBytesAtomic)(path, data) } catch (error) {
+        throw new BackendError('EXPORT_FAILED', jobSentences.exportFailed(errnoTokens[(error as NodeJS.ErrnoException).code ?? ''] ?? 'IO', fileName))
+      }
+      this.lastDir = dirname(path)
+      this.lastFormat = format
+      return { fileName, format, rows }
+    } finally {
+      this.saveBusy = false
+    }
+  }
+
+  /** Save Results As's dialog: the last folder and format first, the name cut to fit without losing `suffix`. The format
+   *  is the chosen file's extension's, else the one asked for. */
+  private async chooseFile(suggestedName: string, suffix: string, format?: ResultsFormat): Promise<{ path: string; format: ResultsFormat } | undefined> {
+    const requested = format ?? this.lastFormat ?? 'csv'
+    const name = sanitizeFileName(suggestedName.slice(0, suggestedName.length - suffix.length) + '.' + extensions[requested], suffix)
+    const order: ResultsFormat[] = [requested, ...(['csv', 'tsv', 'json'] as const).filter(item => item !== requested)]
+    const selection = await this.deps.showSaveDialog({
+      title: 'Save Grid Results', defaultPath: join(this.lastDir ?? this.deps.documentsDir(), name),
+      filters: [...order.map(item => filters[item]), { name: 'All Files', extensions: ['*'] }], properties: ['showOverwriteConfirmation', 'createDirectory']
+    })
+    if (selection.canceled || !selection.filePath) return undefined
+    // No extension is appended: the dialog's overwrite confirmation was for exactly this path.
+    return { path: selection.filePath, format: formatFromPath(selection.filePath) ?? requested }
   }
 
   /** Cancels the copy or save with this job id (CANCEL reason 1); it then fails with CANCELLED. */

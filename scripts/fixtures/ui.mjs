@@ -115,6 +115,7 @@ export const part = {
   resultTabs: '.rt-root',
   /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
   liveGrid: '.live-grid',
+  localGrid: '.local-grid',
   // Object Explorer
   explorerLabel: '.oe-label',
   explorerText: '.oe-text',
@@ -833,6 +834,12 @@ export const liveGridOverlay = frame => frame.locator(gridPart.overlay)
 export const liveGridStrip = frame => frame.locator(gridPart.strip)
 /** The "n new rows · Jump to latest" button of a log scrolled up from its tail. */
 export const liveGridNewRows = frame => frame.getByRole('button', { name: /new rows? · Jump to latest$/ })
+
+// Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid, named by its owner.
+
+export const localGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
+/** Its frame: the strip (a truncation, a failed copy, a save) and the overlay an empty table's words show in. */
+export const localGridFrame = (page, name) => page.locator(part.localGrid).filter({ has: localGrid(page, name) })
 
 // Object Explorer
 

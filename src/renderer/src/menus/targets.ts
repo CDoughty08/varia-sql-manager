@@ -74,7 +74,8 @@ export interface OutputTarget {
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
   readonly live?: LiveOutput
 }
-/** What Query Output's commands do in a live grid (LiveGridPane): its selection, sort, funnels, widths and copy. */
+/** What Query Output's commands do in a grid with its own source, a live grid (LiveGridPane) or a local grid (LocalGrid):
+ *  its selection, sort, funnels, widths, copy and save. */
 export interface LiveOutput {
   /** Its table sorts (a snapshot table, not a log that keeps arrival order). */
   readonly sortable: boolean
@@ -100,6 +101,8 @@ export interface LiveOutput {
   filterColumn(column: number): void
   clearFilters(): void
   save(): void
+  /** Whether Save Results As applies (a card's local grid has none); it does without this. */
+  canSave?(): boolean
   /** Find in Results: the owner's filter box, when it has one. */
   canFind(): boolean
   find(): void
@@ -115,7 +118,7 @@ export interface LiveRowActions {
   run(action: LiveRowAction): void
 }
 const liveOutputs = new WeakMap<Element, LiveOutput>()
-/** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
+/** A live or local grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
 export function registerLiveOutput(element: Element, live: LiveOutput): () => void {
   liveOutputs.set(element, live)
   return () => { if (liveOutputs.get(element) === live) liveOutputs.delete(element) }

@@ -112,11 +112,18 @@ export interface GridStatus { readonly tileError?: string; readonly renderError?
 /** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
 export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
+/**
+ * What a grid reads its rows through: a backend result (ResultHandle), a live table's revision (one too), or a local table
+ * held in the renderer (LocalSource, grid/local-source.ts). The row-size bar needs `rowBytes` and `profile` as well, so a
+ * source without them has none.
+ */
+export type GridSource = Pick<ResultHandle, 'getSnapshot' | 'subscribe' | 'getWindow' | 'peekWindow' | 'prefetch' | 'measure'> & Partial<Pick<ResultHandle, 'rowBytes' | 'profile'>>
+
 export interface GridViewOptions {
   /** The grid's root (`role="grid"`) and its scroller, both rendered by the React shell; the view owns the scroller's children. */
   readonly root: HTMLElement
   readonly scroller: HTMLElement
-  readonly handle: ResultHandle
+  readonly handle: GridSource
   readonly client: { readonly windowsInFlight: number }
   readonly descriptor: ResultDescriptor
   readonly state: GridViewState
@@ -212,7 +219,7 @@ export class GridView {
   private readonly marks: HTMLDivElement
   private readonly marksRows: HTMLDivElement
   private data: GridData
-  private handle: ResultHandle
+  private handle: GridSource
   private descriptor: ResultDescriptor
   private stopHandle: () => void = () => {}
   private readonly layout: ColumnAxis
@@ -584,7 +591,7 @@ export class GridView {
    * (departed) are muted until the next swap; `top` puts the view at that offset instead (a restarted live log). Reads of
    * the old result stop; the old result is not closed (its owner does).
    */
-  swap(handle: ResultHandle, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
+  swap(handle: GridSource, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
     if (this.disposed) return
     if (toneColumnOf(descriptor) !== this.tone || descriptor.columns.length !== this.descriptor.columns.length) throw new Error('A swapped result must have the grid\'s columns.')
     const state = this.o.state
@@ -623,7 +630,7 @@ export class GridView {
    * Reads the tiles a swap to `handle` shows first (from `firstRow`, over the rows and columns in view now) into the window
    * cache, so the swap paints whole rows at once rather than a frame of empty cells. Failures are left to the swap's reads.
    */
-  prepare(handle: ResultHandle, firstRow: number, signal?: AbortSignal): Promise<void> {
+  prepare(handle: GridSource, firstRow: number, signal?: AbortSignal): Promise<void> {
     const range = this.lastRange && this.sourceRange(this.lastRange), rows = handle.getSnapshot().rowsAvailable
     if (!range || rows <= 0 || this.disposed) return Promise.resolve()
     const first = Math.max(0, Math.min(firstRow, rows - 1)), last = Math.min(rows - 1, first + Math.max(0, range.lastRow - range.firstRow))
@@ -677,8 +684,11 @@ export class GridView {
   /** The rows and columns drawn: the result's own, or turned, with at most `limits.transpose.maxRows` rows as columns. */
   private drawnRows(rows = this.rows()): number { return this.rotated ? this.columns : rows }
   private drawnColumns(rows = this.rows()): number { return this.rotated ? Math.min(rows, wire.transpose.maxRows) : this.columns }
-  private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
-  private dataFor(handle: ResultHandle): GridData {
+  private sizesFor(handle: GridSource): RowSizes | undefined {
+    const { rowBytes, profile } = handle
+    return rowBytes && profile ? new RowSizes({ getSnapshot: () => handle.getSnapshot(), rowBytes: rowBytes.bind(handle), profile: profile.bind(handle) }, () => this.schedule()) : undefined
+  }
+  private dataFor(handle: GridSource): GridData {
     return new GridData({ handle, columns: this.columns, tone: this.tone, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {

@@ -435,6 +435,11 @@ export interface ResultsSaveRequest { jobId: string; generation: number; resultI
 /** `rows`: the result's rows written. `partial`: the set was still open, so open-ended selections ended at the rows stored
  *  then. `capped`: the rows a transposed copy or save left out, for lying past the rows a transposed grid draws (0 otherwise). */
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean; capped: number }
+/** Save Results As of a local table (a Peek list, a Properties table: src/shared/results/local-table.ts): main shows the
+ *  save dialog, writes the rows given, in their order, with the TypeScript twin of ResultTextWriter, and returns only the
+ *  file's name. Bounded by `localTableLimits`. */
+export interface LocalSaveRequest { suggestedName: string; columns: { name: string; kind?: 'text' | 'number' }[]; rows: (string | null)[][] }
+export interface SavedLocalResults { fileName: string; format: ResultsFormat; rows: number }
 /** Only the file's name returns to the renderer, never its path. */
 export interface SavedResults extends ResultsJobResult { fileName: string; format: ResultsFormat }
 /** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
@@ -821,6 +826,8 @@ export interface VariaApi {
   copyResults(request: ResultsCopyRequest): Promise<ApiResult<ResultsJobResult>>
   /** Save Results As; resolves to null when the dialog is cancelled. */
   saveResults(request: ResultsSaveRequest): Promise<ApiResult<SavedResults | null>>
+  /** Save Results As of a local table's rows (main formats and writes them); resolves to null when the dialog is cancelled. */
+  saveLocalResults(request: LocalSaveRequest): Promise<ApiResult<SavedLocalResults | null>>
   /** Cancels a running copy or save by its job id. */
   cancelResultsJob(jobId: string): Promise<ApiResult<{ cancelled: boolean }>>
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void

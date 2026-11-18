@@ -256,8 +256,18 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     column for the rows drawn, counting the rest in `capped` (docs/ipc.md, Copy and Save Results As).
   - Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; the
     row tone column (catalogue `role: 'tone'`, last) is hidden and left out of Copy and Save (`ResultJobs`).
-- **Copy and Save** text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and
-  never leave main except to the backend.
+  - **Local tables** show through `LocalGrid` (`grid/LocalGrid.tsx`): a small read-only table the renderer already holds (a
+    Peek list, a Properties table), never a backend result. `GridView` reads any `GridSource` (the six read members of a
+    `ResultHandle`); `LocalSource` (`grid/local-source.ts`) serves the table from memory, and a sort is a new source the
+    grid swaps in. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
+    built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
+    with its own source (view `live`, `LiveOutput`); a `card` has no Save. `tests/local-grid.test.ts` and results-smoke's
+    local grid step hold this.
+- **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
+  (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
+  (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the
+  renderer and saves in main (`varia:results-save-local`, `ResultsJobHost.saveLocal`). Export paths come only from main's
+  save dialog and never leave main except to the backend.
 - **Operations busy state.** Whole-result operations (sort or filter building a view, profile, pivot, comparison) have
   one busy state, `ResultsService.operations` (`results/operations.ts`), read by every result control. A sort or filter
   holds that grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: refused, never
