@@ -1728,7 +1728,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-rename { min-width: 120px; flex: 1 1 auto; height: 20px; padding: 0 4px; font-size: var(--varia-size-sm); line-height: 16px; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-focusBorder); border-radius: var(--varia-radius-sm); }
 .explorer-rename:focus-visible { outline: none; }
 .connection-modal.object-dialog { width: min(820px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); max-height: none; }
-.connection-modal.object-dialog:focus { outline: none; }
+.connection-modal.object-dialog:focus, .connection-modal.connect-dialog:focus { outline: none; }
 .object-dialog-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-side { flex: 0 0 clamp(170px, 26%, 220px); display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-caption { padding: 6px 10px; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-settings-headerForeground); }

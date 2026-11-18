@@ -21,6 +21,7 @@ import { IntegratedIdentityLookup } from './services/integrated-identity'
 import { authenticationCatalog, authenticationModes, requiresUser, showsIdentity, usesPassword, type AuthenticationMode } from '../../shared/auth'
 import { focusToReturn, returnFocusTo } from './core/focus'
 import SubDialog from './dialogs/SubDialog'
+import { useKeepFocus } from './dialogs/keep-focus'
 import { applySavedDetails } from './services/saved-connection-details'
 
 /** What Cancel compares: settings and labels (the environment as stored), never the password. */
@@ -254,6 +255,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (busy) stopButton.current?.focus()
     else if (document.activeElement === stopButton.current) connectButton.current?.focus()
   }, [busy])
+  // Saving disables the button pressed, Remove takes its row away, and a press on the dialog's text would focus the page:
+  // focus stays in the dialog, where Escape and Tab reach it.
+  useKeepFocus(dialog, advanced || !!reviewOpen || !!confirmClose)
   // Choosing an entry with a remembered password checks Remember password, as SSMS does; a typed password keeps the choice.
   useEffect(() => {
     if (!currentOptions.current.password && !rememberEdited.current) setRemember(!!match)
@@ -375,8 +379,6 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile): Promise<boolean> {
     const labelled = profile ? profile.options : labelledOptions()
     if (!labelled) return false
-    // Saving disables the button pressed, which drops focus to the page, where Escape and Tab no longer reach the dialog.
-    const returnTo = document.activeElement instanceof HTMLElement && dialog.current?.contains(document.activeElement) ? document.activeElement : undefined
     setSaving(true); setError(''); setNotice('')
     try {
       const { value, savedId } = await persist({ id: profile?.id ?? editedEntry(labelled)?.id, options: labelled, favorite, registered, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : autoReconnect }, labelled, profile?.id)
@@ -385,12 +387,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       if (!profile) { setSelectedId(savedId); startAfresh() }
       return true
     } catch (reason) { if (alive.current) setError(message(reason)); return false }
-    finally {
-      if (alive.current) {
-        setSaving(false)
-        setTimeout(() => { const active = document.activeElement; if (returnTo?.isConnected && (!active || active === document.body)) returnTo.focus() }, 0)
-      }
-    }
+    finally { if (alive.current) setSaving(false) }
   }
   /** After Connect: the edited Name, Color, Environment and Reconnect on startup in History (main's reuse of a live
    *  connection records none), and on that entry's other Explorer connections. A failure leaves the connection alone. */
@@ -575,7 +572,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     trapFocus(event)
   }
   return <>
-    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal={reviewOpen ? undefined : 'true'} aria-hidden={reviewOpen || undefined} inert={advanced || reviewOpen || !!confirmClose} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
+    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal={reviewOpen ? undefined : 'true'} aria-hidden={reviewOpen || undefined} tabIndex={-1} inert={advanced || reviewOpen || !!confirmClose} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
       <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="icon-button" aria-label="Close connection dialog" disabled={locked} onClick={requestClose}><Icon name="close" /></button></div>
       <div className="connect-panes">
         <div ref={sourcesPane} className="connect-sources-pane" onKeyDown={sourcesKey}>
