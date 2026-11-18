@@ -1241,6 +1241,10 @@ try {
   // A cell cut to the bound says so in the strip, and the card makes room for the strip under its rows.
   await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
   await expect(localGridFrame(page, 'Local cut').locator(gridPart.strip)).toHaveText('1 value was cut to 4,000 characters.')
+  // Columns past the bound are said to be left out too.
+  await mountLocal({ columns: Array.from({ length: 70 }, (_, i) => ({ name: `c${i}` })), rows: [Array.from({ length: 70 }, () => 'v')] }, { label: 'Local columns', preset: 'card' })
+  await expect(localGridFrame(page, 'Local columns').locator(gridPart.strip)).toHaveText('Showing the first 64 columns.')
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
   // ...and the cut cell is read out as truncated, as a results grid's.
   await gridCell(localGrid(page, 'Local cut'), 0, 0).click()
   await expect.poll(() => localGrid(page, 'Local cut').evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label') ?? '')).toMatch(/, truncated$/)

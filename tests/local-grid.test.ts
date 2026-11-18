@@ -7,6 +7,7 @@ import { boundTable, LocalCopyTooLarge, localCopyText, localExportBytes, localPa
 import { exportText } from '../src/shared/results/text-writer'
 import { copyText } from '../src/shared/results/text-writer'
 import { localDescriptor, LocalSource, sortOrder } from '../src/renderer/src/grid/local-source'
+import { beginCopy, latestCopy } from '../src/renderer/src/grid/copy-generation'
 import { FLAG_CAPPED, FLAG_NULL, FLAG_TRUNCATED } from '../src/renderer/src/results/worker-protocol'
 import { localSaveRequestSchema } from '../src/main/validation'
 import { localSaveMode, ResultsJobHost, writeLocalSave, type JobHostDeps } from '../src/main/results-jobs'
@@ -27,6 +28,7 @@ describe('local tables', () => {
     expect(wide.rows[0]).toHaveLength(localTableLimits.columns)
     expect(wide.rows[0][0]).toHaveLength(localTableLimits.cellChars)
     expect(wide.cutCells).toBe(localTableLimits.columns)
+    expect(wide.droppedColumns).toBe(70 - localTableLimits.columns)
     const long = boundTable({ columns: [{ name: 'a' }], rows: Array.from({ length: localTableLimits.rows + 5 }, (_, i) => [String(i)]) })
     expect(long.rows).toHaveLength(localTableLimits.rows)
     expect(long.truncatedRows).toBe(5)
@@ -67,6 +69,18 @@ describe('local tables', () => {
     // Stopped at the page that passed the bound, not after every part.
     expect(pages).toBeLessThan(6)
     expect((await localCopyText(wide, [{ rows: [[0, 999]], columns: [[0, 2]] }], { headers: false, crlf: false, maxBytes: 8 * 1024 * 1024 })).rows).toBe(1000)
+  })
+
+  it('stop a copy a later copy supersedes, at its next page', async () => {
+    const long: LocalTableData = { columns: [{ name: 'n' }], rows: Array.from({ length: localSavePageRows * 4 }, (_, i) => [String(i)]) }
+    const first = beginCopy()
+    let pages = 0
+    const stopped = await localCopyText(long, [{ rows: [[0, long.rows.length - 1]], columns: [[0, 0]] }], { headers: false, crlf: false, afterPage: async () => {
+      if (++pages === 2) beginCopy()
+      if (!latestCopy(first)) throw new Error('superseded')
+    } }).catch((error: Error) => error.message)
+    expect(stopped).toBe('superseded')
+    expect(pages).toBe(2)
   })
 
   it('copy in the order shown, and only the parts selected', async () => {
@@ -184,6 +198,11 @@ describe('local saves in main', () => {
       for (const format of ['csv', 'tsv', 'json'] as const) for (const nullText of ['NULL', 'empty'] as const)
         expect(localSaveBytes(table)).toBeGreaterThanOrEqual((await localExportBytes(table, { format, headers: true, nullText })).data.length)
     }
+    // Long names and tiny cells: a CSV writes its header once, so the estimate charges only JSON's keys per row and a
+    // table whose every save fits is taken.
+    const named: LocalTableData = { columns: Array.from({ length: localTableLimits.columns }, (_, i) => ({ name: `A fifty character column name for the table ${i}`.padEnd(50, '.') })), rows: Array.from({ length: localTableLimits.rows }, () => Array<string | null>(localTableLimits.columns).fill('a')) }
+    expect(localSaveBytes(named)).toBeLessThanOrEqual(localTableLimits.saveBytes)
+    for (const format of ['csv', 'json'] as const) expect(localSaveBytes(named)).toBeGreaterThanOrEqual((await localExportBytes(named, { format, headers: true, nullText: 'NULL' })).data.length)
     // At the bound: blank NULL columns and long control-character names, whose JSON keys repeat on every row.
     const edge: LocalTableData = { columns: [...Array.from({ length: 40 }, () => ({ name: '' })), ...Array.from({ length: 24 }, (_, i) => ({ name: `${i}`.padEnd(localTableLimits.nameChars, '\u0001') }))], rows: Array.from({ length: 3600 }, () => Array<string | null>(64).fill(null)) }
     const edgeJson = (await localExportBytes(edge, { format: 'json', headers: true, nullText: 'NULL' })).data.length

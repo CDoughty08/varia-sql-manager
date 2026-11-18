@@ -19,16 +19,16 @@ export const localTableLimits = Object.freeze({ rows: 10_000, columns: 64, cellC
 
 const utf8Bytes = (text: string) => { let bytes = 0; for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : 3 } return bytes }
 /**
- * At least the bytes any save of the table writes, in any format: per cell its key as JSON writes it (Column{n} for a
- * blank name, _n for a repeated one) or its header as CSV quotes it, whichever is longer, a separator, and its text at
- * JSON's worst escape (a control character's six-character escape, 6 bytes a byte) or NULL's letters; per row its
- * brackets and line end; and the header line. Cheap and never under, so a save past `saveBytes` is refused before its
- * file is built.
+ * At least the bytes any save of the table writes, in any format: the header line once (each name as CSV quotes it, a
+ * blank one as "(No column name)", with its separator); per row its brackets and line end; per cell its key as JSON
+ * writes it (Column{n} for a blank name, _n for a repeated one) with its colon and comma, which also covers a CSV or TSV
+ * separator, and its text at JSON's worst escape (a control character's six-character escape, 6 bytes a byte, more than
+ * CSV's doubled quotes) or NULL's letters. Cheap and never under, so a save past `saveBytes` is refused before its file
+ * is built.
  */
 export function localSaveBytes(table: LocalTableData): number {
-  const json = jsonKeyBytes(table.columns)
-  const keys = table.columns.map((column, index) => Math.max(json[index], utf8Bytes(column.name || NO_COLUMN_NAME) * 2 + 2) + 2)
-  let total = 16 + keys.reduce((sum, key) => sum + key, 0)
+  const keys = jsonKeyBytes(table.columns).map(key => key + 2)
+  let total = 16 + table.columns.reduce((sum, column) => sum + utf8Bytes(column.name || NO_COLUMN_NAME) * 2 + 3, 0)
   for (const row of table.rows) {
     total += 4
     for (let column = 0; column < table.columns.length; column++) total += keys[column] + Math.max(utf8Bytes(row[column] ?? '') * 6 + 2, 4)
@@ -41,7 +41,7 @@ export function localSaveBytes(table: LocalTableData): number {
  * and 4 Mi characters in all, every row as wide as the columns (missing cells are NULL). `truncated` counts what was left
  * out: rows past the bounds, and cells cut.
  */
-export function boundTable(data: LocalTableData): LocalTableData & { readonly truncatedRows: number; readonly cutCells: number; readonly cut: ReadonlySet<number> } {
+export function boundTable(data: LocalTableData): LocalTableData & { readonly truncatedRows: number; readonly droppedColumns: number; readonly cutCells: number; readonly cut: ReadonlySet<number> } {
   const columns = data.columns.slice(0, localTableLimits.columns).map(column => ({ ...column, name: column.name.slice(0, localTableLimits.nameChars) }))
   const rows: LocalCell[][] = []
   let chars = 0, cutCells = 0
@@ -60,7 +60,7 @@ export function boundTable(data: LocalTableData): LocalTableData & { readonly tr
     chars += rowChars
     rows.push(row)
   }
-  return { columns, rows, truncatedRows: data.rows.length - rows.length, cutCells, cut }
+  return { columns, rows, truncatedRows: data.rows.length - rows.length, droppedColumns: Math.max(0, data.columns.length - columns.length), cutCells, cut }
 }
 
 const encoder = new TextEncoder()

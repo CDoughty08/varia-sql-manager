@@ -11,6 +11,7 @@ import { gridLimits as g } from './constants'
 import GridShell, { GridErrorBoundary, instanceKey, type GridShellApi, type GridSpec } from './GridShell'
 import type { GridView, HeaderSortKey } from './GridView'
 import { localDescriptor, LocalSource, sortOrder, type LocalSortKey } from './local-source'
+import { beginCopy, latestCopy } from './copy-generation'
 import { scrollbarSize } from './scrollbar'
 import { copyPlan } from './selection'
 import { cycleSortKeys, sortKeysBy } from './sort-keys'
@@ -49,6 +50,7 @@ const yieldToEvents = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 /** The most a local copy writes, in UTF-8 bytes (never fewer than its characters): what the clipboard takes and a results
  *  grid's copy may be, whichever is less. Overlapping parts copy their rows again, past what the table holds. */
 const localCopyBytes = Math.min(maxClipboardText, wire.jobs.copyBytes)
+class CopySuperseded extends Error {}
 const unsorted: readonly LocalSortKey[] = []
 /** The sort an owner-kept state was saved with, so its selection and scroll come back over the rows they were in. */
 const keptSorts = new WeakMap<GridViewState, { readonly columns: string; readonly keys: readonly LocalSortKey[] }>()
@@ -80,7 +82,6 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const setNotice = useCallback((next?: { readonly text: string; readonly error?: boolean }) => setNoticed(next && { ...next, bound }), [bound])
   const [wide, setWide] = useState(false)
   const apiRef = useRef<GridShellApi | undefined>(undefined)
-  const copies = useRef(0)
   const sourceRef = useRef<LocalSource | undefined>(undefined)
   const own = useMemo<GridViewState>(() => state ?? { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }, [state, bound])
   const latest = useRef({ label, suggestedName })
@@ -135,16 +136,18 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
         const parts = source && selection ? copyPlan(selection, source.table.columns.length) : []
         if (!source || !parts.length) return
         setNotice(undefined)
-        // Only the latest copy writes the clipboard: a large one still formatting never overwrites a later, smaller one.
-        const copy = ++copies.current
-        void localCopyText(source.table, parts, { headers, crlf: platform === 'win32', ...source.order ? { order: source.order } : {}, maxBytes: localCopyBytes, afterPage: yieldToEvents })
+        // Only the latest copy, of any grid, writes the clipboard: one still formatting stops at its next page once a later
+        // copy begins, and never overwrites it.
+        const copy = beginCopy()
+        const afterPage = async () => { await yieldToEvents(); if (!latestCopy(copy)) throw new CopySuperseded() }
+        void localCopyText(source.table, parts, { headers, crlf: platform === 'win32', ...source.order ? { order: source.order } : {}, maxBytes: localCopyBytes, afterPage })
           .then(async copied => {
-            if (copy !== copies.current) return
+            if (!latestCopy(copy)) return
             const written = await window.varia.writeClipboardText(copied.text)
             if (!written.ok) report('copy the rows', written.error)
           })
           .catch(error => {
-            if (copy !== copies.current) return
+            if (error instanceof CopySuperseded || !latestCopy(copy)) return
             if (error instanceof LocalCopyTooLarge) setNotice({ text: `The selection is too large to copy (more than ${localCopyBytes / 1024 / 1024} MB).${preset === 'page' ? ' Use Save Results As instead.' : ''}`, error: true })
             else report('copy the rows', error)
           })
@@ -175,7 +178,8 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const headerSort = useMemo<HeaderSortKey[]>(() => keys.map(key => ({ column: key.column, descending: key.descending })), [keys])
   // What the bounds left out is shown, as a results grid shows truncated values: rows past the first, and cut cells.
   const cut = bound.cutCells > 0 ? `${formatCount(bound.cutCells)} ${bound.cutCells === 1 ? 'value was' : 'values were'} cut to ${formatCount(localTableLimits.cellChars)} characters.` : undefined
-  const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, cut].filter(Boolean).join(' ') || undefined
+  const dropped = bound.droppedColumns > 0 ? `Showing the first ${formatCount(columns)} ${plural(columns, 'column')}.` : undefined
+  const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, dropped, cut].filter(Boolean).join(' ') || undefined
   const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
   // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
   // than it and for its strip.

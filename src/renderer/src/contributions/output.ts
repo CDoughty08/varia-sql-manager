@@ -1,4 +1,5 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import { beginCopy } from '../grid/copy-generation'
 import { outputPaneIds } from '../../../shared/layouts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -231,6 +232,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: async args => {
         const target = targetOf(args), cells = selected(target), live = liveOf(args)
         if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
+        beginCopy()
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
         if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
@@ -241,6 +243,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: async args => {
         const live = liveOf(args)
         if (live) { if (live.hasSelection()) live.copy(true); return }
+        beginCopy()
         const cells = selected(targetOf(args))
         const failure = cells && await results.copy(cells.tabId, cells.key, true)
         if (failure) commands.reportError(failure)
