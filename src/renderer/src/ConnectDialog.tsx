@@ -76,6 +76,7 @@ const mfaWaiting = 'Complete the sign-in in your web browser. Waiting up to 3 mi
 const cancelledNotice = 'Connection cancelled.'
 const testCancelledNotice = 'Test cancelled.'
 const settingsDroppedPassword = 'Saved to History. The saved password was for the old settings, so it was forgotten; enter it with Remember password checked and save to keep it.'
+const settingsDroppedPasswordFor = 'Saved to History. The saved password was for the old login settings, so it was forgotten.'
 const saveCancelledNotice = 'Save cancelled. Nothing was saved.'
 const saveTitle = 'Save settings and labels to History. Opens no session.'
 /** What Save will do with a typed password: check it with the server and remember it, or keep only the settings. */
@@ -244,7 +245,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const id = testRequest.current
     if (!id) return
     stopped.current.add(id)
-    cancelDatabases()
+    // A Load databases the check waits for ends too, quietly: it is not a failure, and focusing the field loads again.
+    if (databasesRequest.current) { dbRequest.current++; cancelDatabases(); setDbBusy(false) }
     void window.varia.cancelConnectionRequests([id]).catch(() => {})
   }
   /** Stop: the connect ends at once, even while it waits for a Microsoft Entra sign-in in the web browser. */
@@ -458,6 +460,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     } catch (reason) { if (alive.current) { setError(message(reason)); setFailure(undefined) } }
     finally {
       // Only the check still running owns the lock: a stale one finishing must not unlock the form under it.
+      stopped.current.delete(requestId)
       if (testRequest.current === requestId) { testRequest.current = undefined; if (alive.current) setTesting(undefined) }
     }
     return undefined
@@ -493,7 +496,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     const inUse = rememberPassword && passwordInUse(labelled, target?.id)
     // The entry's remembered password is for its old login settings: other ones (Trust server certificate, Encrypt, ...)
     // leave it behind, so Save says so rather than dropping it silently.
-    const hadPassword = !!target && savedIds.has(target.id) && !forgetPassword
+    const hadPassword = !!target && savedIds.has(target.id) && !forgetPassword && credentialBinding(target.options) !== credentialBinding(labelled)
     if (rememberPassword && !await check(labelled, 'save')) return false
     const value = await saveProfile(undefined, undefined, undefined, { labelled, rememberPassword, forgetPassword })
     if (!value || !alive.current) return value ? 'saved' : false
@@ -503,7 +506,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       return inUse && value.passwordReplaced ? 'warned' : 'saved'
     }
     if (rememberPassword) { setNotice('Saved to History, but the password could not be remembered.'); return 'warned' }
-    if (hadPassword && !value.savedPasswords.includes(target!.id)) { setNotice(settingsDroppedPassword); return 'warned' }
+    if (hadPassword && !value.savedPasswords.includes(target!.id)) { setNotice(canRememberPassword(labelled.authentication) ? settingsDroppedPassword : settingsDroppedPasswordFor); return 'warned' }
     if (forgetPassword) {
       rememberEdited.current = false
       setNotice(!value.passwordForgotten ? 'Saved to History, but the saved password could not be removed.' : typed ? 'Saved to History. The saved password was forgotten, and the typed one was not kept.' : 'Saved to History. The saved password was forgotten.')

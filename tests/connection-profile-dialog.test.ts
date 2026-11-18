@@ -702,13 +702,27 @@ describe('Save and Test Connection', () => {
     expect(remember(view).checked).toBe(false)
     await act(async () => answer({ ok: true, value: [] }))
     expect(text(view)).toContain('Connected to server-7')
-    // Stop while Test waits cancels the Load databases and sends no Test.
+    // Stop while Test waits cancels the Load databases quietly and sends no Test.
     await act(async () => view.button('Load databases').click())
+    const loading = calls.mock.calls[2][1]?.requestId
     await act(async () => view.button('Test Connection').click())
     await act(async () => view.button('Stop').click())
+    expect(view.api.cancelConnectionRequests).toHaveBeenCalledWith([loading])
     await act(async () => answer({ ok: false, error: 'Cancelled.', code: 'CANCELLED' }))
     expect(calls).toHaveBeenCalledTimes(3)
     expect(text(view)).toContain('Test cancelled.')
+    expect(text(view)).not.toContain('Could not load databases')
+  })
+
+  it('says a remembered password was forgotten only when the saved settings changed', async () => {
+    const saved = sqlProfile(), view = await mount(undefined, { profiles: [saved], savedPasswords: [saved.id] })
+    await view.choose('Sql profile')
+    await pick(view, '#connect-name', 'Renamed')
+    // Storage unavailable after the dialog loaded lists no passwords; the settings are the same, so none was forgotten.
+    view.saveConnectionProfile.mockImplementationOnce(async () => ({ ok: true, value: { library: { version: 1, profiles: view.profiles() }, savedPasswords: [] } }))
+    await act(async () => view.button('Save').click())
+    expect(text(view)).toContain('Saved to History.')
+    expect(text(view)).not.toContain('was for the old')
   })
 
   it('offers to trust the certificate and test again after a failed test, without connecting', async () => {
