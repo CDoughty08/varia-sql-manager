@@ -103,29 +103,36 @@ h1 { font-size: 16px; margin: 0 0 4px }
 .btn { height: 28px; padding: 0 14px; border-radius: 4px; border: 1px solid var(--borderStrong); background: var(--raised); cursor: default }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--onAccent) }
 
-/* The drop: the ghost flies into the tab, a ring in the server's colour spreads from it, the server line swaps in. */
-.play .ghost { animation: fly .42s cubic-bezier(.5,0,.75,0) forwards }
-@keyframes fly { to { left: var(--tx); top: 18px; transform: scale(.35); opacity: 0 } }
-.play .tab.drop { animation: settle .5s .38s cubic-bezier(.2,.9,.3,1.3) both }
-@keyframes settle { 0% { transform: translateY(-1px) scale(1) } 40% { transform: translateY(0) scale(1.04) } 100% { transform: none } }
-.ring { position: absolute; z-index: 4; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--srvB); opacity: 0; pointer-events: none }
-.play .ring { animation: ring .6s .38s ease-out both }
-@keyframes ring { 0% { opacity: .9; transform: scale(.4) } 100% { opacity: 0; transform: scale(6) } }
-.tab .srv .was, .tab .srv .now { display: inline-flex; align-items: center; gap: 4px }
-.tab .srv .now { display: none }
-.play .tab.drop .srv .was { animation: out .2s .5s forwards }
-.play .tab.drop .srv .now { display: inline-flex; animation: in .25s .7s both }
-.play .tab.drop .sid { animation: sid 1.2s .5s both }
-@keyframes out { to { opacity: 0; transform: translateY(-6px) } }
-@keyframes in { from { opacity: 0; transform: translateY(6px) } }
-@keyframes sid { 0%, 40% { opacity: .3 } 100% { opacity: 1 } }
-.play .tab.drop .stripe { position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: var(--srvB); transform-origin: left; animation: stripe .5s .45s ease-out both }
-@keyframes stripe { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+/* The drop, ≈ 0.9 s on one decelerating curve with no overshoot. The drag image settles where it was let go and
+   dissolves; the tab's lift and accent ease away; a soft wash in the new server's colour passes behind the tab's text,
+   and the server line cross-fades under it, so the change is covered rather than performed. The colour rule eases out
+   from the centre, and the session badge dims while the old session ends and the new one opens. */
+body { --ease: cubic-bezier(.2,0,0,1) }
+.tab { transition: transform .22s var(--ease), background-color .22s var(--ease), box-shadow .22s var(--ease), opacity .16s }
+.tab .ic, .tab .tx { position: relative }
+.tab .srv { display: inline-grid }
+.tab .srv .was, .tab .srv .now { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 4px }
+.tab .srv .now { opacity: 0 }
+.tab .wash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--srvB) 20%, transparent) 35%, color-mix(in srgb, var(--srvB) 20%, transparent) 65%, transparent 100%) no-repeat; background-size: 60% 100% }
+.play .ghost { animation: dissolve .24s var(--ease) forwards }
+@keyframes dissolve { to { transform: scale(.92); opacity: 0; filter: blur(1.5px) } }
+.play .tab.drop .wash { animation: wash .72s .1s var(--ease) both }
+@keyframes wash { 0% { opacity: 0; background-position: -60% 0 } 20% { opacity: 1 } 70% { opacity: 1 } 100% { opacity: 0; background-position: 160% 0 } }
+.play .tab.drop .srv .was { animation: fade-out .22s .24s var(--ease) forwards }
+.play .tab.drop .srv .now { animation: fade-in .3s .36s var(--ease) both }
+@keyframes fade-out { to { opacity: 0; filter: blur(2px) } }
+@keyframes fade-in { from { opacity: 0; filter: blur(2px) } to { opacity: 1 } }
+.play .tab.drop .stripe { position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: var(--srvB); transform-origin: center; animation: stripe .5s .26s var(--ease) both }
+@keyframes stripe { from { transform: scaleX(0); opacity: .4 } to { transform: scaleX(1); opacity: 1 } }
+.play .tab.drop .sid { animation: sid .9s .22s var(--ease) both }
+@keyframes sid { 0% { opacity: 1 } 22%, 70% { opacity: .3 } 100% { opacity: 1 } }
+.status span.swap, .play .toast { animation: rise .3s var(--ease) both }
+@keyframes rise { from { opacity: 0; transform: translateY(4px) } }
 @media (prefers-reduced-motion: reduce) {
-  body:not(.motion) .play .ghost, body:not(.motion) .play .ring { animation: none; opacity: 0 }
-  body:not(.motion) .play .tab.drop, body:not(.motion) .play .tab.drop .stripe, body:not(.motion) .play .tab.drop .sid { animation: none }
-  body:not(.motion) .play .tab.drop .srv .was { animation: none; display: none }
-  body:not(.motion) .play .tab.drop .srv .now { animation: none }
+  body:not(.motion) .play .ghost { animation: none; opacity: 0 }
+  body:not(.motion) .tab, body:not(.motion) .play .tab.drop .wash, body:not(.motion) .play .tab.drop .stripe, body:not(.motion) .play .tab.drop .sid, body:not(.motion) .status span.swap, body:not(.motion) .play .toast { animation: none; transition: none }
+  body:not(.motion) .play .tab.drop .srv .was { animation: none; opacity: 0 }
+  body:not(.motion) .play .tab.drop .srv .now { animation: none; opacity: 1 }
 }
 
 .eov { position: absolute; z-index: 3; left: 0; right: 0; top: 44px; bottom: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;
@@ -155,11 +162,12 @@ h1 { font-size: 16px; margin: 0 0 4px }
 .eov.insert .plate { width: auto; padding: 6px 12px; border-radius: 6px; font-size: 12px; text-align: left; animation: none }
 .dropcaret { position: absolute; z-index: 4; width: 2px; height: 18px; background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); animation: socket .8s ease-in-out infinite }
 .eov.held, .eov.held .plate { animation: none }
-/* Dropping on the editor: the plate shrinks into the tab, then the tab plays the same swap as a drop on it. */
-.play .eov { animation: eov-out .45s .25s ease-in forwards }
-@keyframes eov-out { to { opacity: 0 } }
-.play .eov .plate { animation: into-tab .5s cubic-bezier(.5,0,.75,0) forwards }
-@keyframes into-tab { to { transform: translate(var(--dx), var(--dy)) scale(.12); opacity: .2 } }
+/* Dropping on the editor: the tint, frame and plate recede where they are, and the tab makes the same swap. */
+.play .eov { animation: eov-out .28s .04s var(--ease) forwards }
+@keyframes eov-out { to { opacity: 0; backdrop-filter: blur(0) } }
+.play .eov .plate { animation: plate-out .24s var(--ease) forwards }
+@keyframes plate-out { to { transform: scale(.97); opacity: 0 } }
+.play .eov::before { animation: none }
 .play .eov .plug::after { animation: none }
 @media (prefers-reduced-motion: reduce) {
   body:not(.motion) .eov, body:not(.motion) .eov .plate, body:not(.motion) .play .eov .plate, body:not(.motion) .eov::before, body:not(.motion) .eov .plug::after { animation: none }
@@ -202,7 +210,7 @@ Pick a scene; the ▶ scenes play the drop, <b>↻ Replay</b> runs it again, and
   <label class="opt"><input type="checkbox" id="motion" checked> Animate even with reduced motion on</label>
 </div>
 
-<p class="motion-note">Your system asks for reduced motion (Windows: Settings › Accessibility › Visual effects › Animation effects off), so Varia would swap the server instantly with no animation. The mock plays the animations anyway while "Animate even with reduced motion on" is ticked; untick it to see what you would get.</p>
+<p class="motion-note">Your system asks for reduced motion (Windows: Settings › Accessibility › Visual effects › Animation effects off). Varia animates anyway by default; only with its Options setting that follows the system turned on does the server swap instantly. Untick "Animate even with reduced motion on" to preview that.</p>
 <div class="win" id="win">
   <div class="body">
     <aside class="oe">
@@ -216,7 +224,7 @@ Pick a scene; the ▶ scenes play the drop, <b>↻ Replay</b> runs it again, and
     </aside>
     <section class="main">
       <div class="tabs" id="tabs">
-        <div class="tab can on" id="t1"><span class="stripe"></span><span class="ic">▤</span><div class="tx"><span class="nm">Orders report.sql</span><span class="meta"><span class="srv"><span class="was"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="now"><i style="background:var(--srvB)"></i>REPORTING-SQL</span></span><span class="sid">SID 57</span></span></div><span class="x">×</span></div>
+        <div class="tab can on" id="t1"><span class="wash"></span><span class="stripe"></span><span class="ic">▤</span><div class="tx"><span class="nm">Orders report.sql</span><span class="meta"><span class="srv"><span class="was"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="now"><i style="background:var(--srvB)"></i>REPORTING-SQL</span></span><span class="sid">SID 57</span></span></div><span class="x">×</span></div>
         <div class="tab can" id="t2"><span class="ic">▤</span><div class="tx"><span class="nm">SQLQuery2.sql</span><span class="meta"><span class="srv"><i style="background:var(--srvA)"></i>SALES-SQL01</span><span class="sid">SID 61</span></span></div><span class="x">×</span></div>
         <div class="tab can" id="t3"><span class="ic">▤</span><div class="tx"><span class="nm">Nightly load.sql <span class="spin" title="Executing"></span></span><span class="meta"><span class="srv"><i style="background:var(--srvB)"></i>REPORTING-SQL</span><span class="sid">SID 64</span></span></div><span class="x">×</span></div>
         <div class="tab cannot" id="t4"><span class="ic">◷</span><div class="tx"><span class="nm">Activity Monitor</span><span class="meta"><span class="srv"><i style="background:var(--srvA)"></i>SALES-SQL01</span></span></div><span class="x">×</span></div>
@@ -239,7 +247,7 @@ Pick a scene; the ▶ scenes play the drop, <b>↻ Replay</b> runs it again, and
     <li><b>Starts</b> when a server row is dragged. Every query tab shows a dashed socket under it; tabs that are not queries dim. Reordering servers in Object Explorer still works during the same drag, so one gesture does either.</li>
     <li><b>Over a query tab</b> the tab lifts and fills with the accent, its socket pulses, and a card names the move: old server struck through → new server, and the database it will use. Hovering does not switch tabs.</li>
     <li><b>Dropping</b> runs <code>targets.changeConnection</code>, the same path as Change Connection…: the query's session ends first, and the query opens on the new server's default database (the database remembered for that server when it had one). The tab becomes the active tab and the editor takes focus.</li>
-    <li><b>The animation</b> (≈ 0.9 s, no layout shift): the drag image flies into the tab and shrinks, a ring in the server's colour spreads from the drop point, a stripe in that colour sweeps across the tab's top edge, the server name rolls over, and the SID badge fades back in when the new session opens. Under reduced motion the server name simply changes.</li>
+    <li><b>The animation</b> (≈ 0.9 s, one decelerating curve, no overshoot, no layout shift): the drag image dissolves where it was let go and the tab's lift eases away; a soft wash in the new server's colour passes behind the tab's text while the server name cross-fades under it, so the change is covered rather than performed; the colour rule on the tab's top edge eases out from the centre; the SID badge dims while the old session ends and returns with the new session's number; the status bar and a quiet toast follow. Dropping on the editor makes the overlay recede in place, then the tab makes the same swap. Varia plays it even when the system asks for reduced motion, unless the Options setting that follows the system is turned on.</li>
     <li><b>Open transaction:</b> the existing prompt asks Commit, Roll Back or Cancel before the session ends; Cancel leaves the query where it was.</li>
     <li><b>Running query:</b> the tab refuses the drop (no-entry cursor, no socket pulse) and the card says to stop the query first. The query is never stopped for you.</li>
     <li><b>Same server:</b> refused quietly; the card says the query is already there, so the session and its temp tables are kept.</li>
@@ -254,14 +262,12 @@ Pick a scene; the ▶ scenes play the drop, <b>↻ Replay</b> runs it again, and
   <ul>
     <li><b>One code path:</b> every drop calls <code>targets.changeConnection</code>, the same flow as Query › Change Connection…, so later changes to it (database choice, session prompts) apply to both.</li>
     <li><b>Empty tab-strip space:</b> dropping a server there opens a new query on it.</li>
+    <li><b>Database rows:</b> dropping a database row (AppData under REPORTING-SQL) on a query moves it to that server and that database in one step: Change Connection, then Change Database.</li>
     <li><b>Production:</b> the environment tag in the card is enough; no extra prompt.</li>
+    <li><b>Editor drop:</b> moves the query by default; holding Ctrl (⌥ on macOS) inserts the name at the caret.</li>
+    <li><b>Animation:</b> the full sequence, polished to feel calm and fluid: it smooths the change over rather than showing off (this version).</li>
+    <li><b>Reduced motion:</b> Varia animates by default even when the system asks for reduced motion; an Options setting, off by default, makes it follow the system.</li>
   </ul>
-  <h3>Still open</h3>
-  <ol>
-    <li><b>Database rows:</b> the drag above starts from a <em>server</em> row (REPORTING-SQL), and the query lands on that server's default database. Should dragging a <em>database</em> row (say AppData, under REPORTING-SQL) onto a query also pick the database: REPORTING-SQL <em>and</em> AppData in one drop (Change Connection, then Change Database)? Or should database rows keep doing only what they do today, inserting <code>[AppData]</code> into the editor?</li>
-    <li><b>Editor drop default:</b> move the query (Ctrl inserts the name, as shown), or the other way round? Today a server row dragged into the editor inserts its name only when it is the only server.</li>
-    <li><b>Animation:</b> keep the full sequence (fly-in, ring, stripe, roll-over, ≈ 0.9 s), or only the stripe and roll-over (≈ 0.5 s)? Use ↻ Replay and Slow motion on scenes 3 and 10 to compare.</li>
-  </ol>
 </div>
 
 <script>
@@ -285,6 +291,9 @@ const slow = () => document.getElementById('slow').checked ? 4 : 1
 function later(step, ms) { timers.push(setTimeout(step, ms * slow())) }
 function show(scene) {
   timers.forEach(clearTimeout); timers = []
+  const status = document.getElementById('status').firstElementChild
+  status.textContent = '● SALES-SQL01'; status.classList.remove('swap')
+  document.querySelector('#t1 .sid').textContent = 'SID 57'
   clearInterval(slowing)
   // Slow motion: every CSS animation that starts in the next few seconds plays at a quarter speed.
   if (slow() > 1) { const until = Date.now() + 8000; slowing = setInterval(() => { document.getAnimations().forEach(animation => { animation.playbackRate = 1 / slow() }); if (Date.now() > until) clearInterval(slowing) }, 16) }
@@ -309,14 +318,12 @@ function show(scene) {
   const pointer = card.accept ? `<svg class="cursor" style="left:${x + w / 2 + 10}px;top:18px" viewBox="0 0 14 20"><path d="M1 1v15l4-4 3 7 2-1-3-7h6z" fill="var(--strong)" stroke="var(--canvas)"/></svg>` : `<span class="no-cursor" style="left:${x + w / 2 + 10}px;top:20px"></span>`
   if (scene === 'play') {
     tab.classList.add('drop')
-    overlay.innerHTML = ghost(x + w / 2 + 24, 30) + `<span class="ring" style="left:${x + w / 2 - 12}px;top:10px"></span>`
-    win.classList.remove('dragging-server')
-    document.getElementById('dragRow').classList.remove('dragging')
-    later(() => win.classList.add('play'), 30)
-    later(() => { overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`); document.getElementById('status').firstElementChild.textContent = '● REPORTING-SQL' }, 1100)
+    overlay.innerHTML = ghost(x + w / 2 + 30, 36)
+    later(() => { win.classList.add('play'); win.classList.remove('dragging-server'); tab.classList.remove('target'); document.getElementById('dragRow').classList.remove('dragging') }, 300)
+    later(() => { const sid = tab.querySelector('.sid'); sid.textContent = 'SID 72'; const status = document.getElementById('status').firstElementChild; status.textContent = '● REPORTING-SQL'; status.classList.add('swap') }, 300 + 420)
+    later(() => overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`), 300 + 900)
     return
   }
-  document.getElementById('status').firstElementChild.textContent = '● SALES-SQL01'
   overlay.innerHTML = ghost(x + w / 2 + 30, 36, card.name, card.color) + pointer + `<div class="card" style="left:${Math.max(4, x)}px">${card.html}</div>`
 }
 const plate = (title, body, hint, refuse) => `<div class="plate"><div class="plug">${refuse ? '⊘' : '⏻'}</div><div class="t">${title}</div>${body}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`
@@ -337,16 +344,11 @@ function showEditor(scene) {
   overlay.innerHTML = `<div class="eov${scene === 'editorPlay' ? ' held' : ''}">${plate('Move this query to REPORTING-SQL', moveLine + `<div class="note">Database: <b>master</b> (REPORTING-SQL's default). The query's session on SALES-SQL01 ends.</div>`, 'Hold Ctrl to insert the name instead')}</div>` + ghost(530, 220) + pointer
   tab.classList.add('target')
   if (scene === 'editorPlay') {
-    const card = overlay.querySelector('.plate'), box = card.getBoundingClientRect()
-    card.style.setProperty('--dx', `${x + w / 2 - (box.left - host.left + box.width / 2)}px`)
-    card.style.setProperty('--dy', `${22 - (box.top - host.top + box.height / 2)}px`)
-    overlay.querySelectorAll('.ghost, .cursor').forEach(node => node.remove())
-    overlay.insertAdjacentHTML('beforeend', `<span class="ring" style="left:${x + w / 2 - 12}px;top:10px"></span>`)
-    win.classList.remove('dragging-server')
-    document.getElementById('dragRow').classList.remove('dragging')
-    later(() => win.classList.add('play'), 30)
-    later(() => { tab.classList.remove('target'); tab.classList.add('drop') }, 380)
-    later(() => { overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`); document.getElementById('status').firstElementChild.textContent = '● REPORTING-SQL' }, 1400)
+    overlay.querySelectorAll('.cursor').forEach(node => node.remove())
+    later(() => { win.classList.add('play'); win.classList.remove('dragging-server'); document.getElementById('dragRow').classList.remove('dragging') }, 300)
+    later(() => { tab.classList.remove('target'); tab.classList.add('drop') }, 420)
+    later(() => { const sid = tab.querySelector('.sid'); sid.textContent = 'SID 72'; const status = document.getElementById('status').firstElementChild; status.textContent = '● REPORTING-SQL'; status.classList.add('swap') }, 420 + 420)
+    later(() => overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`), 420 + 900)
   }
 }
 document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
