@@ -133,8 +133,8 @@ is quarantined and the default place used; a file that cannot be read is never o
   itself: only the size and the maximized flag are restored and the compositor chooses where. Full screen reports no
   reliable normal bounds (Windows gives the maximized rectangle), so main keeps the window's normal bounds as it goes:
   Windows' and macOS's own while maximized, and on Linux, whose window manager may report a maximize's new size before or after
-  its state, the bounds the window last had while normal, told apart from an early maximized size by whether the size
-  changes after the state does.
+  its state, the bounds the window last had while normal, told apart from an early maximized size by whether the next
+  change of bounds keeps the state and changes the size (the maximize's own resize).
 - **Popouts** reopen from the workspace layout, checked by `onDisplay` as above; this file holds only the main window.
 - A main window replaced after a lost renderer opens where its predecessor was. Smoke runs keep no place unless they
   set `VARIA_TEST_WINDOW_STATE=1`.

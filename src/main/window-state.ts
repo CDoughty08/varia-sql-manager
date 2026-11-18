@@ -232,17 +232,23 @@ export class WindowStateTracker {
     }
     // Linux, a candidate the window left the normal state at: either the maximized size reported before the flag (it stays
     // the window's size, and `earlier` was the normal place) or the normal place itself with the new size still to come.
-    let undecided: { candidate: Rect; earlier?: Rect } | undefined
+    // The first change of bounds after it decides: the maximize's own resize changes the size in the same state; anything
+    // else (a move to another display, full screen, a minimize) means the size had come first.
+    let undecided: { candidate: Rect; earlier?: Rect; maximized: boolean; fullScreen: boolean } | undefined
     /** The window is not normal: decide what its last bounds while normal were. */
     const left = () => {
       if (window.isDestroyed()) return
       const now = window.getBounds()
-      if (undecided && !same(now, undecided.candidate)) { normal = undecided.candidate; undecided = undefined }
+      if (undecided && !same(now, undecided.candidate)) {
+        const sameState = window.isMaximized() === undecided.maximized && window.isFullScreen() === undecided.fullScreen && !window.isMinimized()
+        if (sameState && (now.width !== undecided.candidate.width || now.height !== undecided.candidate.height)) { normal = undecided.candidate; undecided = undefined }
+        else decide()
+      }
       if (!candidate) return
       // Minimizing keeps the window's bounds, so the bounds it has are the place it was minimized from.
       if (window.isMinimized() && !window.isMaximized() && !window.isFullScreen()) normal = candidate
       else if (!same(candidate, now)) normal = candidate
-      else undecided = { candidate, earlier }
+      else undecided = { candidate, earlier, maximized: window.isMaximized(), fullScreen: window.isFullScreen() }
       candidate = earlier = undefined
     }
     /** Nothing changed the size since: the undecided candidate was the maximized size, reported early. */

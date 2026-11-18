@@ -402,6 +402,31 @@ describe('WindowStateTracker', () => {
     }
   })
 
+  it('on Linux, a change soon after a size-first maximize does not make the maximized size the normal place', async () => {
+    const changes: [string, (state: ReturnType<typeof fakeWindow>['state'], emit: (event: string) => void) => void][] = [
+      ['full screen', (state, emit) => { state.fullScreen = true; emit('enter-full-screen'); state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('resize') }],
+      ['full screen and back', (state, emit) => {
+        state.fullScreen = true; emit('enter-full-screen'); state.bounds = { x: 0, y: 0, width: 1920, height: 1080 }; emit('resize')
+        state.fullScreen = false; emit('leave-full-screen'); state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+      }],
+      ['a move to another display', (state, emit) => { state.bounds = { x: -1920, y: 0, width: 1920, height: 1040 }; emit('move') }],
+      ['a minimize', (state, emit) => { state.minimized = true; emit('minimize') }]
+    ]
+    for (const viaOldPosition of [false, true]) for (const [, change] of changes) {
+      const { tracker, save, state, emit } = setup('linux')
+      // Size first (at the old position, then a move to the work area's corner, for some window managers), then the flag.
+      state.bounds = viaOldPosition ? { x: 100, y: 50, width: 1920, height: 1040 } : { x: 0, y: 0, width: 1920, height: 1040 }; emit('resize')
+      state.maximized = true; emit('maximize')
+      if (viaOldPosition) { state.bounds = { x: 0, y: 0, width: 1920, height: 1040 }; emit('move') }
+      change(state, emit)
+      vi.advanceTimersByTime(1000)
+      emit('close')
+      await tracker.flush()
+      expect(save).toHaveBeenLastCalledWith({ x: 100, y: 50, width: 1440, height: 960, maximized: true })
+      vi.useRealTimers()
+    }
+  })
+
   it('writes what a window last looked like when it is destroyed before its pending save', async () => {
     const { tracker, save, state, emit } = setup('linux')
     state.bounds = { x: 300, y: 200, width: 1300, height: 900 }; emit('move')
