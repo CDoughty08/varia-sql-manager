@@ -952,6 +952,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-panel { display: flex; flex: 0 0 300px; flex-direction: column; min-height: 0; max-width: 45%; border-left: 1px solid var(--varia-panel-border); background: var(--varia-sideBar-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .profile-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 26px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--varia-panel-border); }
 .profile-title { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.profile-head.with-subject { border-bottom: 0; }
+.profile-subject { flex-shrink: 0; padding: 0 8px 4px; border-bottom: 1px solid var(--varia-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); }
 .profile-note { flex-shrink: 0; padding: 4px 8px; color: var(--varia-descriptionForeground); }
 .profile-note.error { color: var(--varia-errorForeground); }

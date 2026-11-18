@@ -14,7 +14,7 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { scrollbarSize } from '../src/renderer/src/grid/ResultsStack'
 import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
-import { filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
+import { comparisonSideChars, comparisonTabLabel, filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, shortenMiddle, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
@@ -166,7 +166,7 @@ describe('results as tabs', () => {
     draw()
     draw()
     expect(results.getSnapshot().t1.focused).toBe(made)
-    expect(chosen(resultTabs())).toBe('Differences: Result 2 → Result 3')
+    expect(chosen(resultTabs())).toBe('Result 2 → Result 3')
   })
 
   it('draw a bounded window of result tabs around the selected one', () => {
@@ -192,7 +192,7 @@ describe('results as tabs', () => {
   it('mount only the selected grid, keep each group\'s view and switch without building the others again', () => {
     const { results, one, three, pivot, diff, draw, resultTabs, viewTabs, names, chosen, grids, all } = fixture()
     draw()
-    expect(names(resultTabs())).toEqual(['Result 1', 'Result 2', 'Result 3', 'Differences: Result 1 → Result 2'])
+    expect(names(resultTabs())).toEqual(['Result 1', 'Result 2', 'Result 3', 'Result 1 → Result 2'])
     expect(chosen(resultTabs())).toBe('Result 1')
     expect(names(viewTabs())).toEqual(['Table'])
     expect(grids()).toEqual([one])
@@ -329,7 +329,7 @@ describe('results as tabs', () => {
     press(resultTabs()[0], 'ArrowLeft')
     draw()
     expect(results.getSnapshot().t1.focused).toBe(diff)
-    expect(document.activeElement?.textContent).toBe('Differences: Result 1 → Result 2')
+    expect(document.activeElement?.textContent).toBe('Result 1 → Result 2')
     press(resultTabs()[3], 'Home')
     draw()
     expect(results.getSnapshot().t1.focused).toBe(one)
@@ -445,8 +445,8 @@ describe('results as tabs', () => {
     closer('Result 3').focus()
     act(() => { closer('Result 3').click() })
     draw()
-    expect(names(resultTabs())).toEqual(['Result 1', 'Result 2', 'Differences: Result 1 → Result 2'])
-    expect(chosen(resultTabs())).toBe('Differences: Result 1 → Result 2')
+    expect(names(resultTabs())).toEqual(['Result 1', 'Result 2', 'Result 1 → Result 2'])
+    expect(chosen(resultTabs())).toBe('Result 1 → Result 2')
     expect(document.activeElement).toBe(resultTabs()[2])
     expect(grids()).toEqual([diff])
     // A close of a tab not selected, from elsewhere, leaves the selection and the focus where they were.
@@ -454,8 +454,8 @@ describe('results as tabs', () => {
     kept.focus()
     act(() => { closer('Result 1').click() })
     draw()
-    expect(chosen(resultTabs())).toBe('Differences: Result 1 → Result 2')
-    expect(document.activeElement?.textContent).toBe('Differences: Result 1 → Result 2')
+    expect(chosen(resultTabs())).toBe('Result 1 → Result 2')
+    expect(document.activeElement?.textContent).toBe('Result 1 → Result 2')
     // The last tab's close moves to the one before.
     closer('Differences: Result 1 → Result 2').focus()
     act(() => { closer('Differences: Result 1 → Result 2').click() })
@@ -884,7 +884,7 @@ describe('moving through the results as tabs', () => {
     // To a comparison, which has no view tabs: the focus goes to its tab in the result row.
     act(() => { results.focusEntry('t1', results.getSnapshot().t1.comparisons[0].key) })
     draw()
-    expect(document.activeElement?.textContent).toBe('Differences: Result 1 → Result 2')
+    expect(document.activeElement?.textContent).toBe('Result 1 → Result 2')
   })
 })
 
@@ -998,7 +998,7 @@ describe('named results as tabs', () => {
     const tab = results.getSnapshot().t1
     expect(topItems(tab).map(item => [item.name, item.number])).toEqual([[long, 'Result 1'], ['Result 2', undefined], ['Totals', 'Result 3'], ['Differences: Result 1 → Result 2', undefined]])
     draw()
-    expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Differences: Result 1 → Result 2'])
+    expect(names(resultTabs())).toEqual([long, 'Result 2', 'Totals', 'Open ord…quarter → Result 2'])
     expect(resultTabs().map(button => button.getAttribute('title'))).toEqual([`${long} · Result 1`, null, 'Totals · Result 3', 'Differences: Result 1 → Result 2'])
     // Only a tab that shows a name the query gave is capped and may end in an ellipsis (the fixture's comparison is made from
     // Result 1, named here); the rest are laid out as before.
@@ -1007,7 +1007,7 @@ describe('named results as tabs', () => {
     expect(all('.rt-tab .rt-name')[0].textContent).toBe(long)
     expect(all('.rt-tab .rt-name')[0].children).toHaveLength(0)
     // A named result's tab and close button are named with its number too, for a screen reader; others as before.
-    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', null])
+    expect(resultTabs().map(button => button.getAttribute('aria-label'))).toEqual([`${long}, Result 1`, null, 'Totals, Result 3', 'Differences: Result 1 → Result 2'])
     expect(closer(`${long}, Result 1`)).toBeTruthy()
     expect(closer('Result 2')).toBeTruthy()
     // The view tabs keep their words; a Pivot's accessible name uses the Table's name.
@@ -1084,8 +1084,45 @@ describe('a comparison of named results as tabs', () => {
     results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', [two.descriptor, three.descriptor].map(set => `${set.generation}:${set.resultId}`))
     draw()
     const tabs = resultTabs()
-    expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
-    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', null])
+    // The tab says "old → new" from its inputs' names; its full name is its accessible name and tooltip.
+    expect(tabs.map(button => button.textContent).slice(-2)).toEqual(['Open orders → Result 2', 'Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('aria-label')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
+    expect(tabs.map(button => button.getAttribute('title')).slice(-2)).toEqual(['Differences: Result 1 → Result 2', 'Differences: Result 2 → Result 3'])
     expect(all('.rt-tab').map(element => element.dataset.named ?? null).slice(-2)).toEqual(['true', null])
+  })
+
+  it('label a comparison\'s tab "old → new" with each side shortened in the middle, and name it in full', () => {
+    const long = 'Open orders by region and quarter'
+    const { results, draw, resultTabs, closer } = fixture([long, undefined, long])
+    const [one, , three] = results.getSnapshot().t1.sets
+    const sides = [one, three].map(set => distinctName(set, results.getSnapshot().t1.sets))
+    const name = `Differences: ${sides[0]} → ${sides[1]}`
+    const made = results.addSet('t1', descriptor(903, { index: 0, kind: 'diff', ...rows }), name, [one.descriptor, three.descriptor].map(set => `${set.generation}:${set.resultId}`))!
+    expect(topItems(results.getSnapshot().t1).at(-1)).toMatchObject({ key: made, name, short: 'Open ord…sult 1) → Open ord…sult 3)' })
+    draw()
+    const tab = resultTabs().at(-1)!
+    // Each side keeps its start and its end, where two results of one name differ ("(Result 1)", "(Result 3)").
+    expect(tab.textContent).toBe('Open ord…sult 1) → Open ord…sult 3)')
+    expect(tab.getAttribute('aria-label')).toBe(name)
+    expect(tab.getAttribute('title')).toBe(name)
+    expect(tab.querySelector('[data-icon="git-compare"]')).not.toBeNull()
+    expect(closer(name)).not.toBeNull()
+  })
+})
+
+describe('a comparison\'s tab label', () => {
+  it('shortens each side in the middle to a fixed number of characters, and leaves a short one whole', () => {
+    expect(shortenMiddle('Result 12', comparisonSideChars)).toBe('Result 12')
+    const cut = shortenMiddle('Orders by region and quarter (Result 3)', comparisonSideChars)
+    expect(Array.from(cut)).toHaveLength(comparisonSideChars)
+    expect(cut).toBe('Orders b…sult 3)')
+    // Characters, not UTF-16 units: an emoji is never split.
+    expect(shortenMiddle('😀'.repeat(20), 5)).toBe('😀😀…😀😀')
+  })
+
+  it('says old → new from the inputs\' names, never "Result N" for the comparison itself', () => {
+    const slot = { entry: { label: 'Differences: Totals → Result 3', number: 5 }, sources: [{ name: 'Totals' }, { name: 'Result 3' }] } as unknown as Parameters<typeof comparisonTabLabel>[0]
+    expect(comparisonTabLabel(slot)).toBe('Totals → Result 3')
+    expect(comparisonTabLabel(slot)).not.toContain('Result 5')
   })
 })

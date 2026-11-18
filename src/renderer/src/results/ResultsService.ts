@@ -38,7 +38,7 @@ export interface ResultSetEntry {
   readonly key: EntryKey; readonly ordinal?: number; readonly number: number
   readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
 }
-type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> }
+type Named = Pick<ResultSetEntry, 'label' | 'number'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind'>> }
 // One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
 // and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
 /** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
@@ -59,6 +59,10 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
  *  told apart, else "Result N". Unlike
  *  `entryName` it never takes a Pivot's or a comparison's label, so those read as they did. */
 export const resultTitle = (entry: Named): string => { const name = queryName(entry); return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}` }
+/** What a surface that names an original result by its title (its splitter, its plans, the Column Profile and its
+ *  operation) calls any entry: an original result by `resultTitle`, a Pivot or a comparison by its own name ("Differences:
+ *  Result 1 → Result 3"), never by the number a derived entry was given, which no one sees elsewhere. */
+export const entryTitle = (entry: Named): string => entry.descriptor?.kind === 'diff' || entry.descriptor?.kind === 'pivot' ? entryName(entry) : resultTitle(entry)
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)

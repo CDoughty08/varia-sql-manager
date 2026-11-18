@@ -16,6 +16,24 @@ export interface TopItem {
   readonly key: EntryKey; readonly name: string; readonly number?: string; readonly group?: ResultGroup; readonly comparison?: ResultSlot
   /** It shows a name the query gave (`slotNamed`): its tab is capped at --varia-resultTab and ends in an ellipsis. */
   readonly named?: true
+  /** A comparison's tab text, "old → new" (`comparisonTabLabel`); its full `name` is the tab's accessible name and tooltip. */
+  readonly short?: string
+}
+/** The characters a comparison's tab keeps of each side's name; a longer one is shortened in the middle. */
+export const comparisonSideChars = 16
+/** A name cut to `max` characters with an ellipsis in the middle, keeping its start and its end (where two results'
+ *  names usually differ: "Orders by r…on (Result 3)"). */
+export function shortenMiddle(text: string, max: number): string {
+  const chars = Array.from(text)
+  if (chars.length <= max) return text
+  const head = Math.ceil((max - 1) / 2), tail = max - 1 - head
+  return chars.slice(0, head).join('') + '…' + chars.slice(chars.length - tail).join('')
+}
+/** A comparison's tab text: its inputs' names old side first, each shortened in the middle ("Result 1 → Result 3"),
+ *  without the "Differences:" its icon already says. */
+export function comparisonTabLabel(slot: Pick<ResultSlot, 'entry' | 'sources'>): string {
+  const [old, neu] = slot.sources
+  return old && neu ? `${shortenMiddle(old.name, comparisonSideChars)} → ${shortenMiddle(neu.name, comparisonSideChars)}` : entryName(slot.entry)
 }
 /** The top row's items in the order drawn: the groups by ordinal, the comparisons after them. */
 export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopItem[] {
@@ -24,7 +42,7 @@ export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopIt
       const number = entrySecondary(group.table.entry)
       return { key: group.table.key, name: entryName(group.table.entry), ...number ? { number, named: true as const } : {}, group }
     }),
-    ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), ...slotNamed(slot) ? { named: true as const } : {}, comparison: slot }))
+    ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), short: comparisonTabLabel(slot), ...slotNamed(slot) ? { named: true as const } : {}, comparison: slot }))
   ]
 }
 /** The view a group's tab selects: the one it last showed, its Pivot while it has one, else its Table. */

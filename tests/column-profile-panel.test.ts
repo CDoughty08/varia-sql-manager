@@ -54,7 +54,7 @@ function panelServices(results: object) {
 
 interface Asked { columns: number[]; signal?: AbortSignal; progress?: OperationProgressListener; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
-function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
+function fixture(columns = 40, shown: string | null = 'e1', name?: string, derived?: { readonly kind: 'diff' | 'pivot'; readonly label: string; readonly number: number }) {
   const listeners = new Set<() => void>()
   let snapshot = { state: 'open', rowsAvailable: 1000 }
   const asked: Asked[] = []
@@ -63,10 +63,10 @@ function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
     getSnapshot: () => snapshot,
     profile: vi.fn((cols: number[], signal?: AbortSignal, progress?: OperationProgressListener) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, progress, resolve, reject }) }))
   }
-  const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })), ...name ? { name } : {} }
+  const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })), ...name ? { name } : {}, ...derived ? { kind: derived.kind } : {} }
   // Result 1, and a result numbered 5 that stands second (the ones between have gone) and has two columns of its own.
   const other = { columns: [{ name: 'x0', dataType: 'int' }, { name: 'x1', dataType: 'int' }] }
-  const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e5', number: 5, descriptor: other, handle }] } as unknown as TabResults
+  const tab = { sets: [{ key: 'e1', number: derived?.number ?? 1, descriptor, handle, ...derived ? { label: derived.label } : {} }, { key: 'e5', number: 5, descriptor: other, handle }] } as unknown as TabResults
   // The panel is told which grid took the focus; without one it asks the stack, which names the second.
   const timers = manualTimers()
   const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1], operations: new ResultOperations({ timers: timers.timers }) }
@@ -83,9 +83,10 @@ function fixture(columns = 40, shown: string | null = 'e1', name?: string) {
   const card = (name: string) => container.querySelector(`section[aria-label="${name}"]`)
   const nulls = (name: string) => [...card(name)?.querySelectorAll('dl > div') ?? []].find(item => item.querySelector('dt')?.textContent === 'NULLs')?.querySelector('dd')?.textContent
   const facts = () => container.querySelector('.profile-facts')?.textContent
+  const subject = () => container.querySelector('.profile-subject')?.textContent
   const cards = () => [...container.querySelectorAll<HTMLElement>('.profile-cards > section')]
   const strip = () => container.querySelector('.profile-strip')?.textContent
-  return { asked, answer, setSnapshot, card, cards, strip, nulls, facts, results, timers, panel, container, unmount: () => act(() => { root.unmount() }) }
+  return { asked, answer, setSnapshot, card, cards, strip, nulls, facts, subject, results, timers, panel, container, unmount: () => act(() => { root.unmount() }) }
 }
 /** A complete result of two columns and 1000 rows whose grid's view the test changes, as ResultsService would on a sort. */
 function sortFixture() {
@@ -327,6 +328,34 @@ describe('column profile panel', () => {
     expect(view.results.operations.getSnapshot().t?.items).toMatchObject([{ kind: 'profile', target: 'Totals, Result 1' }])
     await view.answer(0, 10, 0)
     view.unmount()
+  })
+
+  it('names a comparison by its own name under the title and in the toolbar, never by the number it was given', async () => {
+    const view = fixture(2, 'e1', undefined, { kind: 'diff', label: 'Differences: Result 1 → Result 2', number: 3 })
+    act(() => { view.timers.advance(300) })
+    const panel = view.container.querySelector('.profile-panel')!
+    expect(panel.querySelector('.profile-title')?.textContent).toBe('Column profile')
+    expect(view.subject()).toBe('Differences: Result 1 → Result 2')
+    expect(panel.getAttribute('aria-description')).toBe('Differences: Result 1 → Result 2')
+    expect(view.facts()).toBe('')
+    expect(view.results.operations.getSnapshot().t?.items).toMatchObject([{ kind: 'profile', target: 'Differences: Result 1 → Result 2' }])
+    await view.answer(0, 10, 0)
+    expect(view.facts()).toBe('10 rows so far')
+    expect(panel.textContent).not.toContain('Result 3')
+    view.unmount()
+  })
+
+  it('names a Pivot by its own name, and an original result has no line under the title', async () => {
+    const pivot = fixture(2, 'e1', undefined, { kind: 'pivot', label: 'Pivot of Result 1', number: 4 })
+    act(() => { pivot.timers.advance(300) })
+    expect(pivot.facts()).toBe('Pivot of Result 1')
+    expect(pivot.subject()).toBeUndefined()
+    expect(pivot.results.operations.getSnapshot().t?.items).toMatchObject([{ kind: 'profile', target: 'Pivot of Result 1' }])
+    pivot.unmount()
+    const original = fixture(2, 'e1')
+    expect(original.subject()).toBeUndefined()
+    expect(original.container.querySelector('.profile-panel')?.hasAttribute('aria-description')).toBe(false)
+    original.unmount()
   })
 
   it('shows its progress across every request in the toolbar, and a cancel keeps the cards it has', async () => {
