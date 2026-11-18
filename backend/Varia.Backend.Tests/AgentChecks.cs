@@ -211,6 +211,13 @@ internal static class AgentChecks
         try { await reader.ReadAsync(null, null, [AgentSql.Jobs with { Id = "other" }], Value, CancellationToken.None); }
         catch (RequestException error) when (error.Code == "BACKEND_ERROR") { unchecked_ = true; }
         check(lost && unchecked_, "a lost connection is thrown for the caller to handle, and a statement that is not one of AgentSql.All never runs (BACKEND_ERROR)");
+        var (shaped, shapeErrors) = await new AgentReader
+        {
+            TestRun = (statement, _, _) => statement.Id == "errorLogs" ? throw new AgentShapeException("The Agent read errorLogs returned the columns A without Date.")
+                : Task.FromResult(new AgentResult(statement.Columns, [], false))
+        }.ReadAsync(null, null, [AgentSql.ErrorLogs, AgentSql.Jobs], Value, CancellationToken.None);
+        check(shaped.Keys.SequenceEqual(["jobs"]) && shapeErrors is [{ Statement: "errorLogs", Code: "BACKEND_ERROR", Number: 0 }],
+            "a result set without a declared column fails that statement alone as BACKEND_ERROR, and the statements after it still run");
         check(AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(300, 297)).Code == "PERMISSION_DENIED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.")).Code == "BLOCKED"
             && AgentReader.Classify(AgentSql.Jobs, ConnectionFailureChecks.Sql(50000, 1, 16, "server", "other")).Code == "SQL_ERROR",

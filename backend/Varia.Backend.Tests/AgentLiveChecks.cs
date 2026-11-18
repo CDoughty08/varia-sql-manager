@@ -98,7 +98,7 @@ internal static class AgentLiveChecks
                 && results.ContainsKey("properties") && (profile.Linux ? service is null or "Running." : service == "Running.")
                 && errors.All(error => error.Statement == "serviceState" && profile.Linux),
                 "as sysadmin under the " + caller + " caller's prologue, every Agent read answers: Agent XPs on with Agent sessions, the jobs, TSQL among the subsystems, the current error log, "
-                + "Agent's properties and the service's Running state (Windows): " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code + " " + error.Number)) + (service is null ? "" : " service " + service));
+                + "Agent's properties and the service's Running state (Windows): " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code + " " + error.Number + (error.Code == "BACKEND_ERROR" ? " (" + error.Message + ")" : ""))) + (service is null ? "" : " service " + service));
         }
     }
 

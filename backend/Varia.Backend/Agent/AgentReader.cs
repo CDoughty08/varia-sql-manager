@@ -54,6 +54,10 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
                 results[statement.Id] = TestRun is { } run ? await run(statement, arguments, cap).ConfigureAwait(false)
                     : await RunAsync(connection ?? throw new InvalidOperationException("An Agent read needs a connection."), prologue, statement, arguments, cap, token).ConfigureAwait(false);
             }
+            catch (AgentShapeException error)
+            {
+                errors.Add(new(statement.Id, "BACKEND_ERROR", 0, error.Message));
+            }
             catch (SqlException error) when (!token.IsCancellationRequested)
             {
                 var value = Classify(statement, error);
@@ -88,7 +92,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
     }
 
     /// <summary>Runs one statement and reads its first result set's declared columns, at most <paramref name="cap"/> + 1 rows;
-    /// a missing column is a bug (BACKEND_ERROR), never a value.</summary>
+    /// a missing column fails that statement alone (BACKEND_ERROR), so one server's other shape does not stop the rest.</summary>
     private static async Task<AgentResult> RunAsync(SqlConnection connection, string? prologue, AgentStatement statement, IReadOnlyDictionary<string, object?> arguments, int cap, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
@@ -102,7 +106,10 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         {
             ordinals[at] = -1;
             for (var field = 0; field < reader.FieldCount; field++) if (reader.GetName(field) == statement.Columns[at]) ordinals[at] = field;
-            if (ordinals[at] < 0) throw new RequestException("BACKEND_ERROR", "An Agent statement returned other columns than it declares.");
+            // Only the server's own column names are named: an msdb or master procedure's result shape, never data.
+            if (ordinals[at] < 0)
+                throw new AgentShapeException("The Agent read " + statement.Id + " returned the columns " + string.Join(", ", Enumerable.Range(0, reader.FieldCount).Select(reader.GetName))
+                    + " without " + statement.Columns[at] + ".");
         }
         var rows = new List<object?[]>();
         var truncated = false;
@@ -122,3 +129,6 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
         return new(statement.Columns, rows, truncated);
     }
 }
+
+/// <summary>A statement's result set lacks a declared column: a server whose procedure answers in another shape.</summary>
+internal sealed class AgentShapeException(string message) : Exception(message);
