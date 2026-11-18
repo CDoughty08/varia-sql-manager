@@ -277,7 +277,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   wait for credit. Copy and Save lease, so a release never cuts them short. Nothing else touches `StoredPage.Stored`
   (`tests/result-page-access.test.ts`), and the .NET checks refuse reads of an unpinned, unleased set
   (`ResultSetBuffer.RequirePins`).
-- **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`).
+- **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`),
+  over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
   - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2

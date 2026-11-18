@@ -28,12 +28,13 @@ internal static class PackingChecks
         return set;
     }
 
-    /// <summary>A set of one binary column of random bytes, which Zstandard cannot shrink.</summary>
-    private static ResultSetBuffer Random(ResultStore store, string session, int rows)
+    /// <summary>A set of one binary column of random bytes, which Zstandard cannot shrink. Cells larger than a page make
+    /// pages of one row, which grow when packed: the codec's framing outweighs the one offset the lengths form saves.</summary>
+    private static ResultSetBuffer Random(ResultStore store, string session, int rows, int cellBytes = 2000)
     {
         var set = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", [new ResultColumn("b", "varbinary", "binary")], [WireKind.Binary])!;
         var random = new Random(7);
-        var cell = new byte[2000];
+        var cell = new byte[cellBytes];
         for (var row = 0; row < rows; row++)
         {
             set.CountRow();
@@ -58,6 +59,7 @@ internal static class PackingChecks
     public static void Run(Action<bool, string> check)
     {
         Codec(check);
+        LengthsForm(check);
         Switch(check);
         Packs(check);
         KeepsRaw(check);
@@ -65,6 +67,67 @@ internal static class PackingChecks
         UnpacksWhole(check);
         ViewReads(check);
         Service(check);
+    }
+
+    /// <summary>A page with every kind of column the lengths form treats apart: one width (with and without NULLs), many
+    /// widths, all NULL, all empty, binary, failed and truncated cells, at row counts that end bitmaps mid-byte.</summary>
+    private static byte[] MixedPage(int rows)
+    {
+        var builder = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Binary, WireKind.Text]);
+        for (var row = 0; row < rows; row++)
+        {
+            builder.BeginRow();
+            builder.AppendText($"2026-11-{row % 28 + 1:00}");
+            if (row % 5 == 0) builder.AppendNull(); else builder.AppendText($"{row * 37 % 1000:000}");
+            builder.AppendText(row % 3 == 0 ? "" : "order " + row * 7919 % 100_003 + new string('x', row % 40));
+            builder.AppendNull(error: row % 11 == 0);
+            builder.AppendText("");
+            builder.AppendBinary(BitConverter.GetBytes((long)row * 2654435761)[..(1 + row % 8)]);
+            builder.AppendText("note " + row, truncated: row % 13 == 0);
+            builder.CommitRow();
+        }
+        return builder.Seal();
+    }
+
+    private static void LengthsForm(Action<bool, string> check)
+    {
+        var pages = new[] { 1, 7, 64, 1000, PageBuilder.MaxRows }.Select(MixedPage).ToList();
+        var formed = pages.All(page => PageCodec.Pack(page) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page));
+        var room = new byte[pages[^1].Length];
+        PageCodec.UnpackInto(PageCodec.Pack(pages[^1])!, room);
+        check(formed && room.AsSpan().SequenceEqual(pages[^1]),
+            "a sealed page packs in its lengths form and unpacks to its bytes as sealed, alone or into a fused read's room");
+
+        // Offsets as lengths: a page of short numbers packs well under Zstandard over the page as sealed.
+        var numbers = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text]);
+        for (var row = 0; row < 4000; row++)
+        {
+            numbers.BeginRow();
+            numbers.AppendText((row * 7919 % 100_000).ToString());
+            numbers.AppendText((row * 104_729L % 1_000_000_007).ToString());
+            numbers.AppendText($"{row % 1000 / 10.0:0.00}");
+            numbers.CommitRow();
+        }
+        var sealedPage = numbers.Seal();
+        var plain = new byte[sealedPage.Length * 2];
+        System.IO.Compression.ZstandardEncoder.TryCompress(sealedPage, plain, out var plainLength, PageCodec.Quality, PageCodec.Window);
+        var asLengths = PageCodec.Pack(sealedPage)!.Length;
+        check(asLengths < plainLength * 0.8, $"offsets packed as lengths take under four fifths of the page packed as sealed ({asLengths} of {plainLength} bytes)");
+
+        // Bytes that are not exactly a sealed page (a byte changed anywhere, a page cut short or doubled) still unpack to
+        // themselves: the codec packs them as they are when the form could not restore them.
+        var random = new Random(11);
+        var page = pages[2];
+        var exact = true;
+        for (var trial = 0; trial < 400 && exact; trial++)
+        {
+            var changed = page.ToArray();
+            changed[random.Next(changed.Length)] ^= (byte)(1 + random.Next(255));
+            exact = PageCodec.Pack(changed) is { } packed && PageCodec.Unpack(packed, changed.Length).AsSpan().SequenceEqual(changed);
+        }
+        foreach (var odd in new[] { page[..(page.Length / 2)], [.. page, .. page], [.. page, 0], [] })
+            exact &= PageCodec.Pack(odd) is { } packed && PageCodec.Unpack(packed, odd.Length).AsSpan().SequenceEqual(odd);
+        check(exact, "bytes that are not exactly a sealed page unpack to themselves");
     }
 
     private static void Codec(Action<bool, string> check)
@@ -149,8 +212,8 @@ internal static class PackingChecks
             && kept.PagesKeptRaw == set.SealedSnapshot().Length && store.PackingSnapshot().PackedInBytes == kept.PackedInBytes,
             "a page that packing saves less than a tenth of stays raw, and is not tried again");
         var every = Store(PagePacking.EveryComplete);
-        var forced = Random(every, "every", 600);
-        check(forced.SealedSnapshot().All(page => page.Stored is PackedPage) && every.UsedBytes - 0 == PageCharges(forced) && Bodies(forced).Length > 0,
+        var forced = Random(every, "every", 4, PageBuilder.SealBytes + 1000);
+        check(forced.SealedSnapshot().All(page => page.Stored is PackedPage packed && packed.Bytes.Length > page.Length) && every.UsedBytes - 0 == PageCharges(forced) && Bodies(forced).Length > 0,
             "the checks' mode packs every page of a complete result, even one that grows, and charges what it holds");
         // Unpacking pages that grew needs no bytes, but they are unpacked all the same, and give back what they grew by.
         bool grownUnpacked;
