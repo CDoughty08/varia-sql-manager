@@ -148,11 +148,84 @@ describe('0.9.0 profile migration', () => {
     const tabs = new SessionStore(join(directory, profileFiles.session.current))
     await tabs.take(true)
     await tabs.write({ documents: [{ name: 'New.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'select 5' }], activeIndex: 0 }, 1)
-    expect(await migrateProfile(directory)).toMatchObject({ session: 'skipped', autoRecover: 'migrated' })
-    expect((await readdir(join(directory, profileFiles.autoRecover.current))).sort()).toEqual([ownId + '.json', recordId + '.json'].sort())
+    expect(await migrateProfile(directory)).toMatchObject({ session: 'migrated', autoRecover: 'migrated' })
+    const names = await readdir(join(directory, profileFiles.autoRecover.current))
+    expect(names).toHaveLength(3)
+    expect(names).toEqual(expect.arrayContaining([ownId + '.json', recordId + '.json']))
     expect(await read(join(profileFiles.autoRecover.current, recordId + '.json'))).toEqual({ ...recovery, version: 2 })
-    // The session 0.10.0 wrote is newer than 0.9.0's, so 0.9.0's stays out.
+    // The session 0.10.0 wrote is newer than 0.9.0's, so it stays; 0.9.0's unsaved tab is offered through AutoRecover instead.
     expect((await read(join(profileFiles.session.current, 'session.json'))).documents[0].name).toBe('New.sql')
+    const offered = await new RecoveryStore(join(directory, profileFiles.autoRecover.current)).list(7)
+    expect(offered.map(entry => entry.name).sort()).toEqual(['Orders.sql', 'Query 1', 'Query 2'])
+    // Once copied, a record the user discards is never offered again, even by a run that repeats the step.
+    const store = new RecoveryStore(join(directory, profileFiles.autoRecover.current))
+    await store.list(8)
+    await store.discard(offered.map(entry => entry.id), 8)
+    const marker = await read(migrationMarker)
+    await writeFile(join(directory, migrationMarker), JSON.stringify({ ...marker, done: [] }))
+    expect(await migrateProfile(directory)).toMatchObject({ session: 'skipped', autoRecover: 'skipped' })
+    expect(await readdir(join(directory, profileFiles.autoRecover.current))).toEqual([])
+  })
+
+  it('merges 0.9.0 connections into a library a reconnect wrote while the step waited, and keys their passwords to it', async () => {
+    const otherId = randomUUID()
+    const other = { id: otherId, options: { server: 'sql-dw-01', database: 'Warehouse', authentication: 'sql', username: 'loader', trustServerCertificate: false, encrypt: 'mandatory' }, favorite: false, registered: true }
+    await seed09()
+    await writeFile(join(directory, profileFiles.connections.legacy), JSON.stringify({ version: 1, profiles: [...library.profiles, other] }))
+    await writeFile(join(directory, profileFiles.savedPasswords.legacy), JSON.stringify({ version: 1, entries: [...passwords.entries, { ...passwords.entries[0], profileId: otherId }] }))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failConnections: typeof writeBytesAtomic = async (path, bytes, options) => {
+      if (path.endsWith(profileFiles.connections.current)) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      return writeBytesAtomic(path, bytes, options)
+    }
+    expect(await migrateProfile(directory, { write: failConnections })).toMatchObject({ connections: 'failed', savedPasswords: 'failed' })
+    // The same run reconnects the first server, which remembers it under a new id and without the favorite.
+    const store = new ConnectionStore(join(directory, profileFiles.connections.current))
+    await store.rememberEntry(library.profiles[0].options as never)
+    const ownId = (await read(profileFiles.connections.current)).profiles[0].id
+    expect(ownId).not.toBe(profileId)
+    expect(await migrateProfile(directory)).toMatchObject({ connections: 'migrated', savedPasswords: 'migrated' })
+    const profiles = (await read(profileFiles.connections.current)).profiles
+    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual([ownId, otherId])
+    expect(profiles[0].favorite).toBe(true)
+    expect((await read(profileFiles.savedPasswords.current)).entries.map((entry: { profileId: string }) => entry.profileId)).toEqual([ownId, otherId])
+  })
+
+  it('quarantines an unreadable marker rather than overwriting it, and merging again adds nothing twice', async () => {
+    await seed09()
+    await migrateProfile(directory)
+    await writeFile(join(directory, migrationMarker), '{ not json')
+    expect(await migrateProfile(directory)).toEqual({ connections: 'skipped', savedPasswords: 'skipped', session: 'skipped', autoRecover: 'skipped' })
+    expect((await readdir(directory)).some(name => name.startsWith(migrationMarker + '.invalid-'))).toBe(true)
+    expect((await read(profileFiles.connections.current)).profiles).toHaveLength(1)
+    expect((await read(profileFiles.savedPasswords.current)).entries).toHaveLength(1)
+  })
+
+  it('copies AutoRecover records only while the folder has room, and the rest at a later start', async () => {
+    await seed09()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const into = join(directory, profileFiles.autoRecover.current)
+    await mkdir(into)
+    const store = new RecoveryStore(into)
+    for (let index = 0; index < 64; index++) await store.write({ id: randomUUID(), name: `Query ${index}`, kind: 'sql', eol: 'lf', text: 'select 6' }, 1)
+    expect((await migrateProfile(directory)).autoRecover).toBe('partial')
+    expect(await readdir(into)).not.toContain(recordId + '.json')
+    const own = (await readdir(into))[0]
+    await rm(join(into, own))
+    expect((await migrateProfile(directory)).autoRecover).toBe('migrated')
+    expect(await readdir(into)).toContain(recordId + '.json')
+  })
+
+  it('copies the AutoRecover records it can when one cannot be read, and only that one later', async () => {
+    await seed09()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const stuck = randomUUID() + '.json'
+    await mkdir(join(directory, profileFiles.autoRecover.legacy, stuck))
+    expect((await migrateProfile(directory)).autoRecover).toBe('failed')
+    expect(await readdir(join(directory, profileFiles.autoRecover.current))).toEqual([recordId + '.json'])
+    await rm(join(directory, profileFiles.autoRecover.current, recordId + '.json'))
+    expect((await migrateProfile(directory)).autoRecover).toBe('failed')
+    expect(await readdir(join(directory, profileFiles.autoRecover.current))).toEqual([])
   })
 
   it('never copies a 0.9.0 file back once its step finished, even when the 0.10.0 file is later quarantined', async () => {

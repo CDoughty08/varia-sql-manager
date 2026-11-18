@@ -75,10 +75,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   0.9.0's own files: `mssql-connections.json`, `bigquery-connections.json`, `mssql-saved-passwords.json`,
   `WorkbenchSession/` and `WorkbenchAutoRecover/` (`profileFiles`, `src/main/profile-migration.ts`). At startup, before
   any store reads, each 0.9.0 file or folder is parsed with today's schema and written atomically under the new name (a
-  folder through a staging folder; records join a folder a store already made, never replacing its own); the 0.9.0 files
-  are never written. Finished steps are recorded in `profile-migration.json` and never run again, so a store's own file
-  neither hides 0.9.0's nor brings it back; a failed step retries at the next start, and saved passwords wait for the
-  connections, whose library their store reconciles against. An unreadable file is quarantined. Logs carry only the step
+  folder through a staging folder); the 0.9.0 files are never written. A 0.10.0 file a store wrote after a failed attempt
+  is merged into, never replaced: connections it lacks by id and key are added with their 0.9.0 ids, passwords are keyed
+  to the matching entry, AutoRecover records join within its 64, and a newer session keeps its tabs while 0.9.0's unsaved
+  ones are offered through AutoRecover. Finished steps, and the records already copied, are recorded in
+  `profile-migration.json`, so a store's own file neither hides 0.9.0's nor brings back what the user discarded; a failed
+  or partial step retries at the next start, and saved passwords wait for the connections, whose library their store
+  reconciles against. An unreadable file, the marker included, is quarantined. Logs carry only the step
   and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session
   files are version 3 and AutoRecover records version 2, each with `provider` and BigQuery's 1,024-character datasets.
 - **Targets.** `src/shared/connection-targets.ts`: target ID, saved-profile hint and backend handle are distinct. Persist
@@ -205,7 +208,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   mirrored by `sortKindOf` in `src/shared/results/sort-kind.ts`); sort, filter, pivot, profiles, row identity, Copy and
   Save, highlights and length sorts read `sortKind`, never type-name lists. SQL Server-only refinements the kinds lack
   (uniqueidentifier order, money scale, text and ntext as keys) live beside the factory; `SortKindChecks` and
-  `tests/sort-kind.test.ts` hold every consumer to its pre-`sortKind` output.
+  `tests/sort-kind.test.ts` pin each consumer's kinds for every SQL Server type.
 - **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
   names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
   `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker
@@ -555,11 +558,14 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 ## UI structure
 
 - **Provider gating.** Commands, submenus, Explorer kinds, object actions, live sources, settings pages and Script As
-  kinds have `providers`, SQL Server only when absent, so an entry that forgets it is hidden for BigQuery rather than
-  half working. `CommandService.isEnabled` checks a command against `activeDocumentProvider` (Object Explorer commands
-  against `explorerSelectionProvider`); Object Explorer's menu leaves out items whose `providers` lack
-  `explorerProvider`. `tests/providers-catalog.test.ts` lints that an entry whose `when` names a provider declares it,
-  and that one declaring `bigquery` runs only methods that serve it (a command's `methods`).
+  kinds have `providers`, SQL Server only when absent. Commands (object and server actions' commands take their spec's)
+  and submenus are gated at run time: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
+  `explorerSelectionProvider` for an Object Explorer command or one on Object Explorer's or a search result's menu
+  (`commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
+  other catalogues' `providers` are read by the lint and by the lanes that add BigQuery's surfaces. What enforces the
+  engine is the method gate (`UNSUPPORTED_PROVIDER`, below). `tests/providers-catalog.test.ts` lints that an entry whose
+  `when` names a provider declares it, and that one declaring `bigquery` names no method that serves SQL Server only (the
+  methods a command lists in `methods`; the other catalogues name theirs).
 - **Commands and keys.** Commands and keybindings are declared only in `src/shared/commands/catalog.ts`.
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show

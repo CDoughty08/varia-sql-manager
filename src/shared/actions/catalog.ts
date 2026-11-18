@@ -466,6 +466,8 @@ export interface ActionCommandEntry {
   /** A menu-only command: a row placement (`rows`) or a server action's node place (ServerActionSpec.nodePlace); the palette offers
    *  the action once, through its main command. */
   readonly palette?: false
+  /** The spec's `providers`, so the command is offered for the engines the action is. */
+  readonly providers?: readonly ProviderId[]
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
   selectTop: {
@@ -521,7 +523,7 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
     const precondition = `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : '')
     // A Search Objects result's menu stands in the result's keys for the selection's (`selectionContextOf`).
     const search: ActionMenuPlacement[] = spec.searchResults ? [{ ...placement, menu: 'search.hit.context', when: `${key} != ''` }] : []
-    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search] }
+    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search], ...spec.providers ? { providers: spec.providers } : {} }
     if (!spec.rows) return [[spec.command, entry]]
     const { command, ...rows } = spec.rows
     const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background'` }] }
@@ -545,7 +547,7 @@ export function serverActionCommandEntries(): { readonly [K in ServerActionComma
     const folderPlaces = spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), kindPlaces = spec.kinds.map(kind => `explorerNode == '${kind}'`)
     const selectionPlaces = anyOf([...spec.folders.map(folder => `explorerSelectionFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerSelectionKind == '${kind}'`)])
     const entry = (group: string, order: number, places: readonly string[]): ActionCommandEntry => ({
-      title: spec.title, category: 'Object Explorer', ...serverCommandData[action],
+      title: spec.title, category: 'Object Explorer', ...serverCommandData[action], ...spec.providers ? { providers: spec.providers } : {},
       precondition: `backendReady && ${selectionPlaces} && ${engines('explorerSelectionServerEngine')}`,
       menus: [{ menu: 'explorer.context', group, order, mnemonic: spec.mnemonic, when: `${anyOf(places)} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
     })

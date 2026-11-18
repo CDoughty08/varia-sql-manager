@@ -531,9 +531,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
 
     /// <summary>The connection options union: the provider first, then SQL Server's strict record. CheckProvider has already
-    /// refused another engine's options, since no method that opens a connection serves one yet.</summary>
+    /// refused another engine's options, since no method that opens a connection serves one yet. The record reads
+    /// <c>provider</c> itself rather than the options being rewritten without it, which would copy the password into
+    /// buffers nothing zeroes; it is cleared so options are equal however the request spelled SQL Server.</summary>
     private static ConnectOptions ReadConnect(JsonElement value, JsonSerializerOptions json) => Providers.OfOptions(value) == Providers.SqlServer
-        ? Read<ConnectOptions>(Providers.WithoutProvider(value), json)
+        ? Read<ConnectOptions>(value, json) with { Provider = null }
         : throw new RequestException("UNSUPPORTED_PROVIDER", "This method is not available for this kind of connection.");
 
     private static string Name(string? value, int maxLength = 128)

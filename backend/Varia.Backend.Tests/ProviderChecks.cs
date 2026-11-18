@@ -20,6 +20,9 @@ internal static class ProviderChecks
         var previewBigQuery = await Code(() => service.DispatchAsync("connections.preview", withProvider("bigquery"), wire));
         var previewUnknown = await Code(() => service.DispatchAsync("connections.preview", withProvider("postgres"), wire));
         var connectBigQuery = await Code(() => service.DispatchAsync("connections.connect", withProvider("bigquery"), wire));
+        var previewText = JsonSerializer.Serialize(await service.DispatchAsync("connections.preview", Parse(options), wire), wire);
+        var previewSqlServerText = JsonSerializer.Serialize(await service.DispatchAsync("connections.preview", withProvider("sqlserver"), wire), wire);
+        check(previewText == previewSqlServerText, "options naming 'sqlserver' read the same as options without a provider");
         check(preview == "ok" && previewSqlServer == "ok" && previewBigQuery == "UNSUPPORTED_PROVIDER" && connectBigQuery == "UNSUPPORTED_PROVIDER" && previewUnknown == "INVALID_PARAMS",
             $"options without a provider and with 'sqlserver' are SQL Server's; 'bigquery' is refused with UNSUPPORTED_PROVIDER before any connection, and an unknown provider is invalid: {preview} {previewSqlServer} {previewBigQuery} {connectBigQuery} {previewUnknown}");
 

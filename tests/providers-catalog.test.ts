@@ -80,10 +80,19 @@ describe('catalogue providers', () => {
     expect(providersOf(settingPages.find(page => page.id === 'queryExecution.sqlServer.general'))).toEqual(['sqlserver'])
   })
 
-  it('checks a command against the active document, or the Explorer selection for Object Explorer commands', () => {
+  it("generates each object and server action's command with its spec's providers", () => {
+    for (const spec of [...Object.values(objectActionSpecs), ...Object.values(serverActionSpecs)]) expect(commandProviders(spec.command), spec.command).toEqual(providersOf(spec))
+    expect(commandDescriptor(objectActionSpecs.rename.command)).not.toHaveProperty('providers')
+  })
+
+  it('checks a command against the active document, or the Explorer selection for a command that acts on it', () => {
     const keys = (activeDocumentProvider: '' | ProviderId, explorerSelectionProvider: '' | ProviderId) => ({ activeDocumentProvider, explorerSelectionProvider })
     expect(commandProviderKey('query.execute')).toBe('activeDocumentProvider')
     expect(commandProviderKey('explorer.refresh')).toBe('explorerSelectionProvider')
+    // Commands of other categories on Object Explorer's menu act on its node, not the document.
+    for (const id of ['connection.disconnect', 'connection.reconnect', 'activity.open', 'ssis.folderProperties'] as const) expect(commandProviderKey(id), id).toBe('explorerSelectionProvider')
+    expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(true)
+    expect(commandAllowsProvider('connection.disconnect', keys('sqlserver', 'bigquery'))).toBe(false)
     expect(commandAllowsProvider('query.execute', keys('sqlserver', ''))).toBe(true)
     expect(commandAllowsProvider('query.execute', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('query.execute', keys('', 'bigquery'))).toBe(true)

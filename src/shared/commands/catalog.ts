@@ -1373,12 +1373,16 @@ export const actsOnTab = (id: CommandId): boolean => !!commandDescriptor(id).men
 export const paletteLabel = (id: CommandId): string => { const command = commandDescriptor(id); return command.category ? `${command.category}: ${command.title}` : command.title }
 /** The engines a command works for (`providers`, or SQL Server only). */
 export const commandProviders = (id: CommandId): readonly ProviderId[] => providersOf(commandDescriptor(id))
+const selectionMenus: ReadonlySet<string> = new Set(['explorer.context', 'search.hit.context'])
 /**
- * The context key a command's `providers` is checked against: the Object Explorer selection's engine for Object Explorer
- * commands (Search Objects results stand their own in), and the active document's for every other.
+ * The context key a command's `providers` is checked against: the Object Explorer selection's engine for a command that
+ * acts on it (an Object Explorer command, or one on Object Explorer's or a Search Objects result's menu, whose keys stand
+ * the result's in), and the active document's for every other.
  */
-export const commandProviderKey = (id: CommandId): 'activeDocumentProvider' | 'explorerSelectionProvider' =>
-  commandDescriptor(id).category === 'Object Explorer' ? 'explorerSelectionProvider' : 'activeDocumentProvider'
+export const commandProviderKey = (id: CommandId): 'activeDocumentProvider' | 'explorerSelectionProvider' => {
+  const command = commandDescriptor(id)
+  return command.category === 'Object Explorer' || command.menus?.some(placement => selectionMenus.has(placement.menu)) ? 'explorerSelectionProvider' : 'activeDocumentProvider'
+}
 /** Whether a command works for the engine its context names ('' — nothing of an engine — allows every command). */
 export const commandAllowsProvider = (id: CommandId, keys: { readonly activeDocumentProvider: ProviderContext; readonly explorerSelectionProvider: ProviderContext }): boolean =>
   providerAllows(commandProviders(id), keys[commandProviderKey(id)])

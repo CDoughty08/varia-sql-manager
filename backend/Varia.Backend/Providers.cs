@@ -32,21 +32,4 @@ internal static class Providers
         return value.ValueKind == JsonValueKind.String && value.GetString() is SqlServer or BigQuery ? value.GetString()!
             : throw new RequestException("INVALID_PARAMS", "Unknown connection provider.");
     }
-
-    /// <summary>SQL Server's connection options: a <c>provider</c> of <c>sqlserver</c> is taken off, so the positional
-    /// <see cref="ConnectOptions"/> record keeps refusing every member it does not know.</summary>
-    public static JsonElement WithoutProvider(JsonElement parameters)
-    {
-        if (parameters.ValueKind != JsonValueKind.Object || !parameters.TryGetProperty("provider", out _)) return parameters;
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            foreach (var property in parameters.EnumerateObject())
-                if (property.Name != "provider") property.WriteTo(writer);
-            writer.WriteEndObject();
-        }
-        using var document = JsonDocument.Parse(buffer.ToArray());
-        return document.RootElement.Clone();
-    }
 }
