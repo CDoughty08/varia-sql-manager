@@ -26,27 +26,27 @@ export const documentSettings = [
     description: 'How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again.'
   },
   {
-    key: 'environment.documents.hotExit', page: 'environment.documents', label: 'Restore open queries on startup', type: 'boolean', default: true,
+    key: 'environment.documents.hotExit', page: 'environment.documents', group: 'Startup', label: 'Restore open queries on startup', type: 'boolean', default: true,
     keywords: ['hot exit', 'restore', 'reopen', 'session', 'tabs', 'unsaved', 'quit', 'exit', 'startup'],
     description: 'Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query\'s database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept.'
   },
   {
-    key: 'environment.documents.detectExternalChanges', page: 'environment.documents', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,
+    key: 'environment.documents.detectExternalChanges', page: 'environment.documents', group: 'Files changed outside Varia', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,
     keywords: ['reload', 'external', 'modified', 'changed on disk', 'deleted'],
     description: 'When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes.'
   },
   {
-    key: 'environment.documents.autoReload', page: 'environment.documents', label: 'Reload modified files unless there are unsaved changes', type: 'boolean', default: false,
+    key: 'environment.documents.autoReload', page: 'environment.documents', group: 'Files changed outside Varia', label: 'Reload modified files unless there are unsaved changes', type: 'boolean', default: false,
     enabledBy: 'environment.documents.detectExternalChanges', keywords: ['reload', 'external', 'modified', 'automatic'],
     description: 'Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks.'
   },
   {
-    key: 'environment.documents.saveWithSpecificEncoding', page: 'environment.documents', label: 'Save files with a specific encoding', type: 'boolean', default: false,
+    key: 'environment.documents.saveWithSpecificEncoding', page: 'environment.documents', group: 'Saving', label: 'Save files with a specific encoding', type: 'boolean', default: false,
     keywords: ['encoding', 'unicode', 'utf-8', 'utf-16', 'bom', 'signature', 'byte order mark'],
     description: 'Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none.'
   },
   {
-    key: 'environment.documents.saveEncoding', page: 'environment.documents', label: 'Save encoding', type: 'enum', default: 'utf8bom', enabledBy: 'environment.documents.saveWithSpecificEncoding',
+    key: 'environment.documents.saveEncoding', page: 'environment.documents', group: 'Saving', label: 'Save encoding', type: 'enum', default: 'utf8bom', enabledBy: 'environment.documents.saveWithSpecificEncoding',
     values: [
       { value: 'utf8bom', label: 'Unicode (UTF-8 with signature)' },
       { value: 'utf8', label: 'Unicode (UTF-8 without signature)' },

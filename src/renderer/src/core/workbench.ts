@@ -2,6 +2,7 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { languagesContribution } from '../contributions/languages'
+import { EditorPeekService } from '../languages/EditorPeekService'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
@@ -48,6 +49,7 @@ import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { EditorGroupService } from '../services/editor-groups'
 import { ExplorerService } from '../explorer/ExplorerService'
+import { ServerDropService } from '../editor-groups/server-drop'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
@@ -109,6 +111,7 @@ import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
+import { followReducedMotion, reducedMotionQuery } from '../services/reduced-motion'
 import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
@@ -119,10 +122,11 @@ import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
+import { ProfilePeekService } from '../results/ProfilePeekService'
 import { gesturesFor, type GestureService } from './gestures'
 import { ShortcutsService } from './ShortcutsService'
 import { MenuStatePublisher } from './menu-state'
-import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
+import { focusHeld, focusWhenDrawn, modalOpen, openModal } from './modal'
 import { nextFrame as frame } from './frame'
 import { windows } from './windows'
 import { peekEditorHasTextFocus } from '../explorer/peek-editor'
@@ -196,6 +200,8 @@ export interface Workbench extends Disposable {
   readonly inputMode: InputModeService
   /** Rename Tab's inline edit in the document strip. */
   readonly tabRename: TabRenameService
+  /** A server or database dragged from Object Explorer onto a query's tab or editor (docs/connections-explorer.md). */
+  readonly serverDrop: ServerDropService
   /** The query editor's editor groups (docs/editor-groups.md). */
   readonly editorGroups: EditorGroupService
   readonly panes: PaneService
@@ -219,6 +225,10 @@ export interface Workbench extends Disposable {
   readonly peek: PeekService
   /** Peek promoted to document tabs: each tab's view. */
   readonly peekTabs: PeekTabService
+  /** The column profile's Ctrl+hover peek at the selected columns: the tab whose panel peeks. */
+  readonly profilePeek: ProfilePeekService
+  /** Go To and Peek Definition in SQL editors: F12's script, the card at a name (Alt+F12, Ctrl+hover), a Peek tab (Ctrl+click). */
+  readonly editorPeek: EditorPeekService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
   /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
@@ -265,6 +275,8 @@ export interface Workbench extends Disposable {
    * and presses `MenuService`, and its focus counts as the user's window (`windows`).
    */
   attachWindow(target: Window): Disposable
+  /** Tools › Options and Help › About open in dialog windows of their own (popouts/DialogWindow.tsx); unit tests' workbenches leave it out. */
+  readonly dialogWindows?: boolean
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -297,7 +309,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const events = new EventBus(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema }), databaseList = new DatabaseListService(api, connections, events)
+  // Smoke runs (followSystemMotion) reduce motion whenever their emulated media asks, whatever the setting says; they
+  // re-read the media after each emulateMedia (scripts/fixtures/smoke.mjs).
+  const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
+    media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
+  if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -362,7 +379,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
       if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned) || connectionTargets.getSnapshot().length)
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady(final) })
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets, explorerExpansion: () => explorer.savedExpansion(), assertConnectionsReady: () => connections.assertCheckpointReady(final) })
     }
   })
   const recentFiles = new RecentFilesService(api)
@@ -372,6 +389,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const serverDrop = new ServerDropService({ documents, queries, targets, connections })
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
@@ -380,7 +398,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
-  const peek = new PeekService({ api, connections, scriptingOptions, platform, results })
+  // The column profile's Ctrl+hover peek at the selected columns; the key dispatcher below feeds it held keys.
+  const profilePeek = new ProfilePeekService({ gestures: gesturesFor(platform) })
+  // Object Explorer's Peek on Hover modifier arms the peek cursor and a press over a resting row; releasing either one
+  // (Object Explorer's or the query editor's, as remapped) forgets a pending hover.
+  const peek = new PeekService({ api, connections, scriptingOptions, platform, results, gestures: gesturesFor(platform),
+    hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const disconnectPrompts = new DisconnectPromptService()
@@ -456,6 +479,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek, documents, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
+  const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
   const dependencies = new DependenciesService({
     api, connections, explorer,
@@ -520,12 +544,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
-    modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
+    modalContains: element => openModal()?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
     editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
-    keyUp: event => peek.keyUp(event.key) })
+    keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat) },
+    keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur() } })
   const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })
   if (!shortcuts) void userShortcuts.load()
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
@@ -540,7 +565,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reloadPins = (): ReloadPins | undefined => {
     if (!api.hotExit) return
     return reloadSession(documents, id => connections.get(id)?.server, {
-      restoreQueries: settings.get('environment.documents.hotExit'), recoveryId: id => recovery.copyId(id), groups: editorGroups, connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady()
+      restoreQueries: settings.get('environment.documents.hotExit'), recoveryId: id => recovery.copyId(id), groups: editorGroups, connectionTargets, explorerExpansion: () => explorer.savedExpansion(), assertConnectionsReady: () => connections.assertCheckpointReady()
     })
   }
   const workbench: Workbench = {
@@ -593,6 +618,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editorStatus,
     inputMode,
     tabRename,
+    serverDrop,
     editorGroups,
     panes,
     explorer,
@@ -605,6 +631,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     peek,
     peekTabs,
+    profilePeek,
+    editorPeek,
     actions,
     actionProgress,
     dialogs,
@@ -627,8 +655,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     updates,
     releaseNotes,
     help,
+    dialogWindows: true,
     attachWindow: target => {
-      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement), reducedMotion.watch(target)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
     },
     dispose: () => {
@@ -711,6 +740,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       editorGroups.dispose()
       resultSelection.dispose()
       peek.dispose()
+      profilePeek.dispose()
       settings.dispose()
       shortcutsBinding.dispose()
       userShortcuts.dispose()
@@ -759,6 +789,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
     blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
+    reducedMotion,
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the

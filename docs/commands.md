@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (342)
+## Commands (349)
 
 ### File
 
@@ -69,6 +69,10 @@ keys it uses are listed below.
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
 | Go To Definition | `edit.goToDefinition` | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Go To Definition |
 | Peek Definition | `edit.peekDefinition` | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | ⌥F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Peek Definition |
+| Open Definition in Peek Tab | `edit.openPeekTab` | — | — | — | `backendReady` | Editor context menu › Open Definition in Peek Tab |
+| Toggle Brackets | `edit.toggleBrackets` | Ctrl+[ (`editorTextFocus`) | Ctrl+[ (`editorTextFocus`) | ⌘[ (`editorTextFocus`) | `activeDocumentIsQuery` | Edit › Advanced › Toggle Brackets; Editor context menu › Toggle Brackets |
+| Move Commas to Front | `edit.commasToFront` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to Front; Editor context menu › Move Commas to Front |
+| Move Commas to End | `edit.commasToEnd` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to End; Editor context menu › Move Commas to End |
 | Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
 | Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
@@ -181,7 +185,7 @@ keys it uses are listed below.
 | Filter for Duplicates in Selected Columns (not in the palette) | `output.filterDuplicates` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicates in Selected Columns |
 | Filter for Duplicate Rows (not in the palette) | `output.filterDuplicateRows` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicate Rows |
 | Keep Selected Rows (not in the palette) | `output.keepSelectedRows` | — | — | — | Always | Query Output context menu › Filter › Keep Selected Rows |
-| Clear Filters (not in the palette) | `output.clearFilters` | — | — | — | Always | Query Output context menu › Filter › Clear Filters |
+| Clear Filters (not in the palette) | `output.clearFilters` | Ctrl+Shift+L (`outputGridFocus`) | Ctrl+Shift+L (`outputGridFocus`) | ⇧⌘L (`outputGridFocus`) | Always | Query Output context menu › Filter › Clear Filters |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | Results toolbar › More results tools › Sort Text by Characters |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | Results toolbar › More results tools › Sort Text by Bytes |
 | Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |
@@ -202,6 +206,7 @@ keys it uses are listed below.
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
+| Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
 | Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
 | Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
@@ -239,12 +244,14 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
 | Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
-| Search in Object Explorer | `explorer.focusSearch` | Ctrl+Shift+F | Ctrl+Shift+F | ⇧⌘F | `hasConnection` | — |
+| Search in Object Explorer | `explorer.focusSearch` | Ctrl+Shift+F, Ctrl+F (`activePanel == 'explorer' && !inputFocus`) | Ctrl+Shift+F, Ctrl+F (`activePanel == 'explorer' && !inputFocus`) | ⇧⌘F, ⌘F (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
 | Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
 | New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New Login… |
 | Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New › Login… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
+| Move Up | `explorer.moveServerUp` | Alt+Up (`explorerFocus && !textInputFocus`) | Alt+Up (`explorerFocus && !textInputFocus`) | ⌥↑ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Up |
+| Move Down | `explorer.moveServerDown` | Alt+Down (`explorerFocus && !textInputFocus`) | Alt+Down (`explorerFocus && !textInputFocus`) | ⌥↓ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Down |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
@@ -519,6 +526,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `3_comment` | **T**oggle Line Comment | `edit.toggleLineComment` | Always |
 | `4_indent` | **I**ncrease Line Indent | `edit.increaseIndent` | Always |
 | `4_indent` | **D**ecrease Line Indent | `edit.decreaseIndent` | Always |
+| `5_sql` | Toggle **B**rackets | `edit.toggleBrackets` | Always |
+| `5_sql` | Move Commas to **F**ront | `edit.commasToFront` | Always |
+| `5_sql` | Move Commas to **E**nd | `edit.commasToEnd` | Always |
 
 #### Edit › Bookmarks
 
@@ -655,6 +665,7 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
 | `2_definition` | **G**o To Definition | `edit.goToDefinition` | Always |
 | `2_definition` | Pee**k** Definition | `edit.peekDefinition` | Always |
+| `2_definition` | Open De**f**inition in Peek Tab | `edit.openPeekTab` | Always |
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
 | `2_execute` | **D**isplay Estimated Execution Plan | `query.estimatePlan` | Always |
@@ -662,6 +673,9 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `3_clipboard` | Cu**t** | `edit.cut` | Always |
 | `3_clipboard` | **C**opy | `edit.copy` | Always |
 | `3_clipboard` | **P**aste | `edit.paste` | Always |
+| `3_format` | Toggle **B**rackets | `edit.toggleBrackets` | Always |
+| `3_format` | **M**ove Commas to Front | `edit.commasToFront` | Always |
+| `3_format` | Mo**v**e Commas to End | `edit.commasToEnd` | Always |
 | `9_palette` | Comm**a**nd Palette… | `workbench.showCommands` | Always |
 
 #### Object Explorer context menu (`explorer.context`)
@@ -705,6 +719,8 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `6_state` | **U**nlock… | `explorer.unlock` | `explorerActionUnlock != '' && explorerNode != 'background'` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
+| `7_order` | Move **U**p | `explorer.moveServerUp` | `explorerNode == 'server'` |
+| `7_order` | Move Do**w**n | `explorer.moveServerDown` | `explorerNode == 'server'` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 | `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
 | `9_properties` | **P**roperties | `ssis.folderProperties` | `explorerNode == 'ssisFolder' && ssisVerbFolderProperties != ''` |
@@ -1020,6 +1036,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `2_view` | **T**ransposed | `output.transpose` | Always |
 | `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
 | `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
+| `3_show` | Profile Selected Columns **O**nly | `output.toggleProfileSelectedColumns` | Always |
 | `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |
 | `4_text` | **S**how Spaces and Tabs | `output.showSpaces` | Always |
 | `4_text` | Show All **W**hite Space | `output.showAllWhitespace` | Always |
@@ -1027,7 +1044,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
-## Context keys (160)
+## Context keys (161)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1118,6 +1135,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
 | `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
+| `resultsProfileSelectedOnly` | boolean | state | The column profile lists only the selected columns (Column Profile: Selected Columns Only). |
 | `resultsGridTransposed` | boolean | state | The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is. |
 | `resultsTabs` | boolean | state | Results show as tabs, one at a time, rather than stacked (Show Results as Tabs). |
 | `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |

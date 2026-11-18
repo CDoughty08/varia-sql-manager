@@ -390,10 +390,11 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' }]
   },
   // Focuses Object Explorer's search box, which searches the selected server's object index as Search Objects does, and
-  // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks.
+  // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks;
+  // Ctrl+F is the editor's Find everywhere but in the explorer pane, where it is this.
   'explorer.focusSearch': {
     title: 'Search in Object Explorer', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick', 'objects'], precondition: 'hasConnection', unavailableHint: noServer,
-    keybindings: [{ key: 'mod+shift+f' }]
+    keybindings: [{ key: 'mod+shift+f' }, { key: 'mod+f', when: "activePanel == 'explorer' && !inputFocus" }]
   },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',
@@ -426,6 +427,18 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.new', group: '1_security', order: 1, mnemonic: 'l', when: "explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')" }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
+  // Server order, kept across restarts in the connection workspace; dragging a server row does the same (gestures.ts).
+  // Enablement is the command's own `when` on its menu's server (a pinned shortcut's too), not the selection's context.
+  'explorer.moveServerUp': {
+    title: 'Move Up', category: 'Object Explorer', icon: 'arrow-up', keywords: ['reorder', 'order', 'sort', 'server', 'move'],
+    keybindings: [{ key: 'alt+up', when: 'explorerFocus && !textInputFocus' }],
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 1, mnemonic: 'u', when: "explorerNode == 'server'" }]
+  },
+  'explorer.moveServerDown': {
+    title: 'Move Down', category: 'Object Explorer', icon: 'arrow-down', keywords: ['reorder', 'order', 'sort', 'server', 'move'],
+    keybindings: [{ key: 'alt+down', when: 'explorerFocus && !textInputFocus' }],
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 2, mnemonic: 'w', when: "explorerNode == 'server'" }]
+  },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   // SSMS 2022's Group by Schema: the toolbar button and the palette flip the objectExplorer.groupBySchema setting.
   'explorer.groupBySchema': {
@@ -755,9 +768,10 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
   },
-  // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens it in a Peek tab. Peek's own read-only
-  // editor takes both through its own focus key (peekEditorFocus), so neither needs a query-tab key there. Ctrl+click is
-  // gestures.ts's editor.goToDefinition.
+  // SSMS's F12 scripts the object under the caret (CREATE) to a new query; Alt+F12 opens Peek's card at the caret, as SSMS's
+  // inline Peek Definition does. Peek's own read-only editor takes both through its own focus key (peekEditorFocus), so
+  // neither needs a query-tab key there. With the pointer, Ctrl+hover (gestures.ts editor.peekHover) opens the card as Object
+  // Explorer's does, and Ctrl+click (editor.goToDefinition) opens a Peek tab (edit.openPeekTab).
   'edit.goToDefinition': {
     title: 'Go To Definition', category: 'Edit', icon: 'go-to-file', keywords: ['goto', 'script', 'create', 'navigate', 'object'],
     precondition: 'backendReady', unavailableHint: definitionHint,
@@ -769,6 +783,30 @@ export const commandCatalog = {
     precondition: 'backendReady', unavailableHint: definitionHint,
     keybindings: [{ key: 'alt+f12', when: 'editorTextFocus || peekEditorFocus' }],
     menus: [{ menu: 'editor.context', group: '2_definition', order: 2, mnemonic: 'k' }]
+  },
+  'edit.openPeekTab': {
+    title: 'Open Definition in Peek Tab', category: 'Edit', icon: 'link-external', keywords: ['peek', 'properties', 'preview', 'object', 'document', 'tab'],
+    precondition: 'backendReady', unavailableHint: definitionHint,
+    menus: [{ menu: 'editor.context', group: '2_definition', order: 3, mnemonic: 'f' }]
+  },
+  // SQL Server text commands that read the query's tokens, so strings, comments and variables never change
+  // (src/renderer/src/editor/sql-transforms.ts). Ctrl+[ is free in the query editor: Monaco's indent and outdent lines
+  // actions are not loaded, and Tab and Shift+Tab indent.
+  'edit.toggleBrackets': {
+    title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    keybindings: [{ key: 'mod+[', when: 'editorTextFocus' }],
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
+  },
+  'edit.commasToFront': {
+    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
+  },
+  'edit.commasToEnd': {
+    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
+    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {
     title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
@@ -1013,7 +1051,7 @@ export const commandCatalog = {
     title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
   },
-  // Filtering a grid (results.view, results PR 4): by the selected cells of one column (their values, other values, or the
+  // Filtering a grid (results.view, results PR 4): by the selected cells, one filter a column they cover (their values, other values, or the
   // range from their lowest to their highest, equal as the column's collation says), without NULL in the active cell's
   // column, or to the rows that repeat in the selected columns or in every column. Filters show in the result's caption,
   // where each comes off on its own; Clear Filters takes them all off.
@@ -1054,8 +1092,10 @@ export const commandCatalog = {
     title: 'Keep Selected Rows', category: 'Query', icon: 'filter', keywords: ['filter', 'keep', 'selected', 'rows', 'only', 'subset', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '3_rows', order: 1, mnemonic: 'k', when: "outputView == 'grid'" }]
   },
+  // Ctrl+Shift+L: Excel's key that turns a sheet's filters off.
   'output.clearFilters': {
-    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
+    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'remove', 'reset', 'grid'], palette: false,
+    keybindings: [{ key: 'mod+shift+l', when: 'outputGridFocus' }],
     menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputLiveFilterable" }]
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
@@ -1157,6 +1197,12 @@ export const commandCatalog = {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
     toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 1, title: 'Column Profile', mnemonic: 'f' }]
   },
+  // The column profile's Selected Columns Only button (queryResults.grid.columnProfileSelectedOnly); Ctrl+hover on the panel
+  // (gestures.ts output.profilePeekHover) shows the other list while held.
+  'output.toggleProfileSelectedColumns': {
+    title: 'Column Profile: Selected Columns Only', category: 'Query', icon: 'filter', keywords: ['profile', 'selected', 'selection', 'columns', 'filter', 'peek', 'stats'],
+    toggled: 'resultsProfileSelectedOnly', menus: [{ menu: 'output.tools', group: '3_show', order: 2, title: 'Profile Selected Columns Only', mnemonic: 'o' }]
+  },
   // The results toolbar's layout toggle (queryResults.grid.layout): every result stacked, or one at a time under tabs.
   'output.toggleResultsTabs': {
     title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
@@ -1230,7 +1276,7 @@ export const commandCatalog = {
   },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
-    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 2, title: 'Row Size', mnemonic: 'z' }]
+    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }, { menu: 'output.tools', group: '3_show', order: 3, title: 'Row Size', mnemonic: 'z' }]
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },

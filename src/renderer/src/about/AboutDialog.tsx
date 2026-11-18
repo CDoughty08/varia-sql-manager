@@ -3,14 +3,16 @@ import { flushSync } from 'react-dom'
 import { productDescription, productName } from '../../../shared/product'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
-import { focusToReturn, returnFocusTo } from '../core/focus'
+import { focusToReturn, returnFocusBeside } from '../core/focus'
 import Icon from '../Icon'
+import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import InlineError from '../kit/InlineError'
 import { copyStatus, copyText, type CopyRecord } from '../kit/format'
 import { trapFocus } from '../trap-focus'
 import { aboutUpdate, platformName, versionDetails, type AboutUpdateCommand } from './about'
 
-export default function AboutDialog({ onClose }: { readonly onClose: () => void }) {
+/** `raise` changes when Help › About is chosen again while it is open: its window comes forward. */
+export default function AboutDialog({ onClose, raise }: { readonly onClose: () => void; readonly raise?: unknown }) {
   const { commands, documents, platform, updates } = useWorkbench()
   const state = useServiceSnapshot(updates), update = aboutUpdate(state, platform), details = versionDetails(state, platform)
   const [returnFocus] = useState(focusToReturn)
@@ -20,8 +22,7 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
   const actionEnabled = useCommandEnabled(action?.command ?? 'help.checkForUpdates')
   const close = () => {
     onClose()
-    if (returnFocus?.isConnected) returnFocusTo(returnFocus)
-    else documents.focusActive()
+    returnFocusBeside(returnFocus, '.about-dialog', () => documents.focusActive())
   }
   const run = async (id: AboutUpdateCommand | 'help.openProject' | 'help.reportIssue') => {
     setError('')
@@ -37,10 +38,10 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
   }
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     trapFocus(event)
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
+    if (event.key === 'Escape' || closesDialogWindow(event, platform)) { event.preventDefault(); event.stopPropagation(); close() }
   }
-  return <div className="modal-backdrop"><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onKeyDown={keyDown}>
-    <div className="connection-heading"><h2 id="about-title">About Varia</h2><button type="button" className="icon-button" aria-label="Close About Varia" onClick={close}><Icon name="close" /></button></div>
+  return <DialogWindow kind="about" onClose={close} raise={raise}><section className="connection-modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" tabIndex={-1} onKeyDown={keyDown}>
+    <DialogHeading id="about-title" title="About Varia" closeLabel="Close About Varia" onClose={close} />
     <div className="connection-scroll">
       <div className="about-identity"><div className="about-brand"><Icon name="varia" /></div><div><h3>{productName}</h3><p>{productDescription}</p></div></div>
       <p className="about-version">{state.currentVersion ? `Version ${state.currentVersion}` : 'Version information unavailable'}<span>{platformName(platform)}</span></p>
@@ -62,5 +63,5 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
       {error && <InlineError message={error} copy={false} />}
     </div>
     <div className="connection-footer"><span /><button type="button" autoFocus onClick={close}>Done</button></div>
-  </section></div>
+  </section></DialogWindow>
 }

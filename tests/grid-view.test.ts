@@ -55,17 +55,17 @@ function mount(o: { rows: number; columns: number; widths?: readonly number[]; r
   document.body.append(root)
   if (!o.on) for (const [name, value] of [['clientWidth', 900], ['offsetWidth', 900], ['clientHeight', 300]] as const) Object.defineProperty(scroller, name, { value })
   const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: !o.unsized, ...o.widths ? { widths: Float64Array.from(o.widths) } : {} }
-  const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn()
+  const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn(), onFirstCell = vi.fn()
   const view = new GridView({
     root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', ...o.stats ? { stats: o.stats } : {}, resultNumber: o.resultNumber ?? 1, resultCount: o.resultCount ?? 1, ...o.resultName ? { resultName: o.resultName } : {}, platform: 'win32',
-    onSelection, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue, onSort, onFilter: () => {}
+    onSelection, onFirstCell, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue, onSort, onFilter: () => {}
   })
   /** The reads answered and the frame after them painted. */
   const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
   const key = (name: string, init: KeyboardEventInit = {}) => view.key(new KeyboardEvent('keydown', { key: name, ...init }))
   const shown = <T extends Element = HTMLElement>(selector: string) => [...root.querySelectorAll<T>(selector)].filter(element => (element as unknown as HTMLElement).style.display !== 'none')
   const cellAt = (row: number, col: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${col + 2}"]`)
-  return { ...made, root, scroller, state, view, frame, key, shown, cellAt, onSelection, onOpenValue, onSort }
+  return { ...made, root, scroller, state, view, frame, key, shown, cellAt, onSelection, onFirstCell, onOpenValue, onSort }
 }
 
 describe('the grid\'s seams', () => {
@@ -95,9 +95,10 @@ describe('the grid\'s seams', () => {
   it('keeps the selection in the state as the keys and Select All write it, and reports each change once', async () => {
     const grid = mount({ rows: 500, columns: 40 })
     await grid.frame()
-    // The first cell is current without being announced.
+    // The first cell is current without being announced, though what follows the selection (the column profile) hears of it.
     expect(grid.state.selection).toEqual(cells([0, 0]))
     expect(grid.onSelection).not.toHaveBeenCalled()
+    expect(grid.onFirstCell).toHaveBeenCalledTimes(1)
     grid.key('ArrowRight')
     grid.key('ArrowDown')
     grid.key('ArrowDown')

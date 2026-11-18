@@ -19,9 +19,10 @@ internal enum PagePacking
     EveryComplete,
 }
 
-/// <summary>Zstandard at level 2 with a 256 KiB window (one page), one page at a time: the codec and settings measured in
-/// docs/page-compression-findings.md. Pure functions; the store decides what is packed.</summary>
-internal static class PageCodec
+/// <summary>Zstandard at level 2 with a 256 KiB window (one page), one page at a time, over the page's lengths form
+/// (PageCodec.Lengths.cs): the codec and settings measured in docs/page-compression-findings.md. Pure functions; the
+/// store decides what is packed.</summary>
+internal static partial class PageCodec
 {
     public const int Quality = 2;
     public const int Window = 18;
@@ -38,23 +39,34 @@ internal static class PageCodec
     /// context per call), streamed so its working memory does not change with the page's size (<see cref="Stream"/>).</param>
     public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null)
     {
-        var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
-        // A page's worst case is above the large object heap's threshold, so the room is pooled (bounded per core by the
+        var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length) + MaxPrefix;
+        // A page's worst case is above the large object heap's threshold, so the rooms are pooled (bounded per core by the
         // shared pool) rather than allocated per page or kept on every thread that ever packs.
         var room = ArrayPool<byte>.Shared.Rent(need);
+        var form = ArrayPool<byte>.Shared.Rent(Math.Max(1, page.Length));
         try
         {
-            if (quiet is null)
-                return ZstandardEncoder.TryCompress(page, room, out var once, Quality, Window) ? room.AsSpan(0, once).ToArray() : null;
-            var encoder = QuietEncoder(room);
+            var formLength = ToLengths(page, form);
+            var source = formLength < 0 ? page : form.AsSpan(0, formLength);
+            // Made (and warmed in the room) before the prefix is written there.
+            var encoder = quiet is null ? null : QuietEncoder(room);
+            var prefix = 0;
+            room[prefix++] = formLength < 0 ? AsSealed : AsLengths;
+            WriteLeb(room, ref prefix, (uint)source.Length);
+            if (encoder is null)
+                return ZstandardEncoder.TryCompress(source, room.AsSpan(prefix), out var once, Quality, Window) ? room.AsSpan(0, prefix + once).ToArray() : null;
             encoder.Reset();
             int written;
-            quiet(true);
-            try { written = Stream(encoder, page, room); }
+            quiet!(true);
+            try { written = Stream(encoder, source, room.AsSpan(prefix)); }
             finally { quiet(false); }
-            return written < 0 ? null : room.AsSpan(0, written).ToArray();
+            return written < 0 ? null : room.AsSpan(0, prefix + written).ToArray();
         }
-        finally { ArrayPool<byte>.Shared.Return(room); }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(form);
+            ArrayPool<byte>.Shared.Return(room);
+        }
     }
 
     /// <summary>Compresses a page as a stream of unknown length, then ends the frame: given the whole input at once with
@@ -90,8 +102,7 @@ internal static class PageCodec
     public static byte[] Unpack(byte[] packed, int length)
     {
         var page = new byte[length];
-        if (!ZstandardDecoder.TryDecompress(packed, page, out var written) || written != length)
-            throw new InvalidDataException("A packed result page could not be read.");
+        UnpackInto(packed, page);
         return page;
     }
 
@@ -99,7 +110,12 @@ internal static class PageCodec
     /// length as sealed: a fused read's own room, reused page after page (ViewSorter.PageRooms).</summary>
     public static void UnpackInto(byte[] packed, Span<byte> room)
     {
-        if (!ZstandardDecoder.TryDecompress(packed, room, out var written) || written != room.Length)
-            throw new InvalidDataException("A packed result page could not be read.");
+        if (packed.Length < 2 || packed[0] is not (AsSealed or AsLengths)) throw Unreadable();
+        var prefix = 1;
+        var formLength = ReadLeb(packed, ref prefix);
+        if (formLength > room.Length || (packed[0] == AsSealed && formLength != room.Length)) throw Unreadable();
+        var at = room.Length - (int)formLength;
+        if (!ZstandardDecoder.TryDecompress(packed.AsSpan(prefix), room[at..], out var written) || written != formLength) throw Unreadable();
+        if (packed[0] == AsLengths) FromLengths(room, at);
     }
 }

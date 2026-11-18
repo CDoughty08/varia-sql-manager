@@ -245,6 +245,27 @@ internal static class DistinctChecks
         check(window is { Total: 2, Offset: 0, Checked: 2 } && window.Values is [{ Group: 0, Row: 1, Text: "A", Count: 3, Checked: true }], "results.distinctRead reads a window");
         var ticked = Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = set.ResultId, snapshotId = opened.SnapshotId, @checked = false, groups = new[] { 1 }, nulls = false });
         check(ticked is { Checked: 1, NullsChecked: false }, "results.distinctTick clears a value and NULL");
+        // Ranges of a list in an order (the popover's selection), the toggle Space makes of them, and Invert ticks.
+        var ranged = Call<ResultsDistinctResult>("results.distinct", new { resultId = set.ResultId, column = 0 });
+        var (rid, sid) = (set.ResultId, ranged.SnapshotId);
+        var second = Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = false, order = "count", ranges = new[] { new long[] { 1, 1 } } });
+        var toggledOn = Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 2 } }, toggle = true, nulls = false });
+        var toggledOff = Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 2 } }, toggle = true, nulls = true });
+        var inverted = Call<ResultsDistinctTickResult>("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, invert = true });
+        var rangeCodes = string.Join(",", new[]
+        {
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 1, 2 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, ranges = new[] { new long[] { 0, 1 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", toggle = true }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, invert = true, all = true }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 0 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 0, 2 }, new long[] { 0, 2 } } }),
+            Code("results.distinctTick", new { resultId = rid, snapshotId = sid, @checked = true, order = "value", ranges = new[] { new long[] { 1, 1 }, new long[] { 0, 1 } } })
+        });
+        check(second is { Checked: 1, NullsChecked: true } && toggledOn is { Checked: 2, NullsChecked: true } && toggledOff is { Checked: 0, NullsChecked: false } && inverted is { Checked: 2, NullsChecked: false }
+            && rangeCodes == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS",
+            "results.distinctTick ticks ranges of a list in an order, toggles them with NULL (any cleared ticks all, else clears all), inverts, and refuses ranges past the end, without an order, empty, overlapping or out of order, a toggle without ranges and two modes");
+        Call<ResultsDistinctCloseResult>("results.distinctClose", new { resultId = set.ResultId, snapshotIds = new[] { ranged.SnapshotId } });
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "groups", column = 0, snapshotId = opened.SnapshotId } } });
         check(view.Rows == 3 && view.Filters is [{ Op: "groups", Column: 0, SnapshotId: var id, Keep: true, Values: 1, Row: 1, Nulls: false, Rows: null }] && id == opened.SnapshotId,
             "a groups filter keeps the ticked value's rows and comes back as asked, saying what it keeps");

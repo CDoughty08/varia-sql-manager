@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { connectionTargetOptions, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionWorkspace, type PersistedConnectionTarget } from '../src/shared/connection-targets'
+import { connectionTargetLimits, connectionTargetOptions, connectionWorkspaceSchema, withExplorerExpansion, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionWorkspace, type PersistedConnectionTarget } from '../src/shared/connection-targets'
 import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
@@ -243,5 +243,65 @@ describe('durable connection targets', () => {
     expect(service.get(id(1))?.credential).toBeUndefined()
     service.beginDisconnect(id(1), id(20))
     expect(service.reconcileAuthentication(handle(), { ...authentication, credential: reference })).toBe(false)
+  })
+})
+
+describe('Object Explorer order and expansion in the connection workspace', () => {
+  it('reorders the named targets among their own places and leaves the others where they are', () => {
+    const service = new ConnectionTargetService()
+    expect(service.restore({ version: 1, targets: [record(1), { ...record(2), inExplorer: false, resumeWanted: false }, record(3), record(4)] })).toBe(true)
+    const listener = vi.fn()
+    service.subscribe(listener)
+    expect(service.reorder([id(4), id(1), id(3)])).toBe(true)
+    // The hidden target keeps its place between the moved ones.
+    expect(service.getSnapshot().map(target => target.id)).toEqual([id(4), id(2), id(1), id(3)])
+    expect(service.exportWorkspace().targets.map(target => target.id)).toEqual([id(4), id(2), id(1), id(3)])
+    expect(listener).toHaveBeenCalledTimes(1)
+    // The same order, unknown ids and a single target change nothing.
+    expect(service.reorder([id(4), id(1), id(3)])).toBe(false)
+    expect(service.reorder([id(9), id(4)])).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives restored targets their saved expansion, and none to a target added this run or not connected at the last close', () => {
+    const service = new ConnectionTargetService()
+    const keys = [JSON.stringify(['', 'object', 'server', null, null, null, null, null, null, null])]
+    service.restore({ version: 1, explorerExpansion: true, targets: [{ ...record(1), explorerExpanded: keys }, { ...record(4), explorerExpanded: [] }, record(2)] })
+    expect(service.savedExplorerExpansion(id(1))).toEqual(keys)
+    expect(service.savedExplorerExpansion(id(4))).toEqual([])
+    // Not connected at the last close: its first connect opens it to its first level, as a new connection's does.
+    expect(service.savedExplorerExpansion(id(2))).toBeUndefined()
+    // A file older than the saved expansion (no marker) restores every server collapsed; one written with it, where no
+    // server had anything to keep, does not.
+    const older = new ConnectionTargetService()
+    older.restore({ version: 1, targets: [record(1), record(2)] })
+    expect(older.savedExplorerExpansion(id(1))).toEqual([])
+    expect(older.savedExplorerExpansion(id(2))).toEqual([])
+    const none = new ConnectionTargetService()
+    none.restore(withExplorerExpansion({ version: 1, targets: [record(1)] }, new Map()))
+    expect(none.savedExplorerExpansion(id(1))).toBeUndefined()
+    service.add(record(3))
+    expect(service.savedExplorerExpansion(id(3))).toBeUndefined()
+    expect(service.exportWorkspace().targets[0].explorerExpanded).toEqual(keys)
+  })
+
+  it('writes the tree\'s expansion into the workspace within its bounds, keeping a server the tree does not know as it was', () => {
+    const workspace: ConnectionWorkspace = { version: 1, targets: [{ ...record(1), explorerExpanded: ['old'] }, { ...record(2), explorerExpanded: ['kept'] }, record(3)] }
+    const tooLong = 'k'.repeat(connectionTargetLimits.explorerKeyChars + 1)
+    const many = Array.from({ length: connectionTargetLimits.explorerExpanded + 5 }, (_, at) => `key-${at}`)
+    const next = withExplorerExpansion(workspace, new Map([[id(1), ['a', tooLong, 'b']], [id(3), many]]))
+    expect(next.targets.map(target => target.explorerExpanded)).toEqual([['a', 'b'], ['kept'], many.slice(0, connectionTargetLimits.explorerExpanded)])
+    // null drops what a server had (removed from Explorer this run).
+    expect(withExplorerExpansion(workspace, new Map([[id(2), null]])).targets[1]).not.toHaveProperty('explorerExpanded')
+    // The total across servers is bounded too, outermost keys first.
+    const big = 'x'.repeat(connectionTargetLimits.explorerKeyChars)
+    const servers = Array.from({ length: 4 }, (_, at) => ({ ...record(10 + at) }))
+    const keys = Array.from({ length: connectionTargetLimits.explorerExpanded }, () => big)
+    const bounded = withExplorerExpansion({ version: 1, targets: servers }, new Map(servers.map(target => [target.id, keys])))
+    const total = bounded.targets.reduce((sum, target) => sum + (target.explorerExpanded ?? []).reduce((chars, key) => chars + key.length, 0), 0)
+    expect(total).toBeLessThanOrEqual(connectionTargetLimits.explorerExpandedChars)
+    expect(bounded.targets[0].explorerExpanded).toHaveLength(connectionTargetLimits.explorerExpanded)
+    // The strict schema refuses a key past the bound, so a tampered file cannot grow the list.
+    expect(() => connectionWorkspaceSchema.parse({ version: 1, targets: [{ ...record(1), explorerExpanded: [tooLong] }] })).toThrow()
   })
 })

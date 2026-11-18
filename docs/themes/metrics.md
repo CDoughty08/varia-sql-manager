@@ -55,7 +55,7 @@ Offset and blur only; a rule adds its colour key, as in `box-shadow: var(--varia
 
 ## Motion
 
-One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). Under `prefers-reduced-motion: reduce`, `--varia-motion-fast` and `--varia-motion-base` are 0 ms, and every looping animation stops, Monaco's codicon spinners included.
+One easing curve, `--varia-motion-ease` (`cubic-bezier(0.2, 0, 0, 1)`). With reduced motion on (Tools › Options › Environment › General › Reduce motion when the system asks, off by default, while the system asks for it), `--varia-motion-fast` and `--varia-motion-base` and `--varia-motion-move` are 0 ms, and every looping animation stops, Monaco's codicon spinners included. The renderer marks it with the root class `varia-reduced-motion`; styles.css never reads `prefers-reduced-motion` itself.
 
 Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.
 
@@ -63,6 +63,7 @@ Only `:hover` rules carry the fast transition, and rules that mark a state (a se
 | --- | --- | --- |
 | `--varia-motion-fast` | 80 | Hover and pressed fills. |
 | `--varia-motion-base` | 120 | Menus, popovers and dialogs appearing. |
+| `--varia-motion-move` | 180 | List items moving to a new place, in or out, and highlights that follow a selection there (the column profile's cards); transform and opacity only. |
 | `--varia-motion-spin` | 1500 | One turn of a loading spinner (a loop). |
 | `--varia-motion-pulse` | 2000 | One beat of the live dot, 0.5 Hz (a loop). |
 | `--varia-motion-delay` | 300 | The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it. |
@@ -90,6 +91,8 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use |
 | --- | --- | --- |
 | `--varia-resultTab` | 240 | A result tab in the Tabs layout, which a long result name (a `#Name` marker) would otherwise widen without bound. |
+| `--varia-optionsLabel` | 240 | The label column of a Tools › Options form page, where longer labels wrap; checkboxes span it and the control column. |
+| `--varia-optionsControl` | 220 | The control column of an Options form page: every number field and list is this wide, so they line up. |
 
 ## Bars and rows
 
@@ -97,9 +100,9 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
-| `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
+| `--varia-header` | 40 | 44 | The title bar. | `.title-bar`, `.dialog-titlebar:not([data-platform="darwin"])` |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.editor-empty > .editor-group-actions`, `.explorer-header`, `.peek-head`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
 | `--varia-documentTab` | 44 | 48 | Two-line document tabs and their shelf overflow buttons. | `.query-shelf-more` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.object-search-field`, `.object-search-filter-button`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle`, `.activity-tool`, `.activity-filter-box input`, `.compare-side` |
-| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.dependencies-row`, `.explorer-pin-more`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head`, `.new-login-credentials-grid th`, `.new-login-credentials-grid td`, `.shortcuts-table td`, `.shortcuts-group th`, `.compare-target`, `.rt-picker-row` |
+| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.column-filter-action`, `.dependencies-row`, `.explorer-pin-more`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head`, `.new-login-credentials-grid th`, `.new-login-credentials-grid td`, `.shortcuts-table td`, `.shortcuts-group th`, `.compare-target`, `.rt-picker-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar`, `.activity-pane-status` |

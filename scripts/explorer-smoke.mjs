@@ -6,10 +6,11 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
+import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -797,6 +798,24 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
+  // Ctrl pressed with the pointer already resting on the row peeks at once, with no move, and shows the peek cursor until
+  // it goes up; the open card stays, so the pointer can move into it.
+  await peekRow.locator(part.explorerRowText).first().hover({ position: { x: 8, y: 4 } })
+  await expect(peekRow).toHaveCSS('cursor', 'default')
+  await page.keyboard.down(peekKey)
+  await expect(peekCard).toBeVisible()
+  await expect(peekRow).toHaveCSS('cursor', 'zoom-in')
+  await page.keyboard.up(peekKey)
+  await expect(peekRow).toHaveCSS('cursor', 'default')
+  await expect(peekCard).toBeVisible()
+  // A hovered card never takes focus, so a row hovered while typing in a query leaves focus in the editor: Esc there closes
+  // the card too.
+  const queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
+  await queryText.focus()
+  await expect(peekCard).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeHidden()
+  await expect(queryText).toBeFocused()
   // 8c. View Dependencies: the menu opens Object Dependencies on the table. Its tree reads the root's level at once and a node's
   // only when it expands, marks the table met again below its view as a cycle, and the other choice starts again from the root.
   await peekRow.click({ button: 'right' })
@@ -832,7 +851,7 @@ try {
   await expect(tree()).toBeFocused()
   expect((await active())?.label).toBe('dbo.Orders')
   console.log('Object Explorer checks: View Dependencies opens Object Dependencies from the menu, reads a level as a node expands, marks a cycle and another database, switches its choice, and Enter selects the node in Object Explorer.')
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu, Ctrl+hover and Ctrl pressed over a resting pointer (with the peek cursor while Ctrl is held), shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -1153,6 +1172,15 @@ try {
   // Search in Object Explorer's key, from the tree, selects the box's text, so typing replaces it.
   await tree().focus()
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F')
+  await expect(searchBox()).toBeFocused()
+  expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  // Ctrl+F (⌘F) in the tree does the same; in the query editor it stays Monaco's Find. (Escape above cleared the box.)
+  await searchBox().fill('Order')
+  await tree().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F' : 'Control+F')
   await expect(searchBox()).toBeFocused()
   expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
   await page.keyboard.press('Escape')
@@ -1936,7 +1964,11 @@ try {
     else await button.click({ button: 'right' })
     await expect(menu('Object Explorer')).toBeVisible()
     expect(await menuItemNames(menu('Object Explorer'))).toEqual(fullServerMenu)
-    expect(await menuItemNames(menu('Object Explorer'), { disabled: true })).toEqual(disabledServerItems)
+    // Move Up and Move Down follow the shortcut's own server (pin-a is first, pin-f last), not the selected row.
+    const moves = ['Move Up', 'Move Down']
+    const disabled = await menuItemNames(menu('Object Explorer'), { disabled: true })
+    expect(disabled.filter(name => !moves.includes(name))).toEqual(disabledServerItems.filter(name => !moves.includes(name)))
+    expect(disabled.filter(name => moves.includes(name))).toEqual(server === 'pin-a' ? ['Move Up'] : server === 'pin-f' ? ['Move Down'] : [])
     if (overflow) await expect(overflow).toBeHidden()
     if (keyboard && overflow) {
       const invoker = await restore.boundingBox(), opened = await menu('Object Explorer').boundingBox()
@@ -2070,6 +2102,302 @@ try {
   await setPins(2, 2)
   await sampleScroll(0)
   console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
+
+  // 13b. Dragging a server past the last row drops it last, as its line shows; leaving the tree drops nothing.
+  // Collapse All leaves servers open on their folders; Left collapses each server, Down moves to the next.
+  await toolbarButton('Collapse All').click()
+  await tree().focus()
+  await press('Home', 'pin-a')
+  for (let server = 0; server < 6; server++) { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown') }
+  await expect(serverRows(page).and(page.locator('[aria-expanded="true"]'))).toHaveCount(0)
+  const serverOrder = async () => (await serverRows(page).evaluateAll(rows => rows.map(row => [Number(row.getAttribute('aria-posinset')), row.getAttribute('aria-label')])))
+    .sort((a, b) => a[0] - b[0]).map(([, label]) => label.split(' ')[0])
+  // Playwright's mouse drags in the sandboxed Windows window reach the page with dragenter but no dragover, so the drag is
+  // the platform's events dispatched where the pointer would be: hit-tested at each point, with dragenter and dragleave
+  // between elements, and a drop where the last dragover was accepted (in the dock panel, always). Held (release false),
+  // the line can be read; dragStep moves it on (onTree: over the tree element itself, as on its scrollbar).
+  const dragStep = (clientY, onTree = false) => tree().evaluate((tree, [clientY, onTree]) => {
+    const drag = window.__variaServerDrag, at = more => ({ clientX: drag.x, clientY, bubbles: true, cancelable: true, dataTransfer: drag.dataTransfer, ...more })
+    const target = onTree ? tree : tree.ownerDocument.elementFromPoint(drag.x, clientY) ?? tree.ownerDocument.body
+    if (target !== drag.over) {
+      target.dispatchEvent(new DragEvent('dragenter', at({ relatedTarget: drag.over })))
+      drag.over.dispatchEvent(new DragEvent('dragleave', at({ relatedTarget: target })))
+      drag.over = target
+    }
+    drag.accepted = !target.dispatchEvent(new DragEvent('dragover', at()))
+    drag.y = clientY
+  }, [clientY, onTree])
+  const dragServer = async (name, toY, release = true) => {
+    const row = await explorerRow(page, name), box = await row.boundingBox(), x = box.x + 40, y = box.y + box.height / 2
+    await row.evaluate((row, [x, y]) => {
+      const dataTransfer = new DataTransfer()
+      row.dispatchEvent(new DragEvent('dragstart', { clientX: x, clientY: y, bubbles: true, cancelable: true, dataTransfer }))
+      window.__variaServerDrag = { row, over: row, accepted: false, dataTransfer, x, y }
+    }, [x, y])
+    for (let step = 1; step <= 12; step++) await dragStep(y + (toY - y) * step / 12)
+    if (release) await releaseServer()
+  }
+  // A move the release should not have made shows after the explorer's next frame.
+  const settled = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const releaseServer = () => page.evaluate(() => {
+    const { row, over, accepted, dataTransfer, x, y } = window.__variaServerDrag, at = { clientX: x, clientY: y, bubbles: true, cancelable: true, dataTransfer }
+    if (accepted) over.dispatchEvent(new DragEvent('drop', at))
+    row.dispatchEvent(new DragEvent('dragend', at))
+    delete window.__variaServerDrag
+  })
+  const servers = ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']
+  await expect.poll(serverOrder).toEqual(servers)
+  const lastBox = await (await explorerRow(page, 'pin-f')).boundingBox(), treeBox = await tree().boundingBox()
+  expect(lastBox.y + lastBox.height + 60).toBeLessThan(treeBox.y + treeBox.height)
+  await dragServer('pin-a', lastBox.y + lastBox.height + 40, false)
+  await expect(explorerDropLine(page)).toHaveCount(1)
+  await expect(explorerDropLine(page)).toHaveAttribute('aria-label', /^pin-f /)
+  await expect(explorerDropLine(page)).toHaveAttribute('data-drop', 'after')
+  await releaseServer()
+  await expect.poll(serverOrder).toEqual([...servers.slice(1), 'pin-a'])
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  await dragServer('pin-a', (await (await explorerRow(page, 'pin-b')).boundingBox()).y + 3)
+  await expect.poll(serverOrder).toEqual(servers)
+  // An expanded last server: the background's line is below its last child, where the server lands, not under its header.
+  await (await explorerRow(page, 'pin-f')).click()
+  await page.keyboard.press('ArrowRight')
+  await expect(await explorerRow(page, 'pin-f')).toHaveAttribute('aria-expanded', 'true')
+  // Rows are placed by transform, so the last row is the lowest on screen, not the last in the DOM.
+  const lowestRow = () => tree().getByRole('treeitem').evaluateAll(rows => {
+    const lowest = rows.reduce((low, row) => row.getBoundingClientRect().bottom > low.getBoundingClientRect().bottom ? row : low), box = lowest.getBoundingClientRect()
+    return { level: lowest.getAttribute('aria-level'), label: lowest.getAttribute('aria-label'), y: box.y, height: box.height }
+  })
+  await expect.poll(async () => (await lowestRow()).level).toBe('2')
+  const lastChild = await lowestRow()
+  expect(lastChild.y + lastChild.height + 30).toBeLessThan(treeBox.y + treeBox.height)
+  await dragServer('pin-a', lastChild.y + lastChild.height + 20, false)
+  await expect(explorerDropLine(page)).toHaveCount(1)
+  await expect(explorerDropLine(page)).toHaveAttribute('aria-label', lastChild.label)
+  await expect(explorerDropLine(page)).toHaveAttribute('data-drop', 'after')
+  await releaseServer()
+  await expect.poll(serverOrder).toEqual([...servers.slice(1), 'pin-a'])
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  await dragServer('pin-a', (await (await explorerRow(page, 'pin-b')).boundingBox()).y + 3)
+  await expect.poll(serverOrder).toEqual(servers)
+  // A tree that fills its pane, scrolled to its end, has no background left: the lower half of its last row drops last.
+  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData', 'Tables')
+  await expect.poll(() => tree().evaluate(tree => tree.scrollHeight > tree.clientHeight + 200)).toBe(true)
+  await tree().evaluate(tree => { tree.scrollTop = 0 })
+  await expect(await explorerRow(page, 'pin-a')).toBeInViewport()
+  await dragServer('pin-a', (await (await explorerRow(page, 'pin-b')).boundingBox()).y + 3, false)
+  await tree().evaluate(tree => { tree.scrollTop = tree.scrollHeight })
+  await expect.poll(() => tree().evaluate(tree => Math.ceil(tree.scrollTop + tree.clientHeight) >= tree.scrollHeight)).toBe(true)
+  await expect.poll(async () => { const row = await lowestRow(); return row.y + row.height >= treeBox.y + treeBox.height - 24 }).toBe(true)
+  const lowest = await lowestRow()
+  await dragStep(lowest.y + lowest.height * 0.75)
+  await expect(explorerDropLine(page)).toHaveCount(1)
+  await expect(explorerDropLine(page)).toHaveAttribute('aria-label', lowest.label)
+  await expect(explorerDropLine(page)).toHaveAttribute('data-drop', 'after')
+  await releaseServer()
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  // The order reads the rendered server rows: back at the top with pin-f closed, all six are on screen.
+  await tree().evaluate(tree => { tree.scrollTop = 0 })
+  await (await explorerRow(page, 'pin-f')).click()
+  await page.keyboard.press('ArrowLeft')
+  await expect(await explorerRow(page, 'pin-f')).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(serverOrder).toEqual([...servers.slice(1), 'pin-a'])
+  await dragServer('pin-a', (await (await explorerRow(page, 'pin-b')).boundingBox()).y + 3)
+  await expect.poll(serverOrder).toEqual(servers)
+  // Over the scrollbar beside the rows the tree itself is under the pointer: no line shows there, so releasing moves nothing.
+  const pinE = await (await explorerRow(page, 'pin-e')).boundingBox()
+  await dragServer('pin-c', pinE.y + pinE.height * 0.75, false)
+  await expect(explorerDropLine(page)).toHaveAttribute('aria-label', /^pin-e /)
+  await dragStep(pinE.y + pinE.height / 2, true)
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  await releaseServer()
+  await settled()
+  expect(await serverOrder()).toEqual(servers)
+  // Carried out of the tree, the drag leaves no line behind, and releasing there moves nothing.
+  await dragServer('pin-c', treeBox.y - 8, false)
+  await expect(explorerDropLine(page)).toHaveCount(0)
+  await releaseServer()
+  await settled()
+  expect(await serverOrder()).toEqual(servers)
+  console.log('Object Explorer checks: dragging a server below the last row drops it last, with its line below the last child of an expanded server, and over the lower half of the last row when the tree fills its pane; onto the top half of the first row it drops first; over the scrollbar or out of the tree it shows no line and stays.')
+
+  // 13c. Expanding a row low in the view scrolls its children in as they arrive, as far as keeps the row itself in view.
+  await toolbarButton('Collapse All').click()
+  await tree().focus()
+  await press('Home', 'pin-a')
+  for (let server = 0; server < 6; server++) { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown') }
+  await expandExplorerPath(page, 'pin-f', 'Databases', 'AppData')
+  await select('pin-f', 'Databases', 'AppData', 'Tables')
+  const treeTop = (await tree().boundingBox()).y, scrolledFrom = await tree().evaluate(element => element.scrollTop)
+  const tablesTop = async () => (await (await explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables')).boundingBox()).y - treeTop
+  expect(await tablesTop()).toBeGreaterThan(200)
+  await press('ArrowRight', 'Tables')
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeGreaterThan(scrolledFrom)
+  // Tables ends just under the pinned server headers above it, with its tables below it.
+  const above = page.getByRole('group', { name: 'Servers above', exact: true })
+  await expect(above).toBeVisible()
+  const aboveBottom = async () => { const box = await above.boundingBox(); return box.y + box.height - treeTop }
+  await expect.poll(async () => Math.round(await aboveBottom() - await tablesTop())).toBeGreaterThanOrEqual(-22)
+  expect(await tablesTop()).toBeGreaterThanOrEqual(Math.floor(await aboveBottom()))
+  await expect(explorerRow(page, 'pin-f', 'Databases', 'AppData', 'Tables', 'dbo.table10')).resolves.toBeTruthy()
+  console.log('Object Explorer checks: expanding a row low in the view scrolls its children into view and keeps the row in view.')
+
+  // 13d. Auto-expand single children. Stored Procedures lists only System Stored Procedures, which it leaves closed.
+  const procedures = ['pin-f', 'Databases', 'AppData', 'Programmability', 'Stored Procedures']
+  // pin-f's own query tab is active, whichever an earlier step left, so switching to pin-a's below is a switch.
+  await selectOpenDocument(page, pinQueries[5])
+  await expandExplorerPath(page, ...procedures.slice(0, -1))
+  await selectRevealed(...procedures)
+  await press('ArrowRight', 'Stored Procedures')
+  await expect(await revealExplorerRow(page, ...procedures, 'System Stored Procedures')).toHaveAttribute('aria-expanded', 'false')
+  // A procedure's only folder, Parameters, is walked into and selected, the active descendant following, though it
+  // collapses again with nothing in it.
+  await setStub({ procedures: 1 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_ShipOrders')
+  await press('ArrowRight', 'Parameters')
+  await expect(await revealExplorerRow(page, ...procedures, 'dbo.usp_ShipOrders')).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(async () => (await active())?.expanded).not.toBe('true')
+  await expect(tree()).toBeFocused()
+  // Enter expands as Right does.
+  await setStub({ procedures: 3 })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_2')
+  await press('Enter', 'Parameters')
+  // Switching query tabs while Parameters loads follows the other server, and the walk's end, selected when it arrives,
+  // does not scroll the tree back.
+  await setStub({ procedures: 2, holdParameters: true })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  await selectRevealed(...procedures, 'dbo.usp_1')
+  await page.keyboard.press('ArrowRight')
+  const heldParameters = () => application.evaluate(() => { const stub = globalThis.variaStub; return stub.calls.filter(call => call.method === 'explorer.children' && call.params.node.folder === 'parameters').map(call => call.params.requestId).findLast(id => stub.held.has(id)) ?? null })
+  await expect.poll(heldParameters).not.toBeNull()
+  const expandedAt = await tree().evaluate(element => element.scrollTop)
+  await selectOpenDocument(page, pinQueries[0])
+  await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(expandedAt)
+  const followedTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(followedTo)
+  // Wheeling the tree while Parameters loads keeps it where the wheel left it too.
+  const heldThen = async (ready, act) => {
+    await setStub({ procedures: 5, holdParameters: true })
+    await selectRevealed(...procedures)
+    await page.keyboard.press('F5')
+    await selectRevealed(...procedures, ready)
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(heldParameters).not.toBeNull()
+    await act()
+    await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  }
+  let wheeledTo
+  await heldThen('dbo.usp_3', async () => {
+    const box = await tree().boundingBox()
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    const before = await tree().evaluate(element => element.scrollTop)
+    // Far enough that Parameters, below, is out of view: a reveal of the walk's end would have to scroll back.
+    await page.mouse.wheel(0, -2000)
+    await expect.poll(() => tree().evaluate(element => element.scrollTop)).toBeLessThan(before)
+    wheeledTo = await tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })
+  })
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await expect.poll(() => tree().evaluate(async element => { await new Promise(resolve => requestAnimationFrame(resolve)); return element.scrollTop })).toBe(wheeledTo)
+  // Turning the setting off while Parameters loads stops the walk where it is: the procedure stays selected.
+  const setAutoExpand = async value => expect((await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.autoExpandSingleChild': value }), value)).ok).toBe(true)
+  // Main sends the change before it answers, and the tree stops the walk as the change commits: the page released next comes after.
+  await heldThen('dbo.usp_4', () => setAutoExpand(false))
+  await expect.poll(async () => (await active())?.label).toBe('dbo.usp_4')
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_4', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_4')
+  await setAutoExpand(true)
+  // A chevron click, a double-click and Numpad + walk on as Right does.
+  await setStub({ procedures: 10, holdParameters: false })
+  await selectRevealed(...procedures)
+  await page.keyboard.press('F5')
+  const procedure = name => revealExplorerRow(page, ...procedures, name)
+  await (await procedure('dbo.usp_5')).locator(part.explorerTwistie).click()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await (await procedure('dbo.usp_6')).locator(part.explorerRowText).first().dblclick()
+  await expect.poll(async () => (await active())?.label).toBe('Parameters')
+  await selectRevealed(...procedures, 'dbo.usp_7')
+  await press('NumpadAdd', 'Parameters')
+  // Clicking the selected row while a chevron's walk waits stops it: the row stays selected.
+  // Both rows are found first: the tree changes under a scan while the walk waits.
+  await selectRevealed(...procedures, 'dbo.usp_8')
+  const [clicked, chevron] = [await procedure('dbo.usp_8'), await procedure('dbo.usp_9')]
+  await setStub({ holdParameters: true })
+  await chevron.locator(part.explorerTwistie).click()
+  await expect.poll(heldParameters).not.toBeNull()
+  await clicked.locator(part.explorerRowText).first().click()
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, await heldParameters())
+  await expect.poll(async () => (await revealExplorerRow(page, ...procedures, 'dbo.usp_9', 'Parameters')).getAttribute('aria-expanded')).not.toBe('true')
+  expect((await active())?.label).toBe('dbo.usp_8')
+  await setStub({ holdParameters: false, procedures: 0 })
+  console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, by Right, Enter, Numpad +, chevron and double-click; switching query tabs or wheeling meanwhile keeps the tree where it was put, and clicking a row or turning the setting off stops it.')
+
+  // 13d. Dragging a server onto a query moves it there, through Change Connection: onto its tab (a card says what the drop
+  // will do), onto its editor (the overlay's plate), and with Ctrl over the editor the name goes in at the caret instead.
+  // Dropped on a tab strip's empty space, a server opens a new query on it.
+  // A fresh window and profile, so the step starts from six connected servers and their queries alone.
+  {
+    await application.close()
+    application = undefined
+    env.VARIA_TEST_USER_DATA = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
+    await launch()
+    await application.evaluate(installExplorerStub, explorerStubData())
+    for (const server of ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']) await connect(server)
+    const serverOf = () => queryServer(page).evaluate(select => select.selectedOptions[0]?.textContent ?? '')
+    // Synthetic drag events with a real DataTransfer, as step 7's fallback: with the Chromium sandbox on Windows, the
+    // platform's drag loop does not deliver Playwright's pointer moves as dragover.
+    const dragOnto = async (name, to, { ctrl = false, card } = {}) => {
+      const id = await (await explorerRow(page, name)).getAttribute('id')
+      await page.evaluate(({ id, to, ctrl }) => {
+        const row = document.getElementById(id), dataTransfer = new DataTransfer()
+        const at = { clientX: to.x, clientY: to.y, bubbles: true, cancelable: true, ctrlKey: ctrl, dataTransfer }
+        row.dispatchEvent(new DragEvent('dragstart', at))
+        const target = document.elementFromPoint(to.x, to.y)
+        for (const type of ['dragenter', 'dragover']) target.dispatchEvent(new DragEvent(type, at))
+        window.__variaServerDrag = { row, target, at }
+      }, { id, to, ctrl })
+      if (card) await expect(serverDropCard(page)).toContainText(card)
+      await page.evaluate(() => {
+        const { row, target, at } = window.__variaServerDrag
+        target.dispatchEvent(new DragEvent('drop', at))
+        row.dispatchEvent(new DragEvent('dragend', at))
+        delete window.__variaServerDrag
+      })
+      await expect(serverDropCard(page)).toHaveCount(0)
+    }
+    const centre = async locator => { const box = await locator.boundingBox(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 } }
+    // Only the last server's query stays open, so its tab and the strip's empty space are in view.
+    const query = await activeDocumentName(page)
+    await activeDocument(page).click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
+    await expect.poll(serverOf).toContain('pin-f')
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: `Move ${query} to pin-b` })
+    await expect.poll(serverOf).toContain('pin-b')
+    // The same server is refused: nothing changes, and the card says why.
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: 'already on pin-b' })
+    await expect.poll(serverOf).toContain('pin-b')
+    const editorPoint = await centre(page.locator(part.activeEditorGroup).locator(part.editorPane).first())
+    await dragOnto('pin-c', editorPoint, { card: `Move ${query} to pin-c` })
+    await expect.poll(serverOf).toContain('pin-c')
+    const before = await queryEditorText(page)
+    await dragOnto('pin-d', editorPoint, { ctrl: true, card: 'Insert the name' })
+    await expect.poll(() => queryEditorText(page)).toContain('pin-d')
+    expect(await serverOf()).toContain('pin-c')
+    expect(before).not.toContain('pin-d')
+    await page.keyboard.press('Control+Z')
+    const strip = await emptyQueryStripPoint(page.locator(part.activeEditorGroup))
+    expect(strip).not.toBeNull()
+    await dragOnto('pin-e', strip, { card: 'Open a new query on pin-e' })
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
+    await expect.poll(serverOf).toContain('pin-e')
+    console.log('Object Explorer checks: a server dropped on a query tab or its editor moves the query there, the same server is refused, Ctrl inserts the name, and the strip opens a new query.')
+  }
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

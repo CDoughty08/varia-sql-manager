@@ -1443,11 +1443,8 @@ describe('results service filters', () => {
     await settle()
     service.filterSelection('t1', keyAt(service, 't1', 0), 'notNull')
     expect(handle.sort.mock.lastCall?.[1]?.filters).toHaveLength(2)
-    // A selection across columns cannot filter by values, but names the columns for duplicates.
+    // A selection across columns names the columns for duplicates.
     select([{ top: 0, bottom: 3, left: 0, right: 1 }])
-    expect(service.canFilterSelection('t1', keyAt(service, 't1', 0), 'in')).toBe(false)
-    await settle()
-    expect(service.filterSelection('t1', keyAt(service, 't1', 0), 'in')).toBe(false)
     await settle()
     service.filterDuplicates('t1', keyAt(service, 't1', 0))
     expect(handle.sort.mock.lastCall?.[1]?.filters?.at(-1)).toEqual({ op: 'duplicates', columns: [0, 1] })
@@ -1456,6 +1453,68 @@ describe('results service filters', () => {
     await settle()
     service.filterDuplicates('t1', keyAt(service, 't1', 0))
     expect(service.sortOf('t1', keyAt(service, 't1', 0))?.filters.at(-1)?.label).toBe('Duplicates in Id')
+  })
+
+  it('filters a selection across columns by each column\'s selected cells, contiguous or not, and replaces only those columns\' filters', async () => {
+    const { service, handle, select } = filtered()
+    const key = keyAt(service, 't1', 0)
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    // Two blocks: rows 0-1 of both columns, and row 5 of column 1 only (a Ctrl+click), so each column has its own runs.
+    select([{ top: 0, bottom: 1, left: 0, right: 1 }, { top: 5, bottom: 5, left: 1, right: 1 }])
+    expect(service.canFilterSelection('t1', key, 'in')).toBe(true)
+    expect(service.canFilterSelection('t1', key, 'between')).toBe(true)
+    expect(service.filterSelection('t1', key, 'in')).toBe(true)
+    // One filter a column, in column order: a row must pass both (filters apply in order), each column's values its own.
+    expect(handle.sort).toHaveBeenLastCalledWith([], {
+      filters: [{ op: 'in', column: 0, cells: { ranges: [[0, 2]] } }, { op: 'in', column: 1, cells: { ranges: [[0, 2], [5, 1]] } }],
+      signal: expect.any(AbortSignal), onProgress: expect.any(Function)
+    })
+    expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['Id: filtering…', '(No column name): filtering…'])
+    await settle()
+    await settle()
+    // Again on column 1 alone: only its filter of that kind is replaced; column 0's stays and goes first.
+    select([{ top: 3, bottom: 3, left: 1, right: 1 }])
+    service.filterSelection('t1', key, 'in')
+    expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'in', column: 0, cells: { ranges: [[0, 2]] } }, { op: 'in', column: 1, cells: { ranges: [[3, 1]] } }])
+    await settle()
+    // Between needs two cells in every column it filters.
+    select([{ top: 0, bottom: 1, left: 0, right: 0 }, { top: 4, bottom: 4, left: 1, right: 1 }])
+    expect(service.canFilterSelection('t1', key, 'between')).toBe(false)
+    expect(service.canFilterSelection('t1', key, 'in')).toBe(true)
+  })
+
+  it('leaves a comparison\'s hidden tone column out of a selection filter across columns', async () => {
+    const columns = [{ name: 'id', dataType: 'int', wire: 'text' }, { name: 'name', dataType: 'nvarchar', wire: 'text' }, { name: 'tone', dataType: 'tinyint', wire: 'text', role: 'tone' }]
+    const { service, handle, select } = filtered(10, columns as ResultColumn[])
+    const key = keyAt(service, 't1', 0)
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    select([{ top: 0, bottom: 2, left: 0, right: 2 }])
+    expect(service.filterSelection('t1', key, 'in')).toBe(true)
+    expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'in', column: 0, cells: { ranges: [[0, 3]] } }, { op: 'in', column: 1, cells: { ranges: [[0, 3]] } }])
+    // The tone column alone filters nothing.
+    select([{ top: 0, bottom: 2, left: 2, right: 2 }])
+    expect(service.canFilterSelection('t1', key, 'in')).toBe(false)
+  })
+
+  it('refuses a selection across more columns than a grid takes filters, and says so when the filters would not fit', async () => {
+    const columns = Array.from({ length: 20 }, (_, index) => ({ name: 'c' + index, dataType: 'int', wire: 'text' as const }))
+    const { service, handle, select, tab, flush } = filtered(10, columns as ResultColumn[])
+    const key = keyAt(service, 't1', 0)
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    select([{ top: 0, bottom: 0, left: 0, right: 19 }])
+    expect(service.canFilterSelection('t1', key, 'in')).toBe(false)
+    // Fifteen filters already: three more columns would pass the sixteen a grid takes by two.
+    for (let column = 0; column < 15; column++) {
+      select([{ top: 0, bottom: 0, left: column, right: column }])
+      service.filterSelection('t1', key, 'notIn')
+      await settle()
+    }
+    select([{ top: 0, bottom: 0, left: 16, right: 18 }])
+    const calls = handle.sort.mock.calls.length
+    expect(service.filterSelection('t1', key, 'in')).toBe(false)
+    expect(handle.sort.mock.calls.length).toBe(calls)
+    flush()
+    expect(tab().jobNotice).toBe('Could not filter the results: a grid takes at most 16 filters. Remove some first.')
   })
 
   it('goes back to the last view and its filters when a filter fails, and builds a stale view again with its resolved filters', async () => {

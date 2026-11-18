@@ -61,6 +61,8 @@ describe('About dialog', () => {
     expect(view.api.checkForUpdates).not.toHaveBeenCalled()
     expect(view.runs['help.checkForUpdates']).not.toHaveBeenCalled()
     const dialog = view.host.querySelector<HTMLElement>('[role="dialog"]')!
+    // Focusable itself, so a click on its text keeps focus, and Escape, in the dialog.
+    expect(dialog.tabIndex).toBe(-1)
     act(() => { dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
     expect(view.closed).toHaveBeenCalledTimes(1)
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()

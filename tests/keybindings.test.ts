@@ -233,13 +233,13 @@ describe('default keybindings', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
-    const bookmarksAndSnippets = ['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith', 'edit.refreshIntelliSense', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.nextSqlIssue', 'edit.previousSqlIssue']
+    const bookmarksAndSnippets = ['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith', 'edit.refreshIntelliSense', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.toggleBrackets', 'edit.nextSqlIssue', 'edit.previousSqlIssue']
     const editing = ['edit.findNext', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     // macOS has ⌘G and F3 for Find Next, as Monaco does.
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
-    // Alt+Down in a grid opens the header funnel's popover for the active cell's column.
+    // Alt+Down in a grid opens the header funnel's popover for the active cell's column; Ctrl/⌘+Shift+L clears its filters.
     // Ctrl+Alt+Page Down and Up step through the results, with Shift through a result's views; in the output panes also
     // Ctrl+Page Down and Up (not on macOS, as for queries) and Ctrl/⌘+1 to 9. Ctrl/⌘+Shift+O opens Go to Result.
     const resultJumps = ['output.goToResult1', 'output.goToResult2', 'output.goToResult3', 'output.goToResult4', 'output.goToResult5', 'output.goToResult6', 'output.goToResult7', 'output.goToResult8', 'output.goToLastResult']
@@ -247,8 +247,8 @@ describe('default keybindings', () => {
     const macResultTabs = ['output.nextResult', 'output.previousResult', ...resultJumps, 'output.nextResultView', 'output.previousResultView', 'output.goToResult']
     // Ctrl/⌘+1 to 9 pick query tabs outside the output panes.
     const queryJumps = ['document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery']
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...resultTabs]
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.highlightRows', ...macResultTabs]
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...resultTabs]
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...macResultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
@@ -256,11 +256,11 @@ describe('default keybindings', () => {
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.estimatePlan', 'query.includeClientStatistics', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
-        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh',
+        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.focusSearch', 'explorer.moveServerUp', 'explorer.moveServerDown', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh',
         'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', ...queryJumps, 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, 'options.focusSearch', ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : [], ...search])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
-      'query.execute', 'query.execute', 'query.estimatePlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh', 'query.changeDatabase',
+      'query.execute', 'query.execute', 'query.estimatePlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.focusSearch', 'explorer.moveServerUp', 'explorer.moveServerDown', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh', 'query.changeDatabase',
       'document.next', 'document.previous', ...queryJumps, 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', 'options.focusSearch', ...display, ...macOutput, ...search])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])

@@ -850,6 +850,26 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(codes(port()).slice(-3)).toEqual([[11, 'RESULT_UNAVAILABLE'], [9, 'BACKEND_ERROR'], [10, 'BACKEND_ERROR']])
   })
+  it('forwards range, toggle and invert ticks, and refuses ones that mix modes or lack an order', async () => {
+    const { host, port, backend } = fixture()
+    host.own([descriptor(7)])
+    const tick = { t: 'distinctTick', generation: 1, resultId: 7, snapshotId: 3, checked: true }
+    port().send({ ...tick, rid: 1, order: 'count', ranges: [[0, 3], [9, 1]], search: 'ab', toggle: true, nulls: true })
+    port().send({ ...tick, rid: 2, invert: true, nulls: false })
+    port().send({ ...tick, rid: 3, ranges: [[0, 1]] })
+    port().send({ ...tick, rid: 4, order: 'value', toggle: true })
+    port().send({ ...tick, rid: 5, order: 'value', ranges: [[0, 0]] })
+    port().send({ ...tick, rid: 6, invert: true, all: true })
+    port().send({ ...tick, rid: 7, order: 'value', ranges: Array.from({ length: 513 }, (_, at) => [at * 2, 1]) })
+    port().send({ ...tick, rid: 8, order: 'value', ranges: [[0, 5], [3, 1]] })
+    port().send({ ...tick, rid: 9, order: 'value', ranges: [[4, 1], [0, 1]] })
+    await settle()
+    expect(vi.mocked(backend.distinctTick).mock.calls.map(call => call[1])).toEqual([
+      { resultId: 7, snapshotId: 3, checked: true, order: 'count', ranges: [[0, 3], [9, 1]], search: 'ab', toggle: true, nulls: true },
+      { resultId: 7, snapshotId: 3, checked: true, invert: true, nulls: false }
+    ])
+    expect(codes(port())).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST'], [1, 'ok'], [2, 'ok']])
+  })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()
     host.own([descriptor(7)])
