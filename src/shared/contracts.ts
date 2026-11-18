@@ -395,12 +395,11 @@ export interface ResultsDistinctReadParams { resultId: number; snapshotId: numbe
 export interface DistinctValue { group: number; row: number; text: string; count: number; checked: boolean }
 /** `total` values the search kept (every value without one); `values` the window from `offset`; the ticks as now. */
 export interface ResultsDistinctReadResult { total: number; offset: number; values: DistinctValue[]; checked: number; nullsChecked: boolean }
-/** results.distinctTick: ticks (`checked`) or clears 1 to `limits.distinct.maxWindow` `groups`, or every value (`all`), only
- *  those whose text contains `search` with one; `nulls` sets NULL's tick, alone or with either. Refused once a groups
- *  filter uses the snapshot. */
-/** One mode at most: `groups`; `all` (a `search`'s matches with one); `ranges` of `[offset, count]` in the list `order` reads
- *  (searched with a `search`), which `toggle` ticks when any of them (or NULL, when `nulls` is given) is cleared and else
- *  clears, ignoring `checked`; or `invert`, which flips every value. `nulls` sets NULL's tick. */
+/** results.distinctTick: ticks (`checked`) or clears values in one mode at most: 1 to `limits.distinct.maxWindow` `groups`;
+ *  every value (`all`), only those whose text contains `search` with one; 1 to `limits.distinct.maxWindow` sorted, disjoint
+ *  `ranges` of `[offset, count]` in the list `order` reads (searched with a `search`), which `toggle` ticks when any of them
+ *  (or NULL, when `nulls` is given) is cleared and else clears, ignoring `checked`; or `invert`, which flips every value.
+ *  `nulls` sets NULL's tick, alone or with a mode. Refused once a groups filter uses the snapshot. */
 export interface ResultsDistinctTickParams {
   resultId: number; snapshotId: number; checked: boolean; groups?: number[]; all?: true; search?: string; nulls?: boolean
   order?: 'count' | 'value'; /** Sorted and disjoint. */ ranges?: [offset: number, count: number][]; toggle?: true; invert?: true

@@ -67,7 +67,8 @@ describe('Sessions pane', () => {
     await full.tick({ checked: false, groups: [1] })
     expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: { values: ['app'] } })
     await full.tick({ checked: true, groups: [1] })
-    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: undefined })    // The popover's selection ticks ranges of the list in its order; Space's toggle ticks them all when any is unticked, else
+    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: undefined })
+    // The popover's selection ticks ranges of the list in its order; Space's toggle ticks them all when any is unticked, else
     // unticks them all, NULL alike when it is selected; Invert ticks flips every value.
     const ranged = facetList(0, facet, undefined)
     await ranged.tick({ checked: false, order: 'count', ranges: [[0, 1]] })
