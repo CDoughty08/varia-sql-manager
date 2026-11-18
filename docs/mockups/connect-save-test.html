@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Varia · Connect: Save and Test Connection mocks</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Mocks for the Connect dialog's Save semantics and Test Connection (owner review before any behaviour changes). Colours are
+  Varia's built-in Dark and Light palette slots (src/shared/theme/palette.ts), sizes the Compact metrics. Static,
+  self-contained, fictional data; no network. Not product code: the renderer still takes colours only from the theme.
+-->
+<style>
+:root { color-scheme: dark }
+body { margin: 0; padding: 16px; background: #0b0c0f; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 20px; color: #d9dce3 }
+body.light { background: #e9ebef; color: #1c1f26; color-scheme: light }
+body { --canvas:#16181d; --raised:#1c1f25; --overlay:#1d2026; --input:#101216; --accentSurface:#232842; --hover:#262a32; --active:#30343e; --sel:#21273b; --selStrong:#29314f; --text:#d9dce3; --strong:#f5f6f8; --text2:#bcc1cb; --text3:#a3a9b5; --muted:#9298a4; --textAccent:#bcc5ff; --border:#262a31; --borderStrong:#2e323a; --sep:#30343c; --inputBorder:#6a7184; --accent:#8f9cff; --onAccent:#0e1230; --error:#f39a9a; --warning:#e4bb6a; --success:#74d19c; --errorSurface:#3a1d22; --errorSurfaceText:#f6bcc1; --warningSurface:#33291a; --warningSurfaceText:#f0d49e; --icon:#a3a9b5; --scrim:#0008 }
+body.light { --canvas:#ffffff; --raised:#f1f3f6; --overlay:#ffffff; --input:#ffffff; --accentSurface:#dde1f9; --hover:#dfe2e7; --active:#d6dae0; --sel:#e7ebfc; --selStrong:#d9e0fb; --text:#1c1f26; --strong:#0a0c10; --text2:#3a404b; --text3:#4d5461; --muted:#5c6370; --textAccent:#3240b0; --border:#e3e6eb; --borderStrong:#d4d8df; --sep:#dcdfe5; --inputBorder:#878e9b; --accent:#4453d0; --onAccent:#ffffff; --error:#b42229; --warning:#875800; --success:#146f3b; --errorSurface:#fdecec; --errorSurfaceText:#8f1d24; --warningSurface:#fff5dc; --warningSurfaceText:#6b4400; --icon:#4d5461; --scrim:#1c1f2640 }
+* { box-sizing: border-box }
+button, input, select { font: inherit; color: inherit }
+.pick { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px }
+.pick label { font-size: 12px; color: var(--text3) }
+.pick select { background: var(--input); border: 1px solid var(--inputBorder); border-radius: 4px; height: 26px; padding: 0 6px }
+.notes { max-width: 980px; margin: 0 0 14px; font-size: 12px; line-height: 18px; color: var(--text3) }
+.notes b { color: var(--text) }
+.stage { position: relative; width: 760px; height: 560px; display: flex; align-items: center; justify-content: center; background: var(--canvas); border: 1px solid var(--border); border-radius: 8px }
+.dlg { position: relative; width: 720px; height: 520px; display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr auto; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 8px; box-shadow: 0 8px 28px #0007; font-size: 12px }
+.head { grid-column: 1 / 3; display: flex; justify-content: space-between; align-items: center; padding: 12px 16px 6px }
+.head h2 { margin: 0; font-size: 15px; font-weight: 600 }
+.x { color: var(--icon) }
+.src { grid-row: 2 / 4; border-right: 1px solid var(--sep); padding: 0 12px 12px 16px; display: flex; flex-direction: column; gap: 6px }
+.tabs { display: flex; gap: 12px; border-bottom: 1px solid var(--sep) }
+.tabs span { padding: 4px 0; color: var(--muted) }
+.tabs span.on { color: var(--strong); box-shadow: inset 0 -2px 0 var(--accent) }
+.filter { height: 24px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); color: var(--muted); padding: 0 8px; line-height: 22px }
+.grp { color: var(--text3); font-size: 11px; margin-top: 4px }
+.item { display: flex; gap: 8px; align-items: center; padding: 3px 6px; border-radius: 4px }
+.item.sel { background: var(--selStrong) }
+.sw { width: 4px; height: 26px; border-radius: 2px; background: var(--accent) }
+.item small { display: block; color: var(--muted); font-size: 11px; line-height: 14px }
+.form { padding: 4px 16px 8px; overflow: hidden }
+.row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; min-height: 28px }
+.row label { color: var(--text2) }
+.in { height: 24px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--input); padding: 0 8px; line-height: 22px; overflow: hidden; white-space: nowrap }
+.in.ph { color: var(--muted) }
+.in.dis { opacity: .55 }
+.chk { display: flex; gap: 6px; align-items: center }
+.box { width: 14px; height: 14px; border: 1px solid var(--inputBorder); border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px }
+.box.on { background: var(--accent); border-color: var(--accent); color: var(--onAccent) }
+.hint { grid-column: 2; color: var(--muted); font-size: 11px; line-height: 15px; margin: -2px 0 4px }
+.hint.new { color: var(--textAccent) }
+.actions { grid-column: 2; display: flex; flex-direction: column }
+.outcome { border-top: 1px solid var(--sep); padding: 6px 16px; font-size: 12px; line-height: 17px }
+.ok { color: var(--success) }
+.err { color: var(--errorSurfaceText); background: var(--errorSurface); border-radius: 4px; padding: 6px 8px }
+.warn { color: var(--warningSurfaceText); background: var(--warningSurface); border-radius: 4px; padding: 4px 8px; margin-top: 4px }
+.det { color: var(--muted); font-size: 11px }
+.foot { display: flex; gap: 6px; align-items: center; padding: 8px 16px; border-top: 1px solid var(--sep) }
+.foot .sp { flex: 1 }
+.b { height: 24px; min-width: 64px; padding: 0 10px; border: 1px solid var(--inputBorder); border-radius: 4px; background: var(--raised); display: inline-flex; align-items: center; justify-content: center; white-space: nowrap }
+.b.pri { background: var(--accent); border-color: var(--accent); color: var(--onAccent); font-weight: 600 }
+.b.dis { opacity: .45 }
+.b.new { box-shadow: 0 0 0 2px var(--accentSurface), 0 0 0 3px var(--accent) }
+.tip { position: absolute; z-index: 5; max-width: 300px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 4px; padding: 6px 8px; font-size: 11px; line-height: 15px; box-shadow: 0 4px 12px #0006 }
+.scrim { position: absolute; inset: 0; background: var(--scrim); border-radius: 8px; display: flex; align-items: center; justify-content: center }
+.sub { width: 420px; background: var(--overlay); border: 1px solid var(--borderStrong); border-radius: 8px; box-shadow: 0 8px 28px #0008 }
+.sub h3 { margin: 0; padding: 14px 16px 6px; font-size: 14px }
+.sub p { margin: 0; padding: 0 16px 12px; color: var(--text2) }
+.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; margin-right: 6px; vertical-align: -1px }
+.scene { display: none }
+.scene.on { display: block }
+</style>
+</head>
+<body>
+<div class="pick">
+  <label for="theme">Theme</label><select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select>
+  <label for="scene">Scene</label><select id="scene">
+    <option value="today">1 · Today: Save beside Connect (what is confusing)</option>
+    <option value="idle">2 · Proposed: Test Connection, Save tooltip</option>
+    <option value="typed">3 · Proposed: a new password typed</option>
+    <option value="testing">4 · Proposed: testing (Esc or Stop ends it)</option>
+    <option value="passed">5 · Proposed: test passed</option>
+    <option value="failed">6 · Proposed: test failed</option>
+    <option value="saved">7 · Proposed: saved with the new password</option>
+    <option value="close">8 · Proposed: closing a new, unsaved connection</option>
+    <option value="savedgroup">9 · Proposed: a saved, never-connected connection in History</option>
+  </select>
+</div>
+<div class="notes" id="note"></div>
+<div class="stage" id="stage"></div>
+
+<template id="t-dialog">
+<div class="dlg">
+  <div class="head"><h2>Connect</h2><span class="x">✕</span></div>
+  <div class="src">
+    <div class="tabs"><span class="on">History</span><span>Browse</span></div>
+    <div class="filter">Filter connections</div>
+    <div class="grp">▾ Favorites (1)</div>
+    <div class="item sel"><span class="sw"></span><span><b>Sales DEV</b><small>sql-dev-01 · Sales · reader</small></span></div>
+    <div class="grp">▾ Recent Connections (2)</div>
+    <div class="item"><span class="sw" style="background:#e66b73"></span><span><b>Sales PROD</b><small>sql-prod-01 · Sales · reader</small></span></div>
+    <div class="item"><span class="sw" style="background:var(--muted)"></span><span><b>localhost</b><small>&lt;default&gt; · DESKTOP\avery</small></span></div>
+  </div>
+  <div class="form">
+    <div class="tabs" style="margin-bottom:6px"><span class="on">Connection Properties</span><span>Connection String</span></div>
+    <div class="row"><label>Server Name</label><div class="in">sql-dev-01</div></div>
+    <div class="row"><label>Authentication</label><div class="in">SQL Server Authentication ▾</div></div>
+    <div class="row"><label>Login</label><div class="in">reader</div></div>
+    <div class="row"><label>Password</label><div class="in" data-slot="password">••••••••</div></div>
+    <div data-slot="pwhint"></div>
+    <div class="row"><span></span><span class="chk"><span class="box on">✓</span>Remember password</span></div>
+    <div class="row"><label>Database Name</label><div class="in">Sales</div></div>
+    <div class="row"><label>Encrypt</label><div class="in">Mandatory ▾</div></div>
+    <div class="row"><span></span><span class="chk"><span class="box"></span>Trust server certificate</span></div>
+    <div class="row"><label>Host Name in Certificate</label><div class="in"></div></div>
+    <div class="row"><span></span><span style="text-align:right"><span class="b">Advanced…</span></span></div>
+    <div class="grp">▾ Custom Properties · Sales DEV · <span style="color:var(--success)">DEV</span></div>
+  </div>
+  <div class="actions"><div data-slot="outcome"></div><div class="foot" data-slot="footer"></div></div>
+</div>
+</template>
+
+<script>
+const scenes = {
+  today: {
+    note: '<b>Today.</b> Save writes the settings and the Name, Color, Environment and Reconnect on startup to History, and relabels open Object Explorer connections at once. It ignores a typed password (only a successful Connect remembers one), never connects and never reconnects. Nothing on screen says so, so a new password plus Save looks like it changed the password. Worse, Save on a connection that has never connected keeps nothing: History drops entries that are not recent, favorite or registered, so it is gone at once.',
+    footer: '<span class="b">Reset</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>'
+  },
+  idle: {
+    note: '<b>Proposed.</b> Test Connection joins Reset on the left. Save keeps its place and gains a tooltip that says what it does: "Save settings and labels to History. Connects nothing." Connect is unchanged (it opens a session; for a lost connection with a new password it reads Update Credentials and Reconnect, as today).',
+    footer: '<span class="b">Reset</span><span class="b new">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>',
+    tip: { text: 'Save settings and labels to History. Connects nothing.', x: 520, y: 470 }
+  },
+  typed: {
+    note: '<b>Proposed, a new password typed.</b> A line under Password says what each button will do with it. With option C (recommended): Save checks the password with the server once, then remembers it, encrypted; open connections keep their sessions and use it the next time they reconnect.',
+    password: '•••••••••••• ', pwhint: 'Save checks this password with the server, then remembers it. Open connections keep their sessions until they reconnect.',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>'
+  },
+  testing: {
+    note: '<b>Testing.</b> The form locks as it does for Connect; Test Connection becomes Stop, and Escape stops the test (it does not close the dialog). The test signs in with the form as it is, including a typed or remembered password, with Load databases\' 30-second deadline.',
+    password: '•••••••••••• ', outcome: '<span class="spin"></span>Testing the connection to sql-dev-01…',
+    footer: '<span class="b dis">Reset</span><span class="b">Stop</span><span class="sp"></span><span class="b dis">Save</span><span class="b pri dis">Connect</span><span class="b dis">Cancel</span>'
+  },
+  passed: {
+    note: '<b>Test passed.</b> Shown at Connect, where failures already show; nothing is saved and no session or Object Explorer node is opened. The database list is filled in as Load databases would. When the typed database is not visible to the login, a warning says so.',
+    password: '•••••••••••• ', outcome: '<div class="ok">✓ Connected to sql-dev-01 as reader. 14 databases are visible.</div><div class="warn">Sales is not among the databases this login can see.</div>',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>'
+  },
+  failed: {
+    note: '<b>Test failed.</b> The same error, details, Copy details and fixes (Trust server certificate and connect) as a failed Connect, with "Testing" in place of "Connecting". A rejected remembered password is forgotten, as Connect and Load databases already do.',
+    password: '•••••••••••• ', outcome: '<div class="err">Login failed for user \'reader\'.<br><span class="det">Testing the connection to sql-dev-01 · Error 18456 · Severity 14 · State 8</span></div>',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>'
+  },
+  saved: {
+    note: '<b>Saved, option C.</b> Save checked the password, remembered it and says so; the field goes back to the saved-password dots. If the check fails, nothing is saved and the failure shows as in scene 6. Without Remember password, Save saves the settings and the note says the password was not kept.',
+    outcome: '<div class="ok">✓ Saved to History. The new password is remembered; open connections use it when they reconnect.</div>',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>'
+  },
+  savedgroup: {
+    note: '<b>Saved but never connected.</b> Save keeps the connection in a Saved group under Favorites, so it is there to connect to later; it moves to Recent Connections once it connects. Remove (✕) deletes it as for any row. Saved entries do not count toward the 30 recent connections.',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>',
+    saved: true
+  },
+  close: {
+    note: '<b>Closing with unsaved changes.</b> Needs Save to keep a never-connected connection (proposed: it is kept under a Saved group in History). Any change to the server, login, settings, Name, Color, Environment or Reconnect on startup asks before Cancel, Escape or ✕ close the dialog, for a new connection too. A typed password alone does not ask unless Save keeps passwords (options A or C).',
+    footer: '<span class="b">Reset</span><span class="b">Test Connection</span><span class="sp"></span><span class="b">Save</span><span class="b pri">Connect</span><span class="b">Cancel</span>',
+    sub: '<div class="sub"><h3>Save sql-dev-02 to History?</h3><p>This connection is not saved. Save it to History before closing?</p><div class="foot"><span class="sp"></span><span class="b pri">Save</span><span class="b">Don\'t Save</span><span class="b">Cancel</span></div></div>'
+  }
+}
+function render() {
+  document.body.classList.toggle('light', document.getElementById('theme').value === 'light')
+  const s = scenes[document.getElementById('scene').value]
+  const stage = document.getElementById('stage')
+  stage.replaceChildren(document.getElementById('t-dialog').content.cloneNode(true))
+  const slot = name => stage.querySelector(`[data-slot="${name}"]`)
+  if (s.password) slot('password').textContent = s.password
+  if (s.pwhint) slot('pwhint').outerHTML = `<div class="row"><span></span><div class="hint new">${s.pwhint}</div></div>`
+  slot('outcome').outerHTML = s.outcome ? `<div class="outcome">${s.outcome}</div>` : ''
+  slot('footer').innerHTML = s.footer
+  if (s.saved) stage.querySelectorAll('.grp')[1]?.insertAdjacentHTML('beforebegin', '<div class="grp">▾ Saved (1)</div><div class="item"><span class="sw" style="background:var(--warning)"></span><span><b>sql-dev-02</b><small>&lt;default&gt; · reader · never connected</small></span></div>')
+  if (s.tip) { const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = s.tip.text; tip.style.left = s.tip.x + 'px'; tip.style.top = s.tip.y + 'px'; stage.append(tip) }
+  if (s.sub) { const scrim = document.createElement('div'); scrim.className = 'scrim'; scrim.innerHTML = s.sub; stage.querySelector('.dlg').append(scrim) }
+  document.getElementById('note').innerHTML = s.note
+}
+document.getElementById('theme').onchange = render
+document.getElementById('scene').onchange = render
+render()
+</script>
+</body>
+</html>
