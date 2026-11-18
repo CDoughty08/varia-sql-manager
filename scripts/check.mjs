@@ -26,12 +26,21 @@ import { acquire, lockEnabled, sharedSlots } from './machine-lock.mjs'
 // VARIA_TEST_SQL_SERVER is set. A new file that spawns the Release backend belongs here.
 export const needsBackend = readdirSync('tests').filter(name => name === 'backend-sidecar.test.ts' || name.endsWith('-live.test.ts')).map(name => `tests/${name}`)
 
+/** The Release build's compiler switch: in-process on CI, where the compiler server would outrank vitest (steps). */
+export function sharedCompilation(env = process.env) {
+  return env.CI ? ' -p:UseSharedCompilation=false' : ''
+}
+
 export const steps = {
   'Type check': 'npx tsc --noEmit',
   // Then main and preload must load nothing but Electron and Node's own modules (scripts/packaged-contents.mjs).
   'electron-vite build': 'npx electron-vite build && node scripts/packaged-contents.mjs',
   vitest: `npx vitest run ${needsBackend.map(file => `--exclude ${file}`).join(' ')}`,
-  'Release build (.NET)': 'dotnet build backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --nologo -v q',
+  // On CI the compiler runs in the build's own processes (UseSharedCompilation=false). GitHub's Windows runner starts a
+  // job's processes below normal priority, but the shared compiler server (VBCSCompiler) starts at normal priority, so it
+  // took all four vCPUs for the build's first 30 to 60 s and gave vitest's workers no CPU for 4 to 11 s at a time: tests of
+  // under 100 ms locally ran past the 20 s timeout. Off CI the server keeps rebuilds fast and shares priority with vitest.
+  'Release build (.NET)': `dotnet build backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --nologo -v q${sharedCompilation()}`,
   'Offline .NET checks': 'dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release',
   'vitest (Release backend)': `npx vitest run ${needsBackend.join(' ')}`,
   'Release backend': 'dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Release --nologo -v q'
