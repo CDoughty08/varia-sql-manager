@@ -65,6 +65,18 @@ export async function rememberCheckedPassword(store: Pick<SavedPasswordStore, 's
   const release = await acquire(store, `binding:${credentialBinding(options)}`)
   try { return await store.set(profileId, options) } finally { release() }
 }
+/**
+ * Save's Forget: the entry's remembered password and every one for its credentials, under the per-binding gate. Resolves
+ * false when secret storage is unavailable, so nothing could be forgotten.
+ */
+export async function forgetSavedPassword(store: Pick<SavedPasswordStore, 'forget' | 'forgetCredentials' | 'storageAvailable'>, profileId: string, options: ConnectionOptions): Promise<boolean> {
+  const release = await acquire(store, `binding:${credentialBinding(options)}`)
+  try {
+    if (!await store.storageAvailable()) return false
+    await store.forget(profileId); await store.forgetCredentials(options)
+    return true
+  } finally { release() }
+}
 /** Whether `options.password` is the one a check just verified for these credentials; a match is used up. */
 export function takeVerifiedPassword(store: object, options: ConnectionOptions): boolean {
   const entries = verified.get(store), binding = credentialBinding(options), entry = entries?.get(binding)

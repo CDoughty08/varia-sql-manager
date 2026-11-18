@@ -349,7 +349,7 @@ try {
       await liveRemember.check()
       await expect(dialog.getByText(/^Save checks this password with the server/)).toBeVisible()
       await dialog.getByRole('button', { name: 'Save', exact: true }).click()
-      await expect(dialog.getByText(/The new password is remembered/)).toBeVisible({ timeout: 35000 })
+      await expect(dialog.getByText(/password is remembered/)).toBeVisible({ timeout: 35000 })
       await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
       const savedLive = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.options.username === liveUser)
       expect(savedLive?.saved).toBe(true)

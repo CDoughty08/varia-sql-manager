@@ -1,12 +1,12 @@
 import { z } from 'zod'
 import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionSaveView, type SecretStorageState } from '../shared/connections'
-import { rememberCheckedPassword, takeVerifiedPassword } from './connection-requests'
+import { forgetSavedPassword, rememberCheckedPassword, takeVerifiedPassword } from './connection-requests'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 
 export interface ConnectionLibraryDeps {
   connections: Pick<ConnectionStore, 'load' | 'save' | 'saveEntry' | 'remove' | 'setEnvironment'>
-  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'forgetCredentials' | 'state' | 'set'>
+  savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'forgetCredentials' | 'state' | 'set' | 'storageAvailable'>
 }
 
 /**
@@ -36,8 +36,9 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
       if (input.forgetPassword) {
         const { forgetPassword: _forget, ...entry } = input
         const saved = await deps.connections.saveEntry(entry)
-        let passwordForgotten = true
-        try { await deps.savedPasswords.forget(saved.id); await deps.savedPasswords.forgetCredentials(input.options) } catch { passwordForgotten = false }
+        // Unavailable storage forgets nothing, so it is reported rather than claimed, as Connect's Forget does.
+        let passwordForgotten = false
+        try { passwordForgotten = await forgetSavedPassword(deps.savedPasswords, saved.id, input.options) } catch { passwordForgotten = false }
         const { library, savedPasswords } = await view(saved.library)
         return { library, savedPasswords, passwordForgotten }
       }
