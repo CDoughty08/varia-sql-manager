@@ -35,7 +35,10 @@ function detailsFrom(from: ConnectionOptions, autoReconnect: ConnectionDetails['
   return detailsOf({ ...from, environment: environment.ok ? environment.environment : from.environment }, autoReconnect)
 }
 const historyNotSaved = 'Connected, but the changed name, color or environment could not be saved to History.'
-const shape = (from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) => JSON.stringify([entryKey(from) ?? null, labels(from, autoReconnect)])
+// The settings' key without the labels, which it never includes: a label the schema refuses (a blank Custom environment)
+// must not hide the server and login from the comparison.
+const settingsKey = (from: ConnectionOptions) => entryKey({ ...from, displayName: undefined, color: undefined, environment: undefined })
+const shape = (from: ConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) => JSON.stringify([settingsKey(from) ?? null, labels(from, autoReconnect)])
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
 // Profiles store the preset's value, which the theme maps to its own color for that preset.
@@ -554,7 +557,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     }
     // Settings another saved entry already has are not new; Save must be available (library loaded, a server, authentication ready); a label Save then refuses keeps the prompt open with its error.
     // Aliases (several entries with these settings and none named by the labels) are saved too: Save would overwrite one.
-    const key = entryKey(options)
+    const key = settingsKey(options)
     if (!touched.current || form === pristine.current || library.profiles.some(profile => entryKeys.get(profile.id) === key) || !loaded || !options.server.trim() || !authReady) return undefined
     return {}
   }

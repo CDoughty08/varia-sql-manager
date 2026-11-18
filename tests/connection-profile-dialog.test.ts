@@ -791,6 +791,15 @@ describe('closing with a new, unsaved connection', () => {
     expect(prompt()?.textContent).toContain('Save cert-server to History?')
   })
 
+  it('asks for a new connection whose Custom environment label is still blank', async () => {
+    // Opened blank, as on Linux and macOS, where the default server is empty.
+    const view = await mount(undefined, { profiles: [], initial: { ...connectionDefaults('win32'), server: '' } })
+    await type(view, '#connect-server', 'label-server')
+    await pick(view, '#connect-environment', 'custom')
+    await act(async () => view.button('Cancel').click())
+    expect(prompt()?.textContent).toContain('Save label-server to History?')
+  })
+
   it('does not ask for a typed password alone, a form typed back to how it opened, or settings a saved entry has', async () => {
     const initial = { ...connectionDefaults('win32'), server: 'fresh', authentication: 'sql' as const, username: 'reader' }
     let view = await mount(undefined, { initial })
