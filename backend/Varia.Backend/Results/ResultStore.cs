@@ -576,14 +576,6 @@ internal sealed partial class ResultStore
 
     public int ViewCount { get { lock (gate) return views.Count; } }
 
-    /// <summary>Whether a view of the set is open (a sorted or filtered grid): stage 2 does not pack a shown result while it
-    /// has one, since each screen of a view reads hundreds of its pages (<see cref="ResultPacker"/>). Opening one never
-    /// unpacks a result already packed.</summary>
-    public bool HasViews(ResultSetBuffer set)
-    {
-        lock (gate) return views.Values.Any(view => view.Set == set);
-    }
-
     /// <summary>Closes views of <paramref name="resultId"/> (others' ids, unknown and repeated ones are skipped); returns how
     /// many were closed.</summary>
     public int CloseViews(uint resultId, IEnumerable<uint> viewIds)
@@ -595,8 +587,6 @@ internal sealed partial class ResultStore
                 if (views.TryGetValue(id, out var view) && view.Set.ResultId == resultId && views.Remove(id)) closed.Add(view);
         }
         foreach (var view in closed) Return(view.Set.Budget, view.Charged);
-        // A shown result whose last view closed may be packed now (stage 2).
-        if (closed.Count > 0) Settle();
         return closed.Count;
     }
 

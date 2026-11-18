@@ -16,25 +16,23 @@ const reservations: Record<string, RegExp> = {
   spare: /\bstore\.TryReserveSpare\(/g,
   steps: /\bnew WorkSteps\(store, /g,
   // A WorkSteps built and not handed on reserves nothing: its TryReserve is what the operation is given.
-  handed: /\b\w+\.TryReserve\b(?!\()/g,
-  unpack: /\bawait Unpack\(/g
+  handed: /\b\w+\.TryReserve\b(?!\()/g
 }
 
-/** Each method's reservations, by kind. `unpack` is SqlService.Unpack, which reserves what unpacking packed pages takes: only
- * a search through a view far from its pages' order still unpacks first. A view, a profile, a pivot, a distinct list, row
- * identities, a diff and any other search read a packed result fused instead: their rooms and extracts are reserved where
- * they are read (ViewSorter.PageSource, PageRooms, RowAccess.Hold), and FusedReadChecks' refusal checks pin them. */
+/** Each method's reservations, by kind. A view, a profile, a pivot, a distinct list, row identities, a diff and a search
+ * (through any view, ResultSearcher.ByPages) read a packed result fused: their rooms and extracts are reserved where they
+ * are read (ViewSorter.PageSource, PageRooms, RowAccess.Hold), and FusedReadChecks' refusal checks pin them. */
 const expected: Record<string, Partial<Record<keyof typeof reservations, number>>> = {
   // A view's keys and filter (work), its collated keys (spare, through KeyMemory).
   ViewAsync: { work: 1, spare: 1 },
   // A search holds a run of matches and a row's layouts and reserves nothing for them (its comment says why); through a
-  // view far from its pages' order it unpacks a packed result first.
-  SearchAsync: { unpack: 1 },
+  // view far from a packed result's pages it reserves the view's inverse where it reads (ResultSearcher.ByPages, whose
+  // refusal FusedReadChecks pins) and never unpacks.
+  SearchAsync: {},
   // Every thread's figures while there is room to spare, one thread's otherwise, and long values as they come.
   ProfileAsync: { work: 1, spare: 1, steps: 1, handed: 1 },
   DistinctAsync: { work: 1, spare: 1 },
   IdentifyAsync: { work: 1 },
-  Unpack: { work: 1 },
   // The alignment (work) and the differing cells (steps).
   DiffAsync: { work: 1, steps: 1, handed: 1 },
   // The groups (work), the figures (steps) and the collated keys (spare).
