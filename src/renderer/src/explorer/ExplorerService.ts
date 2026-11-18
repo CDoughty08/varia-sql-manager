@@ -366,7 +366,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.advanceOpen()
   }
   /** Toggles as the user's own click does: an expand is `open`. */
-  toggleOpen(id: number, chain = false): void { if (this.nodes.get(id)?.expanded) this.collapse(id); else this.open(id, chain) }
+  toggleOpen(id: number, chain = false): void { if (this.nodes.get(id)?.expanded) this.close(id); else this.open(id, chain) }
+  /** The user's collapse (a chevron, Enter, Left or Numpad -): it ends the user's expand wherever that was walking. */
+  close(id: number): void { this.opened = undefined; this.collapse(id) }
   /**
    * The node whose children the tree keeps in view after the user's expand, while its first page is still to come or an
    * auto-expand still walks (`settled` false). Undefined once the user does anything else.

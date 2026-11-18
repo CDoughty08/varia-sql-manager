@@ -315,7 +315,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
         return
       }
       case 'expand': explorer.open(action.id, autoExpand); return
-      case 'collapse': explorer.collapse(action.id); return
+      case 'collapse': explorer.close(action.id); return
       case 'toggle': explorer.toggleOpen(action.id, autoExpand); return
       case 'expandSiblings': explorer.expandSiblings(action.id); return
       case 'retry': explorer.retry(action.id); return

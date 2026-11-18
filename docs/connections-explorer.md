@@ -28,14 +28,14 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   Collapsing a node, Collapse All or Stop while a restore is still loading ends it.
 - Expanding a node yourself (a click on its chevron, a double-click, Right, Enter or Numpad +) scrolls down to show as
   many of its children as fit, as they arrive, without scrolling the node itself out of view. Scrolling or clicking in
-  the tree, clicking or selecting a row, or switching to another document tab stops it.
+  the tree, clicking, selecting or collapsing a row, or switching to another query tab (or away from one) stops it.
 - With **Auto-expand single children** (Tools › Options › Environment › Object Explorer, on by default), an expanded
   node whose only child can expand keeps expanding, level by level as each loads, down to the first node with more than
   one child (or none, or a single leaf, or a listing that failed), which is then selected, so Down goes to its first
-  child; if you scrolled or switched to another document tab meanwhile, it is selected without scrolling back to it. It never opens a
-  System folder: Views in a database without views stops at Views. Clicking or selecting a row,
-  collapsing a level it went through, Stop, Refresh or turning the setting off while a level loads stops it. Restoring a server's expansion, `*` and Refresh
-  never auto-expand.
+  child; if you scrolled or switched query tabs meanwhile, it is selected without scrolling back to it. It never opens a
+  System folder: Views in a database without views stops at Views. Clicking, selecting or collapsing a row, Stop,
+  Refresh or turning the setting off while a level loads stops it. Restoring a server's expansion, `*` and Refresh never
+  auto-expand.
 
 ## Sessions and authentication
 

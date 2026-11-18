@@ -349,6 +349,20 @@ describe('ExplorerService: expanding as the user', () => {
     expect(f.explorer.getSnapshot().selected).toBe(selected)
     expect(f.explorer.opening).toBeUndefined()
   })
+  it('stops when the user collapses another node, as a chevron click does without selecting it', async () => {
+    const f = fixture()
+    const database = await appData(f)
+    const views = f.find('Views', database), tables = f.find('Tables', database), selected = f.explorer.getSnapshot().selected
+    f.explorer.expand(tables)
+    await settleAll()
+    await waiting(f, views)
+    f.explorer.toggleOpen(tables, true)
+    expect(f.explorer.node(tables)!.expanded).toBe(false)
+    f.unhold(); f.release()
+    await settleAll()
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+    expect(f.explorer.opening).toBeUndefined()
+  })
   it('ends at, and selects, a level that comes back empty', async () => {
     const f = fixture()
     f.state.viewColumnsEmpty = true
