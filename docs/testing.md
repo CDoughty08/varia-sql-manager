@@ -160,7 +160,8 @@ npm run test:smoke:wsl -- --all
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
     prompts stay; docs/hot-exit.md), `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (the fixture's default unless a launch passes
     `motion: true`: the renderer reduces motion whenever the emulated `prefers-reduced-motion` asks, without the
-    Reduce motion when the system asks setting), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
+    Reduce motion when the system asks setting), `VARIA_TEST_WINDOW_STATE=1` (the main window keeps its place between
+    launches, and main sets `globalThis.__variaWindowPlacement`; docs/popout-windows.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
     cipher);
   - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
     holdNextRenderer and releaseHolders);
