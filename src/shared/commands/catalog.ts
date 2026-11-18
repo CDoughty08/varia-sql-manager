@@ -390,10 +390,11 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' }]
   },
   // Focuses Object Explorer's search box, which searches the selected server's object index as Search Objects does, and
-  // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks.
+  // selects its text, so typing replaces it and End keeps it. Ctrl+Shift+F is SSMS's Find in Files, which Varia lacks;
+  // Ctrl+F is the editor's Find everywhere but in the explorer pane, where it is this.
   'explorer.focusSearch': {
     title: 'Search in Object Explorer', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick', 'objects'], precondition: 'hasConnection', unavailableHint: noServer,
-    keybindings: [{ key: 'mod+shift+f' }]
+    keybindings: [{ key: 'mod+shift+f' }, { key: 'mod+f', when: "activePanel == 'explorer' && !inputFocus" }]
   },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',

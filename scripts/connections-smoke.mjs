@@ -65,8 +65,8 @@ const layout = dialog => dialog.evaluate((form, part) => {
   }
 }, part)
 /** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer.
- *  Reset and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
-const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(2).map(button => {
+ *  Reset, Test Connection and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
+const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(3).map(button => {
   const box = button.getBoundingClientRect()
   return [box.top, box.bottom, box.right].map(Math.round)
 }))
@@ -101,8 +101,111 @@ async function size(width, height) { await app.evaluate(({ BrowserWindow }, dime
 try {
   await launch()
   let dialog = await open()
+  // Focus stays in the dialog, where Escape reaches it: after a press on its text, and after Save, a star, Add favorite
+  // and Remove, which disable or remove the button pressed.
+  await dialog.getByRole('heading', { name: 'Connect', exact: true }).click()
+  await expect(dialog).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  dialog = await open()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('focus-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  // A new connection the user filled in is not closed without asking either; Cancel there keeps editing.
+  await page.keyboard.press('Escape')
+  let unsaved = page.getByRole('dialog', { name: 'Save focus-server to History?', exact: true })
+  await expect(unsaved).toBeVisible()
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unsaved).toHaveCount(0)
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('focus-server')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused()
+  // Save keeps a connection that never connected, in History's Saved group, and says what it saved.
+  await expect(dialog.getByText('Saved to History.', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
+  await expect(savedConnections(dialog, 'focus-server')).toHaveCount(1)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === 'focus-server')?.saved).toBe(true)
+  await dialog.getByRole('button', { name: 'Add favorite', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: true })).toBeFocused()
+  // A favorite is listed under Favorites only.
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Remove saved focus-server', exact: true }).click()
+  await expect(savedConnections(dialog, 'focus-server')).toHaveCount(0)
+  await expect(dialog).toBeFocused()
+  // Save in the prompt saves the new connection to History, then closes.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('prompt-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save prompt-server to History?', exact: true })
+  await unsaved.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'prompt-server')).toBe(true)
+  dialog = await open()
+  // It waits in History's Saved group; removing it leaves History as the rest of the suite expects.
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Remove saved prompt-server', exact: true }).click()
+  await expect(savedConnections(dialog, 'prompt-server')).toHaveCount(0)
+  // Once saved, a typed password alone does not ask about the saved entry: closing loses nothing it keeps.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog.getByText('Saved to History.', { exact: true })).toBeVisible()
+  await dialog.getByLabel('Password', { exact: true }).fill('typed-only')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
+  dialog = await open()
+  // Settings a saved entry already has are not new: closing does not ask.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  dialog = await open()
+  // A Name typed for that entry is an edit of it: closing asks about the entry.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('password-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await customProperties(dialog)
+  await dialog.getByLabel('Name', { exact: true }).fill('Typed after')
+  await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save changes to password-server?', exact: true })
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unsaved).toHaveCount(0)
+  // Removing that entry is a choice about it: closing then does not offer to save it back.
+  await dialog.getByRole('button', { name: 'Remove saved password-server', exact: true }).click()
+  await expect(savedConnections(dialog, 'password-server')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
+  dialog = await open()
+  // A Save in the prompt that fails (here a blank Custom environment label) keeps the dialog open with the reason.
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('label-server')
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await customProperties(dialog)
+  await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
+  await page.keyboard.press('Escape')
+  unsaved = page.getByRole('dialog', { name: 'Save label-server to History?', exact: true })
+  await unsaved.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Enter an environment label.')
+  await expect(dialog).toBeVisible()
+  await page.keyboard.press('Escape')
+  await unsaved.getByRole('button', { name: "Don't Save", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'label-server')).toBe(false)
+  dialog = await open()
+  // Custom Properties stays open for later dialogs: close it again, as the rest of the suite starts.
+  await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'false')
   await expect(dialog.getByText('recent-server', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Favorite recent-server', exact: true }).click()
+  // The row pressed was Recent Connections'; Favorites now lists it first.
+  await expect(dialog.getByRole('button', { name: 'Unfavorite recent-server', exact: true }).last()).toBeFocused()
   await expect(dialog.locator('details').first().getByText('recent-server', { exact: true })).toBeVisible()
   await dialog.getByLabel('Filter connections').fill('not-a-match')
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
@@ -311,6 +414,29 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })
+    // Test Connection signs in with the form as it is, against the real server, and opens nothing.
+    await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+    await expect(dialog.getByText('Connected to ' + process.env.VARIA_TEST_SQL_SERVER + (liveUser ? ' as ' + liveUser : ''), { exact: false })).toBeVisible({ timeout: 35000 })
+    const liveRemember = dialog.getByLabel('Remember password', { exact: true })
+    if (liveUser && await liveRemember.isEnabled()) {
+      // Save checks a typed password with the server, then remembers it only as ciphertext; the field shows it is saved.
+      await liveRemember.check()
+      await expect(dialog.getByText(/^Save checks this password with the server/)).toBeVisible()
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(dialog.getByText(/password is remembered/)).toBeVisible({ timeout: 35000 })
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      const savedLive = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.options.username === liveUser)
+      expect(savedLive?.saved).toBe(true)
+      expect(await readFile(join(profile, 'saved-passwords.json'), 'utf8')).not.toContain(process.env.VARIA_TEST_SQL_PASSWORD)
+      // The rest of the suite connects with a typed password and nothing remembered: unchecking forgets it on Connect.
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+      await liveRemember.uncheck()
+    } else if (liveUser) {
+      // No keyring (as on CI's Linux): Save keeps the settings and says the password was not kept.
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(dialog.getByText('Saved to History. The password was not kept.', { exact: true })).toBeVisible()
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_PASSWORD)
+    }
     // Development servers have self-signed certificates: without Trust server certificate the connect fails with the fix,
     // and the fix connects. A server whose certificate this computer trusts connects at once.
     await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
@@ -473,6 +599,70 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: The backend operation failed/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
+  // Test Connection signs in as Load databases does, saves nothing, opens no session, and reports at Connect.
+  const connects = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect').length)
+  const connectsBefore = await connects(), databaseBefore = await dialog.getByLabel('Database Name', { exact: true }).inputValue()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('test-server')
+  await dialog.getByLabel('Database Name', { exact: true }).fill('Sales')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to test-server\b.*2 databases are visible\.$/)).toBeVisible()
+  await expect(dialog.getByText('Sales is not among the databases this login can see.', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
+  expect(await connects()).toBe(connectsBefore)
+  expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'test-server')).toBe(false)
+  // Connect drops the report: it is not about this attempt, which here fails.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to server-down\b/)).toBeVisible()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Server unavailable.')
+  await expect(dialog.getByText(/^Connected to server-down\b/)).toHaveCount(0)
+  // A changed form drops the report; a failed test shows Connect's error with its details.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('test-server')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to test-server/)).toBeVisible()
+  await dialog.getByLabel('Database Name', { exact: true }).fill('Other')
+  await expect(dialog.getByText(/^Connected to test-server/)).toHaveCount(0)
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-error')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Login failed.')
+  await expect(connectErrorDetails(dialog)).toHaveCount(1)
+  // A test that waits (here, for a sign-in) locks the form; Test Connection becomes Stop, and Escape stops the test
+  // without closing the dialog.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText('Testing the connection to entra-wait…', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('Test cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
+  // Cancel stops a running test too, as Stop does while connecting; it neither closes the dialog nor asks to save.
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeEnabled()
+  await expect(dialog).toBeVisible()
+  await expect(page.getByRole('dialog', { name: /^Save / })).toHaveCount(0)
+  // Stopping Save's password check saves nothing and says so. Only where a keyring lets Save remember passwords.
+  const authBefore = await dialog.getByLabel('Authentication', { exact: true }).inputValue()
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+  await dialog.getByLabel('Login', { exact: true }).fill('reader')
+  await dialog.getByLabel('Password', { exact: true }).fill('typed-for-save')
+  const rememberBox = dialog.getByLabel('Remember password', { exact: true })
+  if (await rememberBox.isEnabled()) {
+    await rememberBox.check()
+    await expect(dialog.getByText('Save checks this password with the server, then remembers it.', { exact: true })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(dialog.getByText('Checking the password with entra-wait…', { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog.getByText('Save cancelled. Nothing was saved.', { exact: true })).toBeVisible()
+    expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'entra-wait')).toBe(false)
+    await rememberBox.uncheck()
+  }
+  await dialog.getByLabel('Authentication', { exact: true }).selectOption(authBefore)
+  await dialog.getByLabel('Database Name', { exact: true }).fill(databaseBefore)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   // A failure shows above the footer: Connect and Cancel stay where they were before it.
   await expect(connectOutcome(dialog)).toHaveCount(0)
@@ -828,7 +1018,11 @@ async function rememberPassword() {
   await expect(dialog.getByRole('alert')).toHaveCount(0)
   expect(await connects()).toBe(attempted)
   await rm(join(control, 'untrusted-certificate'))
+  // Trusting the certificate changed the entry's settings, so closing asks whether to keep that change.
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  const keepTrust = page.getByRole('dialog', { name: /^Save changes to / })
+  await expect(keepTrust).toBeVisible()
+  await keepTrust.getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // (7) Rejected after a password change: forgotten, and the dialog says so.
   // The certificate failure left it offline, so this attempt must authenticate rather than reuse a live transport.
@@ -899,6 +1093,8 @@ async function rememberPassword() {
   await dialog.getByLabel('Database Name', { exact: true }).focus()
   await expect(loading).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  // The connection was never saved: closing asks first, and Don't Save closes.
+  await page.getByRole('dialog', { name: 'Save entra-wait to History?', exact: true }).getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
   await app.close(); app = undefined

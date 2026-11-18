@@ -398,7 +398,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `chip.activeBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | A filter chip while on. |
 | `chip.activeForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Label and check mark of a filter chip while on. |
 | `chip.activeBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on. |
-| `live.indicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. |
+| `live.indicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot of a live view that is collecting; it pulses unless reduced motion is on (Reduce motion when the system asks, while the system asks). |
 | `live.pausedForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Text and glyph of a live view that is not collecting: starting, paused, stopped or ended. |
 | `live.staleForeground` | Varia | `$warningSurfaceText` | `#f0d49e` | `#6b4400` | Text and glyph of live data that is out of date, as in "Stale since 22:44:03". |
 | `live.staleBackground` | Varia | `$warning/14` | `#e4bb6a24` | `#87580024` | Badge behind out-of-date live data. |

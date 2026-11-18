@@ -18,7 +18,8 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
 
 ## Server order and expansion
 
-- Drag a server row onto another to move it above or below that server, or use **Move Up** and **Move Down**
+- Drag a server row onto another to move it above or below that server (onto an expanded server, above it; onto the
+  lower half of the tree's last row or below it, to move it last), or use **Move Up** and **Move Down**
   (Alt+Up and Alt+Down, also on the server's context menu). Varia announces the new position. The order is the
   connection workspace's, so it survives restarts and reloads.
 - The workspace also keeps which nodes each server had expanded, as connection-free keys (at most 128 per server, 1,024
@@ -26,6 +27,17 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
   just those, or nothing if it showed none. A server with no saved expansion (first connected this run, or never shown
   connected before) expands to its folders. After updating from a version without this, servers start collapsed.
   Collapsing a node, Collapse All or Stop while a restore is still loading ends it.
+- Expanding a node yourself (a click on its chevron, a double-click, Right, Enter or Numpad +) scrolls down to show as
+  many of its children as fit, as they arrive, without scrolling the node itself out of view. Scrolling or clicking in
+  the tree, clicking, selecting or collapsing a row, or switching to another query tab (or away from one) stops it.
+- With **Auto-expand single children** (Tools › Options › Environment › Object Explorer, on by default), an expanded
+  node whose only child can expand keeps expanding, level by level as each loads, down to the first node with more than
+  one child (or none, or a single leaf, or a listing that failed), which is then selected, so Down goes to its first
+  child; if you scrolled or switched query tabs meanwhile, it is selected without scrolling back to it. It never opens a
+  System folder: Views in a database without views stops at Views. Clicking, selecting or collapsing a row, Collapse
+  All, Stop, Refresh or turning the setting off while a level loads stops it; scrolling, or clicking elsewhere in the
+  tree, only keeps it from scrolling there. Restoring a server's expansion, `*` and Refresh never
+  auto-expand.
 
 ## Sessions and authentication
 
@@ -45,8 +57,31 @@ profiles.
 **Save**, in Connect's footer, saves the form to History without connecting and applies its name, color, environment and
 startup reconnect preference at once to every Explorer connection with the same server, database, login and settings
 (Explorer, query tabs and both status bars), changing only the labels the save changed. When History aliases share those settings, only connections still showing
-the saved entry's previous labels follow it. Add favorite and Register server save the same way. Cancel, Escape or the
+the saved entry's previous labels follow it. Add favorite and Register server save the same way. Save opens no session
+and never reconnects. A connection saved before it ever connected stays in History's **Saved** group (a favorite is
+listed under Favorites only) and moves to Recent Connections once it connects; Saved entries do not count toward the 30
+recent ones. A password typed into the form is kept only when Remember password is checked: Save first signs in with it
+(as Load databases does, so a wrong password saves nothing and shows the failure at Connect), then remembers it, and the
+field goes back to the saved-password dots. Object Explorer connections that used the old password keep their sessions
+but need the new one entered when they next connect, as after Connect with a new password. Unchecking Remember password
+and saving forgets the saved password, as Connect does. A remembered password belongs to its login settings: saving
+others (authentication, login, Encrypt, Trust server certificate, Host name in certificate, or the Advanced server
+certificate, failover partner or network protocol) forgets it, and Save says so. Without Remember password, Save keeps the settings and says the password was not kept. A line under
+Password says which applies.
+
+**Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
+the same path and limits as Load databases, so like Load databases it signs in to the login's default database rather
+than Database Name; a Load databases still running finishes first. It saves nothing and opens no session or Explorer node. A pass reports the
+server, the login and how many databases it sees, fills the Database Name list, and warns when the typed database is
+not among them; a failure shows the same error, details and Copy details as a failed Connect, and its certificate fix trusts the
+certificate and tests again rather than connecting. While it runs the
+form is locked, the button reads Stop, and Escape or Cancel stops the test without closing the dialog. Cancel, Escape or the
 close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
+For a connection that is not saved yet, they ask **Save *name* to History?** (the server when it has no name) once
+the user has changed the form (server, login, settings or labels), no saved entry already has its settings, and Save is
+available (a server and authentication filled in); a Save that then fails (such as for a blank Custom environment label), or that saves but could not keep or forget a password as asked or left Object Explorer connections needing the new one, says so and keeps the dialog open. Removing the entry the form edits, or a typed password alone, does not ask.
+Focus stays in the dialog: a press on its text focuses the dialog, and a button that saving disables or Remove takes
+away gives focus back to the dialog (then to that button once it is enabled), so Escape and Tab always reach it.
 
 Connect applies the labels the user changed in the dialog to a reused target without asking again (only those: a
 connection-only environment set from the server menu stays) and saves them to History. Otherwise, choosing

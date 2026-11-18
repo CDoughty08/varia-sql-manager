@@ -12,12 +12,13 @@ import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
 import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
-import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
+import { childrenShown, lastDescendant, layoutWindow, pinnedServerBands, renderedIndices, revealChildrenScroll, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
 const announceDelayMs = 500
-interface DropMark { readonly rowId: number; readonly edge: 'before' | 'after' }
+/** Where a dragged server drops: above or below a server row; `end` (the background) draws the line below the tree's last row. */
+interface DropMark { readonly rowId: number; readonly edge: 'before' | 'after'; readonly end?: true }
 interface FollowedQuery {
   readonly query: string
   readonly connection: string
@@ -36,7 +37,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const { 'objectExplorer.pinnedServerHeadersTop': topLimit, 'objectExplorer.pinnedServerHeadersBottom': bottomLimit,
-    'objectExplorer.followActiveQuery': follow } = useServiceSnapshot(settings).values
+    'objectExplorer.followActiveQuery': follow, 'objectExplorer.autoExpandSingleChild': autoExpand } = useServiceSnapshot(settings).values
   const renaming = useServiceSnapshot(explorer.renaming)
   const element = useRef<HTMLDivElement | null>(null)
   const frame = useRef<HTMLDivElement | null>(null)
@@ -167,6 +168,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     })
   }, [ensureVisible, measure, menuTargets, releaseFollow])
 
+  // Another query tab is where the user went: an expand still loading neither scrolls the tree back nor reveals its end.
+  // Only a switch counts, not the tab's connection dropping or coming back, nor the tree mounting.
+  const heldForQuery = useRef(activeQueryId)
+  useLayoutEffect(() => {
+    if (heldForQuery.current === activeQueryId) return
+    heldForQuery.current = activeQueryId
+    explorer.holdOpening()
+  }, [explorer, activeQueryId])
   useLayoutEffect(() => {
     if (!activeQueryId || !activeConnectionId) { followed.current = undefined; return }
     if (!follow) { followed.current = { query: activeQueryId, connection: activeConnectionId }; return }
@@ -197,6 +206,23 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     reveal.current = undefined
     if (id !== undefined) { releaseFollow(); ensureVisible(rows, rowIndex(rows, id)) }
   })
+  // After the user's expand, the children come into view as they arrive, as far as they fit below the expanded row (the
+  // node an auto-expand reached). Scrolling or clicking elsewhere stops it; so does selecting another row (the service).
+  useLayoutEffect(() => {
+    const opening = explorer.opening
+    if (!opening) return
+    const tree = element.current, index = rowIndex(rows, opening.id)
+    if (!tree || index < 0) return
+    const last = lastDescendant(rows, index)
+    const destination = revealChildrenScroll(layout, index, last, tree.scrollTop, tree.clientHeight, topLimit, bottomLimit)
+    if (destination !== undefined) { releaseFollow(); tree.scrollTop = destination; measure() }
+    // The service is ahead of the rows rendered: its page may be in while the rows still show the loading row. An error
+    // row is what the expand shows, and ends it too.
+    if (opening.settled && childrenShown(rows, index)) explorer.endOpening()
+  })
+  const holdOpening = useCallback(() => explorer.holdOpening(), [explorer])
+  // A layout effect: the walk stops as the change commits, before a page that arrives after it can walk on.
+  useLayoutEffect(() => { if (!autoExpand) explorer.stopChain() }, [explorer, autoExpand])
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
@@ -209,13 +235,13 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
-    select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
-    toggle: rowId => explorer.toggle(rowId),
+    select: rowId => { explorer.endOpen(); explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
+    toggle: rowId => explorer.toggleOpen(rowId, autoExpand),
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
-    // carries only its own type, so dropping it anywhere but on another server does nothing.
+    // carries only its own type, so dropping it anywhere but among the servers in the tree does nothing.
     dragStart: (rowId, transfer) => {
       // A server drag whose dragend never arrived (its row unmounted mid-drag) must not carry over into this one.
       dragging.current = undefined
@@ -244,21 +270,16 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
     },
+    // The lower half of the tree's last row, of any kind, drops a server last like the background below it: a tree that
+    // fills its pane scrolled to the end has no background left.
     dragOver: (rowId, edge, event) => {
-      const from = serverDragOf(event, dragging.current)
-      if (from === undefined || !explorer.serverPlace(rowId)) { setDropMark(undefined); return }
+      const from = serverDragOf(event, dragging.current), rows = explorer.getSnapshot().rows, last = explorer.rootIds.at(-1)
+      const end = edge === 'after' && last !== undefined && rows.count > 0 && rows.ids[rows.count - 1] === rowId
+      if (from === undefined || (!end && !explorer.serverPlace(rowId))) { setDropMark(undefined); return }
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-      setDropMark(mark => mark?.rowId === rowId && mark.edge === edge ? mark : { rowId, edge })
-    },
-    drop: (rowId, event) => {
-      const from = serverDragOf(event, dragging.current), mark = dropMark.current
-      dragging.current = undefined
-      setDropMark(undefined)
-      if (from === undefined || mark?.rowId !== rowId) return
-      event.preventDefault()
-      const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(rowId)
-      if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
+      if (end) setDropMark(mark => mark?.end && mark.rowId === last ? mark : { rowId: last, edge: 'after', end: true })
+      else setDropMark(mark => mark?.rowId === rowId && mark.edge === edge && !mark.end ? mark : { rowId, edge })
     },
     dragEnd: () => { dragging.current = undefined; setDropMark(undefined) },
     // The pointer's row stays known while it rests, so pressing Peek on Hover's modifier peeks it without a move.
@@ -273,7 +294,30 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (peek.getSnapshot().open?.source === 'hover') peek.close()
       run('explorer.openPeekTab', rowId)
     }
-  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark])
+  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark, autoExpand])
+  // The background below the last row drops a server last, and its line shows that: below the tree's last row, which is
+  // the last server's last child when it is expanded. Rows mark themselves (actions.dragOver);
+  // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
+  // Beside the rows, the tree itself is under the pointer only on its scrollbar, where no line would show: no drop there.
+  const dragOverTree = (event: DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest?.('[role="treeitem"]')) return
+    const from = serverDragOf(event, dragging.current), last = explorer.rootIds.at(-1)
+    const rowsEnd = event.currentTarget.firstElementChild?.getBoundingClientRect().bottom ?? -Infinity
+    if (from === undefined || last === undefined || event.clientY < rowsEnd) { setDropMark(undefined); return }
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    setDropMark(mark => mark?.end && mark.rowId === last ? mark : { rowId: last, edge: 'after', end: true })
+  }
+  // Releasing drops where the line is, whichever element is under the pointer: a row, its edge or the background.
+  const dropOnTree = (event: DragEvent<HTMLDivElement>) => {
+    const from = serverDragOf(event, dragging.current), mark = dropMark.current
+    dragging.current = undefined
+    setDropMark(undefined)
+    if (from === undefined || !mark) return
+    event.preventDefault()
+    const others = explorer.rootIds.filter(id => id !== from), at = others.indexOf(mark.rowId)
+    if (at >= 0) explorer.moveServer(from, at + (mark.edge === 'after' ? 1 : 0))
+  }
   // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -289,9 +333,9 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
         else { reveal.current = id; explorer.select(id) }
         return
       }
-      case 'expand': explorer.expand(action.id); return
-      case 'collapse': explorer.collapse(action.id); return
-      case 'toggle': explorer.toggle(action.id); return
+      case 'expand': explorer.open(action.id, autoExpand); return
+      case 'collapse': explorer.close(action.id); return
+      case 'toggle': explorer.toggleOpen(action.id, autoExpand); return
       case 'expandSiblings': explorer.expandSiblings(action.id); return
       case 'retry': explorer.retry(action.id); return
       case 'continue': explorer.continueLoading(action.id); return
@@ -360,7 +404,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     }} />
   }
   return <div ref={frame} className="explorer-tree-frame" style={{ '--explorer-tree-height': `${bands.height}px`, '--explorer-tree-width': `${view.width}px`, '--explorer-scrollbar-height': `${view.scrollbar}px` } as CSSProperties}
-    onPointerDownCapture={releaseFollow} onWheelCapture={releaseFollow} onKeyDownCapture={releaseFollow}
+    onPointerDownCapture={() => { releaseFollow(); holdOpening() }} onWheelCapture={() => { releaseFollow(); holdOpening() }} onKeyDownCapture={releaseFollow}
     onFocusCapture={event => { focusedPin.current = event.target.closest('.explorer-pin-band') ? event.target : undefined }}
     onBlurCapture={event => {
       if (event.relatedTarget && event.relatedTarget !== event.currentTarget.ownerDocument.body) focusedPin.current = undefined
@@ -368,8 +412,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     {pinned('top')}
     <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
       aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}
-      // A server drag over the tree's background (no row accepted it) or out of the tree leaves no drop line behind.
-      onDragOver={(event: DragEvent) => { if (!event.defaultPrevented && dropMark.current) setDropMark(undefined) }}
+      onDragOver={dragOverTree} onDrop={dropOnTree}
+      // A server drag out of the tree leaves no drop line behind.
       onDragLeave={(event: DragEvent) => { if (dropMark.current && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropMark(undefined) }}>
       <div className="explorer-spacer" style={{ height: layout.total }}>
         {indices.map(index => {
@@ -381,7 +425,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
             status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}
-            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.rowId === rowId ? dropAt.edge : undefined} />
+            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} drop={dropAt?.end ? (index === rows.count - 1 ? 'after' : undefined) : dropAt?.rowId === rowId ? dropAt.edge : undefined} />
         })}
       </div>
     </div>
