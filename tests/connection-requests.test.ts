@@ -440,3 +440,39 @@ describe('connection library with remembered passwords', () => {
     await expect(library.save({ options: { ...options, password: 'x'.repeat(1025) } })).rejects.toThrow()
   })
 })
+
+describe('Save with a checked password', () => {
+  it('keeps a saved entry that never connected, until it is removed', async () => {
+    const { connections, savedPasswords } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    const plain = await library.save({ options: { ...empty, server: 'not-saved' } })
+    expect(plain.library.profiles).toEqual([])
+    const saved = await library.save({ options: { ...empty, server: 'saved-only' }, saved: true })
+    expect(saved.library.profiles).toMatchObject([{ saved: true, options: { server: 'saved-only' } }])
+    expect(saved.library.profiles[0].lastConnected).toBeUndefined()
+    expect((await library.remove(saved.library.profiles[0].id)).library.profiles).toEqual([])
+  })
+  it('remembers only the password a check just signed in with, once', async () => {
+    const { directory, connections, savedPasswords, request } = await setup()
+    const library = connectionLibrary({ connections, savedPasswords })
+    // Unchecked: nothing is saved, so settings and password cannot disagree.
+    await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    expect((await connections.load()).library.profiles).toEqual([])
+    // A failed check verifies nothing.
+    await request('connections.databases', options, { remember: true }, () => ({ ok: false, error: loginFailed() }))
+    await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    // A check without `remember` (Test Connection) verifies nothing either.
+    await request('connections.databases', options, undefined, () => ({ ok: true, value: [{ name: 'master' }] }))
+    await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    await request('connections.databases', options, { remember: true }, () => ({ ok: true, value: [{ name: 'master' }] }))
+    // Another password than the one checked is refused, and the check is used up.
+    await expect(library.save({ options: { ...options, password: 'other' }, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+    await request('connections.databases', options, { remember: true }, () => ({ ok: true, value: [{ name: 'master' }] }))
+    const saved = await library.save({ options, saved: true, rememberPassword: true })
+    const id = saved.library.profiles[0].id
+    expect(saved).toMatchObject({ passwordSaved: true, savedPasswords: [id] })
+    expect(await savedPasswords.get(id, empty)).toBe(marker)
+    expect(await readFile(join(directory, 'connections.json'), 'utf8')).not.toContain(marker)
+    await expect(library.save({ options, saved: true, rememberPassword: true })).rejects.toThrow('not checked')
+  })
+})

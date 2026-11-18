@@ -60,17 +60,21 @@ export function savedConnection(options: ConnectionOptions): Omit<ConnectionOpti
   return parsed
 }
 export const connectionAutoReconnectSchema = z.enum(['inherit', 'on', 'off'])
-export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions, 'password'>; favorite: boolean; registered: boolean; lastConnected?: string; autoReconnect?: 'inherit' | 'on' | 'off' }
+/** `saved`: the user saved the entry with Save, so History keeps it (in its Saved group until it connects) though it is
+ *  not recent, a favorite or registered. */
+export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions, 'password'>; favorite: boolean; registered: boolean; saved?: boolean; lastConnected?: string; autoReconnect?: 'inherit' | 'on' | 'off' }
 export interface ConnectionLibrary { version: 1; profiles: ConnectionProfile[] }
-export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
-export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()
+/** `rememberPassword`: Save remembers the options' typed password under the entry, which main does only for a password a
+ *  Test Connection or Save check just signed in with (connections.databases with `remember`). */
+export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean; saved?: boolean; rememberPassword?: boolean; autoReconnect?: 'inherit' | 'on' | 'off' }
+export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional(), saved: z.boolean().optional(), rememberPassword: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()
 /** Set Connection Environment: the live connection's options name its entry (by connectionKey), and only the entry's label
  *  changes; `environment` absent is None. */
 export interface ConnectionEnvironmentInput { options: ConnectionOptions; environment?: string }
 export const connectionEnvironmentInputSchema = z.object({ options: connectionOptionsSchema, environment: environmentSchema.optional() }).strict()
 const savedOptionsSchema = connectionOptionsSchema.refine(value => value.password === undefined, 'Saved connections cannot contain passwords.')
 export const connectionLibrarySchema = z.object({
-  version: z.literal(1), profiles: z.array(z.object({ id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), registered: z.boolean(), lastConnected: z.iso.datetime().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()).max(200)
+  version: z.literal(1), profiles: z.array(z.object({ id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), registered: z.boolean(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()).max(200)
 }).strict().refine(value => new Set(value.profiles.map(profile => profile.id)).size === value.profiles.length, 'Duplicate connection IDs.')
 export function connectionKey(options: ConnectionOptions): string {
   const clean = savedConnection(options)
@@ -121,3 +125,5 @@ export const connectContextSchema = z.object({
 export type ConnectContext = z.infer<typeof connectContextSchema>
 /** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
 export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }
+/** Save's answer: whether the typed password it was asked to remember was remembered (absent when none was asked). */
+export interface ConnectionSaveView extends ConnectionLibraryView { passwordSaved?: boolean }

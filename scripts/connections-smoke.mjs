@@ -65,8 +65,8 @@ const layout = dialog => dialog.evaluate((form, part) => {
   }
 }, part)
 /** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer.
- *  Reset and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
-const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(2).map(button => {
+ *  Reset, Test Connection and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
+const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(3).map(button => {
   const box = button.getBoundingClientRect()
   return [box.top, box.bottom, box.right].map(Math.round)
 }))
@@ -112,8 +112,15 @@ try {
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeFocused()
+  // Save keeps a connection that never connected, in History's Saved group, and says what it saved.
+  await expect(dialog.getByText('Saved to History.', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
+  await expect(savedConnections(dialog, 'focus-server')).toHaveCount(1)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === 'focus-server')?.saved).toBe(true)
   await dialog.getByRole('button', { name: 'Add favorite', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: true })).toBeFocused()
+  // A favorite is listed under Favorites only.
+  await expect(dialog.getByText('Saved (1)', { exact: true })).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Remove saved focus-server', exact: true }).click()
   await expect(savedConnections(dialog, 'focus-server')).toHaveCount(0)
   await expect(dialog).toBeFocused()
@@ -333,6 +340,22 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })
+    // Test Connection signs in with the form as it is, against the real server, and opens nothing.
+    await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+    await expect(dialog.getByText('Connected to ' + process.env.VARIA_TEST_SQL_SERVER + (liveUser ? ' as ' + liveUser : ''), { exact: false })).toBeVisible({ timeout: 35000 })
+    if (liveUser) {
+      // Save checks a typed password with the server, then remembers it only as ciphertext; the field shows it is saved.
+      await dialog.getByLabel('Remember password', { exact: true }).check()
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(dialog.getByText(/The new password is remembered/)).toBeVisible({ timeout: 35000 })
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      const savedLive = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.options.username === liveUser)
+      expect(savedLive?.saved).toBe(true)
+      expect(await readFile(join(profile, 'saved-passwords.json'), 'utf8')).not.toContain(process.env.VARIA_TEST_SQL_PASSWORD)
+      // The rest of the suite connects with a typed password and nothing remembered: unchecking forgets it on Connect.
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+      await dialog.getByLabel('Remember password', { exact: true }).uncheck()
+    }
     // Development servers have self-signed certificates: without Trust server certificate the connect fails with the fix,
     // and the fix connects. A server whose certificate this computer trusts connects at once.
     await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
@@ -495,6 +518,35 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: The backend operation failed/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
+  // Test Connection signs in as Load databases does, saves nothing, opens no session, and reports at Connect.
+  const connects = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect').length)
+  const connectsBefore = await connects(), databaseBefore = await dialog.getByLabel('Database Name', { exact: true }).inputValue()
+  await dialog.getByLabel('Server Name', { exact: true }).fill('test-server')
+  await dialog.getByLabel('Database Name', { exact: true }).fill('Sales')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText(/^Connected to test-server\b.*2 databases are visible\.$/)).toBeVisible()
+  await expect(dialog.getByText('Sales is not among the databases this login can see.', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
+  expect(await connects()).toBe(connectsBefore)
+  expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'test-server')).toBe(false)
+  // A changed form drops the report; a failed test shows Connect's error with its details.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-error')
+  await expect(dialog.getByText(/^Connected to test-server/)).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Login failed.')
+  await expect(connectErrorDetails(dialog)).toHaveCount(1)
+  // A test that waits (here, for a sign-in) locks the form; Test Connection becomes Stop, and Escape stops the test
+  // without closing the dialog.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
+  await expect(dialog.getByText('Testing the connection to entra-wait…', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('Test cancelled.', { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
+  await dialog.getByLabel('Database Name', { exact: true }).fill(databaseBefore)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   // A failure shows above the footer: Connect and Cancel stay where they were before it.
   await expect(connectOutcome(dialog)).toHaveCount(0)

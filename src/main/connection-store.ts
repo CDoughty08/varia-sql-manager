@@ -4,11 +4,11 @@ import type { ConnectionOptions } from '../shared/contracts'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
 const limit = 2_000_000
-/** History keeps the 30 most recent connections; an entry that is not a favorite, registered or recent is dropped. */
+/** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped. */
 function prune(library: ConnectionLibrary) {
   const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
   for (const item of recent.slice(30)) delete item.lastConnected
-  library.profiles = library.profiles.filter(item => item.favorite || item.registered || item.lastConnected)
+  library.profiles = library.profiles.filter(item => item.favorite || item.registered || item.saved || item.lastConnected)
   if (library.profiles.length > 200) throw new Error('The connection library supports up to 200 saved servers.')
 }
 export class ConnectionStore {
@@ -41,6 +41,8 @@ export class ConnectionStore {
     return next
   }
   async save(value: ConnectionProfileInput, connected = false): Promise<ConnectionLibrary> { return (await this.upsert(value, connected)).library }
+  /** save(), with the id of the entry it created or updated (Save remembers a checked password under it). */
+  saveEntry(value: ConnectionProfileInput) { return this.upsert(value, false) }
   /**
    * Saves the profile and returns the id of the entry it created or updated, with the environment it now has. With
    * `keepEnvironment`, options without an environment keep the entry's label: a connect only clears it when the user
@@ -59,6 +61,7 @@ export class ConnectionStore {
       profile.options = kept ? { ...options, environment: kept } : options
       if (input.favorite !== undefined) profile.favorite = input.favorite
       if (input.registered !== undefined) profile.registered = input.registered
+      if (input.saved) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
       if (connected) profile.lastConnected = new Date().toISOString()
       prune(library)

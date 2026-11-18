@@ -45,7 +45,20 @@ profiles.
 **Save**, in Connect's footer, saves the form to History without connecting and applies its name, color, environment and
 startup reconnect preference at once to every Explorer connection with the same server, database, login and settings
 (Explorer, query tabs and both status bars), changing only the labels the save changed. When History aliases share those settings, only connections still showing
-the saved entry's previous labels follow it. Add favorite and Register server save the same way. Cancel, Escape or the
+the saved entry's previous labels follow it. Add favorite and Register server save the same way. Save opens no session
+and never reconnects. A connection saved before it ever connected stays in History's **Saved** group (a favorite is
+listed under Favorites only) and moves to Recent Connections once it connects; Saved entries do not count toward the 30
+recent ones. A password typed into the form is kept only when Remember password is checked: Save first signs in with it
+(as Load databases does, so a wrong password saves nothing and shows the failure at Connect), then remembers it, and the
+field goes back to the saved-password dots. Open connections keep their sessions; the new password applies when they
+connect again. Without Remember password, Save keeps the settings and says the password was not kept. A line under
+Password says which applies.
+
+**Test Connection**, beside Reset, signs in with the form as it is (a typed or remembered password included) through
+the same path and limits as Load databases. It saves nothing and opens no session or Explorer node. A pass reports the
+server, the login and how many databases it sees, fills the Database Name list, and warns when the typed database is
+not among them; a failure shows the same error, details, Copy details and fixes as a failed Connect. While it runs the
+form is locked, the button reads Stop, and Escape stops the test without closing the dialog. Cancel, Escape or the
 close button asks **Save changes to *name*?** (Save, Don't Save, Cancel) when a saved entry has edits that were not saved.
 Focus stays in the dialog: a press on its text focuses the dialog, and a button that saving disables or Remove takes
 away gives focus back to the dialog (then to that button once it is enabled), so Escape and Tab always reach it.

@@ -149,7 +149,7 @@ describe('Set Connection Environment', () => {
   /** main's side as `window.varia.setConnectionEnvironment` reaches it, over a real connections.json. */
   async function mainSide() {
     const store = await tempStore()
-    const library = connectionLibrary({ connections: store.store, savedPasswords: { reconcile: async () => ({ ids: [] }), forget: async () => {}, state: async () => ({ available: true }) } })
+    const library = connectionLibrary({ connections: store.store, savedPasswords: { reconcile: async () => ({ ids: [] }), forget: async () => {}, set: async () => {}, state: async () => ({ available: true }) } })
     const setEnvironment = vi.fn(async (input: unknown) => { try { return { ok: true as const, value: await library.setEnvironment(input) } } catch (error) { return { ok: false as const, error: (error as Error).message } } })
     return { ...store, setEnvironment }
   }

@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+### New and improved
+
+- **Test Connection:** Connect's footer has a Test Connection button that signs in with the form as it is and reports the result inline, with the databases the login can see, without saving anything or opening a connection\. Escape or Stop ends it\.
+- **Save says what it does with a password:** With Remember password checked, Save checks a newly typed password with the server, then remembers it; a wrong password saves nothing\. A note under Password and Save's tooltip say what Save keeps, and Save confirms what it saved\.
+
 ### Fixes
 
+- **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 
 ## [0.9.1] - 2026-11-16
