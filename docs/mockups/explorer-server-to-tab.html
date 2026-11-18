@@ -114,8 +114,8 @@ body { --ease: cubic-bezier(.2,0,0,1) }
 .tab .srv .was, .tab .srv .now { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 4px }
 .tab .srv .now { opacity: 0 }
 .tab .wash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--srvB) 20%, transparent) 35%, color-mix(in srgb, var(--srvB) 20%, transparent) 65%, transparent 100%) no-repeat; background-size: 60% 100% }
-.play .ghost { animation: dissolve .24s var(--ease) forwards }
-@keyframes dissolve { to { transform: scale(.92); opacity: 0; filter: blur(1.5px) } }
+.play .ghost { transform-origin: left center; animation: into-tab-short .32s cubic-bezier(.3,0,.2,1) forwards }
+@keyframes into-tab-short { 70% { opacity: 1 } to { left: var(--tx); top: 12px; transform: scale(.45); opacity: 0 } }
 .play .tab.drop .wash { animation: wash .72s .1s var(--ease) both }
 @keyframes wash { 0% { opacity: 0; background-position: -60% 0 } 20% { opacity: 1 } 70% { opacity: 1 } 100% { opacity: 0; background-position: 160% 0 } }
 .play .tab.drop .srv .was { animation: fade-out .22s .24s var(--ease) forwards }
@@ -162,12 +162,19 @@ body { --ease: cubic-bezier(.2,0,0,1) }
 .eov.insert .plate { width: auto; padding: 6px 12px; border-radius: 6px; font-size: 12px; text-align: left; animation: none }
 .dropcaret { position: absolute; z-index: 4; width: 2px; height: 18px; background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); animation: socket .8s ease-in-out infinite }
 .eov.held, .eov.held .plate { animation: none }
-/* Dropping on the editor: the tint, frame and plate recede where they are, and the tab makes the same swap. */
-.play .eov { animation: eov-out .28s .04s var(--ease) forwards }
-@keyframes eov-out { to { opacity: 0; backdrop-filter: blur(0) } }
-.play .eov .plate { animation: plate-out .24s var(--ease) forwards }
-@keyframes plate-out { to { transform: scale(.97); opacity: 0 } }
-.play .eov::before { animation: none }
+/* Dropping on the editor: the tint and frame fade while the plate travels into the query's tab on a slight arc
+   (it rises faster than it moves across), shrinking as it goes, and lands as the tab's wash begins. */
+.play .eov { animation: eov-out .3s var(--ease) forwards }
+@keyframes eov-out { to { background: transparent; backdrop-filter: blur(0) } }
+.play .eov::before { animation: frame-out .2s var(--ease) forwards }
+@keyframes frame-out { to { opacity: 0 } }
+.play .eov .plate { transform-origin: center; animation: into-tab .5s forwards }
+@keyframes into-tab {
+  0% { transform: none; opacity: 1; animation-timing-function: cubic-bezier(.3,0,.6,1) }
+  55% { transform: translate(calc(var(--dx) * .5), calc(var(--dy) * .78)) scale(.42); opacity: 1; animation-timing-function: cubic-bezier(.3,0,.2,1) }
+  100% { transform: translate(var(--dx), var(--dy)) scale(.1); opacity: 0 }
+}
+.play .eov .plug::after { animation: none }
 .play .eov .plug::after { animation: none }
 @media (prefers-reduced-motion: reduce) {
   body:not(.motion) .eov, body:not(.motion) .eov .plate, body:not(.motion) .play .eov .plate, body:not(.motion) .eov::before, body:not(.motion) .eov .plug::after { animation: none }
@@ -247,7 +254,7 @@ Pick a scene; the ▶ scenes play the drop, <b>↻ Replay</b> runs it again, and
     <li><b>Starts</b> when a server row is dragged. Every query tab shows a dashed socket under it; tabs that are not queries dim. Reordering servers in Object Explorer still works during the same drag, so one gesture does either.</li>
     <li><b>Over a query tab</b> the tab lifts and fills with the accent, its socket pulses, and a card names the move: old server struck through → new server, and the database it will use. Hovering does not switch tabs.</li>
     <li><b>Dropping</b> runs <code>targets.changeConnection</code>, the same path as Change Connection…: the query's session ends first, and the query opens on the new server's default database (the database remembered for that server when it had one). The tab becomes the active tab and the editor takes focus.</li>
-    <li><b>The animation</b> (≈ 0.9 s, one decelerating curve, no overshoot, no layout shift): the drag image dissolves where it was let go and the tab's lift eases away; a soft wash in the new server's colour passes behind the tab's text while the server name cross-fades under it, so the change is covered rather than performed; the colour rule on the tab's top edge eases out from the centre; the SID badge dims while the old session ends and returns with the new session's number; the status bar and a quiet toast follow. Dropping on the editor makes the overlay recede in place, then the tab makes the same swap. Varia plays it even when the system asks for reduced motion, unless the Options setting that follows the system is turned on.</li>
+    <li><b>The animation</b> (≈ 0.9 s, one decelerating curve, no overshoot, no layout shift): the drag image glides the short way into the tab as the tab's lift eases away; a soft wash in the new server's colour passes behind the tab's text while the server name cross-fades under it, so the change is covered rather than performed; the colour rule on the tab's top edge eases out from the centre; the SID badge dims while the old session ends and returns with the new session's number; the status bar and a quiet toast follow. Dropping on the editor sends the plate into the query's tab on a slight arc, shrinking as it goes, while the tint and frame fade; the tab's swap starts as it lands. Varia plays it even when the system asks for reduced motion, unless the Options setting that follows the system is turned on.</li>
     <li><b>Open transaction:</b> the existing prompt asks Commit, Roll Back or Cancel before the session ends; Cancel leaves the query where it was.</li>
     <li><b>Running query:</b> the tab refuses the drop (no-entry cursor, no socket pulse) and the card says to stop the query first. The query is never stopped for you.</li>
     <li><b>Same server:</b> refused quietly; the card says the query is already there, so the session and its temp tables are kept.</li>
@@ -318,7 +325,7 @@ function show(scene) {
   const pointer = card.accept ? `<svg class="cursor" style="left:${x + w / 2 + 10}px;top:18px" viewBox="0 0 14 20"><path d="M1 1v15l4-4 3 7 2-1-3-7h6z" fill="var(--strong)" stroke="var(--canvas)"/></svg>` : `<span class="no-cursor" style="left:${x + w / 2 + 10}px;top:20px"></span>`
   if (scene === 'play') {
     tab.classList.add('drop')
-    overlay.innerHTML = ghost(x + w / 2 + 30, 36)
+    overlay.innerHTML = ghost(x + w / 2 + 30, 36).replace(/--tx:[^"]*/, `--tx:${x + w / 2 - 20}px`)
     later(() => { win.classList.add('play'); win.classList.remove('dragging-server'); tab.classList.remove('target'); document.getElementById('dragRow').classList.remove('dragging') }, 300)
     later(() => { const sid = tab.querySelector('.sid'); sid.textContent = 'SID 72'; const status = document.getElementById('status').firstElementChild; status.textContent = '● REPORTING-SQL'; status.classList.add('swap') }, 300 + 420)
     later(() => overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`), 300 + 900)
@@ -344,11 +351,14 @@ function showEditor(scene) {
   overlay.innerHTML = `<div class="eov${scene === 'editorPlay' ? ' held' : ''}">${plate('Move this query to REPORTING-SQL', moveLine + `<div class="note">Database: <b>master</b> (REPORTING-SQL's default). The query's session on SALES-SQL01 ends.</div>`, 'Hold Ctrl to insert the name instead')}</div>` + ghost(530, 220) + pointer
   tab.classList.add('target')
   if (scene === 'editorPlay') {
-    overlay.querySelectorAll('.cursor').forEach(node => node.remove())
+    const card = overlay.querySelector('.plate'), box = card.getBoundingClientRect()
+    card.style.setProperty('--dx', `${x + w / 2 - (box.left - host.left + box.width / 2)}px`)
+    card.style.setProperty('--dy', `${22 - (box.top - host.top + box.height / 2)}px`)
+    overlay.querySelectorAll('.ghost, .cursor').forEach(node => node.remove())
     later(() => { win.classList.add('play'); win.classList.remove('dragging-server'); document.getElementById('dragRow').classList.remove('dragging') }, 300)
-    later(() => { tab.classList.remove('target'); tab.classList.add('drop') }, 420)
-    later(() => { const sid = tab.querySelector('.sid'); sid.textContent = 'SID 72'; const status = document.getElementById('status').firstElementChild; status.textContent = '● REPORTING-SQL'; status.classList.add('swap') }, 420 + 420)
-    later(() => overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`), 420 + 900)
+    later(() => { tab.classList.remove('target'); tab.classList.add('drop') }, 300 + 380)
+    later(() => { const sid = tab.querySelector('.sid'); sid.textContent = 'SID 72'; const status = document.getElementById('status').firstElementChild; status.textContent = '● REPORTING-SQL'; status.classList.add('swap') }, 680 + 420)
+    later(() => overlay.insertAdjacentHTML('beforeend', `<div class="toast">✓ Orders report.sql moved to <b>REPORTING-SQL</b> · master</div>`), 680 + 900)
   }
 }
 document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
