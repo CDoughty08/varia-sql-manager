@@ -216,7 +216,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeFromExplorer', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type. A server row
-    // carries only its own type, so dropping it anywhere but on another server does nothing.
+    // carries only its own type, so dropping it anywhere but among the servers in the tree does nothing.
     dragStart: (rowId, transfer) => {
       // A server drag whose dragend never arrived (its row unmounted mid-drag) must not carry over into this one.
       dragging.current = undefined
@@ -245,12 +245,16 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
     },
+    // The lower half of the tree's last row, of any kind, drops a server last like the background below it: a tree that
+    // fills its pane scrolled to the end has no background left.
     dragOver: (rowId, edge, event) => {
-      const from = serverDragOf(event, dragging.current)
-      if (from === undefined || !explorer.serverPlace(rowId)) { setDropMark(undefined); return }
+      const from = serverDragOf(event, dragging.current), rows = explorer.getSnapshot().rows, last = explorer.rootIds.at(-1)
+      const end = edge === 'after' && last !== undefined && rows.count > 0 && rows.ids[rows.count - 1] === rowId
+      if (from === undefined || (!end && !explorer.serverPlace(rowId))) { setDropMark(undefined); return }
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-      setDropMark(mark => mark?.rowId === rowId && mark.edge === edge ? mark : { rowId, edge })
+      if (end) setDropMark(mark => mark?.end && mark.rowId === last ? mark : { rowId: last, edge: 'after', end: true })
+      else setDropMark(mark => mark?.rowId === rowId && mark.edge === edge && !mark.end ? mark : { rowId, edge })
     },
     dragEnd: () => { dragging.current = undefined; setDropMark(undefined) },
     // The pointer's row stays known while it rests, so pressing Peek on Hover's modifier peeks it without a move.

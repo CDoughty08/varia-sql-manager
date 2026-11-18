@@ -39,7 +39,10 @@ export interface RowActions {
   remove(rowId: number): void
   /** Fills a drag's data with the row's insert text, or starts moving a server row; false cancels the drag. */
   dragStart(rowId: number, transfer: DataTransfer): boolean
-  /** A drag over a row: a server being moved may drop above or below a server row (`edge`: the pointer's half of the row). */
+  /**
+   * A drag over a row: a server being moved may drop above or below a server row, or last over the lower half of the tree's
+   * last row (`edge`: the pointer's half of the row; an expanded server's whole row is its top edge).
+   */
   dragOver(rowId: number, edge: 'before' | 'after', event: Pick<DragEvent, 'preventDefault' | 'dataTransfer'>): void
   /** The drag ended, dropped or not. */
   dragEnd(): void
@@ -82,7 +85,7 @@ export interface RowProps {
   /** Live status (ExplorerStatusService): chips at the row's end; for a database, its state in place of the listing's. */
   readonly status?: RowStatus
   readonly recovery?: { readonly label: string; run(): void }
-  /** A server being dragged would drop above or below this server row. */
+  /** A server being dragged would drop above or below this server row, or (after) below everything when it is the tree's last row. */
   readonly drop?: 'before' | 'after'
 }
 
@@ -284,6 +287,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
+  const half = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
   if (kind !== RowKind.Node || !listed) {
     // Loading rows do nothing; the capped row's Enter opens Filter Settings, so it is not announced as unavailable.
     const inert = kind === RowKind.Loading || kind === RowKind.More
@@ -292,8 +296,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     // As the tree's last row it carries the line a server dragged below everything draws (drop).
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
       aria-disabled={inert || undefined} aria-label={text} title={text} style={style} data-drop={drop} onMouseDown={select}
-      // Not a place a server drops: passing over it clears the line the row above left, so releasing here moves nothing.
-      onDragOver={(event: DragEvent) => actions.dragOver(rowId, 'after', event)}>
+      // Not a place a server drops, except below everything when it is the tree's last row: passing over it clears the line
+      // the row above left, so releasing here moves nothing.
+      onDragOver={(event: DragEvent) => actions.dragOver(rowId, half(event), event)}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
       {!inert && recovery && <button type="button" className="oe-recovery-action" tabIndex={-1} title={`${recovery.label} (Enter)`}
         onMouseDown={event => { event.preventDefault(); event.stopPropagation(); actions.select(rowId) }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}
@@ -319,9 +324,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   // An open server's children follow its row, so a server dropped after it lands below them, not where a line under its
   // row would show: its whole row drops above it (below it is the next server's top half, or the background below the last).
   const edgeOf = (event: DragEvent): 'before' | 'after' => {
-    if (root && expandable && node.expanded) return 'before'
-    const box = event.currentTarget.getBoundingClientRect()
-    return event.clientY < box.top + box.height / 2 ? 'before' : 'after'
+    return root && expandable && node.expanded ? 'before' : half(event)
   }
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}

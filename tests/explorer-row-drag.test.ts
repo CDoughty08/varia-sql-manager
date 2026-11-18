@@ -33,7 +33,11 @@ async function mount(props: Partial<RowProps>) {
   cleanups.push(() => { act(() => root.unmount()); host.remove() })
   return host.querySelector('[role="treeitem"]')!
 }
-const dragOverAt = (row: Element, clientY: number) => act(() => { row.dispatchEvent(new DragEvent('dragover', { clientY, bubbles: true, cancelable: true })) })
+/** A dragover at `clientY` over a row 20 px tall at 100 px (happy-dom lays nothing out, and its DragEvent drops clientY). */
+const dragOverAt = (row: Element, clientY: number) => act(() => {
+  row.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 100, width: 300, height: 20 })
+  row.dispatchEvent(new MouseEvent('dragover', { clientY, bubbles: true, cancelable: true }))
+})
 
 describe('Object Explorer row drags', () => {
   // The line below everything is drawn on the tree's last row, which can be a loading, error or recovery row.
@@ -48,18 +52,19 @@ describe('Object Explorer row drags', () => {
     for (const [expanded, edge] of [[true, 'before'], [false, 'after']] as const) {
       const dragOver = vi.fn()
       const row = await mount({ rowId: 5, node: server({ expanded }), actions: actions(dragOver) })
-      dragOverAt(row, 1000)
+      dragOverAt(row, 115)
       expect(dragOver.mock.calls.map(call => call.slice(0, 2)), `expanded ${expanded}`).toEqual([[5, edge]])
     }
   })
-  // The tree drops a server where the last row marked it; a row that told it nothing would leave the row above's line in place.
-  it('report a drag over a loading, error or recovery row, so the tree clears the line the row above left', async () => {
+  // The tree drops a server where the last row marked it; a row that told it nothing would leave the row above's line in
+  // place. Its half matters too: the lower half of the tree's last row drops a server last.
+  it('report a drag over a loading, error or recovery row with the half the pointer is in, so the tree clears or moves the line', async () => {
     for (const kind of [RowKind.Loading, RowKind.More, RowKind.Error, RowKind.MoreError, RowKind.Stopped, RowKind.Paused, RowKind.Capped]) {
       const dragOver = vi.fn()
       const row = await mount({ rowId: 41, kind, level: 2, posinset: 0, setsize: 0, text: 'Loading…', draggable: false, actions: actions(dragOver) })
-      dragOverAt(row, 10)
-      expect(dragOver, `kind ${kind}`).toHaveBeenCalledTimes(1)
-      expect(dragOver.mock.calls[0]![0]).toBe(41)
+      dragOverAt(row, 105)
+      dragOverAt(row, 115)
+      expect(dragOver.mock.calls.map(call => call.slice(0, 2)), `kind ${kind}`).toEqual([[41, 'before'], [41, 'after']])
     }
   })
 })
