@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 
 export interface CssDeclaration { readonly property: string; readonly value: string }
 export interface CssRule {
-  /** The at-rule preludes around the rule, outermost first (`@media (prefers-reduced-motion: reduce)`, `@keyframes …`). */
+  /** The at-rule preludes around the rule, outermost first (`@media (forced-colors: active)`, `@keyframes …`). */
   readonly at: readonly string[]
   readonly selector: string
   readonly declarations: readonly CssDeclaration[]

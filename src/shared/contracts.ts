@@ -821,6 +821,8 @@ export interface VariaApi {
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
   /** True only in unpackaged smoke runs (main passed --varia-test-mode). */
   readonly testMode: boolean
+  /** True only in unpackaged smoke runs that ask for it (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1): motion follows the system's preference whatever the setting says. */
+  readonly followSystemMotion: boolean
   /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
   openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>

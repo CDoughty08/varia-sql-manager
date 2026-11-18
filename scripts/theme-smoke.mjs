@@ -335,19 +335,32 @@ try {
   await writeFile(smokeTheme, broken)
   await close()
   await launch({ motion: true })
-  // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens (none if
-  // the system asks for reduced motion), and the spinners turn.
+  // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens, and the
+  // spinners turn, even when the system asks for reduced motion: Varia follows it only with Reduce motion when the system asks.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await toolbar(page).locator('button:not(:disabled)').first().hover()
-  const motion = await page.evaluate(menuClass => {
+  const motion = () => page.evaluate(menuClass => {
     const probe = document.body.appendChild(document.createElement('div'))
     probe.className = menuClass.slice(1)
     const menu = getComputedStyle(probe).animationDuration
     probe.remove()
-    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('button:hover')).transitionDuration, menu }
+    return { button: getComputedStyle(document.querySelector('button:hover')).transitionDuration, menu }
   }, part.menu)
+  const moving = { button: '0.08s, 0.08s, 0.08s', menu: '0.12s' }, still = { button: '0s, 0s, 0s', menu: '0s' }
+  expect(await motion()).toEqual(moving)
+  expect(await spinners()).toEqual({ status: 'codicon-spin', tree: 'codicon-spin' })
+  // With the setting on, the system's request stops them at once, and only while the system asks.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.reduceMotionWithSystem': true }))).toMatchObject({ ok: true })
+  await expect.poll(motion).toEqual(still)
+  expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await expect.poll(motion).toEqual(moving)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect.poll(motion).toEqual(still)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.reduceMotionWithSystem': null }))).toMatchObject({ ok: true })
+  await expect.poll(motion).toEqual(moving)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.mouse.move(0, 0)
-  expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
-  expect(await spinners()).toEqual(motion.reduced ? { status: 'none', tree: 'none' } : { status: 'codicon-spin', tree: 'codicon-spin' })
   // Only hover fades: a tree row moved to with the keys, the current dialog page and a menu-bar button opened from the
   // keyboard take their colours at once, as in SSMS. A row given a transition of its own shows that this would see one.
   const states = await page.evaluate(p => {
@@ -380,7 +393,7 @@ try {
     return result
   }, part)
   expect(states).toEqual({ selected: true, deselected: true, page: true, menu: true, control: true })
-  console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for hovered buttons and 120 ms for menus'}, and selection changes at once.`)
+  console.log('Theme checks: motion is 80 ms for hovered buttons and 120 ms for menus even when the system asks for less, stops only with Reduce motion when the system asks, and selection changes at once.')
   const alert = themeNotice(page).and(page.getByRole('alert'))
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')

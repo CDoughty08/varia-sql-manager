@@ -2321,7 +2321,8 @@ and reports that block skipped.
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
   `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
   `VARIA_TEST_SHOW_WINDOW=1` (shows the main window inactive; the smoke fixture sets it under xvfb, where a never-shown
-  window sometimes ran no animation frames).
+  window sometimes ran no animation frames), and `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (`--varia-follow-system-motion`:
+  the renderer reduces motion whenever the emulated media asks, without the setting).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.
 
 ## Testing
