@@ -416,6 +416,10 @@ describe('column profile selection peek', () => {
   it('selects a card\'s column in the grid on a click, Enter or Space, and moves between cards with the arrows, Home and End', () => {
     const view = fixture(4)
     document.body.append(view.container)
+    // Each card says what Enter does, through a description the cards share.
+    const hint = view.card('c2')!.getAttribute('aria-describedby')!
+    expect(view.cards().every(card => card.getAttribute('aria-describedby') === hint)).toBe(true)
+    expect(document.getElementById(hint)?.textContent).toBe('Enter selects this column in the grid.')
     act(() => { view.card('c2')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(view.panel.selectColumn).toHaveBeenLastCalledWith('t', 'e1', 2)
     const press = (key: string) => act(() => { (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
@@ -434,6 +438,12 @@ describe('column profile selection peek', () => {
     press('ArrowDown')
     press(' ')
     expect(view.panel.selectColumn).toHaveBeenLastCalledWith('t', 'e1', 1)
+    // A focused card that leaves the list (Selected Columns Only) hands the focus to the active column's card, not the page.
+    act(() => { (view.card('c3') as HTMLElement).focus() })
+    view.panel.select(columns('e1', 1, 2))
+    view.panel.setOnly(true)
+    expect(view.card('c3')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('c2')
     view.unmount()
     view.container.remove()
   })

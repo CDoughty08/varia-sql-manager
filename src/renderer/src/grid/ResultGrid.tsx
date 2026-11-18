@@ -135,6 +135,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
         results.selectionChanged()
       },
+      onFirstCell: () => results.selectionChanged(),
       // Edit › Copy's copy event; Ctrl+C and Ctrl+A are the catalogue's output.copy and output.selectAll.
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),

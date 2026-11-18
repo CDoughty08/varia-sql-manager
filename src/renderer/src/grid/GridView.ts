@@ -140,6 +140,9 @@ export interface GridViewOptions {
   /** A bar behind each row number shows the row's bytes (queryResults.grid.rowSize); off by default. */
   readonly rowSize?: boolean
   onSelection(selection: GridSelection): void
+  /** The first cell became current as rows arrived: not a selection change to announce, but what follows the selection (the
+   *  column profile) should show it. */
+  onFirstCell?(): void
   /** Edit › Copy (the copy event), and a live grid's Ctrl+C (with `headers`, its Ctrl+Shift+C): runs Copy. */
   onCopy(headers?: boolean): void
   /**
@@ -453,7 +456,9 @@ export class GridView {
    *  leaving the focus where it is. Transposed, the column is a drawn row. */
   selectColumn(column: number): void {
     if (column < 0 || column >= this.columns) return
-    const row = this.sourceSelection()?.active.row ?? 0
+    // Transposed, the active row is a drawn column: one past those drawn is brought within them.
+    const kept = this.sourceSelection()?.active.row ?? 0
+    const row = this.rotated ? Math.min(kept, wire.transpose.maxRows - 1, Math.max(0, this.rows() - 1)) : kept
     const source = columnSelection(this.o.entry, column, row)
     this.select(this.rotated ? withinCap(rotateSelection(source)) : source)
     if (this.rotated) this.reveal(column, -1)
@@ -1515,7 +1520,7 @@ export class GridView {
     }
     // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
     // and the keys start from it and screen readers hear it. It is not announced as a selection change.
-    if (drawnRows > 0 && drawnColumns > 0 && !this.sourceSelection()) state.selection = firstCell(this.o.entry)
+    if (drawnRows > 0 && drawnColumns > 0 && !this.sourceSelection()) { state.selection = firstCell(this.o.entry); this.o.onFirstCell?.() }
     if (this.rotated) this.keepActiveDrawn()
 
     this.dragStep()

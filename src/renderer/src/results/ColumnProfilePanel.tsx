@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ColumnProfile, ProfileLengths } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -35,12 +35,14 @@ interface Profiles {
 interface CardProps {
   readonly column: number; readonly name: string; readonly type: string; readonly profile: ColumnProfile | undefined; readonly rows: number
   readonly selected: boolean; readonly current: boolean; readonly tabStop: boolean; readonly cardRef: (element: HTMLElement | null) => void; readonly onPick: (column: number) => void
+  /** The id of the panel's hidden hint that a card selects its column (Enter). */
+  readonly hint: string
 }
 // Memoised: a selection move re-renders the panel, and only the cards whose highlight or Tab stop changed redraw.
-const ProfileCard = memo(function ProfileCard({ column, name, type, profile, rows, selected, current, tabStop, cardRef, onPick }: CardProps) {
+const ProfileCard = memo(function ProfileCard({ column, name, type, profile, rows, selected, current, tabStop, cardRef, onPick, hint }: CardProps) {
   const histogram = profile?.histogram
   return <section ref={cardRef} className={'profile-card' + (selected ? ' selected' : '') + (current ? ' current' : '')} aria-label={name}
-    aria-current={current || undefined} data-column={column} tabIndex={tabStop ? 0 : -1} onClick={() => onPick(column)}>
+    aria-current={current || undefined} aria-describedby={hint} data-column={column} tabIndex={tabStop ? 0 : -1} onClick={() => onPick(column)}>
     <div className="profile-card-title"><b>{name}</b>{selected && <span className="visually-hidden">Selected</span>}<span>{type}</span></div>
     {profile ? <dl className="profile-figures">
       {profileLines(profile, rows).map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>)}
@@ -207,8 +209,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   const motionKey = `${list.only ? 1 : 0}|${strip ? 1 : 0}|${list.columns.join(',')}`
   const last = useRef({ key: motionKey, entry: entry?.key })
   const before = useRef<Map<number, CardPlace> | undefined>(undefined)
+  // Whether a card had the focus before the change: one that leaves the list hands it to the cards' Tab stop, not the page.
+  const focused = useRef(false)
   if (last.current.key !== motionKey || last.current.entry !== entry?.key) {
-    before.current = last.current.entry === entry?.key && scroller.current ? measureCards(cardEls.current, scroller.current) : undefined
+    before.current = last.current.entry === entry?.key && scroller.current ? measureCards(cardEls.current) : undefined
+    focused.current = !!scroller.current?.contains(scroller.current.ownerDocument.activeElement)
     last.current = { key: motionKey, entry: entry?.key }
   }
   useLayoutEffect(() => {
@@ -216,6 +221,8 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     before.current = undefined
     if (places && scroller.current && ghosts.current) playCardMoves({ before: places, cards: cardEls.current, left: left.current, scroller: scroller.current, ghosts: ghosts.current })
     left.current.clear()
+    if (focused.current && scroller.current && !scroller.current.contains(scroller.current.ownerDocument.activeElement)) cardEls.current.get(tabStop ?? -1)?.focus({ preventScroll: true })
+    focused.current = false
   }, [motionKey, entry?.key])
   // The active cell's column's card scrolls into view as the selection moves (as little as it takes).
   useLayoutEffect(() => {
@@ -226,12 +233,15 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   const [said, setSaid] = useState('')
   const count = useRef(list.columns.length)
   count.current = list.columns.length
-  const seen = useRef(false)
+  const saidOnly = useRef(list.only)
   useEffect(() => {
-    if (!seen.current) { seen.current = true; if (!list.only) return }
+    if (saidOnly.current === list.only) return
+    saidOnly.current = list.only
     setSaid(list.only ? `Showing ${formatCount(count.current)} of ${formatCount(columns.length)} columns` : 'Showing all columns')
-  }, [list.only, peeking])
+  }, [list.only, columns.length])
 
+  // A panel that goes away under the pointer (its Close button) gets no pointerleave: the peek forgets it here.
+  useEffect(() => () => profilePeek.leave(tabId), [profilePeek, tabId])
   // Stable for the memoised cards: it reads the entry the panel shows when called.
   const picking = useRef<(column: number) => void>(() => {})
   picking.current = column => { if (entry) results.selectColumn(tabId, entry.key, column) }
@@ -251,6 +261,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
       pick(Number(card.dataset.column))
     }
   }
+  const hint = useId()
   const peekWords = gestures.phrase('output.profilePeekHover')
   const toggleTitle = peekWords === 'off' ? 'Selected Columns Only' : `Selected Columns Only (${peekWords} the panel to peek)`
   return <aside className="profile-panel" aria-label="Column profile" aria-busy={shown?.loading || undefined}
@@ -277,10 +288,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
         const info = entry.descriptor.columns[column]
         const profiled = shown?.columns.get(column)
         return <ProfileCard key={column} column={column} name={info.name || '(No column name)'} type={sqlTypeLabel(info)} profile={profiled?.profile} rows={profiled?.rows ?? 0}
-          selected={selected.has(column)} current={column === active} tabStop={column === tabStop} cardRef={cardRef(column)} onPick={pick} />
+          selected={selected.has(column)} current={column === active} tabStop={column === tabStop} cardRef={cardRef(column)} onPick={pick} hint={hint} />
       })}
     </div>
     <div className="visually-hidden" role="status">{said}</div>
+    <span id={hint} hidden>Enter selects this column in the grid.</span>
   </aside>
 }
 

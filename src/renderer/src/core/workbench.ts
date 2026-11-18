@@ -388,9 +388,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
+  // The column profile's Ctrl+hover peek at the selected columns; the key dispatcher below feeds it held keys.
+  const profilePeek = new ProfilePeekService({ gestures: gesturesFor(platform) })
   // Object Explorer's Peek on Hover modifier arms the peek cursor and a press over a resting row; releasing either one
   // (Object Explorer's or the query editor's, as remapped) forgets a pending hover.
-  const profilePeek = new ProfilePeekService({ gestures: gesturesFor(platform) })
   const peek = new PeekService({ api, connections, scriptingOptions, platform, results, gestures: gesturesFor(platform),
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })

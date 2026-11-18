@@ -57,7 +57,7 @@ describe('profile card motion', () => {
     const scroller = document.createElement('div'), ghosts = document.createElement('div')
     // The theme's move token, as styles.css sets it (0 ms while motion is reduced, when nothing animates).
     scroller.style.setProperty('--varia-motion-move', '0ms')
-    place(scroller, 0)
+    scroller.getBoundingClientRect = () => ({ top: 0, left: 0, width: 220, height: 400, right: 220, bottom: 400, x: 0, y: 0, toJSON() {} })
     scroller.append(ghosts)
     document.body.append(scroller)
     const stays = document.createElement('section'), arrives = document.createElement('section'), goes = document.createElement('section')
@@ -65,7 +65,7 @@ describe('profile card motion', () => {
     place(stays, 50)
     place(arrives, 100)
     // c1 was drawn at 100 and moves up to 50; c0 left from 50; c2 is new.
-    const play = () => playCardMoves({ before: new Map([[0, { top: 50, left: 10, width: 200 }], [1, { top: 100, left: 10, width: 200 }]]), cards: new Map([[1, stays], [2, arrives]]), left: new Map([[0, goes]]), scroller, ghosts })
+    const play = () => playCardMoves({ before: new Map([[0, { top: 50, height: 40, left: 10, width: 200 }], [1, { top: 100, height: 40, left: 10, width: 200 }]]), cards: new Map([[1, stays], [2, arrives]]), left: new Map([[0, goes]]), scroller, ghosts })
     play()
     expect(played).toEqual([])
     expect(ghosts.children).toHaveLength(0)
@@ -80,6 +80,40 @@ describe('profile card motion', () => {
     expect(played.find(play => play.target === ghost)?.frames.at(-1)).toMatchObject({ opacity: 0 })
     const properties = new Set(played.flatMap(play => play.frames.flatMap(frame => Object.keys(frame))))
     expect([...properties].filter(property => !['transform', 'opacity', 'offset', 'easing'].includes(property))).toEqual([])
+    scroller.remove()
+    animate.mockRestore()
+    animations.mockRestore()
+  })
+
+  it('animates only the cards drawn within a view of the scroller, so thousands of columns start a few dozen animations', () => {
+    const targets: Element[] = []
+    const animate = vi.spyOn(HTMLElement.prototype, 'animate').mockImplementation(function (this: HTMLElement) {
+      targets.push(this)
+      return { cancel() {}, onfinish: null, oncancel: null } as unknown as Animation
+    })
+    const animations = vi.spyOn(HTMLElement.prototype, 'getAnimations').mockReturnValue([])
+    const place = (element: HTMLElement, top: number, height = 40) => { element.getBoundingClientRect = () => ({ top, left: 0, width: 200, height, right: 200, bottom: top + height, x: 0, y: top, toJSON() {} }) }
+    const scroller = document.createElement('div'), ghosts = document.createElement('div')
+    scroller.style.setProperty('--varia-motion-move', '180ms')
+    place(scroller, 0, 400)
+    scroller.append(ghosts)
+    document.body.append(scroller)
+    // Every card moves up 40 px; only those seen, before or after, within 400 px of the 400 px view move.
+    const cards = new Map<number, HTMLElement>(), before = new Map<number, { top: number; height: number; left: number; width: number }>()
+    for (let column = 0; column < 2000; column++) {
+      const card = document.createElement('section')
+      place(card, column * 40 - 2000)
+      cards.set(column, card)
+      before.set(column, { top: column * 40 - 1960, height: 40, left: 0, width: 200 })
+    }
+    playCardMoves({ before, cards, left: new Map(), scroller, ghosts })
+    expect(targets.length).toBeGreaterThan(0)
+    expect(targets.length).toBeLessThan(40)
+    expect(targets.every(card => { const top = card.getBoundingClientRect().top; return top >= -480 && top <= 800 })).toBe(true)
+    // A card that left far out of view leaves no ghost.
+    const far = document.createElement('section')
+    playCardMoves({ before: new Map([[5000, { top: 9000, height: 40, left: 0, width: 200 }]]), cards: new Map(), left: new Map([[5000, far]]), scroller, ghosts })
+    expect(ghosts.children).toHaveLength(0)
     scroller.remove()
     animate.mockRestore()
     animations.mockRestore()
@@ -129,6 +163,21 @@ describe('profile peek', () => {
     peek.pointer('t', true)
     timers.advance(peekLimits.pressMs)
     peek.pointer('t', false)
+    expect(peek.getSnapshot()).toBeUndefined()
+  })
+
+  it('stops peeking when the panel under the pointer goes away, and ignores another panel going', () => {
+    const { peek, timers } = setup()
+    peek.pointer('t', true)
+    timers.advance(peekLimits.pressMs)
+    peek.leave('other')
+    expect(peek.getSnapshot()).toBe('t')
+    peek.leave('t')
+    expect(peek.getSnapshot()).toBeUndefined()
+    // Ctrl pressed again with the pointer nowhere does not bring back the panel that went.
+    peek.keyUp('Control')
+    peek.keyDown('Control')
+    timers.advance(peekLimits.pressMs)
     expect(peek.getSnapshot()).toBeUndefined()
   })
 

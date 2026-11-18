@@ -42,6 +42,9 @@ export class ProfilePeekService extends SnapshotStore<string | undefined> implem
     this.start()
   }
 
+  /** The panel of `tabId` went away (closed, or its query's results replaced): if the pointer was on it, it is not now. */
+  leave(tabId: string): void { if (this.over === tabId) this.pointer(undefined) }
+
   /** A key went down anywhere in the window (the key dispatcher's `keyDown`). */
   keyDown(key: string, repeat = false): void {
     if (this.disposed) return
