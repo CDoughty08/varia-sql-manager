@@ -263,7 +263,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
     with its own source (view `live`, `LiveOutput`); a `card` has no Save. Its strip says what the bounds left out (rows
     past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
-    and stops once a later copy of any grid begins or the page writes other text to the clipboard (`grid/copy-generation.ts`). A save is refused before its file is built when it could pass `saveBytes` in the format
+    and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
     mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
