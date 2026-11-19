@@ -303,18 +303,19 @@ internal static partial class LiveSql
 
     private static readonly string[] Builtins = [.. CatalogSql.Builtins, "DB_NAME(", "DB_ID(", "OBJECT_ID(", "FILE_NAME(", "FILE_ID(", "INDEXPROPERTY(", "COLUMNPROPERTY(", "SCHEMA_ID(",
         "IDENT_CURRENT(", "IDENT_SEED(", "IDENT_INCR(", "TYPE_ID(", "TYPEPROPERTY(", "STATS_DATE(", "FILEGROUP_NAME(", "FILEGROUP_ID(", "FILEPROPERTY(", "FILEPROPERTYEX(",
-        "INDEXKEY_PROPERTY(", "DATABASE_PRINCIPAL_ID(", "USER_ID(", "SUSER_ID(", "SUSER_SID("];
+        "INDEXKEY_PROPERTY(", "DATABASE_PRINCIPAL_ID(", "USER_ID(", "SUSER_ID(", "SUSER_SID(", "FILE_IDEX(", "FILEGROUPPROPERTY(", "DATABASEPROPERTY(", "APPLOCK_TEST("];
     // COL_LENGTH stays allowed: the Activity Monitor's capability probe asks it of a system view, which takes no lock.
     /// <summary>The built-ins as words, so a space before the parenthesis hides none (OBJECTPROPERTY also covers OBJECTPROPERTYEX).</summary>
     private static readonly (string Name, Regex Pattern)[] BuiltinPatterns = [.. Builtins.Select(builtin => (builtin.TrimEnd('('),
         new Regex(@"\b" + Regex.Escape(builtin.TrimEnd('(')) + (builtin.EndsWith('(') ? @"\s*\(" : ""), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))];
 
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
-    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|MAXRECURSION)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|MAXRECURSION|QUERYTRACEON|MIN_GRANT_PERCENT)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
     /// <summary>Functions that read the server's files, any path a UNC share included, which reaches another host as OPENROWSET
-    /// would; or the log, which fn_dump_dblog reads through a scheduler it leaves behind.</summary>
-    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file|fn_dblog|fn_dblog_xtp|fn_full_dblog|fn_dump_dblog|dm_os_enumerate_filesystem|dm_os_file_exists)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    /// would; the log or backups, which fn_dump_dblog reads through a scheduler it leaves behind; every page of an index or
+    /// database; or the live event stream, which never ends.</summary>
+    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations)\b",RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ServerFiles();
     /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
     /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
@@ -370,10 +371,20 @@ internal static partial class LiveSql
             return " ";
         }
         if (commented || code.Contains("/*", StringComparison.Ordinal)) problems.Add("has a comment");
-        foreach (var (name, pattern) in BuiltinPatterns) if (pattern.IsMatch(code)) problems.Add("uses " + name);
-        problems.AddRange(CatalogSql.SecretUses(code));
-        if (code.Contains('#')) problems.Add("uses a temporary table");
-        if (code.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
+        // A bracketed or quoted name is still the name it holds (l.[password_hash], sys.[fn_dblog], [#t]), so the checks for
+        // names read the code with identifiers unwrapped; the keyword checks read it with them blanked, as SQL Server does.
+        var names = Token().Replace(text, token => token.Value[0] switch
+        {
+            '-' or '/' => " ",
+            '[' => token.Value[1..^1].Replace("]]", "]", StringComparison.Ordinal),
+            '"' => token.Value[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal),
+            _ => "''"
+        });
+        foreach (var (name, pattern) in BuiltinPatterns) if (pattern.IsMatch(names)) problems.Add("uses " + name);
+        problems.AddRange(CatalogSql.SecretUses(names));
+        if (names.Contains('#')) problems.Add("uses a temporary table");
+        if (names.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
+        foreach (Match match in ServerFiles().Matches(names)) problems.Add("reads server files through " + match.Value);
         foreach (Match match in Forbidden().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
         // The statement after the prologue (whose SET options are the prologue's own): no number glued to a word, and no
         // statement kind but a read's.
@@ -384,7 +395,6 @@ internal static partial class LiveSql
         foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
         if (Unprintable().IsMatch(code)) problems.Add("has a character outside printable ASCII in its code");
         if (FourPartName().IsMatch(code)) problems.Add("reads a four-part name through a linked server");
-        foreach (Match match in ServerFiles().Matches(code)) problems.Add("reads server files through " + match.Value);
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");
         if (code.Contains("@@SPID", StringComparison.OrdinalIgnoreCase) && !text.EndsWith(Session, StringComparison.Ordinal) && !text.EndsWith(SsisSession, StringComparison.Ordinal))

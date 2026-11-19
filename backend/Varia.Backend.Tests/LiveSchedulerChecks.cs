@@ -109,7 +109,21 @@ internal static class LiveSchedulerChecks
         ("trace file", "SELECT t.TextData FROM sys.fn_trace_gettable(N'\\\\h\\s\\t.trc', 1) AS t;"),
         ("file system", "SELECT f.full_filesystem_path FROM sys.dm_os_enumerate_filesystem(N'\\\\h\\s\\', N'*') AS f;"),
         ("log dump", "SELECT d.[Current LSN] FROM sys.fn_dump_dblog(NULL, NULL, N'DISK', 1, N'x') AS d;"),
-        ("fetch from a cursor", "SELECT 1 AS a; FETCH NEXT FROM c;"),
+        // A bracketed or quoted name is the name it holds: SQL Server returned the hash bytes for l.[password_hash].
+        ("bracketed password hash", "SELECT TOP (1) l.[password_hash] FROM sys.sql_logins AS l ORDER BY l.principal_id;"),
+        ("quoted password hash", "SELECT TOP (1) l.\"password_hash\" FROM sys.sql_logins AS l ORDER BY l.principal_id;"),
+        ("star over bracketed sql_logins", "SELECT TOP (1) * FROM sys.[sql_logins] AS l ORDER BY l.principal_id;"),
+        ("bracketed log reader", "SELECT TOP (1) x.[Current LSN] FROM sys.[fn_dblog](NULL, NULL) AS x ORDER BY x.[Current LSN];"),
+        ("quoted file system reader", "SELECT f.file_or_directory_name FROM sys.\"dm_os_enumerate_filesystem\"(N'C:\\', N'*') AS f;"),
+        ("bracketed temporary table", "SELECT t.a FROM [#t] AS t;"),
+        ("audit file v2", "SELECT a.event_time FROM sys.fn_get_audit_file_v2(N'\\\\h\\s\\*.sqlaudit', NULL, NULL, NULL, NULL) AS a;"),
+        ("backup log dump", "SELECT d.Operation FROM sys.fn_dump_dblog_xtp(NULL, NULL, N'DISK', 1, N'x') AS d;"),
+        ("live event stream", "SELECT s.object_name FROM sys.fn_MSxe_read_event_stream(N'system_health', 0) AS s;"),
+        ("every page of every index", "SELECT p.page_count FROM sys.dm_db_index_physical_stats(NULL, NULL, NULL, NULL, N'DETAILED') AS p;"),
+        ("more name-resolving built-ins", "SELECT FILE_IDEX(N'x') AS a, FILEGROUPPROPERTY(N'PRIMARY', N'IsDefault') AS b, DATABASEPROPERTY(N'x', N'IsShutDown') AS c, APPLOCK_TEST(N'public', N'x', N'Exclusive', N'Session') AS d;"),
+        ("trace flag hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (QUERYTRACEON 8649);"),
+        ("memory grant hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (MIN_GRANT_PERCENT = 100);"),
+        ("fetch from a cursor","SELECT 1 AS a; FETCH NEXT FROM c;"),
         ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")
     ];
 
