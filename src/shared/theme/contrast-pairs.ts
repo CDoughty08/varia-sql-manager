@@ -157,7 +157,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A highlighted row's colour replaces the stripe and is a layer over its cells and a diff's colour, under a search
   // match and the selection; its row number is tinted with it over the header.
   ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).flatMap(color => [
-    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
+    ...text(['resultsGrid.foreground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
+    // A NULL there keeps its tint under the highlight and takes the grid's text (styles.css).
+    ...text(['resultsGrid.foreground'], ...[[], ['resultsGrid.hitOverlay'], ['resultsGrid.inactiveSelectionOverlay'], ['resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']]
+      .map(layers => [...grid, 'resultsGrid.nullBackground', `resultsGrid.highlight${color}Background`, ...layers] as ColorKey[])),
     ...text(['resultsGrid.foreground'], [...grid, `resultsGrid.highlight${color}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
     ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`]),
     // Transposed, the highlighted row is a column: its tint lies over each cell, on the grid and on a striped row.
@@ -198,7 +201,7 @@ export const contrastPairs: readonly ContrastPair[] = [
       // A selected cell keeps the row's text colour while the grid is not focused, and a departed (muted) row is the
       // selected one by construction.
       ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionOverlay']),
-      ...text(['resultsGrid.foreground'], ['resultsGrid.background', background, 'resultsGrid.selectionOverlay'])
+      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.selectionOverlay'])
     ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
