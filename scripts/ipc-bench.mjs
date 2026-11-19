@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, statusBar } from './fixtures/ui.mjs'
+import { xvfbArgs } from './fixtures/xvfb.mjs'
 
 // End-to-end IPC benchmarks (npm run bench:e2e): the built app with the Release backend and its test hooks, measured
 // from the renderer. --live adds a real query against VARIA_TEST_SQL_SERVER. Writes artifacts/bench/e2e.json, which
@@ -74,7 +75,7 @@ try {
   const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_BACKEND_TEST_HOOKS: '1', VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) }
   delete env.ELECTRON_RUN_AS_NODE
   // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it.
-  app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  app = await electron.launch({ args: xvfbArgs(['.']), env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   // Smoke windows stay hidden, and a hidden window gets about one animation frame a second; show it without focus.
