@@ -14,7 +14,7 @@ internal static class Providers
 
     /// <summary>Methods declared for both engines: those that name a query, session or result rather than a connection, and
     /// system.health. SqlService resolves their provider from what the id names.</summary>
-    internal static readonly string[] BothMethods = ["system.health", "connections.connect", "connections.disconnect", "query.cancel", "query.session.close", "query.session.state",
+    internal static readonly string[] BothMethods = ["system.health", "connections.connect", "connections.disconnect", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.visibility", "results.read", "results.close", "results.setMemoryLimit", "results.rowBytes", "results.view", "results.viewClose",
         "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot",
         "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose", "results.copy", "results.export"];

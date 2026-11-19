@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
-import { deadlineFor, methodAllows, requestProvider } from '../../shared/ipc/methods'
+import { deadlineFor, methodAllows, optionsAllow, requestProvider } from '../../shared/ipc/methods'
 import type { ProviderId } from '../../shared/providers'
 import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
@@ -169,7 +169,9 @@ export class BackendSupervisor {
   async request<M extends BackendMethod>(method: M, params: BackendMethods[M]['params'], o: RequestOptions = {}): Promise<BackendMethods[M]['result']> {
     // A connection of another engine never reaches a method that does not serve it, nor starts a backend for it; C# checks
     // again (DispatchAsync).
-    if (!methodAllows(method, requestProvider(method, params, id => this.providers.get(id)))) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedProvider)
+    const provider = requestProvider(method, params, id => this.providers.get(id))
+    if (!methodAllows(method, provider)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedProvider)
+    if (!optionsAllow(method, provider, params)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
     this.start()
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']

@@ -368,8 +368,8 @@ describe('IPC validation', () => {
     expect(main).toEqual(expect.arrayContaining(['connections.connect', 'connections.disconnect']))
     expect(methodProviders('bigquery.account')).toEqual(['bigquery'])
     expect(methodProviders('connections.preview')).toEqual(['sqlserver'])
-    expect(main).not.toContain('query.execute')
-    expect(main).toEqual(expect.arrayContaining(['system.health', 'query.cancel', 'query.session.close', 'query.session.state', 'results.read', 'results.close', 'results.copy', 'results.export']))
+    expect(main).not.toContain('plans.estimate')
+    expect(main).toEqual(expect.arrayContaining(['system.health', 'query.execute', 'query.cancel', 'query.session.close', 'query.session.state', 'results.read', 'results.close', 'results.copy', 'results.export']))
   })
   it('resolves a request\'s provider as main can tell it, and refuses a method for another engine', () => {
     const providers = new Map([['bq-handle', 'bigquery' as const], ['sql-handle', 'sqlserver' as const]])

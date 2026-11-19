@@ -92,6 +92,7 @@ if (args is ["--bigquery-checks"])
     void Collect(bool condition, string name) { if (condition) Interlocked.Increment(ref passed); else failed.Enqueue(name); }
     BigQueryCredentialChecks.Run(Collect);
     await BigQueryChecks.RunAsync(Collect);
+    await BigQueryExecutionChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -439,6 +440,7 @@ if (liveGroup is null)
         ("Provider", () => ProviderChecks.RunAsync(Check)),
         ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
+        ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
