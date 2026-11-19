@@ -63,14 +63,15 @@ namespace Varia.Backend.Agent
         /// <summary>msdb refused the login (916, where its guest CONNECT was revoked): no Agent role, the server options unread.</summary>
         public static AgentProfileDto NoMsdb(string platform, int engineEdition) => new(platform, engineEdition, false, false, false, false, false, false, false, false, false, false, null, null, false);
 
-        /// <summary>A failed read as agent.profile answers it: msdb refusing the login (NO_DB_ACCESS) is a profile with no role,
-        /// anything else the error itself.</summary>
-        public static AgentProfileResult Failed(ExplorerError error, string platform, int engineEdition) => error.Code == "NO_DB_ACCESS"
+        /// <summary>A failed read as agent.profile answers it: msdb refusing the login (NO_DB_ACCESS once the pool connection is open,
+        /// so from the msdb scope wrapper) is a profile with no role; anything else, a refused open included, is the error itself.</summary>
+        public static AgentProfileResult Failed(ExplorerError error, bool opened, string platform, int engineEdition) => opened && error.Code == "NO_DB_ACCESS"
             ? new(NoMsdb(platform, engineEdition), 0)
             : new(null, 0, error);
 
         /// <summary>The batch returned no row, which a working server never does.</summary>
-        public static readonly ExplorerError NoRow = new("SQL_ERROR", "The SQL Server Agent capability read returned no row. Refresh to retry.", true);
+        /// The renderer adds "Refresh to retry." to every failed role read (agentRoleReason), so the message does not.
+        public static readonly ExplorerError NoRow = new("SQL_ERROR", "The SQL Server Agent capability read returned no row.", true);
 
         /// <summary>Why a server serves no Agent node, by its engine edition.</summary>
         public static string Unsupported(int engineEdition) => engineEdition == 4
@@ -105,19 +106,20 @@ namespace Varia.Backend.Explorer
             {
                 token.ThrowIfCancellationRequested();
                 var values = new Values(null, null, null, false, 1, null, null, null, null, null, null, null);
+                var opened = false;
                 var result = await RunAsync(args.ConnectionId, "msdb", "SQL Server Agent", profile, QueryScope.Database, AgentProfileSql.Render(new SqlRender(profile.Band)), values,
                     async (_, reader) => await AgentProfileSql.ReadAsync(reader, platform, server.EngineEdition, source.Token) is { } read
                         ? new AgentProfileResult(read, 0)
                         : new AgentProfileResult(null, 0, AgentProfileSql.NoRow),
-                    error => AgentProfileSql.Failed(error, platform, server.EngineEdition),
-                    source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget));
+                    error => AgentProfileSql.Failed(error, opened, platform, server.EngineEdition),
+                    source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget), () => opened = true);
                 return result with { ElapsedMs = watch.ElapsedMilliseconds };
             }
             catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
             {
                 if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
                 return new(null, watch.ElapsedMilliseconds, new("TIMEOUT", "Reading this login's SQL Server Agent role took longer than "
-                    + Math.Ceiling(budget.TotalSeconds).ToString(CultureInfo.InvariantCulture) + " seconds. Refresh to retry.", true));
+                    + Math.Ceiling(budget.TotalSeconds).ToString(CultureInfo.InvariantCulture) + " seconds.", true));
             }
             finally { running.Unregister(args.RequestId, entry); }
         }

@@ -451,7 +451,7 @@ internal sealed partial class ExplorerService : IDisposable
     /// <param name="subject">The folder or object being read, as the tree labels it, for error messages.</param>
     /// <param name="started">Runs once the slots are taken, before the connection opens (Peek starts its budget there).</param>
     private async Task<T> RunAsync<T>(string connectionId, string? requestDatabase, string subject, ExplorerProfile profile, QueryScope scope, string statement, Values values,
-        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null)
+        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null, Action? opened = null)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
         var database = scope == QueryScope.Ssis ? host.SsisCatalog : requestDatabase;
@@ -475,6 +475,7 @@ internal sealed partial class ExplorerService : IDisposable
                 {
                     return failed(await SsisOpenFailureAsync(connectionId, subject, database!, token));
                 }
+                opened?.Invoke();
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");

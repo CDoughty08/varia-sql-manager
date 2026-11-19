@@ -323,7 +323,7 @@ internal static class AgentLiveChecks
         try
         {
             var slow = await service.Explorer.AgentProfileAsync(new AgentProfileArgs(info.Id, Guid.NewGuid().ToString()), CancellationToken.None);
-            check(slow is { Profile: null, Error: { Code: "TIMEOUT", Retryable: true } } && slow.ElapsedMs < 2500 && service.Explorer.RunningCount == 0,
+            check(slow is { Profile: null, Error: { Code: "TIMEOUT", Retryable: true } } && !slow.Error.Message.Contains("Refresh", StringComparison.Ordinal) && slow.ElapsedMs < 2500 && service.Explorer.RunningCount == 0,
                 "agent.profile past its budget is a retryable TIMEOUT value, and unregisters (" + slow.ElapsedMs + " ms): " + slow.Error?.Code);
             options.AgentProfileBudget = TimeSpan.FromSeconds(30);
             // The call registers before its first await, so a Forget straight after it finds the request running.
