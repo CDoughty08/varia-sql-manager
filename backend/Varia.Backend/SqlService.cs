@@ -2363,6 +2363,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var token = Token(context);
         if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
             throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
+        var match = DiffMatchOf(args.Match);
         var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
         var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
         if (!ReferenceEquals(left.Budget, right.Budget))
@@ -2391,7 +2392,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             DiffModel model;
-            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, progress, left, right); }
+            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve, match: match), token, progress, left, right); }
             catch (RequestException error) when (error.Code == "TOO_LARGE")
             {
                 // A room or the first result's unpacking refused may be the machine's memory as much as the budget's.
@@ -2412,7 +2413,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 progress?.Phase("write", 0.98);
-                try { await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, progress, left, right); }
+                long trailing;
+                try { trailing = await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, progress, left, right); }
                 catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right)); }
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
@@ -2423,8 +2425,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
                     [.. columns.Select((column, index) => (column, index)).Where(item => !ResultTextWriter.Hidden(item.column) && !paired.Any(pair => side(pair) == item.index))
                         .Take(MaxDiffColumnNames).Select(item => item.column.Name)];
-                var answer = new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
-                    model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
+                var used = new DiffMatchResult(model.Mode switch { DiffMatchMode.Auto => "auto", DiffMatchMode.Position => "position", DiffMatchMode.Rows => "rows", _ => "columns" },
+                    [.. model.KeyPairs.Select(pair => right.Columns[paired[pair].Right].Name)]);
+                var answer = new ResultsDiffResult(set.Describe(), used, same, changed, added, removed, soft,
+                    model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right), model.Repeated(), model.Possible.Count / 2,
+                    model.PossibleSkipped, same + changed == 0 && leftRows > 0 && rightRows > 0, [.. model.ColumnChanges().Select(change => new DiffColumnChange(change.Changed, change.Soft))], trailing);
                 // Main owns the diff only once it has the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
                 return answer;
@@ -2436,6 +2441,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
         }
         finally { store.Return(left.Budget, working + cells.Held); }
+    }
+
+    /// <summary>results.diff's match parameter: absent is Auto; Columns takes 1 to 16 distinct pair indexes (checked against
+    /// the pairs by ResultDiffer.Compare), the other modes none.</summary>
+    internal static DiffMatch DiffMatchOf(DiffMatchArgs? args)
+    {
+        if (args is null) return DiffMatch.Auto;
+        var mode = args.Mode switch
+        {
+            "auto" => DiffMatchMode.Auto,
+            "position" => DiffMatchMode.Position,
+            "rows" => DiffMatchMode.Rows,
+            "columns" => DiffMatchMode.Columns,
+            _ => throw new RequestException("INVALID_PARAMS", "Match rows by auto, position, rows or columns.")
+        };
+        if (mode != DiffMatchMode.Columns)
+            return args.Columns is null ? new DiffMatch(mode, []) : throw new RequestException("INVALID_PARAMS", "Only a match by columns takes columns.");
+        if (args.Columns is not { Length: >= 1 and <= ResultDiffer.MaxKeyColumns } columns || columns.Any(pair => pair < 0) || columns.Distinct().Count() != columns.Length)
+            throw new RequestException("INVALID_PARAMS", "Choose 1 to 16 different paired columns to match rows by.");
+        return new DiffMatch(mode, columns);
     }
 
     /// <summary>results.pivot: groups and aggregates a complete result's rows (ResultPivoter), or its view's, off the frame

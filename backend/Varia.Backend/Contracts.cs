@@ -174,12 +174,22 @@ internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool
 /// <summary>results.diff: compares two complete results of the same query (Left the earlier, Right the later) and stores
 /// the unified diff as a new result of that query (UnifiedDiff). Context is how many unchanged rows show around each change
 /// (-1: all); Exact compares text character for character instead of by collation.</summary>
-internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1);
-/// <summary>Key is the shared column whose values matched rows, or null when whole rows did; LeftOnly and RightOnly are the
-/// columns (at most 64 names each) without a namesake in the other result, which are not compared; Soft counts values equal
-/// only by collation (case or trailing spaces, say).</summary>
-internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
-    string[] LeftOnly, string[] RightOnly);
+internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1, DiffMatchArgs? Match = null);
+/// <summary>How results.diff matches rows: Mode "auto" (absent: auto), "position", "rows", or "columns" with 1 to 16
+/// distinct pair indexes (ResultDiffer.MaxKeyColumns).</summary>
+internal sealed record DiffMatchArgs(string Mode, int[]? Columns = null);
+/// <summary>What matched rows: Mode "auto" with its key's name, "rows" (asked, or when auto found no key), "position", or
+/// "columns" with the key columns' names (the second result's).</summary>
+internal sealed record DiffMatchResult(string Mode, string[] Columns);
+/// <summary>One pair's changed and soft (collation-only) cells.</summary>
+internal sealed record DiffColumnChange(long Changed, long Soft);
+/// <summary>Match is what matched rows; LeftOnly and RightOnly are the columns (at most 64 names each) without a namesake in
+/// the other result, which are not compared; Soft counts values equal only by collation (case or trailing spaces, say).
+/// Repeated counts entries whose key repeats (flagged dup), Possible the pairs of removed and added rows that look alike
+/// (flagged poss), PossibleSkipped that too many unmatched rows were left to look; NothingPaired that both results have
+/// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row.</summary>
+internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, DiffMatchResult Match, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
+    string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden);
 /// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
 /// without a column counts rows.</summary>
 internal sealed record PivotValueArgs(string Aggregate, int? Column = null);

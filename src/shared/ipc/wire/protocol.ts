@@ -27,9 +27,9 @@ export const limits = {
   /** Row identities for highlights: rows one results.rowIds names, identities one results.findRows looks for and rows it
    *  lists (SqlService.MaxRowIds, MaxFindIds and MaxFindMatches in C#); identities are below 2^53. */
   identity: { maxRows: 16_384, maxFind: 10_000, maxMatches: 100_000 },
-  /** results.diff: unchanged rows shown around a change (-1 for all), and names listed of the columns only one result has
-   *  (SqlService.MaxDiffContext and MaxDiffColumnNames in C#). */
-  diff: { maxContext: 100, maxColumnNames: 64 },
+  /** results.diff: unchanged rows shown around a change (-1 for all), names listed of the columns only one result has, and
+   *  the pairs a match by columns takes (SqlService.MaxDiffContext, MaxDiffColumnNames and ResultDiffer.MaxKeyColumns in C#). */
+  diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16 },
   /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
    *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */
   search: { maxText: 1024, maxMatches: 10_000 },
@@ -131,6 +131,8 @@ export const errorCodes = [
   // Backend and main: the method has no such engine (its `providers` lack the connection's provider). Not NOT_SUPPORTED
   // ("this server cannot have it") or AUTH_UNSUPPORTED (an authentication failure).
   'UNSUPPORTED_PROVIDER',
+  // Backend: a results.diff key column holds a truncated value, which could pair different rows; choose another.
+  'DIFF_KEY_TRUNCATED',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

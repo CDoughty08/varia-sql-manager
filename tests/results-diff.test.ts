@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
-import { cellMarksOf, rowToneOf } from '../src/renderer/src/grid/GridView'
+import { cellMarksOf, diffKinds, rowToneOf } from '../src/renderer/src/grid/GridView'
+import { liveTones } from '../src/shared/live/catalog'
 import { cssRules } from './fixtures/css-rules'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
-import { CompareService, compareText } from '../src/renderer/src/results/CompareService'
+import { CompareService, compareText, matchedBy } from '../src/renderer/src/results/CompareService'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -80,9 +81,9 @@ describe('result diffs', () => {
     expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
     expect(results.getSnapshot().t1.settled.get(setKey(sets[2].descriptor))).toEqual({ rows: 3, strip: true })
     const info = compare.getSnapshot().info.get(setKey(sets[2].descriptor))!
-    expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, key: 'Id', changed: 1, added: 1, removed: 0, same: 1 })
+    expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, match: { mode: 'auto', columns: ['Id'] }, changed: 1, added: 1, removed: 0, same: 1 })
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
-    expect(compareText({ ...info, key: undefined, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
+    expect(compareText({ ...info, match: { mode: 'rows', columns: [] }, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
       .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2). Filters and sorts on the inputs were not applied.')
     // A diff is not compared again, nor is a set whose previous one is the diff.
     expect(compare.canCompare('t1', keyAt(results, 't1', 2))).toBe(false)
@@ -139,7 +140,7 @@ describe('result diffs', () => {
     const comparing = compare.compare('t1', keyAt(results, 't1', 1))
     run(2, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
-    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await comparing
     expect(client.released()).toContain(950)
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
@@ -238,18 +239,30 @@ describe('result diffs', () => {
     expect(css.indexOf('.rg-row .rg-c.is-hit.is-hit')).toBeGreaterThan(css.indexOf('.rg-row.tone-changedOld .rg-c.is-chg {'))
   })
 
-  it('tells a changed row\'s halves from added and removed rows by their listed cells', () => {
+  it('reads a row\'s tone from its tone text\'s kind, whatever flags and cells follow', () => {
     expect(rowToneOf('removed')).toBe('removed')
-    expect(rowToneOf('added')).toBe('added')
-    expect(rowToneOf('removed 2 ~4')).toBe('changedOld')
-    expect(rowToneOf('added 0-3 …')).toBe('changedNew')
+    expect(rowToneOf('added poss=4')).toBe('added')
+    expect(rowToneOf('removed 2 ~4')).toBe('removed')
+    expect(rowToneOf('changedOld dup gap=3 2 ~4')).toBe('changedOld')
+    expect(rowToneOf('changedNew 0-3 …')).toBe('changedNew')
     expect(rowToneOf('same ~1')).toBe('same')
+    // The comparison kinds never name a live tone, so one set of grid classes serves both.
+    expect(diffKinds.filter(kind => (liveTones as readonly string[]).includes(kind))).toEqual([])
+    // Flags are not cells.
+    expect([...cellMarksOf('dup poss=3 gap=12 4')!.keys()]).toEqual([4])
     expect(rowToneOf('error')).toBe('error')
     expect(rowToneOf('')).toBe('')
   })
 
+  it('says how rows were matched, from the answer\'s match', () => {
+    expect(matchedBy({ mode: 'auto', columns: ['Id'] })).toBe('rows matched by Id')
+    expect(matchedBy({ mode: 'rows', columns: [] })).toBe('whole rows matched')
+    expect(matchedBy({ mode: 'position', columns: [] })).toBe('rows matched by position')
+    expect(matchedBy({ mode: 'columns', columns: ['Id', 'Status'] })).toBe('rows matched by Id, Status')
+  })
+
   it('says when values were compared by their stored prefix', () => {
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, key: 'Id', exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show. Filters and sorts on the inputs were not applied.')
   })
 

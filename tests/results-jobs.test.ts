@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { exportDefaults, formatFromPath, jobSentences, removeExportLeftovers, ResultsJobHost, supervisorJobs, type JobHostDeps, type JobsBackend } from '../src/main/results-jobs'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
-import type { ResultsCopyParams, ResultsExportParams, ResultsJobProgress, ResultsJobResult } from '../src/shared/contracts'
+import type { DiffMatch, ResultsCopyParams, ResultsExportParams, ResultsJobProgress, ResultsJobResult } from '../src/shared/contracts'
+import { diffResultSchema } from '../src/shared/ipc/port-messages'
 import { cancelReasons } from '../src/shared/ipc/wire/protocol'
 import type { StreamSink } from '../src/main/backend/connection'
 
@@ -410,6 +411,17 @@ describe('ResultsJobHost over the fake backend', () => {
     const lines = (await readFile(target, 'utf8')).split('\r\n')
     expect([lines.length, lines[0], lines[1].split(',').slice(0, 2)]).toEqual([3002, '\ufeffid,name,created,amount,key,note,active,score', ['0', 'Customer 0000000000 GmbH']])
     expect((await readdir(control)).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+  it('compares by the match asked for in the fake, in the shape the port accepts', async () => {
+    const { supervisor, execute } = await workbench()
+    const [first, second] = (await execute('-- varia-fake: sets=N1*10,N1*10\nSELECT 1')).resultSets
+    const ask = (match?: DiffMatch) => supervisor.request('results.diff', { left: first.resultId, right: second.resultId, context: 0, ...match ? { match } : {} })
+    const answers = [await ask(), await ask({ mode: 'rows' }), await ask({ mode: 'position' }), await ask({ mode: 'columns', columns: [0] })]
+    for (const answer of answers) expect(diffResultSchema.safeParse(answer).error).toBeUndefined()
+    expect(answers.map(answer => [answer.match.mode, answer.match.columns.length, answer.same, answer.trailingHidden, answer.nothingPaired])).toEqual([
+      ['auto', 1, 10, 10, false], ['rows', 0, 10, 10, false], ['position', 0, 10, 10, false], ['columns', 1, 10, 10, false]
+    ])
+    expect(await failure(ask({ mode: 'columns', columns: [99] }))).toMatchObject({ code: 'INVALID_PARAMS' })
   })
   it('passes BUDGET_STOPPED from a pivot or diff of a stopped query through main with its sentence', async () => {
     const { control, supervisor, execute } = await workbench()

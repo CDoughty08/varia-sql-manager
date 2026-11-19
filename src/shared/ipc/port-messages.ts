@@ -27,6 +27,14 @@ const distinctColumns = z.array(column).min(1).max(limits.page.maxColumns).refin
 const filterCells = z.object({ ranges: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.views.maxFilterRanges), viewId: u32.optional() }).strict()
 /** The base rows a keepRows filter keeps (ViewSorter.MaxKeepRows in C#). */
 const keptRows = z.array(filterRow).min(1).max(limits.transpose.maxRows)
+/** results.diff's match: a mode, and for `columns` 1 to maxKeyColumns distinct pair indexes (the backend checks them
+ *  against the pairs). */
+export const diffMatchSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('auto') }).strict(),
+  z.object({ mode: z.literal('position') }).strict(),
+  z.object({ mode: z.literal('rows') }).strict(),
+  z.object({ mode: z.literal('columns'), columns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).min(1).max(limits.diff.maxKeyColumns).refine(columns => new Set(columns).size === columns.length, 'Key columns must be distinct.') }).strict()
+])
 export const viewFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean().optional() }).strict(),
   z.object({ op: filterOp, column, cells: filterCells }).strict(),
@@ -68,7 +76,7 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   z.object({ t: z.literal('rowIds'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.identity.maxRows), viewId: u32.optional() }).strict(),
   z.object({ t: z.literal('findRows'), rid: u31, generation, resultId: u32, ids: z.array(identityId).min(1).max(limits.identity.maxFind), viewId: u32.optional() }).strict(),
   // A unified diff of two results of one query (results.diff), stored as a new result the port then owns.
-  z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext) }).strict()
+  z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext), match: diffMatchSchema.optional() }).strict()
     .refine(request => request.resultId !== request.right, 'A result is not compared with itself.'),
   // Search (results.search): the cells containing a text, through a view when one is named; `cancel` stops it.
   z.object({
@@ -137,11 +145,14 @@ export const rowIdsResultSchema = z.object({ firstRow: count, ids: z.array(z.num
 export const findRowsResultSchema = z.object({ positions: z.array(count).max(limits.identity.maxMatches), marks: z.array(z.number().int().min(0).max(limits.identity.maxFind - 1)).max(limits.identity.maxMatches), truncated: z.boolean(), rows: count }).strict()
   .refine(result => result.positions.length === result.marks.length && result.positions.every((position, index) => index === 0 || position > result.positions[index - 1]), 'Positions ascend, one mark each.')
 const columnNames = z.array(z.string().max(512)).max(limits.diff.maxColumnNames)
-/** A results.diff answer as the backend sends it (its descriptor without the generation, which main adds). `key` is absent
- *  when whole rows matched: the backend leaves out a null member (Contracts.cs, WhenWritingNull), never sends it as null. */
+/** A results.diff answer as the backend sends it (its descriptor without the generation, which main adds): `match` names
+ *  what matched rows (at most maxKeyColumns names), and `columnChanges` has one entry per compared pair. */
 export const diffResultSchema = z.object({
-  descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }), key: z.string().max(512).optional(), same: count, changed: count, added: count, removed: count, soft: count,
-  approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }),
+  match: z.object({ mode: z.enum(['auto', 'position', 'rows', 'columns']), columns: z.array(z.string().max(512)).max(limits.diff.maxKeyColumns) }).strict(),
+  same: count, changed: count, added: count, removed: count, soft: count, approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames,
+  repeated: count, possible: count, possibleSkipped: z.boolean(), nothingPaired: z.boolean(),
+  columnChanges: z.array(z.object({ changed: count, soft: count }).strict()).max(limits.page.maxColumns), trailingHidden: count
 }).strict()
 /** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks
  *  its matches are in order and inside the rows searched before forwarding it. */
