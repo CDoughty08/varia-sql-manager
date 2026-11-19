@@ -375,7 +375,8 @@ internal static partial class FusedReadChecks
         var store = Packed();
         var packed = Filled(store, "identify packed");
         var used = store.UsedBytes;
-        bool Kept() => packed.HasPacked && store.UsedBytes == used && store.PackingSnapshot().CacheBytes == 0;
+        // A search keeps its type-ahead memo (SearchNarrowing.cs) charged to the result; nothing else may stay.
+        bool Kept() => packed.HasPacked && store.UsedBytes - (packed.SearchMemo?.Bytes ?? 0) == used && store.PackingSnapshot().CacheBytes == 0;
         string Identity(ResultSetBuffer set, IdentityBy by, int column)
         {
             var (chosen, unique, approximate, ids) = RowIdentity.Build(set, set.SealedSnapshot(), by, column, CancellationToken.None);
@@ -397,7 +398,7 @@ internal static partial class FusedReadChecks
             owner.AddView(set, ViewSorter.Build(set, set.SealedSnapshot(), [], [new ViewFilter(FilterOp.In, 1, GroupRows(2), false, null, [])], CancellationToken.None).Order, [], false, true, 0, null);
         var rawView = FilteredView(rawStore, raw);
         var packedView = FilteredView(store, packed);
-        used = store.UsedBytes;
+        used = store.UsedBytes - (packed.SearchMemo?.Bytes ?? 0);
         foreach (var (text, from, backward) in new[] { ("word12", 1000L, false), ("open", 30_000L, true), ("REFERENCE-00042", 0L, false), ("no such text", 0L, false) })
         {
             var unpackedBefore = store.PackingSnapshot().PagesUnpacked;
@@ -424,7 +425,7 @@ internal static partial class FusedReadChecks
         {
             var rawSorted = SortedView(rawStore, raw, filtered);
             var packedSorted = SortedView(store, packed, filtered);
-            used = store.UsedBytes;
+            used = store.UsedBytes - (packed.SearchMemo?.Bytes ?? 0);
             using (packed.Pin()) check(!ResultSearcher.Local(packed.SealedSnapshot(), packedSorted.Order), "the fixture: a sorted view far from the packed pages' order");
             foreach (var (text, from, backward, max) in new[] { ("word12", 500L, false, 50), ("word1", 0L, false, 3), ("open", 20_000L, true, 50), ("o", 30_000L, true, 7), ("REFERENCE-00042", 0L, false, 10_000), ("no such text", 100L, true, 10) })
             {
@@ -483,7 +484,7 @@ internal static partial class FusedReadChecks
             "row identities of a partly packed result are those of it unpacked");
         var found = ResultSearcher.Search(left, left.SealedSnapshot(), null, "0A", 0, false, 100, CancellationToken.None)!;
         var foundRaw = ResultSearcher.Search(rawLeft, rawLeft.SealedSnapshot(), null, "0A", 0, false, 100, CancellationToken.None)!;
-        check(found.Total == foundRaw.Total && found.Rows.SequenceEqual(foundRaw.Rows) && found.Columns.SequenceEqual(foundRaw.Columns) && store.UsedBytes == used,
+        check(found.Total == foundRaw.Total && found.Rows.SequenceEqual(foundRaw.Rows) && found.Columns.SequenceEqual(foundRaw.Columns) && store.UsedBytes - (left.SearchMemo?.Bytes ?? 0) == used,
             "a search of a partly packed result finds what it finds unpacked: " + found.Total);
     }
 

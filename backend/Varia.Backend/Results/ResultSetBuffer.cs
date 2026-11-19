@@ -98,6 +98,8 @@ internal sealed class ResultSetBuffer
     private int unpackTotal, unpackDone;
     private TruncationReason refused;
     private volatile bool incomplete;
+    /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
+    private SearchMemo? searchMemo;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -512,6 +514,22 @@ internal sealed class ResultSetBuffer
     /// <summary>Whether memory taken as spare may still be kept (<see cref="ResultStore.HasSpare"/>).</summary>
     public bool HasSpare => store.HasSpare(Budget);
 
+    /// <summary>What the result's last search kept for the next to narrow from (<see cref="Narrowing"/>), or null.</summary>
+    internal SearchMemo? SearchMemo => Volatile.Read(ref searchMemo);
+
+    /// <summary>Keeps a search's memo in place of the last, taking over the spare room its search reserved for it
+    /// (<see cref="TryReserveSpare"/>) and returning the last one's; a freed set keeps none and returns the room.</summary>
+    internal void KeepSearchMemo(SearchMemo memo)
+    {
+        lock (gate)
+        {
+            if (gone) { store.Return(Budget, memo.Bytes); return; }
+            if (searchMemo is { } last) ReturnLocked(last.Bytes);
+            charged += memo.Bytes;
+            Volatile.Write(ref searchMemo, memo);
+        }
+    }
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
@@ -873,6 +891,8 @@ internal sealed class ResultSetBuffer
         gone = true;
         pages.Clear();
         cache.Clear();
+        // Its bytes are in charged, returned below.
+        Volatile.Write(ref searchMemo, null);
         store.Held(-packedBytes, -packedLogical, -cacheBytes);
         packedBytes = packedLogical = cacheBytes = 0;
         var freed = charged;

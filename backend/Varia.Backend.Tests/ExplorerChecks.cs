@@ -306,6 +306,15 @@ internal static class ExplorerChecks
         check(wrong.Count == 0, "module headers: defaults found past strings, comments, quoted names, OUTPUT, READONLY, VARYING, CREATE OR ALTER and ;n; surprises give null: " + string.Join(" | ", wrong));
         var many = "CREATE PROC p " + string.Join(", ", Enumerable.Range(0, 2101).Select(i => "@p" + i + " int")) + " AS";
         check(ModuleHeader.ParameterDefaults(many) is null, "more than 2,100 parameters is a surprise");
+        // Each default as written, for Peek's Parameters list: a sign kept with its number, a string with its quotes.
+        var texts = ModuleHeader.ParameterDefaultTexts("CREATE OR ALTER PROCEDURE p @a int = -1, @b money = $1.50, @n nvarchar(max) = N'it''s', @x xml(CONTENT dbo.c) = NULL, @o int = 5 OUT, @c int AS");
+        check(texts is not null && texts.Count == 5 && texts["@a"] == "-1" && texts["@b"] == "$1.50" && texts["@N"] == "N'it''s'" && texts["@x"] == "NULL" && texts["@o"] == "5"
+            && !texts.ContainsKey("@c") && ModuleHeader.ParameterDefaultTexts("SELECT 1") is null,
+            "module headers give each default's text as written, by the parameter's name in any case: " + (texts is null ? "null" : string.Join(" | ", texts.Select(pair => pair.Key + "=" + pair.Value))));
+        // A "quoted" default (a string under QUOTED_IDENTIFIER OFF) keeps the others, and a native module's NOT NULL is passed over.
+        var quoted = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @s varchar(10) = \"abc\", @n int NOT NULL = 1, @b nvarchar(5) = [x] AS");
+        check(quoted is not null && quoted["@s"] == "\"abc\"" && quoted["@n"] == "1" && quoted["@b"] == "[x]",
+            "a quoted default is read as written, and does not lose its module's other defaults: " + (quoted is null ? "null" : string.Join(" | ", quoted.Select(pair => pair.Key + "=" + pair.Value))));
     }
 
     private static void Errors(Action<bool, string> check)

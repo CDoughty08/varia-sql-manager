@@ -1,6 +1,7 @@
 // Peek's card layout and value formatting, kept apart from the component so the checks can run them without a DOM.
-import type { PeekFormat, PeekValue } from '../../../shared/explorer/peek.ts'
+import type { PeekFormat, PeekListColumn, PeekValue } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import type { LocalTableData } from '../../../shared/results/local-table.ts'
 
 /** The card's room: as wide and tall as this where the window allows, and this far from the pane and the window's edges. */
 export const cardWidth = 880, cardHeight = 480, gap = 8
@@ -26,6 +27,30 @@ export function formatPeekValue(fact: { readonly format: PeekFormat }, value: Pe
     case 'code': return typeof value === 'string' && /^[A-Z]+(_[A-Z]+)*$/.test(value) ? words(value) : displayText(String(value))
     default: return displayText(String(value))
   }
+}
+
+/**
+ * A Peek list as a local table (`LocalGrid`): its columns by their labels, a count a number column, NULL as NULL (as a results
+ * grid shows it), text as the catalog holds it (the grid shows control characters itself), and the other formats as the
+ * Properties pane words them (True and False, sizes in KB or MB, codes in words).
+ */
+export function peekListTable(spec: { readonly columns: readonly PeekListColumn[] }, rows: readonly (readonly PeekValue[])[]): LocalTableData {
+  return {
+    columns: spec.columns.map(column => column.format === 'count' ? { name: column.label, kind: 'number' as const } : { name: column.label }),
+    rows: rows.map(row => spec.columns.map((column, index) => {
+      const value = row[index] ?? null
+      return value === null ? null : column.format === 'text' ? String(value) : formatPeekValue(column, value)
+    }))
+  }
+}
+
+/**
+ * Properties as Copy writes them: a `Name<TAB>Value` line a fact, the platform's line breaks between them (as a grid's copy), a
+ * tab or line break inside a value turned to a space so each fact stays one line of two fields.
+ */
+export function peekPropertiesText(facts: readonly (readonly [name: string, value: string])[], crlf: boolean): string {
+  const field = (text: string) => text.replace(/[\t\r\n]+/g, ' ')
+  return facts.map(([name, value]) => `${field(name)}\t${field(value)}`).join(crlf ? '\r\n' : '\n')
 }
 
 /** Where the card goes: beside the pane on the side with room (right first), level with the row, inside the window. */

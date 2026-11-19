@@ -238,11 +238,16 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
-  of one the view's inverse, 4 bytes a row of the result); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
+  memory, one a result, freed with it: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
-  highlights from sorted positions by binary search per painted row, theme colours only. Diffs (`Results/ResultDiff.cs`,
+  highlights from sorted positions by binary search per painted row, theme colours only. A cell's own colour (a diff's
+  tint, NULL's) is its `background-color`; the row's highlight, a search match and the selection lie over it in that order
+  as translucent `background-image` layers set through `--rg-hl`, `--rg-hit` and `--rg-sel`, so none replaces another, and
+  no other cell rule sets an image or the `background` shorthand outside forced colours (`tests/results-diff.test.ts`).
+  Diffs (`Results/ResultDiff.cs`,
   `results.diff`) store the unified diff as a derived result of the same query: its data columns, then a hidden suffix
   (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
   in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`
@@ -475,6 +480,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   from the first page's means the module changed, and the part says so. Closing, replacing or refreshing cancels the
   page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units, a renderer memory bound): a longer
   text is not read, never shown in part. Search Objects' details pane reads pages only up to its `shownChars`.
+- **Peek lists** (`peekLists` in `src/shared/explorer/peek.ts`) come with the facts in `explorer.peek`'s batch, each
+  `TOP (@take)` in a fixed order, and show through `PeekListGrid` (card or page preset). Columns' and Parameters'
+  Definition is composed in C# (`PeekSql.ColumnRow`, `ParameterRow`) from names the batch quotes with `QUOTENAME`, since
+  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`).
 - **View Dependencies** (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) has no SQL
   of its own: a level is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings
   (`PeekSql.Level`, joined by `PeekSql.Dependencies`), on Peek's slot and budget. A level is read only on expand, at most

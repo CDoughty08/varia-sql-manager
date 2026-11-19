@@ -347,6 +347,9 @@ export const gridPart = {
    *  value, and one equal to the other only by collation. */
   addedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-added',
   removedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-removed',
+  /** A changed row's old (−) and new (+) halves in a comparison: only their changed cells are coloured. */
+  changedOldRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-changedOld',
+  changedNewRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-changedNew',
   changedCell: '[role="gridcell"].is-chg',
   softCell: '[role="gridcell"].is-soft',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */

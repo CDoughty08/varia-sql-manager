@@ -288,7 +288,7 @@ internal static class PackerChecks
         var byAmount = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         var packedUse = rig.Store.UsedBytes;
         var search = (ResultsSearchResult)service.DispatchAsync("results.search", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "no such text", fromRow = 0, maxMatches = 10 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
-        check(search.Rows == set.RowsAvailable && AllPacked(set) && set.Unpacks == 0 && rig.Store.UsedBytes == packedUse,
+        check(search.Rows == set.RowsAvailable && AllPacked(set) && set.Unpacks == 0 && rig.Store.UsedBytes - (set.SearchMemo?.Bytes ?? 0) == packedUse,
             "a search of a packed hidden result through a sorted view leaves it packed and holds nothing afterwards");
         // An operation that unpacks it whole (a comparison reading it far from the other result's order) charges its raw
         // size, and its end wakes the policy.

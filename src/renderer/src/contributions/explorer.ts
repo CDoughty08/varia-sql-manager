@@ -2,7 +2,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf, filterable, type ExplorerMenuNode } from '../menus/targets'
+import { explorerNodeOf, filterable, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
 import { windows } from '../core/windows'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -89,6 +89,11 @@ export function explorerContribution({ commands, documents, connections, explore
     commands.register('explorer.copyName', {
       when: args => copyText(args) !== undefined,
       run: async args => { const text = copyText(args); if (text !== undefined) unwrap(await api.writeClipboardText(text)) }
+    }),
+    // Peek's Properties menu: the facts it read when it opened (the selected ones, else all).
+    commands.register('peek.copyProperties', {
+      when: args => !!peekPropertiesOf(args)?.text,
+      run: async args => { const text = peekPropertiesOf(args)?.text; if (text) unwrap(await api.writeClipboardText(text)) }
     })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
