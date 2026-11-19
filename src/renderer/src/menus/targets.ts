@@ -6,6 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { PaneId } from '../../../shared/layouts'
+import { explorerNodeProvider } from '../../../shared/providers'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { gridAnchor, gridTarget } from '../grid/anchor'
@@ -74,7 +75,8 @@ export interface OutputTarget {
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
   readonly live?: LiveOutput
 }
-/** What Query Output's commands do in a live grid (LiveGridPane): its selection, sort, funnels, widths and copy. */
+/** What Query Output's commands do in a grid with its own source, a live grid (LiveGridPane) or a local grid (LocalGrid):
+ *  its selection, sort, funnels, widths, copy and save. */
 export interface LiveOutput {
   /** Its table sorts (a snapshot table, not a log that keeps arrival order). */
   readonly sortable: boolean
@@ -100,6 +102,8 @@ export interface LiveOutput {
   filterColumn(column: number): void
   clearFilters(): void
   save(): void
+  /** Whether Save Results As applies (a card's local grid has none); it does without this. */
+  canSave?(): boolean
   /** Find in Results: the owner's filter box, when it has one. */
   canFind(): boolean
   find(): void
@@ -115,7 +119,7 @@ export interface LiveRowActions {
   run(action: LiveRowAction): void
 }
 const liveOutputs = new WeakMap<Element, LiveOutput>()
-/** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
+/** A live or local grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
 export function registerLiveOutput(element: Element, live: LiveOutput): () => void {
   liveOutputs.set(element, live)
   return () => { if (liveOutputs.get(element) === live) liveOutputs.delete(element) }
@@ -166,6 +170,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
+    explorerProvider: target?.kind === 'explorer' ? explorerNodeProvider(target.node) : '',
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,

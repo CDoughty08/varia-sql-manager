@@ -416,6 +416,8 @@ if (liveGroup is null)
         ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
         ("SearchNarrowing", Sync(() => SearchNarrowingChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
+        ("SortKind", Sync(() => SortKindChecks.Run(Check))),
+        ("Provider", () => ProviderChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),

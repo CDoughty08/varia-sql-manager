@@ -1,3 +1,4 @@
+import { bothProviders } from '../providers'
 import type { SettingPage } from './types'
 
 /**
@@ -6,19 +7,19 @@ import type { SettingPage } from './types'
  * Tab and Status Bar, Transact-SQL; Varia's own Activity Monitor last. tests/settings-catalog.test.ts's `expectedTree` lists the same tree.
  */
 export const settingPages = [
-  { id: 'environment', title: 'Environment' },
-  { id: 'environment.general', title: 'General', parent: 'environment', layout: 'form', provider: 'theme' },
-  { id: 'environment.autoRecover', title: 'AutoRecover', parent: 'environment', layout: 'form', description: 'Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.' },
-  { id: 'environment.documents', title: 'Documents', parent: 'environment', layout: 'form', sections: [{ label: 'Startup' }, { label: 'Files changed outside Varia' }, { label: 'Saving' }] },
-  { id: 'environment.fontsAndColors', title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).', sections: [{ label: 'Text Editor' }] },
-  { id: 'environment.shortcuts', title: 'Shortcuts', parent: 'environment', layout: 'shortcuts', description: 'Keyboard and mouse shortcuts: SSMS\'s defaults, your changes, and the scope each works in. Changes apply when you choose OK.' },
-  { id: 'environment.productUpdates', title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
+  { id: 'environment', providers: bothProviders, title: 'Environment' },
+  { id: 'environment.general', providers: bothProviders, title: 'General', parent: 'environment', layout: 'form', provider: 'theme' },
+  { id: 'environment.autoRecover', providers: bothProviders, title: 'AutoRecover', parent: 'environment', layout: 'form', description: 'Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.' },
+  { id: 'environment.documents', providers: bothProviders, title: 'Documents', parent: 'environment', layout: 'form', sections: [{ label: 'Startup' }, { label: 'Files changed outside Varia' }, { label: 'Saving' }] },
+  { id: 'environment.fontsAndColors', providers: bothProviders, title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).', sections: [{ label: 'Text Editor' }] },
+  { id: 'environment.shortcuts', providers: bothProviders, title: 'Shortcuts', parent: 'environment', layout: 'shortcuts', description: 'Keyboard and mouse shortcuts: SSMS\'s defaults, your changes, and the scope each works in. Changes apply when you choose OK.' },
+  { id: 'environment.productUpdates', providers: bothProviders, title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.', sections: [{ label: 'Hidden views', description: 'Live views in tabs that are not shown, or in a minimized window.' }, { label: 'Object Explorer' }, { label: 'Charts' }] },
   { id: 'environment.objectExplorer', title: 'Object Explorer', parent: 'environment', layout: 'form' },
-  { id: 'environment.connections', title: 'Connections', parent: 'environment', layout: 'form', description: 'How remembered connection targets reconnect when the workspace opens. Not in SSMS.' },
-  { id: 'textEditor', title: 'Text Editor' },
-  { id: 'textEditor.general', title: 'General', parent: 'textEditor', layout: 'form', sections: [{ label: 'Settings' }, { label: 'Display' }] },
-  { id: 'textEditor.editorTabAndStatusBar', title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },
+  { id: 'environment.connections', providers: bothProviders, title: 'Connections', parent: 'environment', layout: 'form', description: 'How remembered connection targets reconnect when the workspace opens. Not in SSMS.' },
+  { id: 'textEditor', providers: bothProviders, title: 'Text Editor' },
+  { id: 'textEditor.general', providers: bothProviders, title: 'General', parent: 'textEditor', layout: 'form', sections: [{ label: 'Settings' }, { label: 'Display' }] },
+  { id: 'textEditor.editorTabAndStatusBar', providers: bothProviders, title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },
   { id: 'textEditor.transactSql', title: 'Transact-SQL', parent: 'textEditor' },
   { id: 'textEditor.transactSql.general', title: 'General', parent: 'textEditor.transactSql', layout: 'form', sections: [{ label: 'Settings' }, { label: 'Display' }] },
   { id: 'textEditor.transactSql.intelliSense', title: 'IntelliSense', parent: 'textEditor.transactSql', layout: 'form', sections: [{ label: 'IntelliSense' }] },

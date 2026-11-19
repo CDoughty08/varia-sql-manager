@@ -22,6 +22,7 @@ delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
 const recentId = crypto.randomUUID()
+// Seeded under 0.9.0's name: startup copies it to mssql-connections.json (profile-migration.ts), which the checks below read.
 await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, profiles: [{ id: recentId, options: { server: 'recent-server', database: 'master', authentication: 'windows', trustServerCertificate: false }, favorite: false, registered: false, lastConnected: new Date().toISOString() }] }))
 let app
 let page
@@ -123,7 +124,7 @@ try {
   await expect(dialog.getByText('Saved to History.', { exact: true })).toBeVisible()
   await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
   await expect(savedConnections(dialog, 'focus-server')).toHaveCount(1)
-  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === 'focus-server')?.saved).toBe(true)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.find(item => item.options.server === 'focus-server')?.saved).toBe(true)
   await dialog.getByRole('button', { name: 'Add favorite', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: true })).toBeFocused()
   // A favorite is listed under Favorites only.
@@ -139,7 +140,7 @@ try {
   unsaved = page.getByRole('dialog', { name: 'Save prompt-server to History?', exact: true })
   await unsaved.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'prompt-server')).toBe(true)
+  await expect.poll(async () => JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.some(item => item.options.server === 'prompt-server')).toBe(true)
   dialog = await open()
   // It waits in History's Saved group; removing it leaves History as the rest of the suite expects.
   await expect(dialog.getByText('Saved (1)', { exact: true })).toBeVisible()
@@ -197,7 +198,7 @@ try {
   await page.keyboard.press('Escape')
   await unsaved.getByRole('button', { name: "Don't Save", exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'label-server')).toBe(false)
+  expect(JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.some(item => item.options.server === 'label-server')).toBe(false)
   dialog = await open()
   // Custom Properties stays open for later dialogs: close it again, as the rest of the suite starts.
   await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
@@ -276,7 +277,7 @@ try {
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: false })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Register server', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Unregister server', exact: true })).toBeEnabled()
-  let stored = await readFile(join(profile, 'connections.json'), 'utf8')
+  let stored = await readFile(join(profile, 'mssql-connections.json'), 'utf8')
   expect(stored).not.toContain('never-store-this-marker')
   expect(stored).not.toContain('password')
   await dialog.getByRole('button', { name: 'Advanced…', exact: true }).click()
@@ -309,7 +310,7 @@ try {
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
   // defaults, and Tools › Options for the command timeout, keep applying to the rest.
-  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.getByRole('alert').allTextContents() })).toEqual({
+  await expect.poll(async () => ({ advanced: JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.find(item => item.options.displayName === 'Development')?.options.advanced, errors: await dialog.getByRole('alert').allTextContents() })).toEqual({
     advanced: {
       commandTimeout: 7, connectTimeout: 20, columnEncryption: false, secureEnclaves: false, attestationProtocol: 'HGS', enclaveAttestationUrl: 'https://attestation.example',
       multipleActiveResultSets: true, networkProtocol: 'tcp', applicationIntent: 'ReadOnly', packetSize: 8192
@@ -425,9 +426,9 @@ try {
       await dialog.getByRole('button', { name: 'Save', exact: true }).click()
       await expect(dialog.getByText(/password is remembered/)).toBeVisible({ timeout: 35000 })
       await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
-      const savedLive = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.find(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.options.username === liveUser)
+      const savedLive = JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.find(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.options.username === liveUser)
       expect(savedLive?.saved).toBe(true)
-      expect(await readFile(join(profile, 'saved-passwords.json'), 'utf8')).not.toContain(process.env.VARIA_TEST_SQL_PASSWORD)
+      expect(await readFile(join(profile, 'mssql-saved-passwords.json'), 'utf8')).not.toContain(process.env.VARIA_TEST_SQL_PASSWORD)
       // The rest of the suite connects with a typed password and nothing remembered: unchecking forgets it on Connect.
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
       await liveRemember.uncheck()
@@ -445,7 +446,7 @@ try {
     await expect.poll(async () => await dialog.count() === 0 || await liveTrust.isVisible(), { timeout: 30000 }).toBe(true)
     if (await dialog.count()) await liveTrust.click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
-    const liveLibrary = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8'))
+    const liveLibrary = JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8'))
     expect(liveLibrary.profiles.some(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.lastConnected)).toBe(true)
     dialog = await open()
     await expect(dialog.getByText(process.env.VARIA_TEST_SQL_SERVER, { exact: true })).toBeVisible()
@@ -496,7 +497,7 @@ try {
         const principalId = 'sid:' + Buffer.from(params.username || 'fixture-account').toString('hex')
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0,
           generation: 1, targetId: context?.targetId ?? crypto.randomUUID(), principalId,
-          authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } } }
+          authentication: { principal: { provider: 'sqlserver', authentication: params.authentication, id: principalId } } } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
       if (method === 'connections.identity') return globalThis.identityPending ? new Promise(resolve => { globalThis.identityResolve = resolve }) : { ok: true, value: { principal: 'alice@CONTOSO.COM' } }
@@ -609,7 +610,7 @@ try {
   await expect(dialog.getByText('Sales is not among the databases this login can see.', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Test Connection', exact: true })).toBeFocused()
   expect(await connects()).toBe(connectsBefore)
-  expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'test-server')).toBe(false)
+  expect(JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.some(item => item.options.server === 'test-server')).toBe(false)
   // Connect drops the report: it is not about this attempt, which here fails.
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
   await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
@@ -658,7 +659,7 @@ try {
     await expect(dialog.getByText('Checking the password with entra-wait…', { exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(dialog.getByText('Save cancelled. Nothing was saved.', { exact: true })).toBeVisible()
-    expect(JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8')).profiles.some(item => item.options.server === 'entra-wait')).toBe(false)
+    expect(JSON.parse(await readFile(join(profile, 'mssql-connections.json'), 'utf8')).profiles.some(item => item.options.server === 'entra-wait')).toBe(false)
     await rememberBox.uncheck()
   }
   await dialog.getByLabel('Authentication', { exact: true }).selectOption(authBefore)
@@ -902,7 +903,7 @@ async function rememberPassword() {
   const marker = 'correct-horse-marker', encoded = Buffer.from(marker).toString('base64')
   const userData = join(passwordProfile, 'user-data'), control = join(passwordProfile, 'control')
   await mkdir(control, { recursive: true })
-  const passwordsFile = join(userData, 'saved-passwords.json'), connectionsFile = join(userData, 'connections.json'), callsFile = join(control, 'calls.jsonl')
+  const passwordsFile = join(userData, 'mssql-saved-passwords.json'), connectionsFile = join(userData, 'mssql-connections.json'), callsFile = join(control, 'calls.jsonl')
   const seamless = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
   delete seamless.VARIA_TEST_SAFE_STORAGE
   const options = { ...launchOptions, env: { ...seamless, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } } }
@@ -911,7 +912,7 @@ async function rememberPassword() {
   const calls = async () => parseCalls(await read(callsFile))
   const historyId = async server => JSON.parse(await read(connectionsFile)).profiles.find(item => item.options.server === server && item.lastConnected)?.id
   async function noSecrets() {
-    for (const [name, text] of [['saved-passwords.json', await read(passwordsFile)], ['connections.json', await read(connectionsFile)], ['calls.jsonl', await read(callsFile)]]) {
+    for (const [name, text] of [['mssql-saved-passwords.json', await read(passwordsFile)], ['mssql-connections.json', await read(connectionsFile)], ['calls.jsonl', await read(callsFile)]]) {
       expect(text.includes(marker) || text.includes(encoded), name).toBe(false)
     }
     // No password member (the server's name, password-check, says password too).
@@ -1127,7 +1128,7 @@ async function rememberPassword() {
 async function environmentLabels() {
   const userData = join(environmentProfile, 'user-data'), control = join(environmentProfile, 'control')
   await mkdir(control, { recursive: true })
-  const connectionsFile = join(userData, 'connections.json')
+  const connectionsFile = join(userData, 'mssql-connections.json')
   const fake = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_TEST_SAFE_STORAGE: 'test', VARIA_TEST_HOT_EXIT: '1' }
   await launch({ ...launchOptions, env: fake }, 'fake')
   const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server.toLowerCase() === 'prod-server')?.options.environment
@@ -1244,7 +1245,7 @@ async function environmentLabels() {
   // The target's own details, credential reference and query association survive a real hot-exit restart without
   // changing the profile. Startup reconnect attaches the original query but never executes its text.
   await app.close(); app = undefined
-  const kept = JSON.parse(await readFile(join(userData, 'Session', 'session.json'), 'utf8'))
+  const kept = JSON.parse(await readFile(join(userData, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(kept.workspace.targets).toHaveLength(1)
   expect(kept.workspace.targets[0].details.environment).toBe('UAT-EU')
   expect(kept.workspace.targets[0].resumeWanted).toBe(true)
@@ -1559,7 +1560,7 @@ async function environmentLabels() {
   await relabelled('STAGING', 'info')
   expect(await saved()).toBe('Production')
   await app.close(); app = undefined
-  const finalKept = JSON.parse(await readFile(join(userData, 'Session', 'session.json'), 'utf8'))
+  const finalKept = JSON.parse(await readFile(join(userData, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(finalKept.workspace.targets).toHaveLength(1)
   expect(finalKept.workspace.targets[0].details).toMatchObject({ displayName: 'Prod reporting', environment: 'Staging' })
   expect(await saved()).toBe('Production')

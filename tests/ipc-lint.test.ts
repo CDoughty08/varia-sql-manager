@@ -41,8 +41,8 @@ await import(${JSON.stringify(core)})`
     const file = join('src', 'shared', 'ipc', 'methods.ts')
     const source = readFileSync(file, 'utf8')
     expect(() => stripTypeScriptTypes(source, { mode: 'strip' })).not.toThrow()
-    // A value import (the actions catalogue's long-action drain, D1c) names its .ts file, so Node's own loader finds it.
-    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type |^import \{[^}]+\} from '\.\.\/[a-z-]+\/[a-z-]+\.ts'$/)
+    // A value import (the actions catalogue's long-action drain, D1c; providers.ts) names its .ts file, so Node's own loader finds it.
+    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type |^import \{[^}]+\} from '\.\.\/(?:[a-z-]+\/)?[a-z-]+\.ts'$/)
     const script = `const { methodPolicies } = await import(${JSON.stringify(pathToFileURL(file).href)}); if (methodPolicies['actions.execute'].drainMs({ action: 'delete' }) !== 0) process.exit(2)`
     const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })
     expect(result.stderr).toBe('')
@@ -72,7 +72,8 @@ await import(${JSON.stringify(core)})`
       [join('src', 'shared', 'live', 'schema.ts'), 'metrics: z.array(z.number().nullable())', 'array elements, whose nulls the backend keeps'],
       [join('src', 'shared', 'settings', 'schema.ts'), 'settingsPatchSchema = z.object(', 'a patch the renderer sends, where null resets a setting'],
       [join('src', 'shared', 'theme', 'choice.ts'), 'themePreviewSchema = z.object(', 'the renderer\'s own value, never a backend answer'],
-      [join('src', 'main', 'index.ts'), 'recoveryIds: z.array(', 'array elements of a request the renderer sends']
+      [join('src', 'main', 'index.ts'), 'recoveryIds: z.array(', 'array elements of a request the renderer sends'],
+      [join('src', 'main', 'validation.ts'), 'rows: z.array(z.array(z.string().max(localTableLimits.cellChars).nullable())', 'NULL cells of a local table the renderer sends to save, never a backend answer']
     ]
     const names = (line: string, text: string | RegExp) => typeof text === 'string' ? line.includes(text) : text.test(line)
     const nulls = (line: string) => [...line.matchAll(/\.nullable\(\)(?!\.(?:optional|default)\()|\bz\.nullable\(|\bz\.null\(\)|\bz\.literal\(null\)/g)].length

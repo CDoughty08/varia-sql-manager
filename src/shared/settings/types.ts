@@ -1,5 +1,6 @@
 // Tools › Options definitions. Erasable TypeScript, like the command catalogue: only type imports from ../commands.
 import type { Platform } from '../commands/keybindings'
+import type { ProviderId } from '../providers'
 
 /** When a changed value takes effect; the description pane says so for anything but 'immediately'. */
 export type SettingApplies = 'immediately' | 'nextExecution' | 'newConnections'
@@ -73,6 +74,8 @@ export interface SettingPage {
   readonly parent?: string
   readonly layout?: 'form' | 'propertyGrid' | 'shortcuts'
   readonly provider?: 'theme'
+  /** The engines its settings apply to; absent, SQL Server only (src/shared/providers.ts). Not `provider`, which draws rows. */
+  readonly providers?: readonly ProviderId[]
   /** Shown in the description pane while no row is focused, and in docs/settings.md. */
   readonly description?: string
   /**

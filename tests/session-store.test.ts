@@ -167,7 +167,7 @@ describe('the hot exit session store', () => {
     await new SessionStore(folder).write(session, 1)
     for (let start = 0; start < 3; start++) {
       const store = new SessionStore(folder), restored = await store.take(true)
-      expect(restored).toMatchObject({ version: 2, ...session })
+      expect(restored).toMatchObject({ version: 3, ...session })
       expect(restored?.workspace?.targets.map(target => target.id)).toEqual([first.id, second.id])
       expect(JSON.stringify(restored)).not.toMatch(/connectionId|sessionId|lifecycle|password|accessToken/)
       await store.write(restored!, start + 2)
@@ -185,7 +185,7 @@ describe('the hot exit session store', () => {
     const legacy = { version: 1, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0, documents: [tabs.documents[0]] }
     await writeFile(join(folder, 'session.json'), JSON.stringify(legacy))
     const restored = await new SessionStore(folder).take(true)
-    expect(restored).toEqual({ ...legacy, version: 2 })
+    expect(restored).toEqual({ ...legacy, version: 3 })
     expect(restored?.documents[0]).not.toHaveProperty('targetId')
     expect(restored?.documents[0]).not.toHaveProperty('attachWanted')
     expect(restored).not.toHaveProperty('workspace')
@@ -239,7 +239,7 @@ describe('the hot exit session store', () => {
     expect(store.keptBy(4)).toBe(false)
     expect(await files()).toEqual(['session.json'])
     const stored = JSON.parse(await readFile(join(folder, 'session.json'), 'utf8'))
-    expect(stored).toEqual({ version: 2, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
+    expect(stored).toEqual({ version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
     if (posix) {
       expect((await stat(folder)).mode & 0o777).toBe(0o700)
       expect((await stat(join(folder, 'session.json'))).mode & 0o777).toBe(0o600)

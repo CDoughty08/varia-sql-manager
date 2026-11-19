@@ -3,8 +3,10 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
+import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
+import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
@@ -74,7 +76,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.connect': z.object({
     id: z.uuid(), server: z.string().max(256), database: z.string().max(128), serverVersion: z.string().max(256), generation: z.number().int().min(0),
     displayName: z.string().max(128).optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), commandTimeout: z.number().int().min(0).max(86400).optional(),
-    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.literal('sqlserver').optional(),
+    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.enum(providerIds).optional(),
     principalId: connectionPrincipalIdSchema.optional(), bindingRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
   }).strict(),
   'language.status': languageStatusSchema,
@@ -123,6 +125,14 @@ export const copyPartSchema = z.object({ rows: rangesSchema(Number.MAX_SAFE_INTE
 const turned = { transposed: z.boolean().optional(), headerColumn: z.number().int().min(0).max(limits.page.maxColumns - 1).optional() }
 const turnedRule = [(request: { transposed?: boolean; headerColumn?: number }) => request.headerColumn === undefined || request.transposed === true, 'Only a transposed request has a header column.'] as const
 export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, headers: z.boolean(), parts: z.array(copyPartSchema).min(1).max(64), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)
+/** varia:results-save-local: a local table's rows, held to localTableLimits (rows as wide as the columns, 4 Mi characters in all). */
+export const localSaveRequestSchema = z.object({
+  suggestedName: z.string().min(1).max(limits.jobs.suggestedName),
+  columns: z.array(z.object({ name: z.string().max(localTableLimits.nameChars), kind: z.enum(['text', 'number']).optional() }).strict()).min(1).max(localTableLimits.columns),
+  rows: z.array(z.array(z.string().max(localTableLimits.cellChars).nullable()).max(localTableLimits.columns)).max(localTableLimits.rows)
+}).strict()
+  .refine(request => request.rows.every(row => row.length === request.columns.length), 'Every row has a cell per column.')
+  .refine(request => request.rows.reduce((sum, row) => sum + row.reduce((chars, cell) => chars + (cell?.length ?? 0), 0), 0) <= localTableLimits.textChars, 'The table is too large.')
 /** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
  *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
 export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()

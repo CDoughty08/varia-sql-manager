@@ -4,7 +4,7 @@
 // VARIA_TEST_BACKEND): scripts return the fixtures below as stored results, which results.read serves as real pages
 // (encodePage) within the stream's credit. A script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100
 // messages=40 errors=2 memory=0.92 hold` streams synthetic sets instead (backend/shapes.mjs). results.copy and
-// results.export format text with backend/text-writer.mjs, the C# ResultTextWriter's twin. Its control directory,
+// results.export format text with src/shared/results/text-writer.ts, the C# ResultTextWriter's twin. Its control directory,
 // VARIA_TEST_BACKEND_DIR, holds:
 //   calls.jsonl         one { generation, method, params } line per request, passwords (and entra.cache.import's data)
 //                       redacted
@@ -79,7 +79,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
 import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
-import { copyText, exportText, isHidden, validTurn } from './backend/text-writer.mjs'
+import { copyText, exportText, isHidden, validTurn } from '../../src/shared/results/text-writer.ts'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { sameName } from '../../src/shared/ordinal-casing.ts'
@@ -1036,7 +1036,7 @@ function readResults(id, credit, { resultId, firstRow, maxRows, viewId }) {
   const next = pages.length ? pages.at(-1).firstRow + pages.at(-1).rows : firstRow
   streamBodies(id, credit, pages.map(page => page.body), () => ({ nextRow: next, rowsAvailable: available(result), complete: result.complete && next >= result.read, pages: pages.length, rows: pages.reduce((sum, page) => sum + page.rows, 0) }))
 }
-/** results.copy: the text_writer.mjs text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
+/** results.copy: the text-writer.ts text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
 async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes, viewId, transposed, headerColumn }) {
   const result = sourceOf(id, resultId, viewId)
   if (!result) return

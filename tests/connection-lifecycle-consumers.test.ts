@@ -7,7 +7,7 @@ import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } fro
 
 const cleanups: (() => void)[] = []
 afterEach(() => cleanups.splice(0).forEach(dispose => dispose()))
-const proof: ConnectionAuthentication = { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }
+const proof: ConnectionAuthentication = { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }
 
 function fixture() {
   const value = workbenchFixture({ settings: { 'objectExplorer.search.indexOnConnect': false } })

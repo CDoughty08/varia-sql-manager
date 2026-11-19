@@ -4,7 +4,7 @@ import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, 
 import { connectContext } from '../src/main/connection-requests'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
-import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
+import { deadlineFor, mainOnlyMethods, methodAllows, methodPolicies, methodProviders, providerParamMethods, requestProvider } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
 import { actionCancelSchema, type ActionDescribeRequest } from '../src/shared/actions/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
@@ -284,7 +284,7 @@ describe('IPC validation', () => {
       { source, seq: 1.5, visible: [7] }, { source, seq: 1, visible: [0] }, { source, seq: 1, visible: [7, 7] }, { source, seq: 1, visible: [1.5] }, { source, seq: 1, visible: [-1] }, { source, seq: 1, visible: [2 ** 32] },
       { source, seq: 1, visible: ['7'] }, { source, seq: 1, visible: [...most, most.length + 1] }, { source, seq: 1, visible: [7], generation: 1 }])
       expect(() => validateRequest('results.visibility', params), JSON.stringify(params).slice(0, 80)).toThrow()
-    expect(methodPolicies['results.visibility']).toEqual({ kind: 'unary', lane: 'control', deadlineMs: 10_000 })
+    expect(methodPolicies['results.visibility']).toEqual({ kind: 'unary', lane: 'control', deadlineMs: 10_000, providers: ['sqlserver', 'bigquery'] })
   })
   it('validates copy and save requests strictly', () => {
     const copy = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, headers: true, parts: [{ rows: [[0, 9], [20, Number.MAX_SAFE_INTEGER]], columns: [[0, 0], [2, 4095]] }] }
@@ -348,6 +348,42 @@ describe('IPC validation', () => {
     const main = Object.entries(methodPolicies).filter(([, policy]) => (policy as { sensitive?: boolean }).sensitive).map(([method]) => method)
     expect(backend.sort()).toEqual(main.sort())
     expect(main).toContain('ssis.execute')
+  })
+  it('declares the same methods for both engines in the backend (Providers.BothMethods) as in main, and every other for SQL Server only', () => {
+    const source = readFileSync('backend/Varia.Backend/Providers.cs', 'utf8')
+    const both = /internal static readonly string\[\] BothMethods = \[([^\]]*)\];/.exec(source)
+    const parameters = /internal static readonly string\[\] ParameterMethods = \[([^\]]*)\];/.exec(source)
+    if (!both || !parameters) throw new Error('Providers.BothMethods or ParameterMethods not found')
+    const names = (list: string) => [...list.matchAll(/"([^"]+)"/g)].map(item => item[1]).sort()
+    const main = Object.keys(methodPolicies).filter(method => methodProviders(method as keyof typeof methodPolicies).includes('bigquery'))
+    expect(names(both[1])).toEqual(main.sort())
+    expect(names(parameters[1])).toEqual([...providerParamMethods].sort())
+    // No method serves BigQuery alone yet, and none that names a connection serves both.
+    for (const method of Object.keys(methodPolicies) as (keyof typeof methodPolicies)[]) expect(methodProviders(method)[0], method).toBe('sqlserver')
+    expect(main).not.toContain('connections.connect')
+    expect(main).not.toContain('query.execute')
+    expect(main).toEqual(expect.arrayContaining(['system.health', 'query.cancel', 'query.session.close', 'query.session.state', 'results.read', 'results.close', 'results.copy', 'results.export']))
+  })
+  it('resolves a request\'s provider as main can tell it, and refuses a method for another engine', () => {
+    const providers = new Map([['bq-handle', 'bigquery' as const], ['sql-handle', 'sqlserver' as const]])
+    const lookup = (id: string) => providers.get(id)
+    expect(requestProvider('connections.connect', { server: 'a' }, lookup)).toBe('sqlserver')
+    expect(requestProvider('connections.preview', { provider: 'bigquery' }, lookup)).toBe('bigquery')
+    expect(requestProvider('databases.list', { connectionId: 'bq-handle' }, lookup)).toBe('bigquery')
+    expect(requestProvider('databases.list', { connectionId: 'unknown' }, lookup)).toBeUndefined()
+    expect(requestProvider('language.complete', { text: '', context: { providerId: 'sqlserver', connectionId: 'bq-handle' } }, lookup)).toBe('bigquery')
+    expect(methodAllows('language.complete', 'bigquery')).toBe(false)
+    expect(requestProvider('results.close', { resultIds: [1] }, lookup)).toBeUndefined()
+    expect(methodAllows('connections.connect', 'bigquery')).toBe(false)
+    expect(methodAllows('databases.list', 'bigquery')).toBe(false)
+    expect(methodAllows('databases.list', 'sqlserver')).toBe(true)
+    expect(methodAllows('results.close', 'bigquery')).toBe(true)
+    // Main cannot tell: C# checks.
+    expect(methodAllows('explorer.children', undefined)).toBe(true)
+    // Main's zod refuses BigQuery options for connect before the supervisor sees them; SQL Server's spelled out pass.
+    const options = { server: 'sql.example', database: '', authentication: 'windows', trustServerCertificate: false }
+    expect(() => validateRequest('connections.connect', { ...options, provider: 'sqlserver' })).not.toThrow()
+    expect(() => validateRequest('connections.connect', { provider: 'bigquery', project: 'my-project-1', authentication: 'gcloud' })).toThrow()
   })
   it('takes the Connect dialog\'s context, with the request id Stop uses, only for connect and Load databases', () => {
     const requestId = crypto.randomUUID()

@@ -211,7 +211,7 @@ try {
   await expect.poll(() => tabShelfRows(editorGroups(page).nth(1))).toBe('2')
   await selectOpenDocument(page, 'Month end')
   await quit('keeping the original tabs')
-  const kept = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  const kept = JSON.parse(await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(kept.documents.map(document => [document.name, document.baseName, document.dirty, document.text])).toEqual([
     ['Totals', 'SQLQuery3.sql', true, 'SELECT 3 AS totals'], ['Welcome', 'SQLQuery1.sql', false, expect.stringContaining('@@SERVERNAME')],
     ['Orders report', 'orders.sql', false, undefined], ['Month end', 'SQLQuery2.sql', true, 'SELECT 2 AS month_end']
@@ -259,7 +259,7 @@ try {
   await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
   await expect(floatingEditorGroups(page)).toHaveCount(4)
   await quit('keeping the floating groups')
-  const floating = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8')).groups
+  const floating = JSON.parse(await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8')).groups
   expect(floating.root.children).toEqual([])
   expect(floating.floating.map(group => group.root.views.length).sort()).toEqual([1, 1, 1, 2])
   await launch([])
@@ -410,7 +410,7 @@ try {
   // Close the unpinned test query without saving it. The close stub chooses Don't Save for a query prompt below.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await quit('keeping the pinned tabs')
-  const pinnedRecord = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  const pinnedRecord = JSON.parse(await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(pinnedRecord.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   expect(pinnedRecord.documents[1]).toMatchObject({
     path: orders, dirty: true, text: 'SELECT 4 AS pinned_orders', fileSha256: expect.stringMatching(/^[0-9a-f]{64}$/)
@@ -452,7 +452,7 @@ try {
   await menubar(page).getByRole('menuitem', { name: 'View', exact: true }).click()
   await page.getByRole('menu', { name: 'View', exact: true }).getByRole('menuitem', { name: 'Reload Window', exact: true }).click()
   await within(quitDuringReload, closeMs, () => { throw new Error('The workbench did not quit during the pinned reload.') })
-  const afterReloadQuit = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  const afterReloadQuit = JSON.parse(await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(afterReloadQuit.documents).toEqual(pinnedRecord.documents)
   console.log('Hot exit checks: quitting during a pinned reload keeps the pins for the next start.')
 
@@ -520,7 +520,7 @@ try {
     return held
   })).toBe(true)
   await within(ended, closeMs, () => { throw new Error('The workbench did not quit at Windows session end.') })
-  const atSessionEnd = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  const atSessionEnd = JSON.parse(await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8'))
   expect(atSessionEnd.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   expect(atSessionEnd.documents[0].text).toContain('before_renderer_crash')
   expect(atSessionEnd.workspace).toEqual(pinnedRecord.workspace)

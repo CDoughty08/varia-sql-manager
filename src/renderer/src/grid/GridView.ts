@@ -117,11 +117,18 @@ export interface GridStatus { readonly tileError?: string; readonly renderError?
 /** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
 export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
+/**
+ * What a grid reads its rows through: a backend result (ResultHandle), a live table's revision (one too), or a local table
+ * held in the renderer (LocalSource, grid/local-source.ts). The row-size bar needs `rowBytes` and `profile` as well, so a
+ * source without them has none.
+ */
+export type GridSource = Pick<ResultHandle, 'getSnapshot' | 'subscribe' | 'getWindow' | 'peekWindow' | 'prefetch' | 'measure'> & Partial<Pick<ResultHandle, 'rowBytes' | 'profile'>>
+
 export interface GridViewOptions {
   /** The grid's root (`role="grid"`) and its scroller, both rendered by the React shell; the view owns the scroller's children. */
   readonly root: HTMLElement
   readonly scroller: HTMLElement
-  readonly handle: ResultHandle
+  readonly handle: GridSource
   readonly client: { readonly windowsInFlight: number }
   readonly descriptor: ResultDescriptor
   readonly state: GridViewState
@@ -206,6 +213,8 @@ export interface GridViewOptions {
  * listener is contained: after 3 failures in a row the grid stops and its shell offers Retry.
  */
 export class GridView {
+  /** Views not yet disposed, by entry: a view its owner forgets keeps its listeners and subscriptions (smoke checks read it). */
+  static readonly alive = new Map<string, number>()
   private readonly o: GridViewOptions
   private get gestures() { return gesturesFor(this.o.platform) }
   /** The grid element (GridShell's), which result visibility observes. */
@@ -219,7 +228,7 @@ export class GridView {
   private readonly marks: HTMLDivElement
   private readonly marksRows: HTMLDivElement
   private data: GridData
-  private handle: ResultHandle
+  private handle: GridSource
   private descriptor: ResultDescriptor
   private stopHandle: () => void = () => {}
   private readonly layout: ColumnAxis
@@ -303,7 +312,7 @@ export class GridView {
   private lastTop = 0
   private lastLeft = 0
   private viewportWidth = 0
-  /** The scroller's width with its vertical scroll bar: a grid sized to its rows has none. */
+  /** The scroller's width with its vertical scroll bar, if any. */
   private outerWidth = 0
   private wide: boolean | undefined
   private viewportHeight = 0
@@ -338,6 +347,7 @@ export class GridView {
 
   constructor(o: GridViewOptions) {
     this.o = o
+    GridView.alive.set(o.entry, (GridView.alive.get(o.entry) ?? 0) + 1)
     this.root = o.root
     this.scroller = o.scroller
     this.handle = o.handle
@@ -597,7 +607,7 @@ export class GridView {
    * (departed) are muted until the next swap; `top` puts the view at that offset instead (a restarted live log). Reads of
    * the old result stop; the old result is not closed (its owner does).
    */
-  swap(handle: ResultHandle, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
+  swap(handle: GridSource, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
     if (this.disposed) return
     if (toneColumnOf(descriptor) !== this.tone || visibleColumnCount(descriptor) !== this.columns || descriptor.columns.length !== this.descriptor.columns.length) throw new Error('A swapped result must have the grid\'s columns.')
     const state = this.o.state
@@ -636,7 +646,7 @@ export class GridView {
    * Reads the tiles a swap to `handle` shows first (from `firstRow`, over the rows and columns in view now) into the window
    * cache, so the swap paints whole rows at once rather than a frame of empty cells. Failures are left to the swap's reads.
    */
-  prepare(handle: ResultHandle, firstRow: number, signal?: AbortSignal): Promise<void> {
+  prepare(handle: GridSource, firstRow: number, signal?: AbortSignal): Promise<void> {
     const range = this.lastRange && this.sourceRange(this.lastRange), rows = handle.getSnapshot().rowsAvailable
     if (!range || rows <= 0 || this.disposed) return Promise.resolve()
     const first = Math.max(0, Math.min(firstRow, rows - 1)), last = Math.min(rows - 1, first + Math.max(0, range.lastRow - range.firstRow))
@@ -664,6 +674,8 @@ export class GridView {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    const alive = (GridView.alive.get(this.o.entry) ?? 1) - 1
+    if (alive > 0) GridView.alive.set(this.o.entry, alive); else GridView.alive.delete(this.o.entry)
     this.fitting?.abort()
     this.resizing = undefined
     this.cancelFrame?.()
@@ -690,8 +702,11 @@ export class GridView {
   /** The rows and columns drawn: the result's own, or turned, with at most `limits.transpose.maxRows` rows as columns. */
   private drawnRows(rows = this.rows()): number { return this.rotated ? this.columns : rows }
   private drawnColumns(rows = this.rows()): number { return this.rotated ? Math.min(rows, wire.transpose.maxRows) : this.columns }
-  private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
-  private dataFor(handle: ResultHandle): GridData {
+  private sizesFor(handle: GridSource): RowSizes | undefined {
+    const { rowBytes, profile } = handle
+    return rowBytes && profile ? new RowSizes({ getSnapshot: () => handle.getSnapshot(), rowBytes: rowBytes.bind(handle), profile: profile.bind(handle) }, () => this.schedule()) : undefined
+  }
+  private dataFor(handle: GridSource): GridData {
     return new GridData({ handle, columns: this.columns, tone: this.tone, suffix: this.columns, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
@@ -1506,7 +1521,9 @@ export class GridView {
       this.head.style.width = total + 'px'
       columnsMoved = true
     }
-    const wide = total > this.outerWidth
+    // Against the width beside a vertical scroll bar when there is one (a card past its rows): a grid sized to its rows
+    // has none, and measuring it with one it only shows while short of room would flip back and forth.
+    const wide = total > Math.min(this.viewportWidth, this.outerWidth)
     if (wide !== this.wide && this.outerWidth > 0) { this.wide = wide; this.o.onWide?.(wide) }
     if (model.spacerHeight !== this.spacerHeight) { this.spacerHeight = model.spacerHeight; this.spacer.style.height = model.spacerHeight + 'px' }
     if ((model.mode === 'virtual') !== this.wheelAttached) {

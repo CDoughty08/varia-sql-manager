@@ -1,4 +1,5 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import { beginCopy } from '../grid/copy-generation'
 import { outputPaneIds } from '../../../shared/layouts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -30,7 +31,8 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * Windows); Messages copy the text selected in them. The commands act on the menu's target, else on the view that has
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell. A live
- * view's grid (view `live`) is the same grid with a live source: the commands it takes act through its `LiveOutput`.
+ * view's grid (view `live`) is the same grid with a live source, and a local grid (LocalGrid: a Peek list, a Properties
+ * table) the same grid over rows the renderer holds: the commands either takes act through its `LiveOutput`.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   // The setting changes once main has saved it, so a second toggle meanwhile toggles the layout still being saved: two quick
@@ -230,6 +232,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.hasSelection() : !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
         const target = targetOf(args), cells = selected(target), live = liveOf(args)
+        // Any copy supersedes a local grid's still formatting (copy-generation.ts); a local grid begins its own after this.
+        beginCopy()
         if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
         if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
@@ -240,6 +244,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const live = liveOf(args); return live ? live.hasSelection() : !!selected(targetOf(args)) },
       run: async args => {
         const live = liveOf(args)
+        beginCopy()
         if (live) { if (live.hasSelection()) live.copy(true); return }
         const cells = selected(targetOf(args))
         const failure = cells && await results.copy(cells.tabId, cells.key, true)
@@ -250,6 +255,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const live = liveColumn(args); return live ? live.live.columnName(live.column) !== undefined : !!sortTarget(args) },
       run: async args => {
         const at = sortTarget(args), live = liveColumn(args), name = live?.live.columnName(live.column)
+        beginCopy()
         if (name !== undefined) unwrap(await api.writeClipboardText(name))
         else if (at) unwrap(await api.writeClipboardText(at.set.descriptor.columns[at.column].name))
       }
@@ -269,10 +275,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,
       // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
-      when: args => { const live = liveOf(args); return live ? live.hasRows() : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
+      when: args => { const live = liveOf(args); return live ? live.hasRows() && (live.canSave?.() ?? true) : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
       run: async args => {
         const live = liveOf(args)
-        if (live) { if (live.hasRows()) live.save(); return }
+        if (live) { if (live.hasRows() && (live.canSave?.() ?? true)) live.save(); return }
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return

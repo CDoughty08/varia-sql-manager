@@ -308,6 +308,7 @@ change to a role's members; a sysadmin's are not evaluated.
 | Error | Retry helps |
 | --- | --- |
 | `CATALOG_MISSING` | No |
+| `UNSUPPORTED_PROVIDER` | No |
 | `NO_DB_ACCESS` | No |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `BLOCKED` | Yes |

@@ -6,7 +6,7 @@ import type { ConnectionService } from './connections'
 export interface EnvironmentDeps {
   readonly connections: Pick<ConnectionService, 'get' | 'relabel'>
   /** `window.varia.setConnectionEnvironment`: main validates the input again, changes only the entry's label and writes
-   *  connections.json atomically. */
+   *  mssql-connections.json atomically. */
   setEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
 }
 export type EnvironmentOutcome = { readonly ok: true; readonly environment?: string } | { readonly ok: false; readonly error: string }
@@ -43,7 +43,7 @@ const notSaved = 'The environment could not be saved with this connection.'
 
 /**
  * Set Environment for a connected server, as Object Explorer's server menu offers it. Main changes the label of the
- * connection's entry in connections.json (found by its server, database, login and settings, as a connect finds it)
+ * connection's entry in mssql-connections.json (found by its server, database, login and settings, as a connect finds it)
  * and nothing else; only when the library it wrote holds that label does every connection to the entry show it, so a
  * failure, or a write that lost the entry, changes nothing on screen.
  */

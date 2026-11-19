@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
 } from './fixtures/ui.mjs'
@@ -1155,6 +1155,177 @@ try {
   await outputTab(/^Messages/).click()
   await expect(messages(page)).toContainText('Completion time:')
   console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
+
+  // 8b. Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid. Ctrl+A,
+  // Ctrl+C and Ctrl+Shift+C are the catalogue's commands and write the text a results grid copies; a header sorts numbers
+  // by value; the menu is Query Output's without what only query results do; a card has no Save, a page saves through
+  // main's dialog; an empty table says so in its owner's words.
+  const localTable = { columns: [{ name: 'Name' }, { name: 'Type' }, { name: 'Rows', kind: 'number' }, { name: 'Note' }], rows: [['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab\there'], ['Order Lines', 'table', '9000', 'a,"b"']] }
+  const mountLocal = (table, o) => page.evaluate(([value, options]) => window.__variaGrid.mountLocal(value, options), [table, o])
+  await mountLocal(localTable, { label: 'Local list', preset: 'card' })
+  const local = localGrid(page, 'Local list'), localFrame = localGridFrame(page, 'Local list')
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 3 rows, 4 columns')
+  await expect(local.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Type', 'Rows', 'Note'])
+  // A card is as tall as its rows: no empty band under three rows.
+  expect(await localFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  // ...and no shorter: its last row is inside it.
+  const bottomOf = locator => locator.evaluate(element => element.getBoundingClientRect().bottom)
+  expect(await bottomOf(gridCell(local, 2, 0))).toBeLessThanOrEqual(await bottomOf(localFrame) + 0.5)
+  await gridCell(local, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+C')
+  const localTsv = rows => rows.map(row => row.map(value => value ?? 'NULL').join('\t')).join(eol)
+  await expect.poll(clipboard).toBe(localTsv([['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(localTsv([['Name', 'Type', 'Rows', 'Note'], ['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  // Rows sorts by value (80, 1,200, 9000), then descending; the header says so and the selection follows its rows.
+  // From the grid's menu: a short column's header is too narrow to show its sort button, as in a results grid.
+  const localSort = async (column, item, of = local) => {
+    await gridCell(of, 0, column).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  await gridCell(local, 0, 0).click()
+  await localSort(2, 'Sort Ascending')
+  await expect(gridCell(local, 0, 0)).toHaveText('customers')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(local, 2, 0)).toHaveText('Order Lines')
+  await expect.poll(async () => (await local.evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.textContent))).toBe('1,200')
+  await localSort(2, 'Sort Descending')
+  await expect(gridCell(local, 0, 0)).toHaveText('Order Lines')
+  // Copy follows the order shown.
+  await gridCell(local, 0, 0).click()
+  await gridCell(local, 2, 0).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['Order Lines', 'Orders', 'customers'].join(eol))
+  // A new table with the same columns keeps the sort, and its old view is disposed: one view left, none after unmount.
+  const rerenderLocal = (table, patch) => page.evaluate(([value, options]) => window.__variaGrid.rerenderLocal(value, options), [table, patch])
+  await rerenderLocal({ ...localTable, rows: [...localTable.rows, ['Archive', 'table', '20000', null]] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 4 rows, 4 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('Archive')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const aliveLocal = () => page.evaluate(() => window.__variaGrid.aliveViews('local'))
+  expect(await aliveLocal()).toBe(1)
+  // A table with other columns starts unsorted: its third column sorted descending would put 'a' first.
+  await rerenderLocal({ columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 2 rows, 3 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('b')
+  await expect(local.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await rerenderLocal(localTable)
+  // Query Output's menu, without what only query results do; a card has no Save.
+  await gridCell(local, 1, 1).click({ button: 'right' })
+  const localMenu = page.getByRole('menu', { name: 'Query output', exact: true })
+  const localItems = await menuItemNames(localMenu)
+  for (const item of ['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Clear Sort', 'Fit Column']) expect(localItems).toContain(item)
+  for (const item of ['Filter', 'Pivot Results…', 'Transpose', 'Column Profile', 'Close Results']) expect(localItems).not.toContain(item)
+  expect(await menuItemNames(localMenu, { disabled: true })).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  // A page saves through main's dialog: the same CSV a results grid writes, in the order shown.
+  await mountLocal(localTable, { label: 'Local page', preset: 'page', suggestedName: 'Orders-Columns' })
+  const localPage = localGrid(page, 'Local page')
+  await localSort(0, 'Sort Ascending', localPage)
+  await choose(join(saveDir, 'local.csv'))
+  await gridCell(localPage, 0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Saved 3 rows to local.csv.')
+  expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Orders-Columns\.csv$/) })
+  const savedCsv = await readFile(join(saveDir, 'local.csv'), 'utf8')
+  // A new table shows its own strip, not the last table's notice: here that it was truncated.
+  await rerenderLocal({ columns: localTable.columns, rows: Array.from({ length: 10_001 }, (_, i) => [`Row ${i}`, 'table', String(i), null]) })
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Showing the first 10,000 rows.')
+  expect(savedCsv).toBe('﻿' + ['customers,view,80,tab\there', 'Order Lines,table,9000,"a,""b"""', 'Orders,table,"1,200",'].map(line => line + '\r\n').join(''))
+  // An empty table says so in its owner's words.
+  await mountLocal({ columns: localTable.columns, rows: [] }, { label: 'Local empty', preset: 'card', empty: 'No predicates apply.' })
+  await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
+  // The card has room for it: its text fits the overlay, which ends at the card's bottom.
+  expect(await localGridFrame(page, 'Local empty').locator(gridPart.overlay).evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true)
+  // A cell cut to the bound says so in the strip, and the card makes room for the strip under its rows.
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
+  await expect(localGridFrame(page, 'Local cut').locator(gridPart.strip)).toHaveText('1 value was cut to 4,000 characters.')
+  // A card's strip is one line, an error's too (Could not copy the rows: ...): a wrapped one would take room the card never made.
+  const cutStrip = localGridFrame(page, 'Local cut').locator(gridPart.strip), stripLine = await cutStrip.evaluate(element => element.offsetHeight)
+  expect(await cutStrip.evaluate(element => { const probe = element.cloneNode(); probe.classList.add('error'); probe.textContent = 'Could not copy the rows: '.repeat(40); element.after(probe); const height = probe.offsetHeight; probe.remove(); return height })).toBe(stripLine)
+  // A new name, with the same table object, is read with its counts.
+  await rerenderLocal(null, { label: 'Local renamed' })
+  await expect(localGrid(page, 'Local renamed')).toHaveAttribute('aria-label', /^Local renamed, 2 rows, 1 column/)
+  // Columns past the bound are said to be left out too.
+  await mountLocal({ columns: Array.from({ length: 70 }, (_, i) => ({ name: `c${i}` })), rows: [Array.from({ length: 70 }, () => 'v')] }, { label: 'Local columns', preset: 'card' })
+  await expect(localGridFrame(page, 'Local columns').locator(gridPart.strip)).toHaveText('Showing the first 64 columns.')
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
+  // ...and the cut cell is read out as truncated, as a results grid's.
+  await gridCell(localGrid(page, 'Local cut'), 0, 0).click()
+  await expect.poll(() => localGrid(page, 'Local cut').evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label') ?? '')).toMatch(/, truncated$/)
+  expect(await bottomOf(gridCell(localGrid(page, 'Local cut'), 1, 0))).toBeLessThanOrEqual(await localGridFrame(page, 'Local cut').locator(gridPart.strip).evaluate(element => element.getBoundingClientRect().top) + 0.5)
+  // An owner's kept state keeps its sort across a remount, but only for the columns it was chosen for.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  const keptGrid = localGrid(page, 'Local kept')
+  await localSort(2, 'Sort Descending', keptGrid)
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  await expect(keptGrid.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const otherColumns = { columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] }
+  await rerenderLocal(otherColumns)
+  await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('b')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // The old columns back do not bring their sort back: the user has not sorted them since.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // Another kept state is another grid: its own sort, not the last one's.
+  await localSort(2, 'Sort Descending', keptGrid)
+  await rerenderLocal(localTable, { keepState: 'two' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await rerenderLocal(localTable, { keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  // A table shown unsortable drops the sort: it offers no Clear Sort to undo one, nor sort buttons; sortable again, it
+  // starts unsorted.
+  await rerenderLocal(localTable, { keepState: 'one', sortable: false })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await expect(keptGrid.locator(gridPart.sortButton)).toHaveCount(0)
+  await rerenderLocal(localTable, { keepState: 'one', sortable: true })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  // A header wide enough for its sort button sorts by value from it, then descending.
+  await mountLocal({ columns: [{ name: 'Name of the object shown' }, { name: 'Row count of the table', kind: 'number' }], rows: [['Orders', '1,200'], ['customers', '80'], ['Order Lines', '9000']] }, { label: 'Local header', preset: 'card' })
+  const headerGrid = localGrid(page, 'Local header'), rowsHeader = headerGrid.getByRole('columnheader', { name: 'Row count of the table', exact: true })
+  await rowsHeader.hover()
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('customers')
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'descending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('Order Lines')
+  // A card wider than its frame makes room for the platform's scroll bar under its rows, and a narrow table after it gives
+  // that room back.
+  const headerHeight = () => localGridFrame(page, 'Local header').evaluate(element => element.getBoundingClientRect().height)
+  const narrowHeight = await headerHeight()
+  const scrollbar = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;top:-1000px;width:100px;height:100px;overflow:scroll'; document.body.append(probe); const size = probe.offsetHeight - probe.clientHeight; probe.remove(); return size })
+  // Overlay scroll bars (macOS) take no room, so there is nothing to make room for. A card past its rows scrolls: columns
+  // that fit its frame but not beside the vertical scroll bar still get room for the horizontal one.
+  if (scrollbar > 0) {
+    await rerenderLocal({ columns: Array.from({ length: 16 }, (_, i) => ({ name: `A rather long column name ${i}` })), rows: [['a'], ['b'], ['c']] })
+    await expect.poll(headerHeight).toBeCloseTo(narrowHeight + scrollbar, 0)
+    await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: [['a'], ['b'], ['c']] })
+    await expect.poll(headerHeight).toBeCloseTo(narrowHeight, 0)
+    await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: Array.from({ length: 40 }, (_, i) => [`row ${i}`]) })
+    const tallFrame = localGridFrame(page, 'Local header'), tallHeight = await headerHeight()
+    // The scroller as wide as the columns and half a scroll bar, whatever the frame's border: beside the vertical bar they
+    // overflow, without it they would fit.
+    await tallFrame.evaluate((element, [half, parts]) => {
+      const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
+      element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
+    }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
+    const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
+    await expect.poll(async () => { const [scroll, client, offset] = (await sizes()).split(/ in | of /).map(Number); return scroll > client && offset > scroll || await sizes() }).toBe(true)
+    // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
+    await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
+    await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
+    await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)
+  } else console.log('Results checks: local card scroll bar room skipped (overlay scroll bars take none).')
+  await page.evaluate(() => window.__variaGrid.unmountLocal())
+  await expect(page.locator(part.localGrid)).toHaveCount(0)
+  expect(await aliveLocal()).toBe(0)
+  console.log('Results checks: local grids select, copy and copy with headers as results grids do, sort numbers by value, show Query Output\'s menu, save a page through main and say when they are empty.')
 
   // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
   // names it, in its language, not dirty and with no connection, where Execute and F5 do nothing and the output pane

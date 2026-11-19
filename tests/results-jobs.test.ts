@@ -99,6 +99,20 @@ describe('ResultsJobHost copy', () => {
     calls[1].reject(new BackendError('TOO_LARGE', 'The selection is too large to copy (80 MB; the limit is 64 MB). Use Save Results As instead.'))
     expect(await failure(second)).toMatchObject({ code: 'TOO_LARGE', message: expect.stringContaining('80 MB') })
   })
+  it('cancels a running copy when another copy supersedes it, so the later text stays on the clipboard', async () => {
+    const { jobs, calls, cancels, clipboard } = host()
+    const copying = jobs.copy(copyRequest())
+    await settle()
+    jobs.supersedeCopy()
+    expect(cancels).toEqual([[1, cancelReasons.user]])
+    calls[0].sink!.data(1, new TextEncoder().encode('row0').buffer)
+    calls[0].resolve({ rows: 1, bytes: 4, truncatedCells: 0, partial: false, capped: 0 })
+    expect(await failure(copying)).toMatchObject({ code: 'CANCELLED' })
+    expect(clipboard).toEqual([])
+    // With no copy running it does nothing.
+    jobs.supersedeCopy()
+    expect(cancels).toHaveLength(1)
+  })
   it('leaves the clipboard alone when the backend finishes a copy cancelled late', async () => {
     const { jobs, calls, cancels, clipboard } = host()
     const request = copyRequest()

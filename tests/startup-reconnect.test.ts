@@ -3,12 +3,13 @@ import type { ConnectionTarget, PersistedConnectionTarget } from '../src/shared/
 import { defaultSettings, settingDef } from '../src/shared/settings/catalog'
 import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
 import { StartupReconnectService, type StartupReconnectAttempt, type StartupReconnectResult } from '../src/renderer/src/services/startup-reconnect'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const record = (value: number, patch: Partial<PersistedConnectionTarget> = {}): PersistedConnectionTarget => ({
   id: id(value), options: { server: 'sql-prod', database: 'Sales', authentication: 'windows', trustServerCertificate: false },
   details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
-  expectedPrincipal: { provider: 'sqlServer', authentication: patch.options?.authentication ?? 'windows', id: 'DOMAIN\\alex' }, ...patch
+  expectedPrincipal: { provider: 'sqlserver', authentication: (patch.options as SqlServerTargetOptions | undefined)?.authentication ?? 'windows', id: 'DOMAIN\\alex' }, ...patch
 })
 const credential = { profileId: id(90), revision: id(91) }
 const saved = (value: number) => record(value, {
@@ -258,7 +259,7 @@ describe('startup reconnect scheduling', () => {
   it('skips live or already-pending targets but permits unexpected lost targets', async () => {
     const { registry, service, attempts } = fixture([record(1), record(2)])
     const operation = registry.beginConnect(id(1), 0, id(100))!
-    registry.completeConnect(operation, { id: id(101), generation: 0 }, { principal: { provider: 'sqlServer', authentication: 'windows', id: 'DOMAIN\\alex' } })
+    registry.completeConnect(operation, { id: id(101), generation: 0 }, { principal: { provider: 'sqlserver', authentication: 'windows', id: 'DOMAIN\\alex' } })
     registry.beginConnect(id(2), 0, id(102))
     service.start(0)
     expect(attempts).toHaveLength(0)

@@ -65,7 +65,8 @@ Results and live data:
 - Query rows stay in backend memory under the result budget, never on disk. DATA pages pass through main undecoded; only
   the results worker decodes them. Results are released on re-execute, tab close, Close Results and backend loss.
 - The grid renders only through `GridView` pools and text only through `nodeValue` (`tests/grid-lint.test.ts`); no React
-  per row or cell. Copy and Save text is formatted only by `ResultTextWriter`.
+  per row or cell. Copy and Save text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
+  `src/shared/results/text-writer.ts`, held to the same goldens.
 - Periodic data flows only through `live.subscribe`/`live.update` with the backend scheduling; the renderer never polls with
   timers. Views open live data only through `LiveService`; charts draw only through `ChartView`.
 

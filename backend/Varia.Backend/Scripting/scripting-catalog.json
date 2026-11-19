@@ -2,6 +2,7 @@
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
     {"code":"NOT_SUPPORTED","retryable":false},
+    {"code":"UNSUPPORTED_PROVIDER","retryable":false},
     {"code":"ENCRYPTED","retryable":false},
     {"code":"NO_DEFINITION","retryable":false},
     {"code":"PERMISSION_DENIED","retryable":true},

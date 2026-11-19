@@ -15,7 +15,7 @@ SSMS display formats, and benchmarks. The code is the reference implementation; 
 | Generations and restarts | `src/main/backend/supervisor.ts` | — |
 | Results port | `src/main/backend/results-port.ts`, `src/shared/ipc/port-messages.ts` | — |
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
-| Copy and Save Results As | `src/main/results-jobs.ts`; fake backend `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
+| Copy and Save Results As | `src/main/results-jobs.ts`; TypeScript twin `src/shared/results/text-writer.ts` (local tables, fake backend) | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
 | Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; `LiveService` in `src/renderer/src/live/` | `Live/` (`LiveService.cs` registry and scheduler, `LiveCatalog.cs`, `SqlSampler.cs`, `LiveSql.cs`, `LiveSqlReader.cs`, `LiveTables.cs`, `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs`), `Activity/ActivityReader.cs`, `ActivityRows.cs` |
 
@@ -27,6 +27,7 @@ SSMS display formats, and benchmarks. The code is the reference implementation; 
 - [Handshake](#handshake)
 - [Requests, deadlines, and cancellation](#requests-deadlines-and-cancellation)
 - [Methods](#methods)
+- [Providers](#providers)
 - [Streams and credits](#streams-and-credits)
 - [Execution plan viewer](#execution-plan-viewer)
 - [Query execution](#query-execution)
@@ -370,7 +371,7 @@ to 256 with an ellipsis (never inside a surrogate pair); main checks the same bo
 errors. A database row carries `database: { state: int, userAccess: int, readOnly: bool, standby: bool }` from
 `sys.databases`; a newer live status sample wins (`currentDatabaseRuntime`), a row-capped one only for its rows. A login
 row carries `connectDenied: true` when CONNECT SQL is denied to it; its `status` stays `disabled` when also disabled.
-`connections.connect` answers `linux: bool` when the server's profile was read (`explorerServerLinux`) and
+`connections.connect` answers `providerId` (`sqlserver`; absent from an older backend means SQL Server) and `linux: bool` when the server's profile was read (`explorerServerLinux`) and
 `engineEdition` (`explorerServerEngine`: `box`, `managedInstance` for edition 8, `cloud` for Azure SQL Database).
 
 **Scripting cancellation.** The backend sends an attention for SMO's statement, answers at once, and keeps the job's
@@ -687,6 +688,17 @@ never CONNECT SQL, each securable's permission once, `cascade: true` only with `
 `PERMISSION_DENIED` (15406, 15517, 15151), `NOT_SUPPORTED` (a login SQL Server cannot impersonate: a group, or one
 mapped to a certificate or asymmetric key), or `NOT_FOUND`. A permission step without effect (4624, or
 another grantor's row left in place) fails `NOT_SUPPORTED`.
+
+### Providers
+
+Each `methodPolicies` entry may declare `providers` (`src/shared/providers.ts`); absent, the method serves SQL Server
+only. `connections.connect`, `.databases` and `.preview` take an optional `provider` in their options (`sqlserver`;
+absent means SQL Server, an unknown one is `INVALID_PARAMS`); `bigquery` is refused, since no method that opens a
+connection serves BigQuery yet. Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
+with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `system.health`, `query.cancel`,
+`query.session.close`, `query.session.state` and every `results.*` method name no connection and are declared for both
+engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
+again first thing (`Providers.BothMethods`, compared with the policies by `tests/validation.test.ts`).
 
 ## Streams and credits
 
@@ -1027,6 +1039,11 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
   gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` SqlCompareOptions bits: 1 IgnoreCase, 2
   IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768 BinarySort; `codePage` 0 for UTF-8;
   `sortId` non-zero for SQL_ collations). If reflection fails, no `collation` and one byte per character, as estimates.
+- **Column sort kinds.** Every descriptor column carries `sortKind`: `integer`, `decimal`, `float`, `boolean`, `date`,
+  `time`, `datetime`, `timestamp`, `binary`, `text`, `json` or `other`, set from its type by `ColumnTypes.SortKindOf`
+  (SQL Server: datetimeoffset is `timestamp`, SQL Server's timestamp (rowversion) `binary`, xml `json`, uniqueidentifier,
+  sql_variant and CLR types `other`; `tests/fixtures/sort-kinds/sql-server.json`). It is optional in the schema, and the
+  renderer derives it from `dataType` with the same mapping (`sortKindOf`, `src/shared/results/sort-kind.ts`) when absent.
 - **Storage.** Per sealed page, `PageLengths`: a `uint32` per row (cell bytes summed, NULL 0), a sorted sparse list of
   24-byte `(row, column, chars, bytes)` entries for cells whose stored text does not give their length (truncated, xml,
   vector, sql_variant, estimates; estimates flagged by the column's sign bit), and 16-byte `(row, bytes)` entries for
@@ -1534,7 +1551,16 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   so the dialog's overwrite confirmation stays valid), ownership is checked again, and only the file name
   returns (`EXPORT_FAILED` tokens become sentences naming only it). `varia:results-job-cancel` sends CANCEL reason 1; a
   reload or closed window, reason 3. Dialogs are shown one at a time (`src/main/dialog-queue.ts`). Paths come only from
-  the dialog and reach only the backend.
+  the dialog and never reach the renderer.
+- **Local saves (`ResultsJobHost.saveLocal`).** `varia:results-save-local { suggestedName ≤ 128, columns, rows }` saves a
+  table the renderer holds (a local grid's): `trusted()`, strictly validated (1 – 64 columns, names ≤ 128, ≤ 10,000
+  rectangular rows, cells NULL or ≤ 4,000 characters, ≤ 4 Mi characters in all), refused `TOO_LARGE` when its file in the
+  format chosen could pass 64 MiB (`localSaveBytes`, an upper bound per format; before the dialog when no format fits,
+  and always before the file is built), and sharing `JOB_BUSY` with results saves. Main formats it with
+  the TypeScript writer a page at a time, yielding between pages, and writes a temporary file renamed over the target
+  (`writeLocalSave`): a deleted folder is never recreated (`NOT_FOUND`), and a replaced file keeps its Unix permission
+  bits; on Windows it keeps no attributes or ACLs (Node has no `File.Replace`). Failures use the results save's tokens;
+  a Windows rename refused over a held file is `IN_USE`, over a read-only one `ACCESS`, over a folder `IS_DIRECTORY`.
 
 ## Live subscriptions
 
@@ -2106,7 +2132,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Rows stored per query | 0 – 2,147,483,647 (0 = budget only) | zod and backend |
 | Result budget | `clamp(available memory / 4, 256 MiB, 16 GiB)`, or the Options limit up to three quarters of memory; 50 % per query; none under high system memory load | backend |
 | Messages | 1,000 entries / 1,000,000 characters, then up to 20 more errors; error text 16,384 characters | backend |
-| Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
+| Descriptors per summary | 8 MiB (bounded per set by names, types and 120 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
@@ -2124,11 +2150,11 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Action progress | EVENTs every ≥ 250 ms plus each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (new step at once, the latest held one at the interval's end); step 0 – 519, percent 0 – 100; renderer tracks ≤ 128 requests | backend, main and renderer |
 | Long object actions | 1 per Varia connection, 2 in all, waited ≤ 30 s, then `BUSY`; a closing generation waits 10 s plus the action's cleanup budget plus 5 s | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
-| Connection environment | `environment` option: absent (None) or 1 – 32 characters after trimming, no control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options and changes only that entry's label), never in the connection string | zod (main) and backend |
+| Connection environment | `environment` option: absent (None) or 1 – 32 characters after trimming, no control, format, line or paragraph separator characters; stored in `mssql-connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (Open, command line, second instance, macOS open-file, drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 at a time (counting those past their 2 s), none again for a file whose last has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
-| AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value, 8,388,608 for a plan); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
+| AutoRecover | 64 records and 256 MiB in `WorkbenchAutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value, 8,388,608 for a plan); names ≤ 512, servers ≤ 256, databases ≤ 128 (BigQuery datasets ≤ 1,024), paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, absolute, no U+0000 – U+001F or `*?"<>|`; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
 | Restore Database | 1 – 64 backup files (server paths as above); ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 1,024 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files, 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only kinds without folders or rows of their own); other identity names (SSIS folders, projects) 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
@@ -2207,9 +2233,9 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -2226,6 +2252,7 @@ terminal for live probes. Display login text is never identity proof.
 | `TOO_LARGE` (main) | "The request is too large to send to the backend. Execute a smaller script or selection." |
 | `TOO_MANY_REQUESTS` | "Too many pending backend requests."; for a 17th live stream on the results port, "Too many live views are open in this window. Close one and retry." |
 | `DUPLICATE_REQUEST` (results port, live) | "This live view is already open." |
+| `UNSUPPORTED_PROVIDER` (main) | "This command is not available for this kind of connection." |
 | `NOT_FOUND` (results port, live update) | "This live view has ended." |
 | `STREAM_PROTOCOL` | "The SQL backend sent an invalid response. The request was cancelled." |
 | `RESPONSE_TOO_LARGE` | "The backend result is too large to return (limit 16 MB)." |
@@ -2332,7 +2359,7 @@ and reports that block skipped.
   does not reopen), and Recent Files neither reads nor writes `recent-files.json`, listing only that run's dialogs'
   files. Other store content (text, names, settings, layouts, themes) is still read from the profile.
 - **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, strict zod) writes query text only, never
-  results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid; a file named in upper case still counts against the caps,
+  results, connections or credentials, to `<userData>/WorkbenchAutoRecover/<uuid>.json` (a lower-case uuid; a file named in upper case still counts against the caps,
   is quarantined rather than offered, and is purged; folder 0700, records 0600 on POSIX, atomic, never logged). The page
   names records by uuid and files by opaque id. A record belongs to the main process and renderer generation that wrote
   it (the page the main frame had committed when the message arrived, so a page being replaced by a reload still writes as
@@ -2343,7 +2370,7 @@ and reports that block skipped.
   older than the retention are deleted at startup, only once settings were read, and not when settings.json held a
   retention that was reset because the file or that value was invalid.
 - **Hot exit** (`varia:session-write`, `varia:session-take`, strict zod; docs/hot-exit.md) writes open text tabs' names,
-  unsaved text (untitled tabs included), line endings, file paths, server and database names to `<userData>/Session/session.json` on an approved
+  unsaved text (untitled tabs included), line endings, file paths, server and database names to `<userData>/WorkbenchSession/session.json` on an approved
   close (0700/0600 on POSIX, atomic, at most 64 tabs and 64 MB, also the non-secret connection workspace: targets' sanitized options, expected account,
   reconnect intent and credential reference; never results, live connections, session ids, passwords, tokens or connection
   strings, never logged), kept as `previous.json` until the next run closes; an invalid file is quarantined. A close with hot exit off keeps only
@@ -2351,7 +2378,7 @@ and reports that block skipped.
   renderer has reopened the tabs and acknowledges it with `varia:session-restored`.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
-  password. A remembered password is Electron `safeStorage` ciphertext in `saved-passwords.json`, bound to its server,
+  password. A remembered password is Electron `safeStorage` ciphertext in `mssql-saved-passwords.json`, bound to its server,
   login and TLS settings by a SHA-256 hash beside it, and to those, its opaque revision and the password by a check
   inside the ciphertext (a ciphertext moved between bindings, a rewritten hash or revision is refused); an unchanged secret keeps its revision, replacement rotates it, and legacy ciphertext without one is picker-only. Main serializes
   secret operations and gates saved-binding attempts through completion, so a rejected revision cannot be tried again by
@@ -2386,10 +2413,10 @@ docs/testing.md has the environment variables and rules; the protocol-specific p
   `fail-commit`, `silent-<generation>`). Each session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK and notes SET
   NOEXEC, PARSEONLY, FMTONLY and SHOWPLAN_*, so `query.session.state` answers as SQL Server would. A script whose first line is
   `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92 hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`;
-  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page
+  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `src/shared/results/text-writer.ts`, and `hold/results.export` pauses an export after each page
   (or line of a transposed one) so a test can cancel it mid-save.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets with the exact Copy, CSV,
-  TSV and JSON bytes; the C# writer (through the real jobs) and the JavaScript twin are both checked against them.
+  TSV and JSON bytes; the C# writer (through the real jobs) and the TypeScript twin are both checked against them.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`: malformed frames,
   stdout purity and, with test hooks, synthetic results, streams, cancellation, the budget, and live subscriptions whose
   every frame must pass main's schemas.
