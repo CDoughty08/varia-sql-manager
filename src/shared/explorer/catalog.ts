@@ -8,6 +8,7 @@ import { loginSubtypes } from '../actions/logins.ts'
 import { peekCatalogBlock } from './peek.ts'
 import { dependencyLimits } from './dependencies.ts'
 import type { ProviderId } from '../providers.ts'
+import { agentPlatform, agentPlatformGates, agentPlatforms, type AgentPlatform } from '../agent/catalog.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -19,7 +20,8 @@ export const nodeKinds = [
   'partitionFunction', 'searchPropertyList', 'planGuide',
   'table', 'view', 'synonym', 'procedure', 'function', 'sequence', 'type', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
   'column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter', 'returnValue',
-  'ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment'
+  'ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment',
+  'agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog'
 ] as const
 export type NodeKind = typeof nodeKinds[number]
 
@@ -66,7 +68,8 @@ export const folderIds = [
   'databaseSecurity', 'users', 'roles', 'databaseRoles', 'applicationRoles', 'schemas', 'asymmetricKeys', 'certificates', 'symmetricKeys',
   'alwaysEncryptedKeys', 'columnMasterKeys', 'columnEncryptionKeys', 'databaseAuditSpecifications', 'securityPolicies',
   'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
-  'integrationServicesCatalogs', 'ssisProjects', 'ssisEnvironments', 'ssisPackages'
+  'integrationServicesCatalogs', 'ssisProjects', 'ssisEnvironments', 'ssisPackages',
+  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'
 ] as const
 export type FolderId = typeof folderIds[number]
 
@@ -99,7 +102,8 @@ export const queryIds = [
   'users', 'databaseRoles', 'applicationRoles', 'schemas', 'schemaGroups', 'asymmetricKeys', 'certificates', 'symmetricKeys', 'columnMasterKeys', 'columnEncryptionKeys',
   'databaseAuditSpecifications', 'securityPolicies',
   'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
-  'ssisCatalogs', 'ssisFolders', 'ssisProjects', 'ssisPackages', 'ssisEnvironments'
+  'ssisCatalogs', 'ssisFolders', 'ssisProjects', 'ssisPackages', 'ssisEnvironments',
+  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxySubsystems', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'
 ] as const
 export type QueryId = typeof queryIds[number]
 
@@ -110,7 +114,8 @@ export const explorerIcons = [
   'symbol-field', 'references', 'symbol-operator', 'symbol-key', 'pass', 'symbol-constant', 'link', 'zap', 'list-ordered', 'layers', 'graph',
   'symbol-function', 'symbol-parameter', 'arrow-left', 'package', 'symbol-structure', 'code', 'law', 'symbol-numeric', 'milestone',
   'person', 'symbol-namespace', 'workspace-trusted', 'circuit-board', 'file-code', 'book', 'circle-slash', 'list-flat', 'split-horizontal',
-  'symbol-ruler', 'archive', 'remote', 'folder-library', 'project', 'symbol-variable', 'symbol-file'
+  'symbol-ruler', 'archive', 'remote', 'folder-library', 'project', 'symbol-variable', 'symbol-file',
+  'agent', 'agent-job', 'agent-activity', 'bell', 'agent-operator', 'agent-proxy', 'output'
 ] as const satisfies readonly IconId[]
 export type ExplorerIcon = typeof explorerIcons[number]
 /** Folders show `folder`, or `folder-opened` while expanded. */
@@ -139,7 +144,11 @@ export const cloudEngineEditions = [5, 6, 9, 11, 12] as const
 export const minBand = 12, maxBand = 17
 export const bandOf = (major: number): number => major < 13 ? minBand : Math.min(major, maxBand)
 export const engineOf = (edition: number): Engine => (cloudEngineEditions as readonly number[]).includes(edition) ? 'cloud' : 'box'
-export interface ExplorerProfile { readonly band: number; readonly engine: Engine }
+/**
+ * What a server can browse. `edition` (EngineEdition) and `linux` choose the SQL Server Agent platform a folder's or kind's
+ * `platforms` gate reads (src/shared/agent/catalog.ts agentPlatform); C# mirrors them (ExplorerProfile.Edition, Linux).
+ */
+export interface ExplorerProfile { readonly band: number; readonly engine: Engine; readonly edition: number; readonly linux: boolean }
 /**
  * The kind of server an action (its catalogue `engines`) or a menu item is offered on: `box` (SQL Server),
  * `managedInstance` (Azure SQL Managed Instance, EngineEdition 8, which the folders above treat as `box`, but which cannot
@@ -172,6 +181,10 @@ export interface FolderSpec {
   /** The kinds of the listed rows. */
   readonly rows?: readonly NodeKind[]
   readonly filter?: readonly FilterProperty[]
+  /** The SQL Server Agent platforms that serve it (`agentPlatformGates`); every server when absent, none where Agent is not served. */
+  readonly platforms?: readonly AgentPlatform[]
+  /** A static subfolder listed after its parent's rows rather than before them (Proxies › Unassigned Proxies, as SSMS). */
+  readonly afterRows?: true
 }
 /** An SSMS folder Varia does not serve yet. It is documented so docs/object-explorer.md shows the whole tree. */
 export interface LaterFolder {
@@ -184,6 +197,20 @@ export interface LaterFolder {
   readonly contents?: readonly string[]
 }
 export type InsertStyle = 'none' | 'onePart' | 'twoPart' | 'raw'
+/**
+ * A child that is one node of its own kind rather than a folder (the server's SQL Server Agent, Agent's Job Activity
+ * Monitor): its ref names only its kind (scope `server`), its label is its kind's title, and it sorts by `order` among its
+ * owner's folders.
+ */
+export interface SingletonSpec {
+  readonly kind: NodeKind
+  readonly order: number
+  /** The SQL Server Agent platforms that serve it; every server when absent. */
+  readonly platforms?: readonly AgentPlatform[]
+}
+/** The documents a leaf kind opens on Enter or double-click (`KindSpec.opens`); the lane that builds each registers its opener. */
+export const explorerDocuments = ['agentJobActivity'] as const
+export type ExplorerDocument = typeof explorerDocuments[number]
 export interface KindSpec {
   readonly kind: NodeKind
   /** The engines whose Object Explorer has this kind; absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
@@ -213,6 +240,12 @@ export interface KindSpec {
   readonly scriptable: boolean
   /** What drag and Copy Name produce: `[name]`, `[schema].[name]`, or the name as is (parameters). */
   readonly insert: InsertStyle
+  /** Children that are single nodes of their own kind, merged with `folders` by `order`. */
+  readonly singletons?: readonly SingletonSpec[]
+  /** A leaf that opens this document on Enter or double-click, and shows no expander. */
+  readonly opens?: ExplorerDocument
+  /** The SQL Server Agent platforms whose servers have nodes of this kind (the backend refuses its refs elsewhere); every server when absent. */
+  readonly platforms?: readonly AgentPlatform[]
 }
 
 const named = ['name'] as const, schemaNamed = ['name', 'schema'] as const
@@ -299,7 +332,16 @@ const folderData: { readonly [F in FolderId]: Omit<FolderSpec, 'id'> } = {
   integrationServicesCatalogs: { label: 'Integration Services Catalogs', owner: 'server', order: 8, since: 13, list: 'ssisCatalogs', rows: ['ssisCatalog'] },
   ssisProjects: { label: 'Projects', owner: 'object', order: 1, list: 'ssisProjects', rows: ['ssisProject'], filter: named },
   ssisEnvironments: { label: 'Environments', owner: 'object', order: 2, list: 'ssisEnvironments', rows: ['ssisEnvironment'], filter: named },
-  ssisPackages: { label: 'Packages', owner: 'object', order: 1, list: 'ssisPackages', rows: ['ssisPackage'], filter: named }
+  ssisPackages: { label: 'Packages', owner: 'object', order: 1, list: 'ssisPackages', rows: ['ssisPackage'], filter: named },
+
+  // SQL Server Agent (docs/agent-plan.md › Object Explorer): below the server's Agent node, in SSMS order with Job Activity
+  // Monitor (a singleton, order 2) between Jobs and Alerts. Which of them a login sees is decided per listing by its Agent role.
+  agentJobs: { label: 'Jobs', owner: 'object', order: 1, list: 'agentJobs', rows: ['agentJob'], filter: ['name', 'owner', 'created'] },
+  agentAlerts: { label: 'Alerts', owner: 'object', order: 3, list: 'agentAlerts', rows: ['agentAlert'], filter: named, platforms: agentPlatformGates.alerts.platforms },
+  agentOperators: { label: 'Operators', owner: 'object', order: 4, list: 'agentOperators', rows: ['agentOperator'], filter: named },
+  agentProxies: { label: 'Proxies', owner: 'object', order: 5, list: 'agentProxySubsystems', rows: ['agentProxySubsystem'], platforms: agentPlatformGates.proxies.platforms },
+  agentUnassignedProxies: { label: 'Unassigned Proxies', owner: 'object', parent: 'agentProxies', order: 1, list: 'agentUnassignedProxies', rows: ['agentProxy'], afterRows: true },
+  agentErrorLogs: { label: 'Error Logs', owner: 'object', order: 6, list: 'agentErrorLogs', rows: ['agentErrorLog'], platforms: agentPlatformGates.errorLogs.platforms }
 }
 export const folderSpecs = Object.fromEntries(folderIds.map(id => [id, { id, ...folderData[id] }])) as { readonly [F in FolderId]: FolderSpec }
 
@@ -312,7 +354,6 @@ export const laterFolders: readonly LaterFolder[] = [
     contents: ['Policy Management', 'Data Collection', 'Resource Governor', 'Extended Events', 'Maintenance Plans', 'SQL Server Logs', 'Database Mail',
       'Distributed Transaction Coordinator', 'Legacy']
   },
-  { label: 'SQL Server Agent', owner: 'server', order: 9 },
   { label: 'XEvent Profiler', owner: 'server', order: 10 },
   { label: 'Endpoints', owner: 'server', parent: 'serverObjects', order: 2, contents: ['System Endpoints', 'Database Mirroring', 'Service Broker', 'TSQL'] },
   { label: 'Providers', owner: 'server', parent: 'linkedServers', order: 1 },
@@ -334,7 +375,8 @@ type KindData = Omit<KindSpec, 'kind' | 'folders' | 'scriptable'> & { readonly f
 // Most kinds are scriptable leaves; the data names only the exceptions.
 const kindData: { readonly [K in NodeKind]: KindData } = {
   server: {
-    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none'
+    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none',
+    singletons: [{ kind: 'agent', order: 9, platforms: agentPlatforms }]
   },
   // One icon for every login, as SSMS draws them (recalled).
   login: { title: 'Login', scope: 'serverObject', icon: 'login', subtypes: loginSubtypes, smo: 'Login', insert: 'onePart' },
@@ -434,7 +476,22 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     title: 'Package', scope: 'ssisProjectObject', icon: 'package', subtypes: ['entryPoint', 'child'], subtypeIcons: { child: 'symbol-file' }, maxName: 260,
     scriptable: false, insert: 'none'
   },
-  ssisEnvironment: { title: 'Environment', scope: 'ssisFolderObject', icon: 'symbol-variable', scriptable: false, insert: 'none' }
+  ssisEnvironment: { title: 'Environment', scope: 'ssisFolderObject', icon: 'symbol-variable', scriptable: false, insert: 'none' },
+  // SQL Server Agent: server-level objects named by name alone (unique per server), an error log by its archive number (0 is
+  // Current), a proxy subsystem by its subsystem name. Script As comes with AG-4, so none is scriptable yet.
+  agent: {
+    title: 'SQL Server Agent', scope: 'server', icon: 'agent', folders: ['agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentErrorLogs'],
+    singletons: [{ kind: 'agentJobActivity', order: 2 }], platforms: agentPlatforms, scriptable: false, insert: 'none'
+  },
+  agentJobActivity: { title: 'Job Activity Monitor', scope: 'server', icon: 'agent-activity', opens: 'agentJobActivity', platforms: agentPlatforms, scriptable: false, insert: 'none' },
+  agentJob: { title: 'Job', scope: 'serverObject', icon: 'agent-job', platforms: agentPlatforms, scriptable: false, insert: 'none' },
+  agentAlert: { title: 'Alert', scope: 'serverObject', icon: 'bell', platforms: agentPlatformGates.alerts.platforms, scriptable: false, insert: 'none' },
+  agentOperator: { title: 'Operator', scope: 'serverObject', icon: 'agent-operator', platforms: agentPlatforms, scriptable: false, insert: 'none' },
+  agentProxySubsystem: {
+    title: 'Proxy Subsystem', scope: 'serverObject', icon: 'folder', list: 'agentProxies', rows: ['agentProxy'], platforms: agentPlatformGates.proxies.platforms, scriptable: false, insert: 'none'
+  },
+  agentProxy: { title: 'Proxy', scope: 'serverObject', icon: 'agent-proxy', platforms: agentPlatformGates.proxies.platforms, scriptable: false, insert: 'none' },
+  agentErrorLog: { title: 'Error Log', scope: 'serverObject', icon: 'output', platforms: agentPlatformGates.errorLogs.platforms, scriptable: false, insert: 'none' }
 }
 export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
   const { folders = [], scriptable = true, ...rest } = kindData[kind]
@@ -533,26 +590,43 @@ const parentMap = new Map<NodeKind, readonly ParentKind[]>(nodeKinds.filter(kind
 /** The kinds a child ref's `parent` may have: the owners of the folders that list it. Empty for other scopes. */
 export const childParentKinds = (kind: NodeKind): readonly ParentKind[] => parentMap.get(kind) ?? []
 
-/** A folder's gates combined with those of the folders above it. */
-export function folderGates(folder: FolderId): { readonly since?: number; readonly engines: readonly Engine[] } {
-  let since: number | undefined, allowed = engines
+/** A folder's gates combined with those of the folders above it (`platforms` absent: every server). */
+export function folderGates(folder: FolderId): { readonly since?: number; readonly engines: readonly Engine[]; readonly platforms?: readonly AgentPlatform[] } {
+  let since: number | undefined, allowed = engines, platforms: readonly AgentPlatform[] | undefined
   for (let spec: FolderSpec | undefined = folderSpecs[folder]; spec; spec = spec.parent ? folderSpecs[spec.parent] : undefined) {
-    const declared = spec.engines
+    const declared = spec.engines, gate = spec.platforms
     if (spec.since !== undefined) since = Math.max(since ?? spec.since, spec.since)
     if (declared) allowed = allowed.filter(engine => declared.includes(engine))
+    if (gate) platforms = (platforms ?? agentPlatforms).filter(platform => gate.includes(platform))
   }
-  return { since, engines: allowed }
+  return { since, engines: allowed, platforms }
 }
-/** Served on this server: the folder and every folder above it are old enough and available on its engine. */
+/** Whether a `platforms` gate admits this server: absent admits every server, present only an Agent platform it lists. */
+export function platformServed(platforms: readonly AgentPlatform[] | undefined, profile: ExplorerProfile): boolean {
+  if (!platforms) return true
+  const platform = agentPlatform(profile.edition, profile.linux)
+  return platform !== null && platforms.includes(platform)
+}
+/** Served on this server: the folder and every folder above it are old enough, available on its engine and on its Agent platform. */
 export function folderServed(folder: FolderId, profile: ExplorerProfile): boolean {
   const gates = folderGates(folder)
-  return (gates.since ?? minBand) <= profile.band && gates.engines.includes(profile.engine)
+  return (gates.since ?? minBand) <= profile.band && gates.engines.includes(profile.engine) && platformServed(gates.platforms, profile)
+}
+/** Whether a server has nodes of this kind (its `platforms` gate). */
+export const kindServed = (kind: NodeKind, profile: ExplorerProfile): boolean => platformServed(kindSpecs[kind].platforms, profile)
+/** A node's static children in SSMS order: its served folders and singletons merged by `order` (folders keep their order among themselves). */
+export function childrenFor(kind: NodeKind, subtype: NodeSubtype | undefined, profile: ExplorerProfile): readonly ({ readonly folder: FolderId } | { readonly singleton: NodeKind })[] {
+  const folders = foldersFor(kind, subtype).filter(id => folderServed(id, profile)).map(id => ({ folder: id, order: folderSpecs[id].order }))
+  const singletons = (kindSpecs[kind].singletons ?? []).filter(item => platformServed(item.platforms, profile)).map(item => ({ singleton: item.kind, order: item.order }))
+  return [...folders, ...singletons].sort((a, b) => a.order - b.order).map(item => 'folder' in item ? { folder: item.folder } : { singleton: item.singleton })
 }
 /** The static folders the backend serves first: below an object, or below a folder (its subfolders). */
 export function staticChildren(node: { readonly kind: NodeKind; readonly subtype?: NodeSubtype } | { readonly folder: FolderId }, profile: ExplorerProfile): readonly FolderId[] {
   const ids = 'folder' in node ? subfolders(node.folder) : foldersFor(node.kind, node.subtype)
   return ids.filter(id => folderServed(id, profile))
 }
+/** The kinds whose `singletons` list this kind: where its node may hang. */
+export const singletonOwners = (kind: NodeKind): readonly NodeKind[] => nodeKinds.filter(owner => kindSpecs[owner].singletons?.some(item => item.kind === kind))
 
 // Compact sorted-key JSON, so the embedded copy is stable and each entry diffs as one line.
 const sortKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(sortKeys)

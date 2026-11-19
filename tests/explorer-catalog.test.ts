@@ -8,15 +8,17 @@ import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
   folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, maxNameOf, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
   rootFolder, scopeFields, serverEngineOf, serverEngines, staticChildren, statusBadges, subfolders, belowGroupedDatabase, belowSchema, folderFilterFor, ownedSubfolders,
-  schemaGroupFolders, schemaGroupList, schemaGroupRoots, schemaPlacement, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
+  schemaGroupFolders, schemaGroupList, schemaGroupRoots, schemaPlacement, childrenFor, kindServed, platformServed, singletonOwners, explorerDocuments,
+  type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
+import { agentPlatformGates, agentPlatforms } from '../src/shared/agent/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
 import { loginSubtypes } from '../src/shared/actions/logins'
 import { iconSpec, isIconId } from '../src/shared/icons'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
-const box = (band: number): ExplorerProfile => ({ band, engine: 'box' })
-const cloud = (band: number): ExplorerProfile => ({ band, engine: 'cloud' })
+const box = (band: number): ExplorerProfile => ({ band, engine: 'box', edition: 3, linux: false })
+const cloud = (band: number): ExplorerProfile => ({ band, engine: 'cloud', edition: 5, linux: false })
 /** The served folder tree below a node, two spaces per level. */
 const outline = (ids: readonly FolderId[], profile: ExplorerProfile, depth = 0): string[] =>
   ids.flatMap(id => ['  '.repeat(depth) + folderSpecs[id].label, ...outline(staticChildren({ folder: id }, profile), profile, depth + 1)])
@@ -57,8 +59,8 @@ describe('Object Explorer catalogue', () => {
     for (const [name, values] of Object.entries({ nodeKinds, folderIds, nodeSubtypes, queryIds, explorerIcons, kindScopes, parentKinds, filterProperties })) {
       expect(unique(values), name).toBe(true)
     }
-    expect(nodeKinds).toHaveLength(56)
-    expect(folderIds).toHaveLength(76)
+    expect(nodeKinds).toHaveLength(64)
+    expect(folderIds).toHaveLength(82)
     for (const id of folderIds) expect(folderSpecs[id].id).toBe(id)
     for (const kind of nodeKinds) expect(kindSpecs[kind].kind).toBe(kind)
     expect(Object.keys(folderSpecs)).toEqual([...folderIds])
@@ -135,7 +137,8 @@ describe('Object Explorer catalogue', () => {
       for (const row of spec.rows ?? []) expect(nodeKinds, kind).toContain(row)
     }
     // SSMS lists an SSIS catalog's folders directly below it, with no folder in between.
-    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual(['ssisCatalog'])
+    // Agent's Proxies folder lists a row per subsystem, and each subsystem row lists its proxies.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual(['ssisCatalog', 'agentProxySubsystem'])
     expect(kindSpecs.ssisCatalog).toMatchObject({ list: 'ssisFolders', rows: ['ssisFolder'], folders: [] })
     for (const id of folderIds) {
       const spec = folderSpecs[id]
@@ -156,7 +159,8 @@ describe('Object Explorer catalogue', () => {
       const spec = kindSpecs[kind]
       expect(kindScopes, kind).toContain(spec.scope)
       expect(explorerIcons, kind).toContain(spec.icon)
-      if (kind !== 'server') expect(listed.has(kind), kind).toBe(true)
+      // Singletons (SQL Server Agent, Job Activity Monitor) appear below their owners instead of being listed.
+      if (kind !== 'server') expect(listed.has(kind) || singletonOwners(kind).length > 0, kind).toBe(true)
       for (const subtype of spec.subtypes ?? []) usedSubtypes.add(subtype)
       expect(unique(spec.subtypes ?? []), kind).toBe(true)
       for (const map of [spec.subtypeIcons, spec.subtypeFolders, spec.subtypeSmo]) for (const subtype of Object.keys(map ?? {})) expect(spec.subtypes, kind).toContain(subtype)
@@ -173,10 +177,12 @@ describe('Object Explorer catalogue', () => {
     expect([...usedSubtypes].sort()).toEqual([...nodeSubtypes].sort())
     expect(nodeKinds.filter(kind => kindSpecs[kind].historyLookup)).toEqual(['table'])
     const ssisKinds = ['ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment']
-    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds])
+    // Script As for Agent objects comes with AG-4; nothing inserts them.
+    const agentKinds = ['agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog']
+    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds, ...agentKinds])
     // Schema-scoped objects insert [schema].[name]; the rest a one-part name, except parameters, the server and return values.
     for (const kind of nodeKinds) expect(kindSpecs[kind].insert === 'twoPart', kind).toBe(kindSpecs[kind].scope === 'schemaObject')
-    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds])
+    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds, ...agentKinds])
     expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('ssis'))).toEqual(ssisKinds)
     expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter'])
   })
@@ -225,12 +231,13 @@ describe('Object Explorer catalogue', () => {
       // Group by Schema hangs the folders of schema-scoped objects below a schema row as well.
       if (owner === 'server' || owner === 'database') expect(owners, id).toEqual(belowSchema(id) ? [owner, 'schema'] : [owner])
       // Object folders hang below the SQL objects that own child refs, or below SSIS folders and projects.
-      else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject'], id).toContain(kind)
+      else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject', 'agent'], id).toContain(kind)
     }
     expect(folderOwnerKinds('integrationServicesCatalogs')).toEqual(['server'])
     expect(folderOwnerKinds('ssisProjects')).toEqual(['ssisFolder'])
     expect(folderOwnerKinds('ssisEnvironments')).toEqual(['ssisFolder'])
     expect(folderOwnerKinds('ssisPackages')).toEqual(['ssisProject'])
+    for (const id of ['agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'] as const) expect(folderOwnerKinds(id), id).toEqual(['agent'])
     expect(folderOwnerKinds('columns')).toEqual(['table', 'view', 'function', 'tableType'])
     expect(folderOwnerKinds('parameters')).toEqual(['procedure', 'function'])
     expect(folderOwnerKinds('systemTables')).toEqual(['database', 'schema'])
@@ -316,9 +323,49 @@ describe('Object Explorer catalogue', () => {
     expect(labels('ssisFolder')).toEqual(['Projects', 'Environments'])
     expect(labels('ssisProject')).toEqual(['Packages'])
     expect(labels('server')).toEqual(['Databases', 'Security', 'Server Objects', 'Integration Services Catalogs'])
-    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function', 'ssisFolder', 'ssisProject']
+    expect(labels('agent')).toEqual(['Jobs', 'Alerts', 'Operators', 'Proxies', 'Error Logs'])
+    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function', 'ssisFolder', 'ssisProject', 'agent']
     for (const kind of nodeKinds.filter(kind => !parents.includes(kind))) expect(foldersFor(kind), kind).toEqual([])
     for (const id of ['columns', 'parameters'] as const) expect(staticChildren({ folder: id }, box(12))).toEqual([])
+  })
+  it('serves SQL Server Agent where it runs, in SSMS order, with its platform gates', () => {
+    const windows = box(17), linux: ExplorerProfile = { ...box(17), linux: true }, managed: ExplorerProfile = { ...box(16), edition: 8 }
+    const express: ExplorerProfile = { ...box(17), edition: 4 }, azure = cloud(17)
+    const label = (item: { readonly folder: FolderId } | { readonly singleton: NodeKind }) => 'folder' in item ? folderSpecs[item.folder].label : kindSpecs[item.singleton].title
+    // The server's Agent node follows its folders (SSMS: after Integration Services Catalogs), only where Agent runs.
+    expect(childrenFor('server', undefined, windows).map(label)).toEqual(['Databases', 'Security', 'Server Objects', 'Integration Services Catalogs', 'SQL Server Agent'])
+    expect(childrenFor('server', undefined, managed).map(label).at(-1)).toBe('SQL Server Agent')
+    for (const profile of [express, azure]) expect(childrenFor('server', undefined, profile).map(label), String(profile.edition)).not.toContain('SQL Server Agent')
+    // Job Activity Monitor sits between Jobs and Alerts; Linux has no alerts, Managed Instance no alerts or proxies.
+    expect(childrenFor('agent', undefined, windows).map(label)).toEqual(['Jobs', 'Job Activity Monitor', 'Alerts', 'Operators', 'Proxies', 'Error Logs'])
+    expect(childrenFor('agent', undefined, linux).map(label)).toEqual(['Jobs', 'Job Activity Monitor', 'Operators', 'Proxies', 'Error Logs'])
+    expect(childrenFor('agent', undefined, managed).map(label)).toEqual(['Jobs', 'Job Activity Monitor', 'Operators', 'Error Logs'])
+    // Every gate comes from the Agent catalogue's platform gates; nothing names a platform here.
+    expect(folderSpecs.agentAlerts.platforms).toBe(agentPlatformGates.alerts.platforms)
+    expect(folderSpecs.agentProxies.platforms).toBe(agentPlatformGates.proxies.platforms)
+    expect(folderSpecs.agentErrorLogs.platforms).toBe(agentPlatformGates.errorLogs.platforms)
+    expect(folderGates('agentUnassignedProxies').platforms).toEqual(agentPlatformGates.proxies.platforms)
+    expect(folderServed('agentUnassignedProxies', managed)).toBe(false)
+    // Agent kinds exist only on Agent's platforms; the backend refuses their refs elsewhere.
+    for (const kind of nodeKinds) expect(kindServed(kind, express), kind).toBe(!kind.startsWith('agent'))
+    expect(kindServed('agentAlert', linux)).toBe(false)
+    expect(kindServed('agentProxy', managed)).toBe(false)
+    // Singletons are named by kind alone, sort among their owner's folders, and their owners list them once.
+    for (const kind of nodeKinds) for (const item of kindSpecs[kind].singletons ?? []) {
+      expect(kindSpecs[item.kind].scope, item.kind).toBe('server')
+      expect(singletonOwners(item.kind), item.kind).toEqual([kind])
+      expect(kindSpecs[kind].folders.map(id => folderSpecs[id].order), item.kind).not.toContain(item.order)
+    }
+    expect(singletonOwners('agent')).toEqual(['server'])
+    expect(singletonOwners('agentJobActivity')).toEqual(['agent'])
+    // Only leaves open a document, and each document is opened by one kind.
+    const opens = nodeKinds.filter(kind => kindSpecs[kind].opens)
+    expect(opens).toEqual(['agentJobActivity'])
+    for (const kind of opens) expect(kindSpecs[kind].folders.length + (kindSpecs[kind].singletons?.length ?? 0) + (kindSpecs[kind].list ? 1 : 0), kind).toBe(0)
+    expect(opens.map(kind => kindSpecs[kind].opens).sort()).toEqual([...explorerDocuments].sort())
+    // Unassigned Proxies follows the subsystem rows, as SSMS lists it.
+    expect(folderSpecs.agentUnassignedProxies).toMatchObject({ parent: 'agentProxies', afterRows: true })
+    expect(folderIds.filter(id => folderSpecs[id].afterRows)).toEqual(['agentUnassignedProxies'])
   })
   it('loads in plain Node 24, so scripts and test fixtures can share it', () => {
     const files = ['catalog.ts', 'refs.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'explorer', name))
@@ -369,7 +416,7 @@ describe('generated catalogue files', () => {
     expect(folder('tables').since).toBeUndefined()
     expect(folder('columnMasterKeys').since).toBe(13)
     for (const id of folderIds) for (const profile of [box(12), box(13), box(14), box(16), box(17), cloud(12), cloud(16), cloud(17)]) {
-      expect((folder(id).since ?? 12) <= profile.band && folder(id).engines.includes(profile.engine), `${id} ${profile.engine} ${profile.band}`).toBe(folderServed(id, profile))
+      expect((folder(id).since ?? 12) <= profile.band && folder(id).engines.includes(profile.engine) && platformServed((folder(id) as { platforms?: typeof agentPlatforms }).platforms, profile), `${id} ${profile.engine} ${profile.band}`).toBe(folderServed(id, profile))
     }
     expect(catalog.kinds.find(kind => kind.kind === 'column')?.parents).toEqual(['table', 'view', 'tableType', 'function'])
     expect(catalog.kinds.find(kind => kind.kind === 'login')?.subtypes).toEqual([...loginSubtypes])

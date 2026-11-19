@@ -38,7 +38,7 @@ or disconnected (collapsed if it showed none, or if the session file predates th
 | Always On High Availability | — | — | — | Planned | — |
 | Management | — | — | — | Planned: Policy Management, Data Collection, Resource Governor, Extended Events, Maintenance Plans, SQL Server Logs, Database Mail, Distributed Transaction Coordinator, Legacy | — |
 | Integration Services Catalogs | `integrationServicesCatalogs` | 2016 (13) | Yes | Integration Services Catalog (`ssisCatalogs`) | — |
-| SQL Server Agent | — | — | — | Planned | — |
+| SQL Server Agent | `agent` node | — | No | Its own node; SQL Server Agent platforms `windows`, `linux`, `managedInstance` | — |
 | XEvent Profiler | — | — | — | Planned | — |
 
 ## Database
@@ -171,6 +171,8 @@ which list in deployment order (`package_id`: a package name can be longer than 
 | `ssisCatalog` | any | Folder rows (`ssisFolders`) |
 | `ssisFolder` | any | Projects, Environments |
 | `ssisProject` | any | Packages |
+| `agent` | any | Jobs, Job Activity Monitor (its own node), Alerts, Operators, Proxies, Error Logs |
+| `agentProxySubsystem` | any | Proxy rows (`agentProxies`) |
 
 | Folder | Id | Below | Lists (query) |
 | --- | --- | --- | --- |
@@ -184,8 +186,35 @@ which list in deployment order (`package_id`: a package name can be longer than 
 | Projects | `ssisProjects` | `ssisFolder` | Project (`ssisProjects`) |
 | Environments | `ssisEnvironments` | `ssisFolder` | Environment (`ssisEnvironments`) |
 | Packages | `ssisPackages` | `ssisProject` | Package (`ssisPackages`) |
+| Jobs | `agentJobs` | `agent` | Job (`agentJobs`) |
+| Alerts | `agentAlerts` | `agent` | Alert (`agentAlerts`) |
+| Operators | `agentOperators` | `agent` | Operator (`agentOperators`) |
+| Proxies | `agentProxies` | `agent` | Proxy Subsystem (`agentProxySubsystems`) |
+| Unassigned Proxies | `agentUnassignedProxies` | `agent` | Proxy (`agentUnassignedProxies`) |
+| Error Logs | `agentErrorLogs` | `agent` | Error Log (`agentErrorLogs`) |
 
-## Node kinds (56)
+## SQL Server Agent
+
+The server's SQL Server Agent node is its own node (a singleton: its ref names only its kind), after the server's folders, on the
+servers Agent runs on (docs/sql-server-agent.md). It shows only while the Agent release gate is on (`VARIA_AGENT_PREVIEW=1`). Its
+children follow SSMS: Jobs, Job Activity Monitor (a leaf that opens its document), Alerts, Operators, Proxies (a row per
+subsystem, then Unassigned Proxies) and Error Logs. Which of them a login sees depends on its Agent role, read when the node
+expands: sysadmin sees all; SQLAgentOperatorRole every folder but Error Logs; SQLAgentReaderRole and SQLAgentUserRole Jobs and Job
+Activity Monitor (a User sees only its own jobs). With Agent XPs off the node lists nothing and says why. The platform gates come
+from the Agent catalogue:
+
+| Node | Id | Served on |
+| --- | --- | --- |
+| SQL Server Agent | `agent` node | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
+| Job Activity Monitor | `agentJobActivity` node | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
+| Jobs | `agentJobs` | every server |
+| Alerts | `agentAlerts` | SQL Server Agent platforms `windows` |
+| Operators | `agentOperators` | every server |
+| Proxies | `agentProxies` | SQL Server Agent platforms `windows`, `linux` |
+| Unassigned Proxies | `agentUnassignedProxies` | SQL Server Agent platforms `windows`, `linux` |
+| Error Logs | `agentErrorLogs` | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
+
+## Node kinds (64)
 
 Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
@@ -248,6 +277,14 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `ssisProject` | Project | `ssisFolderObject` | `project` | — | No | — |
 | `ssisPackage` | Package | `ssisProjectObject` | `package`; `child` → `symbol-file` | — | No | — |
 | `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
+| `agent` | SQL Server Agent | `server` | `agent` | — | No | — |
+| `agentJobActivity` | Job Activity Monitor | `server` | `agent-activity` | — | No | — |
+| `agentJob` | Job | `serverObject` | `agent-job` | — | No | — |
+| `agentAlert` | Alert | `serverObject` | `bell` | — | No | — |
+| `agentOperator` | Operator | `serverObject` | `agent-operator` | — | No | — |
+| `agentProxySubsystem` | Proxy Subsystem | `serverObject` | `folder` | — | No | — |
+| `agentProxy` | Proxy | `serverObject` | `agent-proxy` | — | No | — |
+| `agentErrorLog` | Error Log | `serverObject` | `output` | — | No | — |
 
 ## Node identity
 
@@ -259,8 +296,8 @@ SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject
 
 | Scope | Requires | Forbids | Kinds |
 | --- | --- | --- | --- |
-| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server` |
-| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
+| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server`, `agent`, `agentJobActivity` |
+| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog` |
 | `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `database` |
 | `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
 | `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |

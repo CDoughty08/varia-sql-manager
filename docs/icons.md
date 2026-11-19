@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (24)
+## Varia's icons (28)
 
 | Id | Use |
 | --- | --- |
@@ -30,13 +30,17 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `plan-aggregate` | Execution plan aggregation. |
 | `plan-parallel` | Execution plan parallel exchanges. |
 | `plan-compute` | Execution plan scalar and constant computations. |
-| `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
+| `agent-job` | SQL Server Agent: jobs, and Object Explorer's running-jobs chip. |
 | `ssis-package` | Integration Services packages (planned). |
 | `drive` | Drives in the server file picker. |
 | `ssis-environment` | Integration Services environments (planned). |
 | `transpose` | Transpose: the results toolbar's Transpose button and the Transpose commands. |
 | `pivot` | Pivot: the results toolbar's Pivot toggle and the Pivot command. |
 | `fuzzy-match` | The Fuzzy Match toggle in Search Objects (an approximately-equal sign). |
+| `agent` | SQL Server Agent: Object Explorer's Agent node (a clock that comes round again). |
+| `agent-activity` | SQL Server Agent: Job Activity Monitor. |
+| `agent-operator` | SQL Server Agent: operators (a person who is sent mail). |
+| `agent-proxy` | SQL Server Agent: proxies (an account a step runs as). |
 
 ## Codicons (128)
 

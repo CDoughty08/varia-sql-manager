@@ -341,7 +341,7 @@ const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadm
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
 // exists. The SSIS Catalog has one folder, Finance, with the project Loads (an entry point and a child package) and the
 // environment Test.
-const explorerProfile = { band: 16, engine: 'box' }
+const explorerProfile = { band: 16, engine: 'box', edition: 3, linux: false }
 // Search Objects' fixture index: AppData's dbo.Orders, a procedure whose definition names it, and a trigger on it.
 const searchObjects = [
   { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' },
