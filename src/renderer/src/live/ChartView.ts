@@ -117,8 +117,11 @@ export function chartTable(series: readonly ChartSeries[], rows: readonly ChartT
  * Whether a chart's table has a column holding longer text than the columns were last sized for (`widest`, empty before the
  * first table), and the lengths they are sized for after `table`: the grid sizes its columns once, so when one has outgrown
  * its width all are sized again from this table (LiveChart), which may narrow the others, so the lengths become this table's.
+ * While the grid has not sized yet (`sized` false: not drawn yet, hidden, or a measure asked for), it will size from the latest
+ * table, so the lengths are that table's and nothing more is asked.
  */
-export function chartColumnsWiden(widest: readonly number[], table: LocalTableData): { readonly widest: number[]; readonly grew: boolean } {
+export function chartColumnsWiden(widest: readonly number[], table: LocalTableData, sized = true): { readonly widest: number[]; readonly grew: boolean } {
+  if (!sized) widest = []
   const next = table.columns.map((column, at) => table.rows.reduce((most, row) => Math.max(most, row[at]?.length ?? 4), column.name.length))
   const grew = widest.length > 0 && next.some((length, at) => length > (widest[at] ?? 0))
   return { widest: grew || widest.length === 0 ? next : next.map((length, at) => Math.max(length, widest[at] ?? 0)), grew }

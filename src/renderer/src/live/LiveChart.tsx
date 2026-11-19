@@ -116,7 +116,7 @@ export function LiveChart(props: LiveChartProps) {
   useEffect(() => {
     if (widest.current.state !== gridState) widest.current = { state: gridState, lengths: [] }
     if (!table.data.rows.length) return
-    const next = chartColumnsWiden(gridState.sized ? widest.current.lengths : [], table.data)
+    const next = chartColumnsWiden(widest.current.lengths, table.data, gridState.sized)
     widest.current.lengths = next.widest
     if (next.grew) gridState.sized = false
   }, [table, gridState])

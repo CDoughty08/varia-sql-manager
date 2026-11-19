@@ -476,6 +476,10 @@ describe('ChartView', () => {
     const refit = chartColumnsWiden(gap.widest, row('now', '12,345/s'))
     expect(refit).toEqual({ widest: [4, 8], grew: true })
     expect(chartColumnsWiden(refit.widest, chartTable(series, [{ time: 'now', values: ['1/s'], gapBefore: true }])).grew).toBe(true)
+    // While a measure is pending the grid sizes from the latest table: the lengths are that table's, not the wider one before.
+    const pending = chartColumnsWiden(gap.widest, row('now', '0/s'), false)
+    expect(pending).toEqual({ widest: [4, 4], grew: false })
+    expect(chartColumnsWiden(pending.widest, chartTable(series, [{ time: 'now', values: ['1/s'], gapBefore: true }])).grew).toBe(true)
   })
   it('labels expanded charts with values and times', () => {
     const ring = ringOf(30, 1, index => index)
