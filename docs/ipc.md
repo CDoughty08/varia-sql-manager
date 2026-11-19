@@ -1395,7 +1395,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Any other cell that did not match (one the fold cannot vouch for that is not ASCII) is looked at again. Ordinal and
   binary columns narrow freely; a column whose compare changes kind (text of only ignorable characters is searched by
   code point) does not narrow. A truncated cell that did not match in a row passed over still makes the answer
-  `approximate`. The memo is spare memory (`TryReserveSpare`: never the budget's last eighth; none without room, and the
+  `approximate`, so when there was one, a binary column that the new text no longer matches (hex text grown a non-hex
+  letter) means a full search. The memo is spare memory (`TryReserveSpare`: never the budget's last eighth; none without room, and the
   search still answers), replaced by the next search's, and freed with its result (re-execute, Close Results, tab close,
   backend loss). Typing a word into all 367,576 of SQL Server's messages takes 1.4 – 1.8 times less time than searching
   every row each key (2 – 5 times over the English ones, 85 – 100 % saved a key from the third on); Japanese and Chinese

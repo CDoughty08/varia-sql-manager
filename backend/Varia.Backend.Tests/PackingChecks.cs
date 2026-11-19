@@ -419,12 +419,12 @@ internal static class PackingChecks
         // A search in the result's own order reads it fused and leaves it packed (FusedReadChecks); through a view far from
         // its pages' order (sorted by amount) it reads it in page order, and leaves it packed too.
         Call<object>("results.search", new { resultId = set.ResultId, text = "59999", fromRow = 0, maxMatches = 1 });
-        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed,
-            "a search of a packed result in its own order reads it fused and leaves it packed");
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes - (set.SearchMemo?.Bytes ?? 0) == packed,
+            "a search of a packed result in its own order reads it fused and leaves it packed (holding only its type-ahead memo)");
         var byAmount = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 3, descending = false, mode = "value" } } });
-        packed = store.UsedBytes;
+        packed = store.UsedBytes - (set.SearchMemo?.Bytes ?? 0);
         Call<object>("results.search", new { resultId = set.ResultId, viewId = byAmount.ViewId, text = "59999", fromRow = 0, maxMatches = 1 });
-        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes == packed && set.Unpacks == 0,
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Stored is PackedPage) && store.UsedBytes - (set.SearchMemo?.Bytes ?? 0) == packed && set.Unpacks == 0,
             "a search through a sorted view of a packed result reads it in page order, leaves it packed and holds nothing afterwards");
         // Unpacked, for the transposed Copy's raw estimate below.
         using (set.Pin()) check(set.TryUnpackAll() && !set.HasPacked, "the fixture: the result unpacked");

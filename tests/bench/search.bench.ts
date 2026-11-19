@@ -24,8 +24,15 @@ it('measures Find through a culture compare with and without the pre-check, and 
   const output = execFileSync('dotnet', ['run', '--project', 'backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj', '--configuration', 'Release', '--', '--find-bench'],
     { encoding: 'utf8', timeout: 280_000, maxBuffer: 16 * 1024 * 1024 })
   const measured = new Map(output.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line) as Metric).map(metric => [metric.id, metric]))
-  const ids = ['node.find.prechecked', 'node.find.precheckSpeedup', 'node.find.typeAhead', 'node.find.typeAheadSpeedup']
-  const metrics = ids.map(id => measured.get(id))
-  expect(metrics.every(Boolean)).toBe(true)
-  record(...metrics.map(metric => ({ id: metric!.id, value: metric!.value, unit: metric!.unit, detail: metric!.detail })))
+  const read = (id: string) => {
+    const metric = measured.get(id)
+    expect(metric, id).toBeTruthy()
+    return { value: metric!.value, unit: metric!.unit, detail: metric!.detail }
+  }
+  record(
+    { id: 'node.find.prechecked', ...read('node.find.prechecked') },
+    { id: 'node.find.precheckSpeedup', ...read('node.find.precheckSpeedup') },
+    { id: 'node.find.typeAhead', ...read('node.find.typeAhead') },
+    { id: 'node.find.typeAheadSpeedup', ...read('node.find.typeAheadSpeedup') }
+  )
 })

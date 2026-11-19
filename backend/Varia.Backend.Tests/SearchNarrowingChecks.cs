@@ -84,8 +84,10 @@ internal static class SearchNarrowingChecks
             "cells ruled out by the pre-check narrow any text whose fold holds the earlier text's fold (an accent that composes with the last letter changes the fold), and no text without a fold; a column that ruled nothing out narrows any text; cells ruled out as ASCII need ASCII");
         check(E("abc", [O, C], "abcd", [O, C]) && E("abc", [O, C], "xabcd", [O, C]) && !E("abc", [O, C], "abd", [O, C]) && !E("abc", [O, C], "ab", [O, C]),
             "a text extends another that it holds anywhere, and no other");
-        check(E("ab", [H, C], "abg", [N, C]) && !E("\u200B", [O], "\u200Ba", [C]),
-            "a column that can no longer match needs nothing; a compare that changes kind (ignorable text was searched ordinally) never narrows");
+        SearchNarrowing.Needs[] none = [SearchNarrowing.Needs.None, SearchNarrowing.Needs.Ascii];
+        check(E("ab", [H, C], "abg", [N, C]) && !SearchNarrowing.Extends("ab", [H, C], none, new string?[2], "abg", [N, C], new string?[2], elsewhere: true)
+            && SearchNarrowing.Extends("abg", [N, C], none, new string?[2], "abgx", [N, C], new string?[2], elsewhere: true) && !E("\u200B", [O], "\u200Ba", [C]),
+            "a column that can no longer match needs nothing, unless truncated cells left the earlier search approximate; a compare that changes kind (ignorable text was searched ordinally) never narrows");
         check(E("caf", [O], "café", [O]) && !E("caf", [C], "café", [C]) && !E("café", [C], "cafés", [C]) && !E("\uD83D", [O], "😀", [O]),
             "an ordinal column narrows any text; a culture column only ASCII text; an earlier text with a surrogate never narrows");
     }
@@ -106,8 +108,10 @@ internal static class SearchNarrowingChecks
             (7, ["かな", "カナ", "kana"], [["k", "ka", "kan"]]),
         ];
         var differences = new List<string>();
+        var unnarrowed = new List<string>();
         foreach (var (column, cells, sequences) in cases)
         {
+            var narrowings = 0;
             var store = new ResultStore(1L << 30, 1L << 29);
             var set = Open(store, "crafted");
             foreach (var cell in cells)
@@ -123,6 +127,7 @@ internal static class SearchNarrowingChecks
                 foreach (var text in sequence)
                 {
                     var narrowed = Shown(ResultSearcher.Search(set, set.SealedSnapshot(), null, text, 0, false, 100, CancellationToken.None));
+                    if (ResultSearcher.LastNarrowing is not null) narrowings++;
                     var full = Shown(ResultSearcher.Search(set, set.SealedSnapshot(), null, text, 0, false, 100, CancellationToken.None, narrow: false));
                     if (narrowed != full) differences.Add(Columns[column].Name + " " + string.Join(">", sequence.Select(Escape)) + " at " + Escape(text) + ": " + narrowed + " against " + full);
                     var listed = Listed(snapshot.Read(DistinctOrder.Value, 0, 100, text, CancellationToken.None));
@@ -131,7 +136,9 @@ internal static class SearchNarrowingChecks
                     if (listed != all) differences.Add("values of " + Columns[column].Name + " at " + Escape(text) + ": " + listed + " against " + all);
                 }
             store.Release(set.ResultId);
+            if (narrowings == 0) unnarrowed.Add(Columns[column].Name + " " + Escape(cells[0]));
         }
+        check(unnarrowed.Count == 0, "every crafted case narrows a later key (so the comparisons below test narrowing): " + string.Join(", ", unnarrowed));
         check(differences.Count == 0, "typing c, ch (Czech), a, aa (Danish), dh and ll (Albanian), ss, fi, ae and oe (expansions), after ignorable text and over kana finds and lists what a full search does: " + string.Join(" | ", differences.Take(3)));
     }
 
@@ -259,6 +266,7 @@ internal static class SearchNarrowingChecks
     private static void Memory(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
+        var start = store.UsedBytes;
         var set = Open(store, "memory");
         var random = new Random(5);
         for (var r = 0; r < 5_000; r++) AddRandom(set, random);
@@ -273,7 +281,7 @@ internal static class SearchNarrowingChecks
         check(memo is { Text: "e", Rows: 5_000 } && first - before == memo.Bytes && memo.Bytes == SearchMemo.BytesFor(5_000, Columns.Length, 1) && narrowed == false
             && second - before == set.SearchMemo!.Bytes,
             "a search's memo (two bits a row) is charged to the result's budget and the next search's replaces it: " + before + " " + first + " " + second);
-        var view = store.AddView(set, [.. Enumerable.Range(0, 5_000)], [], false, true, 20_000, null, 5_000);
+        var view = store.AddView(set, [.. Enumerable.Range(0, 5_000)], [], false, true, 0, null, 5_000);
         ResultSearcher.Search(set, set.SealedSnapshot(), view, "esx", 0, false, 10, CancellationToken.None);
         check(ResultSearcher.LastNarrowing is null && set.SearchMemo!.ViewId == view.ViewId, "a search through another view reads every row and keeps its own memo");
         ResultSearcher.Search(set, set.SealedSnapshot(), view, "es", 0, false, 10, CancellationToken.None);
@@ -281,7 +289,7 @@ internal static class SearchNarrowingChecks
         var held = store.UsedBytes;
         var memoBytes = set.SearchMemo!.Bytes;
         store.Release(set.ResultId);
-        check(set.SearchMemo is null && held - store.UsedBytes >= memoBytes, "a released result returns its search's memo with it");
+        check(set.SearchMemo is null && held - store.UsedBytes >= memoBytes && store.UsedBytes == start, "a released result returns its search's memo with it: " + start + " " + store.UsedBytes);
 
         // Little room: the memo is spare memory, so a search with no spare room keeps none and is still answered.
         var tight = new ResultStore(1L << 20, 1L << 20);
@@ -318,6 +326,23 @@ internal static class SearchNarrowingChecks
         check(valueRuled == SearchNarrowing.Needs.Fold && values.LastNarrowed && values.LastNeeds == SearchNarrowing.Needs.Fold,
             "so does a value search's: " + valueRuled + " " + values.LastNeeds);
         store.Release(carry.ResultId);
+
+        // A truncated binary cell makes a search approximate only while the text is hex: once a letter makes it non-hex
+        // the column cannot match, so a full search is exact, and so must the narrowed one be.
+        var cut = Open(store, "cut binary");
+        var text = new string?[Columns.Length - 1];
+        text[3] = "zzz";
+        Add(cut, text, truncated: true, binary: [0x12, 0x34]);
+        cut.Complete();
+        var cutDifferences = new List<string>();
+        foreach (var typed in new[] { "ab", "abs", "absx" })
+        {
+            var narrowedCut = Shown(ResultSearcher.Search(cut, cut.SealedSnapshot(), null, typed, 0, false, 10, CancellationToken.None));
+            var fullCut = Shown(ResultSearcher.Search(cut, cut.SealedSnapshot(), null, typed, 0, false, 10, CancellationToken.None, narrow: false));
+            if (narrowedCut != fullCut) cutDifferences.Add(typed + ": " + narrowedCut + " against " + fullCut);
+        }
+        check(cutDifferences.Count == 0, "a truncated binary cell stops making the search approximate when the text stops being hex: " + string.Join(" | ", cutDifferences));
+        store.Release(cut.ResultId);
     }
 
     private static ResultSetBuffer Open(ResultStore store, string name) =>
@@ -329,7 +354,7 @@ internal static class SearchNarrowingChecks
         var builder = set.BeginRow()!;
         for (var c = 0; c < Columns.Length; c++)
         {
-            if (c == Binary) { if (binary is null) builder.AppendNull(); else builder.AppendBinary(binary); continue; }
+            if (c == Binary) { if (binary is null) builder.AppendNull(); else builder.AppendBinary(binary, truncated); continue; }
             var text = c < Binary ? row[c] : row[c - 1];
             if (text is null) builder.AppendNull();
             else builder.AppendText(text, truncated: truncated && c == 2);

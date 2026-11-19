@@ -77,14 +77,16 @@ internal static class SearchNarrowing
     /// <summary>Whether a search for <paramref name="next"/> may read only what the search for <paramref name="previous"/>
     /// kept (its matches and rechecks), given each column's <see cref="Kind"/> for both texts, what the earlier search's
     /// ruling out needs (<see cref="Needs"/>), and both texts' folds. Not for the same text, which reads only the matches.</summary>
-    public static bool Extends(string previous, ReadOnlySpan<Kind> previousKinds, ReadOnlySpan<Needs> needs, ReadOnlySpan<string?> previousFolds, string next, ReadOnlySpan<Kind> nextKinds, ReadOnlySpan<string?> nextFolds)
+    public static bool Extends(string previous, ReadOnlySpan<Kind> previousKinds, ReadOnlySpan<Needs> needs, ReadOnlySpan<string?> previousFolds, string next, ReadOnlySpan<Kind> nextKinds, ReadOnlySpan<string?> nextFolds, bool elsewhere = false)
     {
         if (previousKinds.Length != nextKinds.Length || !next.Contains(previous, StringComparison.Ordinal)) return false;
         foreach (var c in previous) if (char.IsSurrogate(c)) return false;
         for (var i = 0; i < nextKinds.Length; i++)
         {
             // A column where no cell can hold the new text has nothing to search again.
-            if (nextKinds[i] == Kind.None) continue;
+            // A column the earlier text searched but the next cannot match (hex text grown a non-hex letter): when truncated
+            // cells left the earlier search approximate, they may be this column's, which a full search of the next text skips.
+            if (nextKinds[i] == Kind.None) { if (elsewhere && previousKinds[i] != Kind.None) return false; continue; }
             if (nextKinds[i] != previousKinds[i]) return false;
             if ((needs[i] & Needs.Ascii) != 0 && !(Ascii.IsValid(previous) && Ascii.IsValid(next))) return false;
             if ((needs[i] & Needs.Fold) != 0 && (previousFolds[i] is not { } earlier || nextFolds[i]?.Contains(earlier, StringComparison.Ordinal) != true)) return false;
@@ -198,7 +200,7 @@ internal sealed class Narrowing
         if (set.SearchMemo is { } memo && memo.ViewId == viewId && memo.Rows <= rows)
         {
             if (memo.Text == text && memo.Kinds.AsSpan().SequenceEqual(kinds)) { from = memo; repeated = true; }
-            else if (SearchNarrowing.Extends(memo.Text, memo.Kinds, memo.Needs, memo.Folds, text, kinds, folds)) from = memo;
+            else if (SearchNarrowing.Extends(memo.Text, memo.Kinds, memo.Needs, memo.Folds, text, kinds, folds, memo.Elsewhere)) from = memo;
         }
         var bytes = SearchMemo.BytesFor(rows, matchers.Length, text.Length);
         var reserved = rows > 0 && set.TryReserveSpare(bytes) ? bytes : 0;
