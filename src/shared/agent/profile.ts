@@ -15,7 +15,7 @@ export interface AgentProfile {
   /** False when msdb refused the login (error 916, only where msdb's guest CONNECT was revoked): every role fact is then false. */
   readonly msdbAccess: boolean
   readonly sysadmin: boolean
-  /** Membership of msdb's Agent roles (`IS_ROLEMEMBER`, nested membership included; sysadmin is dbo, so in all three). */
+  /** Membership of msdb's Agent roles (`IS_ROLEMEMBER`, nested membership included). False for sysadmin, who is dbo in msdb and so no role's member: `sysadmin` outranks them. */
   readonly userRole: boolean
   readonly readerRole: boolean
   readonly operatorRole: boolean

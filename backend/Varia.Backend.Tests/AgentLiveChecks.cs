@@ -205,7 +205,8 @@ internal static class AgentLiveChecks
     }
 
     /// <summary>agent.profile (AG-0b) as the suite's own login: msdb access, Agent XPs on (Agent is up), the platform the server
-    /// profile says, sysadmin as the server says, and for sysadmin every Agent role and permission.</summary>
+    /// profile says, sysadmin as the server says, and for sysadmin every permission but no role membership: sysadmin is dbo in msdb,
+    /// and IS_ROLEMEMBER counts dbo in no role, so the role facts mean real membership and agentRoleOf ranks sysadmin first.</summary>
     private static async Task ProfileAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, ServerProfile server,
         Func<string, string, Task<SqlRun>> sql)
     {
@@ -213,10 +214,10 @@ internal static class AgentLiveChecks
         var sysadmin = (await sql("SELECT CONVERT(int, IS_SRVROLEMEMBER(N'sysadmin'));", "master")).Scalar == "1";
         var platform = server.EngineEdition == 8 ? "managedInstance" : server.Linux ? "linux" : "windows";
         check(result is { Error: null, Profile: { MsdbAccess: true, AgentXps: true } facts } && facts.Sysadmin == sysadmin && facts.Platform == platform && facts.EngineEdition == server.EngineEdition
-            && (!sysadmin || facts is { UserRole: true, ReaderRole: true, OperatorRole: true, PurgeHistory: true, ServerServices: true, Sessions: true, AlterAnyCredential: true })
+            && (!sysadmin || facts is { UserRole: false, ReaderRole: false, OperatorRole: false, PurgeHistory: true, ServerServices: true, Sessions: true, AlterAnyCredential: true })
             && result.ElapsedMs < AgentCatalog.Current.Limit("profileMs"),
             "agent.profile reads this login's Agent facts on the Object Explorer pool: msdb access, Agent XPs on, the " + platform + " platform, sysadmin " + sysadmin
-            + " with every Agent role and permission when sysadmin, within its budget: " + JsonSerializer.Serialize(result));
+            + " with every permission but no Agent role membership when sysadmin (dbo is no role's member), within its budget: " + JsonSerializer.Serialize(result));
     }
 
     private static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";

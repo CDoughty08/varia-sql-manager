@@ -42,7 +42,7 @@ internal static class AgentChecks
             && !old.Contains("SECURITY STATE", StringComparison.Ordinal) && !old.Contains("PERFORMANCE STATE", StringComparison.Ordinal)
             && current.Contains("N'VIEW SERVER SECURITY STATE'", StringComparison.Ordinal) && current.Contains("N'VIEW SERVER PERFORMANCE STATE'", StringComparison.Ordinal)
             && current.Contains("c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = 16384", StringComparison.Ordinal) && !current.Contains("Agent XPs", StringComparison.Ordinal)
-            && !current.Contains("EXEC", StringComparison.OrdinalIgnoreCase),
+            && !System.Text.RegularExpressions.Regex.IsMatch(current, @"\bEXEC\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
             "agent.profile's batch passes CatalogSql.Lint for every band with its own literals, reads the 2022 server-state permissions from band 16 only, and Agent XPs by id as value_in_use: " + string.Join(" | ", failures));
         check(CatalogSql.Lint(current + "SELECT N'x';", new SqlRender(16), false, false, AgentProfileSql.Literals).Contains("has the literal N'x'")
             && CatalogSql.Lint(current, new SqlRender(16), false, false).Any(problem => problem.StartsWith("has the literal N'sysadmin'", StringComparison.Ordinal)),
