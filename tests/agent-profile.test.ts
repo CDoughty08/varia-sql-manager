@@ -39,7 +39,7 @@ describe('SQL Server Agent release gate', () => {
 })
 
 describe('agent.profile', () => {
-  it('is registered as a SQL Server-only metadata read with a short deadline', () => {
+  it('is registered as a SQL Server-only read on the explorer lane with a short deadline', () => {
     expect(methodPolicies['agent.profile']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 15_000 })
     expect(methodProviders('agent.profile')).toEqual(['sqlserver'])
     expect(agentLimits.profileMs).toBeLessThan(methodPolicies['agent.profile'].deadlineMs as number)
