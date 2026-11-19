@@ -475,7 +475,7 @@ try {
   await sectionList().getByRole('button', { name: 'Files' }).click()
   // The files are a page grid (LG-3), as tall as its rows and no wider than the section at 1280 × 800: selection, Copy
   // with Headers, header sort by value and Save Results As work as in a results grid.
-  const filesGrid = localGrid(properties(), 'Database files'), filesGridFrame = localGridFrame(page, 'Database files')
+  const filesGrid = localGrid(properties(), 'Database files'), filesGridFrame = localGridFrame(properties(), 'Database files')
   const fileRows = [
     ['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'],
     ['AppData_Archive2026_log', 'LOG', 'Not Applicable', '8', 'By 10 percent, Limited to 2097152 MB', 'C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\DATA', 'AppData_Archive2026_log.ldf']
@@ -519,7 +519,7 @@ try {
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.press('ControlOrMeta+C')
   await expect.poll(clipboard).toBe(['PRIMARY', '1', 'No', 'Yes', 'No'].join('\t'))
-  for (const name of ['FILESTREAM filegroups', 'Memory Optimized Data filegroups']) await expect(localGridFrame(page, name).locator(gridPart.overlay)).toHaveText('None.')
+  for (const name of ['FILESTREAM filegroups', 'Memory Optimized Data filegroups']) await expect(localGridFrame(properties(), name).locator(gridPart.overlay)).toHaveText('None.')
   await expect(properties().getByRole('table')).toHaveCount(0)
   await sectionList().getByRole('button', { name: 'Files' }).click()
   const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
