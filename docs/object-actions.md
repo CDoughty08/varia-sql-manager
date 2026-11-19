@@ -401,8 +401,9 @@ Apply; Stop replaces them while the changes run. Its sections are SSMS's pages. 
 text: backups, name, status, owner, date created, size, space available, number of users, memory-optimized memory and
 collation. Files and Filegroups list the database's files and filegroups read-only in this version, as results grids
 (Database files; Rows, FILESTREAM and Memory Optimized Data filegroups): select, copy with headers, sort and Save
-Results As as in query results. Owner in Files is editable (typed, suggested from the server's logins, or chosen in
-Select Database Owner). Options shows Collation,
+Results As as in query results, each as tall as its rows up to 12 before it scrolls; an empty list says so in its
+frame. Owner in Files is editable (typed, suggested from the server's logins, or chosen in Select Database Owner).
+Options shows Collation,
 Recovery model, Compatibility level and Containment type, then every option under its category: a boolean as a
 switch, an enum of four values or fewer as a segmented control, a longer or server-supplied one as a list, a number as
 a number field, and what Varia does not change as text. A row's whole description shows in a strip under the

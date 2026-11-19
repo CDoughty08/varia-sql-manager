@@ -6,7 +6,8 @@ import { boundTable, localCopyText, localTableLimits, type LocalTableData } from
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import { filegroupLists, filegroupsTable, filesTable, partitionsTable, permissionsTable, predicatesTable } from '../src/renderer/src/properties/grids'
-import PropertiesGrid, { propertiesGridRows } from '../src/renderer/src/properties/PropertiesGrid'
+import { propertiesGridRows } from '../src/shared/actions/catalog'
+import PropertiesGrid from '../src/renderer/src/properties/PropertiesGrid'
 import { databaseModel } from './fixtures/database-properties'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -25,7 +26,7 @@ describe('Properties lists as local tables', () => {
     expect(table.columns.map(column => column.name)).toEqual(['Principal', 'Type', 'Permission', 'Column', 'State', 'Grantor'])
     expect(table.rows).toEqual([['app', 'Sql user', 'SELECT', '', 'Grant', 'dbo'], ['auditor', 'Database role', 'UPDATE', 'Total', 'Grant with grant', 'dbo']])
   })
-  it('writes numbers as plain digits in number columns, so they sort by value and save as numbers', () => {
+  it('writes numbers as plain digits (no thousands separators) in columns marked as numbers', () => {
     const table = partitionsTable(tableModel({ storage: { partitioned: true, partitions: [{ number: 1, rows: 1_200_000, compression: 'PAGE', filegroup: 'FG1' }, { number: 2, rows: 0, compression: 'NONE' }] } as unknown as TablePropertiesModel['storage'] }))
     expect(table.columns).toEqual([{ name: 'Partition', kind: 'number' }, { name: 'Rows', kind: 'number' }, { name: 'Compression' }, { name: 'Filegroup' }])
     expect(table.rows).toEqual([['1', '1200000', 'Page', 'FG1'], ['2', '0', 'None', '']])

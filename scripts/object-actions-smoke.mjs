@@ -485,7 +485,9 @@ try {
   await expect(filesGridFrame).toHaveAttribute('data-local-grid', 'page')
   await expect(gridCell(filesGrid, 0, 0)).toHaveText('AppData')
   await expect(gridCell(filesGrid, 1, 2)).toHaveText('Not Applicable')
-  expect(await bottomOf(gridCell(filesGrid, 1, 0))).toBeLessThanOrEqual(await bottomOf(filesGridFrame) + 0.5)
+  // The last row ends inside the scroller's viewport, so no horizontal scroll bar (the log's long path) covers it.
+  const viewportBottom = () => filesGridFrame.locator(gridPart.scroller).evaluate(element => element.getBoundingClientRect().top + element.clientTop + element.clientHeight)
+  expect(await bottomOf(gridCell(filesGrid, 1, 0))).toBeLessThanOrEqual(await viewportBottom() + 0.5)
   expect(await filesGridFrame.evaluate(frame => frame.getBoundingClientRect().height)).toBeLessThan(140)
   const rightOf = locator => locator.evaluate(element => element.getBoundingClientRect().right)
   expect(await rightOf(filesGridFrame)).toBeLessThanOrEqual(await rightOf(frameSection(properties(), 'Files')) + 0.5)
@@ -509,6 +511,14 @@ try {
   const savedLines = (await readFile(savedFiles, 'utf8')).replace(/^\ufeff/, '').split('\r\n').filter(line => line && !line.startsWith('Logical Name,'))
   expect(savedLines).toEqual(['AppData_Archive2026_log,LOG,Not Applicable,8,"By 10 percent, Limited to 2097152 MB",C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\DATA,AppData_Archive2026_log.ldf',
     'AppData,ROWS Data,PRIMARY,8,"By 64 MB, Unlimited",C:\\Data,AppData.mdf'])
+  // Editing the draft keeps the grid as it is (each table is memoized on the model): its sort and its strip stay.
+  const ownerField = properties().getByLabel('Owner', { exact: true }), ownerBefore = await ownerField.inputValue()
+  await ownerField.fill('EditedOwner')
+  await expect(ownerField).toHaveAttribute('data-changed', 'true')
+  await expect(gridCell(filesGrid, 0, 0)).toHaveText('AppData_Archive2026_log')
+  await expect(filesGridFrame.locator(gridPart.strip)).toHaveText('Saved 2 rows to appdata-files.csv.')
+  await ownerField.fill(ownerBefore)
+  await expect(ownerField).not.toHaveAttribute('data-changed', 'true')
   await page.screenshot({ path: resolve('artifacts', 'database-properties-files-dark.png') })
   // Filegroups: SSMS's three lists as page grids; an empty one says so inside its frame.
   await sectionList().getByRole('button', { name: 'Filegroups' }).click()

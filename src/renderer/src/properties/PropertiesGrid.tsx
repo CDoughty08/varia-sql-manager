@@ -1,8 +1,6 @@
 import type { LocalTableData } from '../../../shared/results/local-table'
+import { propertiesGridRows } from '../../../shared/actions/catalog'
 import { LocalGrid } from '../grid/LocalGrid'
-
-/** The most rows a Properties list shows before it scrolls: the page's sections scroll too, so a long list stays a window. */
-export const propertiesGridRows = 12
 
 /**
  * A Properties list as a page grid (LocalGrid's `page` preset, so Save Results As applies), fitted to its rows: the
