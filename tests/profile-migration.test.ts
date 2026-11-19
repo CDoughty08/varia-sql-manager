@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrateProfile, migrationMarker, profileFiles } from '../src/main/profile-migration'
 import { ConnectionStore } from '../src/main/connection-store'
 import { SessionStore } from '../src/main/session-store'
-import { RecoveryStore } from '../src/main/recovery-store'
+import { RecoveryStore, recoveryRecordSchema } from '../src/main/recovery-store'
 import { writeBytesAtomic } from '../src/main/json-file'
-import { recoveryLimits } from '../src/shared/files/recovery'
+import { recoveryCapMessage, recoveryLimits } from '../src/shared/files/recovery'
 
 let directory: string
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'varia-migration-')) })
@@ -39,6 +39,20 @@ async function seed09(): Promise<Record<string, string>> {
   return files
 }
 const read = async (name: string) => JSON.parse(await readFile(join(directory, name), 'utf8'))
+/**
+ * Fills a 0.10.0 AutoRecover folder to the store's record cap with records in its on-disk format, written at once:
+ * 64 sequential `RecoveryStore.write` calls (each an atomic write that also stats every other record) outlast the
+ * test timeout on a loaded machine. The store itself then confirms the folder is full.
+ */
+async function fillAutoRecover(into: string): Promise<void> {
+  await mkdir(into, { recursive: true })
+  const owner = { instance: randomUUID(), generation: 1 }
+  await Promise.all(Array.from({ length: recoveryLimits.records }, (_, index) => {
+    const record = recoveryRecordSchema.parse({ version: 2, id: randomUUID(), owner, name: `Query ${index}`, kind: 'sql', eol: 'lf', savedAt: '2026-11-18T10:00:00.000Z', text: 'select 6' })
+    return writeFile(join(into, record.id + '.json'), JSON.stringify(record) + '\n')
+  }))
+  await expect(new RecoveryStore(into).write({ id: randomUUID(), name: 'Query', kind: 'sql', eol: 'lf', text: 'select 6' }, 1)).rejects.toThrow(recoveryCapMessage)
+}
 
 describe('0.9.0 profile migration', () => {
   it('copies every 0.9.0 file to its 0.10.0 name and leaves the 0.9.0 files untouched', async () => {
@@ -249,8 +263,7 @@ describe('0.9.0 profile migration', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await mkdir(join(directory, profileFiles.session.current))
     const into = join(directory, profileFiles.autoRecover.current)
-    const store = new RecoveryStore(into)
-    for (let index = 0; index < 64; index++) await store.write({ id: randomUUID(), name: `Query ${index}`, kind: 'sql', eol: 'lf', text: 'select 6' }, 1)
+    await fillAutoRecover(into)
     expect((await migrateProfile(directory)).session).toBe('partial')
     await rm(join(into, (await readdir(into))[0]))
     expect((await migrateProfile(directory)).session).toBe('migrated')
@@ -357,9 +370,7 @@ describe('0.9.0 profile migration', () => {
     await seed09()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const into = join(directory, profileFiles.autoRecover.current)
-    await mkdir(into)
-    const store = new RecoveryStore(into)
-    for (let index = 0; index < 64; index++) await store.write({ id: randomUUID(), name: `Query ${index}`, kind: 'sql', eol: 'lf', text: 'select 6' }, 1)
+    await fillAutoRecover(into)
     expect((await migrateProfile(directory)).autoRecover).toBe('partial')
     expect(await readdir(into)).not.toContain(recordId + '.json')
     const own = (await readdir(into))[0]
