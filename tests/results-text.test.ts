@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { decodePage, encodePage, type PageCell, type PageView, type WireKind } from '../src/shared/ipc/wire/pages'
-// @ts-expect-error The fake backend's modules are plain JavaScript without declarations.
-import { copyText, exportText, resolvePart, validTurn, MAX_SAFE, MAX_TRANSPOSED_ROWS } from './fixtures/backend/text-writer.mjs'
+import { copyText, exportText, resolvePart, validTurn, MAX_SAFE, MAX_TRANSPOSED_ROWS } from '../src/shared/results/text-writer'
 import { limits } from '../src/shared/ipc/wire/protocol'
 
-// The same goldens the C# ResultTextWriter is checked against (Varia.Backend.Tests/TextChecks.cs), so the fake backend's
-// Copy and Save Results As text matches the real one byte for byte.
+// The same goldens the C# ResultTextWriter is checked against (Varia.Backend.Tests/TextChecks.cs), so the TypeScript
+// writer (local tables and the fake backend) writes Copy and Save Results As text byte for byte as the real one does.
 interface Column { name: string; dataType: string; wire: WireKind }
 type FixtureCell = string | null | { error: true } | { text: string; truncated: true } | { hex: string; truncated?: true }
 interface Turned { transposed?: true; headerColumn?: number; capped?: number }

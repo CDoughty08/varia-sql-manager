@@ -29,7 +29,7 @@ export class RowSizes {
   private readMax = 0
   private disposed = false
 
-  constructor(private readonly handle: ResultHandle, private readonly changed: () => void) {}
+  constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void) {}
 
   /** The bytes scaling the bars: the largest row known. */
   get max(): number { return Math.max(this.profileMax, this.readMax) }

@@ -43,8 +43,9 @@ describe('result names', () => {
 
   it('lists every grid named by a result number', () => {
     // A results grid, which passes `derivedGridName` as its label for a comparison or Pivot (tests/result-grid-name.test.ts),
-    // and a live grid, which always passes its own label.
+    // and a live grid and a local grid, which always pass their own label.
     expect(callers(/(?<!readonly )\bresultNumber: /)).toEqual([
+      'grid/LocalGrid.tsx: handle: source',
       'grid/ResultGrid.tsx: entry: key',
       'live/LiveGridPane.tsx: entry: \'live\''
     ])

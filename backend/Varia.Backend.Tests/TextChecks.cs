@@ -8,7 +8,7 @@ using Varia.Backend.Results;
 namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of Copy and Save Results As: the golden text of tests/fixtures/results-text/cases.json (which
-/// the fake backend's text-writer.mjs must also match), PageView against the independent PageReader, the copy estimate,
+/// the TypeScript twin src/shared/results/text-writer.ts must also match), PageView against the independent PageReader, the copy estimate,
 /// the copy stream and export file jobs, leases, FOR XML collection and the descriptor bounds.</summary>
 internal static class TextChecks
 {

@@ -1,5 +1,5 @@
 {
-  "fixture": "Copy and Save Results As text (ResultTextWriter in C#, tests/fixtures/backend/text-writer.mjs in JS). Cells: a string, null (NULL), {error} (read error, NULL), {text, truncated} (a stored prefix), {hex[, truncated]} (binary). Copy uses NULL; save uses the given nullText ('empty' or 'NULL'); rows of 2^53 - 1 run to the end. A copy or save with transposed: true is written as a transposed grid draws it (a line per column, a field per row), its fields named by headerColumn's values when it has one; capped counts the rows left out past the first 4,095.",
+  "fixture": "Copy and Save Results As text (ResultTextWriter in C#, src/shared/results/text-writer.ts in TypeScript). Cells: a string, null (NULL), {error} (read error, NULL), {text, truncated} (a stored prefix), {hex[, truncated]} (binary). Copy uses NULL; save uses the given nullText ('empty' or 'NULL'); rows of 2^53 - 1 run to the end. A copy or save with transposed: true is written as a transposed grid draws it (a line per column, a field per row), its fields named by headerColumn's values when it has one; capped counts the rows left out past the first 4,095.",
   "cases": [
     {
       "name": "edge values: NULL, read errors, empty strings, line breaks, quotes, BOM, astral, U+FFFD, binary, truncation, blank and duplicate names, typing",
