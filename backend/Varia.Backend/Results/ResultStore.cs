@@ -203,6 +203,15 @@ internal sealed partial class ResultStore
     /// policy turns it on. Switching it off packs nothing more and leaves packed pages packed; they read as ever.</summary>
     internal PagePacking Packing { get; set; } = DefaultPacking;
 
+    /// <summary>The size at which a query's pages are sealed (the checks lower it for many small pages).</summary>
+    internal int SealBytes { get; init; } = PageBuilder.SealBytes;
+
+    /// <summary>The smallest page given an n-gram filter when packed (<see cref="PageFilter"/>).</summary>
+    internal int FilterMinBytes { get; init; } = DefaultFilterMinBytes;
+
+    /// <summary>The checks' packed pass lowers it so the small pages of every suite there are filtered.</summary>
+    internal static int DefaultFilterMinBytes { get; set; } = PageFilter.MinPageBytes;
+
     private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
     /// <summary>The store's packing figures (<see cref="PackingSnapshot"/>): what is held now (packed bytes, their bytes as
@@ -376,7 +385,7 @@ internal sealed partial class ResultStore
         IReadOnlyList<ColumnLength>? lengths = null, bool derived = false, string? name = null)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
-        var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
+        var sealBytes = query.Live is null ? SealBytes : LiveSealBytes;
         if (query.Stopped != TruncationReason.None) return null;
         var metadata = 512 + columns.Sum(column => 2L * column.Name.Length + 64);
         if (transfer) Force(query, metadata);

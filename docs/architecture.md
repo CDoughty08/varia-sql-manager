@@ -350,6 +350,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
+  - Find filters: packing a page of 32 KiB or more also builds its n-gram filter (`PageFilter`), which lets Find pass the
+    page over unread; it is charged with the packed page, dropped on unpack and never stored apart from it (docs/ipc.md's
+    "Search in results").
   - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2
     a shown one idle for 30 s (no pin or lease begun or ended, not completed or shown again; `ResultSetBuffer.Activity`
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
