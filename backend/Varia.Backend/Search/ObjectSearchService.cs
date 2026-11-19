@@ -413,6 +413,10 @@ internal sealed class ObjectSearchService : IDisposable
 
     /// <summary>Reads SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>) in msdb into the index's Agent slot. The reason
     /// it could not, reported as msdb, as a value: only Agent kinds are then left out.</summary>
+    /// <summary>Why SQL Server Agent's objects were left out: reported against msdb, where they are read, and flagged as Agent's so
+    /// the index line does not count msdb itself as skipped.</summary>
+    internal static ObjectIndexSkip AgentSkip(string code, string message) => new("msdb", code, message, Agent: true);
+
     private async Task<ObjectIndexSkip?> ReadAgentAsync(string connectionId, State state, bool alerts, CancellationToken token)
     {
         const string Msdb = "msdb";
@@ -430,18 +434,18 @@ internal sealed class ObjectSearchService : IDisposable
             command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = Msdb });
             command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ObjectSearchSql.Agent });
             var index = await ReadBatchAsync(command, rows => reader.ReadAgentAsync(rows, alerts, budgetSource.Token), state.Index.PutAgent, budgetSource.Token);
-            return index is null ? new(Msdb, "TOO_LARGE", "SQL Server Agent's objects do not fit in the index's memory (" + Size + " across every connection).", Agent: true) : null;
+            return index is null ? AgentSkip("TOO_LARGE", "SQL Server Agent's objects do not fit in the index's memory (" + Size + " across every connection).") : null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
         {
             reader.Abandon();
-            return new(Msdb, "TIMEOUT", "Reading SQL Server Agent's objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.", Agent: true);
+            return AgentSkip("TIMEOUT", "Reading SQL Server Agent's objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.");
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
             KeepPartial(reader, state.Index.Agent is not null, state.Index.PutAgent);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, "SQL Server Agent", Msdb);
-            return new(Msdb, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message, Agent: true);
+            return AgentSkip(value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
         }
         catch
         {

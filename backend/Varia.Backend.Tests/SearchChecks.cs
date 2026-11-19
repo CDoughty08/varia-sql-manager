@@ -576,6 +576,16 @@ internal static class SearchChecks
             "the Agent batch reads jobs only where msdb lets the login read sysjobs_view, so a login in no Agent role skips nothing");
         using var sql = new SqlService();
         check(sql.Search.AgentEnabled == Varia.Backend.Agent.AgentGate.Enabled, "Search Objects' Agent read follows the release gate by default");
+        // A failed Agent read is msdb's entry flagged as Agent's, listed before the server's and the databases'.
+        var skips = new SkipList(8);
+        skips.Add(0, new ObjectIndexSkip("Sales", "NO_DB_ACCESS", "m"));
+        skips.Add(SkipList.Server, new ObjectIndexSkip("", "CATALOG_ERROR", "m"));
+        skips.Add(SkipList.Agent, ObjectSearchService.AgentSkip("TIMEOUT", "m"));
+        var json = JsonSerializer.Serialize(ObjectSearchService.AgentSkip("TIMEOUT", "m"), new JsonSerializerOptions(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+        var plain = JsonSerializer.Serialize(new ObjectIndexSkip("Sales", "NO_DB_ACCESS", "m"), new JsonSerializerOptions(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+        check(skips.ToList() is [{ Database: "msdb", Agent: true }, { Database: "" }, { Database: "Sales", Agent: null }] && json.Contains("\"database\":\"msdb\"", StringComparison.Ordinal)
+            && json.Contains("\"agent\":true", StringComparison.Ordinal) && !plain.Contains("agent", StringComparison.Ordinal),
+            "a failed Agent read is reported as msdb with agent: true, first in the skip list, and a database's skip sends no agent flag: " + json + " " + plain);
     }
 
     private static async Task Reader(Action<bool, string> check)

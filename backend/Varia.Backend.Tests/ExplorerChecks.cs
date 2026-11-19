@@ -800,13 +800,20 @@ internal static class ExplorerChecks
             check(agentNode is { Nodes.Count: 0, Error: { Code: "CONNECTION_LOST" or "SQL_ERROR" or "TIMEOUT" } } && agentHost.Connections == 1,
                 "listing the Agent node runs its access step first, on one connection, and lists nothing when it fails: " + agentNode.Error?.Code);
         }
-        // Error Logs: past the explorer budget a TIMEOUT value; where xp_enumerrorlogs returns no list (Linux), Current alone.
-        using (var slow = new ExplorerService(new FakeHost(), new ExplorerOptions { Budget = TimeSpan.FromMilliseconds(200), TestDelay = TimeSpan.FromSeconds(5) }))
+        // Error Logs: past the explorer budget a TIMEOUT value, whether the open or xp_enumerrorlogs is slow (both run on the
+        // budget's token: a read that fails after it expired is a timeout, not the failure); with no list (Linux), Current alone.
+        foreach (var (where, logsHost, reader) in new (string, FakeHost, Varia.Backend.Agent.AgentReader?)[]
         {
+            ("the open", new FakeHost { Opening = (_, token) => Task.Delay(TimeSpan.FromSeconds(5), token) }, null),
+            ("xp_enumerrorlogs", new FakeHost { Opening = (_, _) => Task.CompletedTask },
+                new Varia.Backend.Agent.AgentReader { TestRun = async (_, _, _) => { await Task.Delay(600); throw ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded."); } })
+        })
+        {
+            using var slow = new ExplorerService(logsHost, new ExplorerOptions { Budget = TimeSpan.FromMilliseconds(200), AgentReader = reader });
             var logsWatch = System.Diagnostics.Stopwatch.StartNew();
             var logs = await slow.ChildrenAsync(Args(Folder(new ObjectRefDto("agent"), "agentErrorLogs")), CancellationToken.None);
             check(logs is { Nodes.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } } && logsWatch.ElapsedMilliseconds < 4000,
-                "Error Logs past the explorer budget answers a retryable TIMEOUT value: " + logs.Error?.Code + " in " + logsWatch.ElapsedMilliseconds + " ms");
+                "Error Logs with " + where + " past the explorer budget answers a retryable TIMEOUT value: " + logs.Error?.Code + " in " + logsWatch.ElapsedMilliseconds + " ms");
         }
         var listless = new FakeHost { Opening = (_, _) => Task.CompletedTask };
         var unlisted = new Varia.Backend.Agent.AgentReader { TestRun = (_, _, _) => throw new Varia.Backend.Agent.AgentShapeException("NOT_SUPPORTED", "no list") };

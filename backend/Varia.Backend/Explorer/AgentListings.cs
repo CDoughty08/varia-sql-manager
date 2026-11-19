@@ -132,7 +132,6 @@ internal sealed partial class ExplorerService
             try
             {
                 budget.CancelAfter(Options.Budget);
-                if (Options.TestDelay is { } delay) await Task.Delay(delay, budget.Token);
                 await using var connection = host.Connection(request.ConnectionId, null);
                 await host.OpenAsync(connection, budget.Token);
                 var (results, errors) = await (Options.AgentReader ?? new AgentReader()).ReadAsync(connection, CatalogSql.Prologue, [AgentSql.ErrorLogs], (_, _) => null, budget.Token);
