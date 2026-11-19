@@ -1204,6 +1204,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg[data-gutter='diff'] .rg-rn { display: flex; justify-content: space-between; gap: 6px; padding-left: 9px; }
 .rg[data-gutter='diff'] .rg-rn:is(.tone-added, .tone-changedNew) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground); }
 .rg[data-gutter='diff'] .rg-rn:is(.tone-removed, .tone-changedOld) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground); }
+/* The active search match's row keeps its underline beside the bar. */
+.rg[data-gutter='diff'] .rg-rn.cur:is(.tone-added, .tone-changedNew) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
+.rg[data-gutter='diff'] .rg-rn.cur:is(.tone-removed, .tone-changedOld) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
 .rg-dm { flex: none; font-weight: 600; }
 .rg-rn.tone-added { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); }
 .rg-rn.tone-removed { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); }
@@ -1300,7 +1303,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.cur { background: var(--varia-banner-warningBackground); box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
 /* Forced colours: a match is Mark, outranking a diff's colour and the layers (`.rg-row.tone-changedOld .rg-c.is-chg` is
    four classes), which would otherwise stay under forced-color-adjust: none. */
-@media (forced-colors: active) { .rg-row .rg-c.is-hit.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
+@media (forced-colors: active) {
+  .rg-row .rg-c.is-hit.is-hit, .rg-row .rg-c.is-hit.is-hit.is-trunc::after { forced-color-adjust: none; background: Mark; color: MarkText; }
+  .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }

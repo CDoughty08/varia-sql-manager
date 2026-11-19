@@ -172,8 +172,14 @@ export const contrastPairs: readonly ContrastPair[] = [
     ...text(['resultsGrid.selectionForeground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
       [...striped, `resultsGrid.diffChanged${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
       ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).map(color => [...grid, `resultsGrid.diffChanged${kind}Background`, `resultsGrid.highlight${color}Background`, 'resultsGrid.selectionOverlay'] as ColorKey[])),
-    ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`])
+    ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`]),
+    // A highlighted added or removed row's number: its highlight over its wash.
+    ...text(['resultsGrid.highlightRowNumberForeground'], ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).map(color => ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`, `resultsGrid.highlight${color}Background`] as ColorKey[]))
   ]),
+  // A NULL keeps its own tint under a search match and the selection, where it takes the grid's or the selection's text.
+  ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay'],
+    [...grid, 'resultsGrid.nullBackground', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.inactiveSelectionOverlay']),
+  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   // Every stack a cell can show (styles.css): its own colour (the grid, the stripe, a diff's wash or a changed value's
   // colour), the row's highlight (which replaces the stripe), a search match, then the unfocused selection with the grid's
   // text (NULL, links and read errors take it on all but the plain grid and stripe, where their own colours are checked) or the focused selection with its own.

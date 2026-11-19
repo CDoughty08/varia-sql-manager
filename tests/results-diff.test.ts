@@ -218,6 +218,10 @@ describe('result diffs', () => {
     expect(screen.filter(rule => /\.rg-row\.tone-changed(Old|New)$/.test(rule.selector))).toEqual([])
     // The row header keeps its kind bar when selected: a shadow, which the selection's fill does not replace.
     expect(value(".rg[data-gutter='diff'] .rg-rn:is(.tone-added, .tone-changedNew)", 'box-shadow')).toMatch(/^inset 3px 0 0 /)
+    // The active match's row underline (`.rg-rn.cur`) is weaker than the bar's rule, so the bar's active rule draws both.
+    for (const kinds of ['.tone-added, .tone-changedNew', '.tone-removed, .tone-changedOld']) {
+      expect(value(`.rg[data-gutter='diff'] .rg-rn.cur:is(${kinds})`, 'box-shadow')).toMatch(/^inset 3px 0 0 .*, inset 0 -2px 0 var\(--varia-warningForeground\)$/)
+    }
     // Under forced colours a changed cell's outline is the weakest outline rule, so the active cell's and the active
     // match's win; on the selection's fill it takes the selection's text colour, and the halves' bars differ in style.
     const forced = rules.filter(rule => rule.at.includes('@media (forced-colors: active)'))
@@ -226,7 +230,7 @@ describe('result diffs', () => {
     expect(forced.find(rule => rule.selector === '.rg-rn:is(.tone-removed, .tone-changedOld)')?.declarations).toEqual([{ property: 'border-left', value: '3px dashed CanvasText' }])
     expect(css).not.toMatch(/\.rg-c\.is-chg[^{]*\{ outline/)
     // A forced-colours match is Mark even on a diff colour or highlight: four classes, after the four-class changed rule.
-    const hit = forced.find(rule => rule.selector === '.rg-row .rg-c.is-hit.is-hit')
+    const hit = forced.find(rule => rule.selector === '.rg-row .rg-c.is-hit.is-hit, .rg-row .rg-c.is-hit.is-hit.is-trunc::after')
     expect(hit?.declarations.find(item => item.property === 'background')?.value).toBe('Mark')
     expect(css.indexOf('.rg-row .rg-c.is-hit.is-hit')).toBeGreaterThan(css.indexOf('.rg-row.tone-changedOld .rg-c.is-chg {'))
   })
