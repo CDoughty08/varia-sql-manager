@@ -20,7 +20,7 @@ the Agent node, Job Activity Monitor and the job documents arrive in later lanes
 - **Release gate.** Agent's surfaces show only when Varia was started with `VARIA_AGENT_PREVIEW=1`: main reads the
   variable once and passes the window an argument, which becomes the static context key `agentEnabled`. Without it Object
   Explorer keeps its planned SQL Server Agent folder and no Agent command, menu item or document is offered.
-- **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool under its gates,
+- **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool on its own slot per connection,
   reads the login's sysadmin membership and Agent roles (`IS_ROLEMEMBER`, so nested membership counts), EXECUTE on
   `sp_purge_jobhistory` and `sysmail_help_profile_sp`, the server-state permissions `sys.dm_server_services` and Agent's
   sessions need (VIEW SERVER STATE, and from SQL Server 2022 VIEW SERVER SECURITY or PERFORMANCE STATE), ALTER ANY

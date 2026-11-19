@@ -62,6 +62,8 @@ internal sealed partial class ExplorerService : IDisposable
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> peekGates = new(StringComparer.Ordinal);
+    /// <summary>agent.profile's own slot per connection, so the role read never queues behind the tree's paging.</summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> agentProfileGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
 
     /// <param name="catalog">A catalogue other than the embedded one, with <paramref name="queries"/> for the ids it lists
@@ -264,6 +266,7 @@ internal sealed partial class ExplorerService : IDisposable
         running.Forget(connectionId);
         gates.TryRemove(connectionId, out _);
         peekGates.TryRemove(connectionId, out _);
+        agentProfileGates.TryRemove(connectionId, out _);
     }
 
     public void Dispose()
@@ -271,6 +274,7 @@ internal sealed partial class ExplorerService : IDisposable
         running.ForgetAll();
         gates.Clear();
         peekGates.Clear();
+        agentProfileGates.Clear();
     }
 
     private async Task<ExplorerChildrenResult> LoadAsync(ExplorerRequest request, ExplorerProfile profile, bool vector, CursorKey? key, CancellationToken token)

@@ -64,9 +64,9 @@ internal static class AgentChecks
                 await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"extra\":1}")
             };
             check(codes.SequenceEqual(["NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]) && SqlService.MethodNames.Contains("agent.profile") && sql.Methods.Contains("agent.profile")
-                && sql.LaneOf("agent.profile") == RequestLane.Metadata && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
+                && sql.LaneOf("agent.profile") == RequestLane.Explorer && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
                 && Providers.Of("agent.profile").SequenceEqual([Providers.SqlServer]),
-                "agent.profile is a SQL Server-only read on the metadata lane that checks its ids and members before the connection: " + string.Join(", ", codes));
+                "agent.profile is a SQL Server-only read on the explorer lane that checks its ids and members before the connection: " + string.Join(", ", codes));
         }
 
         AgentProfileArgs Args() => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString());
@@ -87,6 +87,12 @@ internal static class AgentChecks
         }
         check(AgentProfileSql.NoMsdb("windows", 3) is { MsdbAccess: false, Sysadmin: false, UserRole: false, ReaderRole: false, OperatorRole: false, AgentXps: null, DatabaseMailXps: null },
             "msdb refusing the login (916) is a profile with msdb access off, no role and the server options unread");
+        var denied = new ExplorerError("PERMISSION_DENIED", "denied", false);
+        check(AgentProfileSql.Failed(new("NO_DB_ACCESS", "no msdb", false), "linux", 2) is { Error: null, Profile: { MsdbAccess: false, Platform: "linux", EngineEdition: 2 } }
+            && AgentProfileSql.Failed(denied, "windows", 3) is { Profile: null } refused && refused.Error == denied,
+            "agent.profile answers msdb refusing the login (NO_DB_ACCESS) as a profile with no role, and any other failure as the error itself");
+        check(AgentProfileSql.NoRow is { Code: "SQL_ERROR", Retryable: true } && !AgentProfileSql.NoRow.Message.StartsWith("Msg ", StringComparison.Ordinal),
+            "a capability read with no row is a retryable SQL_ERROR in words, not a message numbered Msg 0");
     }
 
     private static void Catalog(Action<bool, string> check)
