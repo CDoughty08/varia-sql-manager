@@ -21,7 +21,8 @@ describe('Electron launches on a virtual display', () => {
    * value (a name that is not a keyword, `)` or `]`), and starts a regex anywhere else.
    */
   function blank(source: string) {
-    const out = [...source]
+    // UTF-16 units, as every index here counts (an emoji is two).
+    const out = source.split('')
     const clear = (from: number, to: number) => { for (let index = from; index < to; index++) if (out[index] !== '\n') out[index] = ' ' }
     let index = 0
     while (index < source.length) {
@@ -66,18 +67,36 @@ describe('Electron launches on a virtual display', () => {
     return null
   }
 
+  /** In blanked code, a declaration's value from `from`: up to a comma, semicolon or line end outside brackets. */
+  function initialiser(code: string, from: number) {
+    let depth = 0
+    for (let index = from; index < code.length; index++) {
+      const char = code[index]
+      if ('([{'.includes(char)) depth++
+      else if (')]}'.includes(char)) { if (--depth < 0) return code.slice(from, index) }
+      else if (depth === 0 && (char === ',' || char === ';' || char === '\n')) return code.slice(from, index)
+    }
+    return code.slice(from)
+  }
+
   /**
    * One script's calls that start a process itself: not through the smoke fixture, not a bare tool name (taskkill, ps), and
    * not marked on its line with `// not the app: <reason>`. Each says whether it is switched: xvfbArgs( in the call, or a
    * name the script set from xvfbArgs(. A script that cannot be read is one unswitched entry, so it fails loudly.
    */
-  function launchCalls(source: string): { call: string, text: string | null, switched: boolean }[] {
+  function launchCalls(source: string): { call: string, text: string | null, shown: string, switched: boolean }[] {
     const code = blank(source)
-    if (code === null) return [{ call: '(a string left open: the script could not be read)', text: null, switched: false }]
+    if (code === null) return [{ call: '(a string left open: the script could not be read)', text: null, shown: '', switched: false }]
     // The fixture's launcher, under whatever name it is imported, adds the switch itself (checked separately).
     const fixtureImport = source.match(/import \{([^}]*)\} from '\.\/(?:fixtures\/)?smoke\.mjs'/)?.[1].match(/\belectron\b(?:\s+as\s+([\w$]+))?/)
     const fixtureLaunch = fixtureImport ? `${fixtureImport[1] ?? 'electron'}.launch` : null
-    const switchedNames = [...code.matchAll(/(?:const|let)\s+([\w$]+)\s*=\s*xvfbArgs\(/g)].map(match => match[1])
+    // A name is trusted only if every declaration of it in the script is initialised with xvfbArgs( in its value.
+    const declarations = new Map<string, boolean>()
+    for (const match of code.matchAll(/(?:const|let|var)\s+([\w$]+)\s*=\s*/g)) {
+      const value = initialiser(code, match.index + match[0].length)
+      declarations.set(match[1], (declarations.get(match[1]) ?? true) && value.includes('xvfbArgs('))
+    }
+    const switchedNames = [...declarations].filter(([, switched]) => switched).map(([name]) => name)
     return [...code.matchAll(start)].flatMap(match => {
       if (match[1] === fixtureLaunch) return []
       const open = match.index + match[0].length - 1
@@ -87,7 +106,7 @@ describe('Electron launches on a virtual display', () => {
       // A string literal of a bare program name (no path, no interpolation) is a tool, not the app.
       if (text && /^\(\s*(?:'[\w.-]+'|"[\w.-]+"|`[\w.-]+`)\s*[,)]/.test(source.slice(open, open + text.length)) && !/^\(\s*['"`](?:electron|varia)/i.test(source.slice(open))) return []
       const switched = !!text && (text.includes('xvfbArgs(') || switchedNames.some(name => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text)))
-      return [{ call: match[1], text, switched }]
+      return [{ call: match[1], text, shown: text ? source.slice(open, open + text.length) : '(… never closes', switched }]
     })
   }
   const fromFixture = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/
@@ -97,7 +116,7 @@ describe('Electron launches on a virtual display', () => {
    * fixture, or one that imports child_process (exec, an alias, promisify(execFile)), must import it.
    */
   const missesImport = (source: string) => !importsSwitch.test(source) && (!fromFixture.test(source) || childProcess.test(source))
-  const unswitchedCalls = (source: string) => launchCalls(source).filter(({ switched }) => !switched).map(({ call, text }) => call + (text ?? '(… never closes').split('\n')[0])
+  const unswitchedCalls = (source: string) => launchCalls(source).filter(({ switched }) => !switched).map(({ call, shown }) => call + shown.split('\n')[0])
 
   it('knows xvfb-run by the XAUTHORITY it sets, on Linux only', () => {
     expect(underXvfb(xvfb, 'linux')).toBe(true)
@@ -175,6 +194,11 @@ describe('Electron launches on a virtual display', () => {
     expect(unswitchedCalls('const args = xvfbArgs([\'.\', file])\nspawn(electronPath, args)')).toEqual([])
     expect(unswitchedCalls('spawn(process.execPath, [helper]) // not the app: the fake backend\'s Node helper')).toEqual([])
     expect(unswitchedCalls('spawn(process.execPath, [helper])')).toHaveLength(1)
+    // An object holding the switched arguments counts too, but a name declared elsewhere without the switch does not.
+    expect(unswitchedCalls('const launchOptions = {\n  args: xvfbArgs([\'.\']),\n  env\n}\nawait electron.launch(launchOptions)')).toEqual([])
+    expect(unswitchedCalls('function a() { const args = xvfbArgs([\'.\']); spawn(electronPath, args) }\nfunction b() {\n  const args = [\'.\', file]\n  spawn(electronPath, args)\n}')).toHaveLength(2)
+    // An emoji (two UTF-16 units) earlier in the script leaves everything after it aligned.
+    expect(unswitchedCalls('const sample = \'😀😀 astral\'\nexecFileSync(\'taskkill\', [\'/PID\', pid])\nspawn(electronPath, xvfbArgs([\'.\']))\nspawn(electronPath, [\'.\'])')).toEqual(['spawn(electronPath, [\'.\'])'])
     const switched = [
       'cp.spawn(electronPath, xvfbArgs([\'.\']))',
       'await electron.launch({ args: xvfbArgs([\'.\']), env })',
