@@ -392,7 +392,7 @@ internal static class PageFilterChecks
         // Latvian, case- and accent-sensitive but width-insensitive only.
         var collation = Collation(1062, 16);
         var culture = ViewSorter.Culture(collation)!.Value;
-        var unbuilt = SearchFold.Forget(collation.Lcid, culture.Options);
+        SearchFold.Seed(collation.Lcid, culture.Options, null);
         ResultColumn[] columns = [new("latvian", "nvarchar", "text", Collation: collation)];
         var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 3 * 1024, FilterMinBytes = 0, FilterCapped = false };
         var set = store.Open(store.BeginQuery("unbuilt"), 0, 1, 1, "rows", columns, [WireKind.Text])!;
@@ -408,7 +408,30 @@ internal static class PageFilterChecks
         var filtered = ResultSearcher.LastFiltered;
         var without = Shown(ResultSearcher.Search(set, pages, null, "valoda", 0, false, 5, CancellationToken.None, narrow: false, filters: false));
         store.Release(set.ResultId);
-        check(unbuilt && filtered > 0 && with == without, "a page packed before its culture's fold was built still gets a filter for the column: " + unbuilt + " " + filtered);
+        check(filtered > 0 && with == without, "a page packed before its culture's fold was built still gets a filter for the column: " + filtered);
+
+        // A fold whose build failed (out of memory) leaves the column unfiltered; packing goes on.
+        SearchFold.Seed(collation.Lcid, culture.Options, Task.FromException<SearchFold>(new OutOfMemoryException()));
+        var failedStore = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 3 * 1024, FilterMinBytes = 0, FilterCapped = false };
+        string? failure = null;
+        StoredPage[] failedPages = [];
+        try
+        {
+            var failedSet = failedStore.Open(failedStore.BeginQuery("failed"), 0, 1, 1, "rows", columns, [WireKind.Text])!;
+            for (var r = 0; r < 400; r++)
+            {
+                failedSet.CountRow();
+                failedSet.BeginRow()!.AppendText((r < 200 ? "pilsēta " : "valoda ") + r);
+                failedSet.TryCommitRow();
+            }
+            failedSet.Complete();
+            failedPages = failedSet.SealedSnapshot();
+            failedStore.Release(failedSet.ResultId);
+        }
+        catch (Exception exception) { failure = exception.GetType().Name; }
+        finally { SearchFold.Seed(collation.Lcid, culture.Options, null); }
+        check(failure is null && failedPages.Length >= 2 && failedPages.All(page => page.Stored is PackedPage && page.Filter is null),
+            "a culture whose fold failed to build leaves its column unfiltered and packing goes on: " + (failure ?? "no failure"));
     }
 
     private static string Escape(string text) => string.Concat(text.Select(c => c < 128 && !char.IsControl(c) ? c.ToString() : "\\u" + ((int)c).ToString("X4", CultureInfo.InvariantCulture)));

@@ -42,13 +42,25 @@ internal sealed class SearchFold
         return build.IsCompletedSuccessfully ? build.Result : null;
     }
 
-    /// <summary>Forgets a fold, as if never built (the checks: a later use builds a new one).</summary>
-    internal static bool Forget(int lcid, CompareOptions options) => folds.TryRemove((lcid, options), out _) || !folds.ContainsKey((lcid, options));
+    /// <summary>Sets a fold's build (the checks): null forgets it, as if never built, and a failed task stands for a build
+    /// that failed.</summary>
+    internal static void Seed(int lcid, CompareOptions options, Task<SearchFold>? build)
+    {
+        if (build is null) folds.TryRemove((lcid, options), out _);
+        else folds[(lcid, options)] = new Lazy<Task<SearchFold>>(() => build);
+    }
 
     /// <summary>The fold for a culture and options, waiting for its build, or null for a culture that is not verified (a
     /// page's Find filter, built off the search, on the packer's thread).</summary>
-    public static SearchFold? Awaited(int lcid, CompareOptions options) =>
-        Array.IndexOf(Verified, lcid) < 0 ? null : Lazy(lcid, options).Value.GetAwaiter().GetResult();
+    public static SearchFold? Awaited(int lcid, CompareOptions options)
+    {
+        if (Array.IndexOf(Verified, lcid) < 0) return null;
+        var build = Lazy(lcid, options).Value;
+        // A build that failed (out of memory) stays failed: no fold, as For answers, never an exception on the packer.
+        try { build.Wait(); }
+        catch (AggregateException) { }
+        return build.IsCompletedSuccessfully ? build.Result : null;
+    }
 
     /// <summary>The fold for a culture and options, waiting for its build (the checks and benchmarks).</summary>
     internal static SearchFold Ready(int lcid, CompareOptions options)
