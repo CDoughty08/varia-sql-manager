@@ -386,11 +386,12 @@ internal static class PageFilterChecks
     }
 
     /// <summary>A page packed before its column's fold was ever built still gets the column's filter: packing waits for the
-    /// fold (forgotten first; a culture and options few checks use).</summary>
+    /// fold (forgotten first; a culture and options no other check uses).</summary>
     private static void Unbuilt(Action<bool, string> check)
     {
-        // Latvian, case- and accent-sensitive but width-insensitive only.
-        var collation = Collation(1062, 16);
+        // Czech ignoring only width: a fold no other suite builds, as this check forgets it and seeds it failed while suites
+        // run side by side.
+        var collation = Collation(1029, 16);
         var culture = ViewSorter.Culture(collation)!.Value;
         SearchFold.Seed(collation.Lcid, culture.Options, null);
         ResultColumn[] columns = [new("latvian", "nvarchar", "text", Collation: collation)];

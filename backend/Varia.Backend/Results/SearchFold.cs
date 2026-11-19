@@ -57,8 +57,9 @@ internal sealed class SearchFold
         if (Array.IndexOf(Verified, lcid) < 0) return null;
         var build = Lazy(lcid, options).Value;
         // A build that failed (out of memory) stays failed: no fold, as For answers, never an exception on the packer.
-        try { build.Wait(); }
-        catch (AggregateException) { }
+        if (!build.IsCompleted)
+            try { build.Wait(); }
+            catch (AggregateException) { }
         return build.IsCompletedSuccessfully ? build.Result : null;
     }
 
