@@ -52,10 +52,11 @@ export function QueryPickers({ variant }: { variant: 'bar' | 'classic' }) {
       value={model.serverValue} onChange={event => { if (tab) void targets.changeConnection(tab.id, event.target.value || undefined) }}>
       {model.servers.map(server => <option key={server.id} value={server.id} disabled={server.disabled}>{server.label}</option>)}
     </select>
-    {classic ? <label className="context-field" htmlFor="query-database">Database</label> : <><span className="query-connection-divider" aria-hidden="true" /><Icon name="database" className="query-connection-icon" /></>}
-    <select id="query-database" aria-label="Query database" title={classic ? undefined : `Database: ${model.database}`} disabled={model.databaseDisabled} value={model.database}
+    {classic ? <label className="context-field" htmlFor="query-database">{model.datasets ? 'Dataset' : 'Database'}</label> : <><span className="query-connection-divider" aria-hidden="true" /><Icon name="database" className="query-connection-icon" /></>}
+    {/* A BigQuery query's box lists the project's datasets (its default dataset), with none as a choice. */}
+    <select id="query-database" aria-label={model.datasets ? 'Query dataset' : 'Query database'} title={classic ? undefined : model.datasets ? `Default dataset: ${model.database || 'none'}` : `Database: ${model.database}`} disabled={model.databaseDisabled} value={model.database}
       onChange={event => { if (tab) targets.changeDatabase(tab.id, event.target.value) }}>
-      {model.databases.map(name => <option key={name} value={name}>{name}</option>)}
+      {model.databases.map(name => <option key={name} value={name}>{name || (model.datasets ? '<no default dataset>' : name)}</option>)}
     </select>
   </>
 }

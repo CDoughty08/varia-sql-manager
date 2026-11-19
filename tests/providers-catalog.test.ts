@@ -98,7 +98,9 @@ describe('catalogue providers', () => {
     }
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'), true)).toBe(true)
-    expect(commandAllowsProvider('connection.disconnect', keys('sqlserver', 'bigquery'), true)).toBe(false)
+    expect(commandAllowsProvider('activity.open', keys('sqlserver', 'bigquery'), true)).toBe(false)
+    // Disconnect, New Query and the dataset box serve a BigQuery connection too (BQ-2).
+    for (const id of ['connection.disconnect', 'connection.reconnect', 'explorer.newQuery', 'query.changeDatabase', 'query.disconnect'] as const) expect(commandAllowsProvider(id, keys('bigquery', 'bigquery'), true), id).toBe(true)
     expect(commandAllowsProvider('query.estimatePlan', keys('sqlserver', ''))).toBe(true)
     expect(commandAllowsProvider('query.estimatePlan', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('query.estimatePlan', keys('', 'bigquery'))).toBe(true)

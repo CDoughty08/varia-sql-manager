@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BackendHealth, BackendState, ConnectionOptions } from '../../shared/contracts'
+import type { BackendHealth, BackendState, ProviderConnectionOptions } from '../../shared/contracts'
 import type { ConnectionDetailField, ConnectionDetails } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
@@ -88,7 +88,7 @@ export default function App() {
   const [showConnect, setShowConnect] = useState(false)
   // 0 while About is closed; each Help › About counts up, raising its window when it is already open.
   const [showAbout, setShowAbout] = useState(0)
-  const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
+  const [options, setOptions] = useState<ProviderConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
   const [detailsReview, setDetailsReview] = useState<OpenedConnection>()
@@ -216,7 +216,7 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  async function connected(info: TargetConnectionInfo, chosen: ConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[] = []) {
+  async function connected(info: TargetConnectionInfo, chosen: ProviderConnectionOptions, preference: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[] = []) {
     let adopted = false
     const opened = await acceptConnectionReceipt({ api: window.varia, connections: workbench.connections, info, options: chosen, details: detailsOf(chosen, preference), attempt, requestId,
       current: () => !signal.aborted && (adopted || !documents.getSnapshot().busy), explicitlyCancelled: () => signal.aborted, signal,
@@ -254,7 +254,8 @@ export default function App() {
       const root = workbench.explorer.rootIds.find(id => workbench.explorer.node(id)?.connectionId === info.id)
       if (root !== undefined) workbench.explorer.select(root, { reveal: true })
       if (pendingMonitor) {
-        try { workbench.activity.open(info.id) } catch (error) { setExplorerError(errorText(error)) }
+        // Activity Monitor is SQL Server's: a BigQuery connection made from its prompt just connects.
+        if (info.providerId !== 'bigquery') try { workbench.activity.open(info.id) } catch (error) { setExplorerError(errorText(error)) }
         opened.association?.complete()
         return
       }

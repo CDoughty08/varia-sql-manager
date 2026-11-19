@@ -47,7 +47,7 @@ export const newSessionMessage = 'This query opened a new SQL session. The previ
 export const lostSessionMessage = 'This query opened a new SQL session. The previous session was lost (SQL Server ended it, or its connection broke), so SQL Server rolled back its open transaction, and its SET options and temporary tables no longer exist.'
 const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: newSessionMessage, lost: lostSessionMessage }
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
-type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
+type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly provider?: string; readonly advanced?: { readonly commandTimeout?: number } } }
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */

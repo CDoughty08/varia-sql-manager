@@ -73,7 +73,7 @@ import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
 import { isBigQueryOptions } from '../shared/connections'
-import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionInfo, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -90,7 +90,10 @@ import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
 import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type WindowPlacement } from './window-state'
-import { BigQueryCredentials, BigQueryKeyFiles } from './bigquery-credentials'
+import { BigQueryCredentials, BigQueryKeyFiles, federationSource, readCredentialFile } from './bigquery-credentials'
+import { BigQueryConnectionStore } from './bigquery-connection-store'
+import { connectionHistory } from './connection-history'
+import { confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
 import { bigQueryEmulatorEndpoint } from './backend/spawn-spec'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
@@ -141,9 +144,16 @@ let credentialRequestsPending = () => false
 let connectionOpen: ConnectionOpenService | undefined
 // BigQuery's credential material (docs/bigquery.md, Authentication): key files by reference, and ADC found and read here.
 const bigQueryKeyFiles = new BigQueryKeyFiles()
-// BigQuery handles opened through the interim path below; BQ-2 moves them into ConnectionOpenService (targets, reuse, pins, receipts).
-const bigQueryHandles = new Set<string>()
-const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, { env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined })
+// BigQuery's saved connections (bigquery-connections.json), created with the other stores once the app is ready.
+let bigQueryStore: BigQueryConnectionStore | undefined
+const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
+  env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined,
+  sourceConfirmed: async (keyPath, source) => !!bigQueryStore && await bigQueryStore.sourceConfirmed(keyPath, source),
+  restoreKeyFiles: async () => { await bigQueryStore?.load() }
+})
+/** BigQuery's options as the backend takes them: main adds the credential material the renderer never holds. */
+const withBigQueryCredential = async (params: unknown): Promise<unknown> => isBigQueryOptions(params as { provider?: string })
+  ? { ...params as BigQueryConnectionOptions, credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions) } : params
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
@@ -324,8 +334,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   resultsJobs?.reset()
   connectionOpen?.reset({ replaceRenderer: true })
   if (!hotExitAvailable) connectionOpen?.retainTargets([])
-  // BigQuery handles (opened outside connectionOpen until BQ-2) end with the backend generation restarted or stopped below.
-  bigQueryHandles.clear()
+
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -884,6 +893,8 @@ app.whenReady().then(async () => {
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), profileFiles.connections.current))
+  bigQueryStore = new BigQueryConnectionStore(join(app.getPath('userData'), profileFiles.bigQueryConnections.current), bigQueryKeyFiles)
+  const history = connectionHistory(connectionStore, bigQueryStore)
   // Remember password: OS-protected ciphertext beside the connections file, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), profileFiles.savedPasswords.current), secretCipher)
@@ -891,21 +902,21 @@ app.whenReady().then(async () => {
   workspaceSealer = new ConnectionWorkspaceSealer(secretCipher, { trustUnsealed: !!smokeProfile })
   credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
   connectionOpen = new ConnectionOpenService({
-    authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
+    authentication: connectionAuthentication, savedPasswords, connections: history,
     generation: () => backend.current?.generation,
     open: async (params, generation, signal) => {
       const requestId = randomUUID(), load = connectionRequests.begin(requestId)
       const cancel = () => { connectionRequests.cancel([requestId]) }
       signal.addEventListener('abort', cancel, { once: true })
       if (signal.aborted) cancel()
-      try { return await validateOpenedConnection(await backend.request('connections.connect', params as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
+      try { return await validateOpenedConnection(await backend.request('connections.connect', await withBigQueryCredential(params) as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
       finally { signal.removeEventListener('abort', cancel); load.end() }
     },
     close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation }),
     bindingsChanged: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:connection-bindings-changed', event) }
   })
   connectionOpen.backendState(backend.state)
-  const library = connectionLibrary({ connections: connectionStore, savedPasswords })
+  const library = connectionLibrary({ connections: connectionStore, savedPasswords, bigQuery: bigQueryStore })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme: settledNativeTheme(nativeTheme, popouts) })
   await appearance.initialize()
@@ -974,6 +985,29 @@ app.whenReady().then(async () => {
   handle('varia:connections-save', value => library.save(value))
   handle('varia:connections-remove', value => library.remove(value))
   handle('varia:connections-environment', value => library.setEnvironment(value))
+  // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
+  // name, never its path, and for a federation configuration the token file it reads (decision 49).
+  handle('varia:connections-pick-key-file', async value => {
+    const { authentication } = pickKeyFileParamsSchema.parse(value)
+    const what = authentication === 'serviceAccountKey' ? 'The key file' : 'The federation configuration file'
+    const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: authentication === 'serviceAccountKey' ? 'Choose a service account key' : 'Choose a federation configuration', filters: [{ name: 'JSON files', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
+    const path = selection.canceled ? undefined : selection.filePaths[0]
+    if (!path) return null
+    // Read now, under the same rules as a connect, so a file Varia cannot use is refused at once with its reason.
+    const json = await readCredentialFile(path, { json: true, what })
+    const keyFile = bigQueryKeyFiles.register(path), source = authentication === 'externalAccount' ? await federationSource(json) : undefined
+    return { keyFile, name: basename(path), ...source !== undefined ? { source, sourceConfirmed: await bigQueryStore!.sourceConfirmed(path, source) } : {} }
+  })
+  // Decision 49: the user confirmed the token file a picked configuration reads. Main re-reads the configuration, so only
+  // the source it names now is confirmed, never a path the page supplied.
+  handle('varia:connections-confirm-source', async value => {
+    const { keyFile, source } = confirmSourceParamsSchema.parse(value)
+    const path = bigQueryKeyFiles.path(keyFile)
+    if (!path) throw new Error('The configuration file is no longer available. Choose it again.')
+    const current = await federationSource(await readCredentialFile(path, { json: true, what: 'The federation configuration file' }))
+    if (current === undefined || current !== source) throw new Error('The configuration file changed. Choose it again.')
+    await bigQueryStore!.confirmSource(path, source)
+  })
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
   // Import and export take no path from the page: main opens the dialogs and uses only the paths they return.
@@ -1054,37 +1088,22 @@ app.whenReady().then(async () => {
     try {
       const validated = validateRequest(method, params)
       if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
-      if (method === 'connections.connect' && isBigQueryOptions(validated as { provider?: string })) {
-        if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
-        // Main adds the credential material the renderer never holds; the supervisor records the handle as BigQuery's.
-        const options = validated as BigQueryConnectionOptions
-        const answer = await backend.request('connections.connect', { ...options, credential: await bigQueryCredentials.material(options) })
-        let info: ConnectionInfo
-        try { info = validateResult('connections.connect', answer) as ConnectionInfo }
-        catch (error) {
-          // The backend opened a handle main will not hand out; release it rather than leave its client alive.
-          const id = (answer as { id?: unknown } | null)?.id
-          if (typeof id === 'string' && id.length <= 128) void backend.request('connections.disconnect', { connectionId: id }).catch(() => {})
-          throw error
-        }
-        bigQueryHandles.add(info.id)
-        return { ok: true, value: info }
-      }
       if (method === 'connections.connect') {
         if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
-        const outcome = await connectionOpen.connect(validated as ConnectionOptions, context)
+        // Either engine: BigQuery's credential material is added when the owner sends it (withBigQueryCredential).
+        const outcome = await connectionOpen.connect(validated as ProviderConnectionOptions, context)
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }
       if (method === 'connections.databases') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
-        const outcome = await connectionOpen.databases(validated as ConnectionOptions, context, async (params, signal) => {
+        const outcome = await connectionOpen.databases(validated as ProviderConnectionOptions, context, async (params, signal) => {
           const requestId = randomUUID(), load = connectionRequests.begin(requestId)
           const cancel = () => { connectionRequests.cancel([requestId]) }
           signal.addEventListener('abort', cancel, { once: true })
           if (signal.aborted) cancel()
-          try { return validateResult('connections.databases', await backend.request('connections.databases', params as ConnectionOptions, { onSent: load.sent })) }
+          try { return validateResult('connections.databases', await backend.request('connections.databases', await withBigQueryCredential(params) as ConnectionOptions, { onSent: load.sent })) }
           finally { signal.removeEventListener('abort', cancel); load.end() }
         })
         if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
@@ -1096,9 +1115,7 @@ app.whenReady().then(async () => {
         const credential = await bigQueryCredentials.material(params)
         return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
       }
-      if (method === 'connections.disconnect' && bigQueryHandles.delete((validated as { connectionId: string }).connectionId)) {
-        return { ok: true, value: await backend.request('connections.disconnect', validated as { connectionId: string }) }
-      }
+
       if (method === 'connections.disconnect') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
@@ -1142,7 +1159,7 @@ app.whenReady().then(async () => {
         outcome = { ok: false, error }
       }
       // History and remembered passwords for the connect methods; other methods pass through.
-      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: connectionStore, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
+      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: history, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }

@@ -477,7 +477,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.connect" => Providers.OfOptions(parameters) == Providers.BigQuery
             ? await bigQuery.ConnectAsync(Read<BigQueryConnectOptions>(parameters, json), Token(context), context)
             : await ConnectAsync(ReadConnect(parameters, json), Token(context), context),
-        "connections.databases" => await DiscoverDatabasesAsync(ReadConnect(parameters, json), Token(context)),
+        "connections.databases" => Providers.OfOptions(parameters) == Providers.BigQuery
+            ? await bigQuery.DiscoverDatasetsAsync(Read<BigQueryConnectOptions>(parameters, json), Token(context))
+            : await DiscoverDatabasesAsync(ReadConnect(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(ReadConnect(parameters, json)),
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
@@ -491,7 +493,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "language.close" => await language.CloseAsync(Read<LanguageCloseArgs>(parameters, json).DocumentId, Token(context)),
         "language.definition" => (object?)await definitions.ResolveAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
         "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),
-        "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
+        "databases.list" => Read<ConnectionArgs>(parameters, json) is var listArgs && bigQuery.Owns(listArgs.ConnectionId)
+            ? await bigQuery.DatasetsAsync(listArgs.ConnectionId, Token(context))
+            : await DatabasesAsync(listArgs, Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "plans.parse" => PlanParser.Read(Read<PlanParseArgs>(parameters, json), Token(context)),

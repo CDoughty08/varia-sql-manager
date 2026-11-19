@@ -233,13 +233,13 @@ noted where it matters.
 | --- | --- | --- | --- | --- |
 | `system.health` | invoke | unary | control | 10 s |
 | `connections.connect` | invoke; Stop via `cancelConnectionRequests` | unary | metadata | SQL Server: (connect timeout, default 15) + 30 s, + 180 s for Entra MFA's browser sign-in; 0 means none. BigQuery: 45 s (15 s non-interactive). Sensitive. Takes either engine's options. A failed open carries error `details`. |
-| `connections.databases` | invoke; `cancelConnectionRequests` | unary | metadata | 45 s, + 180 s for Entra MFA. Sensitive. Failed open carries `details`. |
+| `connections.databases` | invoke; `cancelConnectionRequests` | unary | metadata | 45 s, + 180 s for Entra MFA. Sensitive. Failed open carries `details`. BigQuery: the project's datasets with `location?` ([BigQuery](bigquery.md#datasets)); main adds `credential`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Sensitive. |
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
-| `databases.list` | invoke | unary | metadata | 45 s |
+| `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
 | `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
@@ -695,8 +695,11 @@ another grantor's row left in place) fails `NOT_SUPPORTED`.
 Each `methodPolicies` entry may declare `providers` (`src/shared/providers.ts`); absent, the method serves SQL Server
 only. `connections.connect`, `.databases` and `.preview` take an optional `provider` in their options (`sqlserver`;
 absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.connect` and `.disconnect` serve both engines:
-a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)); `.databases` and `.preview` refuse `bigquery`
-with `UNSUPPORTED_PROVIDER`. `bigquery.account` and `bigquery.projects` serve BigQuery alone (`Providers.BigQueryMethods`). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
+a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
+(BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `bigquery.account` and
+`bigquery.projects` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
+`varia:connections-confirm-source` (records a federation token file the user confirmed). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
 with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
 `query.session.close`, `query.session.state` and every `results.*` method name no connection and are declared for both
 engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request

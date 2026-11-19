@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import ConnectDialog from '../src/renderer/src/ConnectDialog'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import type { ConnectionLibrary, ConnectionProfile } from '../src/shared/connections'
+import type { ConnectionLibrary, ConnectionProfile, ConnectionProfileInput } from '../src/shared/connections'
 import type { ConnectionOptions, VariaApi } from '../src/shared/contracts'
 import { connectionDefaults, connectionKey } from '../src/shared/connections'
 import { readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -32,15 +32,16 @@ async function mount(initialAutoReconnect?: 'inherit' | 'on' | 'off', setup: {
   const held = deferred<void>()
   const loadConnectionLibrary = vi.fn<VariaApi['loadConnectionLibrary']>(async () => {
     if (setup.holdLibrary) await held.promise
-    return { ok: true, value: { library, savedPasswords: setup.savedPasswords ?? [], windowsIdentity: 'DOMAIN\\reader', passwordStorage: { available: true } } }
+    return { ok: true, value: { library, savedPasswords: setup.savedPasswords ?? [], windowsIdentity: 'DOMAIN\\reader', passwordStorage: { available: true }, bigQuery: { profiles: [] } } }
   })
-  const saveConnectionProfile = vi.fn<VariaApi['saveConnectionProfile']>(async input => {
+  const saveConnectionProfile = vi.fn<VariaApi['saveConnectionProfile']>(async value => {
+    const input = value as ConnectionProfileInput
     // As main's upsert: without an id, the first entry with these settings.
     const target = input.id ?? library.profiles.find(value => connectionKey(value.options) === connectionKey(input.options))?.id
     library = { ...library, profiles: library.profiles.map(value => value.id === target ? { ...value, options: input.options, autoReconnect: input.autoReconnect, favorite: input.favorite ?? value.favorite, registered: input.registered ?? value.registered } : value) }
     return { ok: true, value: { library, savedPasswords: setup.savedPasswords ?? [] } }
   })
-  workbench.api.connect.mockImplementation(async (options, context) => ({ ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', authentication: { principal: { provider: 'sqlserver', authentication: options.authentication, id: 'sid:fixture' } } } }))
+  workbench.api.connect.mockImplementation(async (value, context) => { const options = value as ConnectionOptions; return { ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', authentication: { principal: { provider: 'sqlserver', authentication: options.authentication, id: 'sid:fixture' } } } } })
   const original = Object.getOwnPropertyDescriptor(window, 'varia')
   Object.defineProperty(window, 'varia', { configurable: true, value: { ...workbench.api, loadConnectionLibrary, saveConnectionProfile } })
   const onConnected = vi.fn<ComponentProps<typeof ConnectDialog>['onConnected']>(async () => {}), onClose = vi.fn()
@@ -142,7 +143,7 @@ describe('saved profile startup reconnect preference', () => {
     expect(view.host.querySelector<HTMLInputElement>('#connect-password')?.placeholder).toBe('••••••••')
     await act(async () => view.button('Connect').click())
     expect(view.api.connect.mock.calls[0]?.[1]).toMatchObject({ selectedProfileId: profiles[1].id, profileId: profiles[0].id, autoReconnect: 'on', remember: true })
-    expect(view.api.connect.mock.calls[0]?.[0].password).toBe('')
+    expect((view.api.connect.mock.calls[0]?.[0] as ConnectionOptions).password).toBe('')
     expect(view.profiles().map(value => value.autoReconnect)).toEqual(['off', 'on'])
   })
 
@@ -386,7 +387,7 @@ describe('saving connection details', () => {
   it('keeps the environment main kept when Connect saves edited details from a form without one', async () => {
     const plain = profile('First alias', 1, 'off'), first = { ...plain, options: { ...plain.options, environment: 'Production' } }, second = { ...profile('Second alias', 2, 'on'), options: { ...first.options, displayName: 'Second alias' } }
     const view = await mount(undefined, { profiles: [first, second], initial: { ...first.options, displayName: '', environment: undefined } })
-    view.api.connect.mockImplementation(async (options, context) => ({ ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', environment: 'Production', authentication: { principal: { provider: 'sqlserver', authentication: options.authentication, id: 'sid:fixture' } } } }))
+    view.api.connect.mockImplementation(async (value, context) => { const options = value as ConnectionOptions; return { ok: true, value: { id: id(100), targetId: context!.targetId, server: options.server, database: options.database, generation: 1, serverVersion: '17', environment: 'Production', authentication: { principal: { provider: 'sqlserver', authentication: options.authentication, id: 'sid:fixture' } } } } })
     await pick(view, '#connect-name', 'Named now')
     await act(async () => view.button('Connect').click())
     expect(view.saveConnectionProfile).toHaveBeenLastCalledWith(expect.objectContaining({ options: expect.objectContaining({ displayName: 'Named now', environment: 'Production' }) }))

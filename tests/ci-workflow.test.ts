@@ -73,6 +73,12 @@ describe('CI workflow', () => {
     const emulator = live.steps.find(step => step.run.includes('--bigquery-emulator-live'))!
     expect(emulator.if?.startsWith('matrix.group == 1 && (success() || failure())')).toBe(true)
     expect(emulator.run).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64} --project=varia-emulator --dataset=varia_fixture/)
+    // And the Connect dialog's BigQuery phase (connections-smoke.mjs) runs against the same emulator in every Linux smoke shard.
+    const linux = workflow.get('smoke-linux')!.steps, start = linux.findIndex(step => step.id === 'bigquery'), shards = linux.findIndex(step => step.run.includes('smoke-shards.mjs'))
+    expect(linux[start]?.run).toBe(emulator.run.split('\n').find(line => line.includes('docker run'))!.trim())
+    expect(start).toBeGreaterThan(-1)
+    expect(start).toBeLessThan(shards)
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050\n        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs')
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).not.toContain('VARIA_TEST_BIGQUERY_PROJECT')
   })
   it('keeps triggers unfiltered, validates docs without installing runtimes, and always aggregates every job', () => {

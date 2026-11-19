@@ -89,7 +89,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         const existing = this.documents.getSnapshot().documents.find(document => document.file?.id === file.id)
         if (existing) { this.documents.activate(existing.id); continue }
         if (file.kind === 'sqlplan') this.documents.openText({ name: file.name, text: file.content, kind: file.kind, file: registeredFile(file), eol: file.eol })
-        else this.documents.create(file.name, file.content, target?.database || 'master', target?.connectionId, false, registeredFile(file), file.eol)
+        else this.documents.create(file.name, file.content, target?.database || this.documents.defaultDatabase(target?.connectionId), target?.connectionId, false, registeredFile(file), file.eol)
         if (file.mixedEol) mixed.push(`Line endings in ${file.name} were mixed; it will be saved with ${lineEndingLabel(file.eol)} line endings.`)
       }
     } finally { await this.releaseUnclaimed(files) }

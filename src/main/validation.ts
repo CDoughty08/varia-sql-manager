@@ -36,7 +36,7 @@ export const requestSchemas = {
   'system.health': z.object({}).strict(),
   // Either engine's options; main adds BigQuery's credential material before sending (never from the renderer).
   'connections.connect': providerConnectionOptionsSchema,
-  'connections.databases': connectionOptionsSchema,
+  'connections.databases': providerConnectionOptionsSchema,
   'connections.preview': connectionOptionsSchema,
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
@@ -74,6 +74,10 @@ export const requestSchemas = {
   'activity.kill': activityKillRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
+/** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
+const databaseListSchema = z.array(z.object({
+  name: z.string().min(1).max(1024), isSystem: z.boolean(), isSnapshot: z.boolean(), location: z.string().min(1).max(64).regex(/^[A-Za-z\d-]+$/).optional()
+}).strict()).max(32_767)
 // Shown as the dialog's User name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
@@ -88,6 +92,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
     'A connection answer must match its provider.'),
   'bigquery.account': bigQueryAccountSchema,
   'bigquery.projects': bigQueryProjectListSchema,
+  'connections.databases': databaseListSchema,
+  'databases.list': databaseListSchema,
   'language.status': languageStatusSchema,
   'language.complete': languageCompletionsSchema,
   'language.hover': languageHoverSchema,

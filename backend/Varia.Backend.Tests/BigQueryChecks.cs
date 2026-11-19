@@ -68,6 +68,8 @@ internal static class BigQueryChecks
         return args;
     }
 
+    static string[] Datasets(JsonElement value) => value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(dataset => Text(dataset, "name") + "@" + Text(dataset, "location")).ToArray() : [];
+
     static string Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var member) && member.ValueKind == JsonValueKind.String ? member.GetString()! : "";
 
     public static async Task RunAsync(Action<bool, string> check)
@@ -324,8 +326,12 @@ internal static class BigQueryChecks
             "the connect probe is a labelled GoogleSQL dry run of SELECT 1 in the billing project, signed with the key's token");
         check(fake.To(BigQueryFake.Jobs).Count() == 1 && fake.To(BigQueryFake.Datasets).Count() == 1 && harness.Service.BigQuery.Find(id)?.Location == "EU",
             "connect probes once and takes the default dataset's location when the options name none");
-        var (explorer, _, _) = await harness.Call("databases.list", new JsonObject { ["connectionId"] = id });
-        check(explorer == "UNSUPPORTED_PROVIDER", $"a SQL Server-only method for a BigQuery handle is refused with UNSUPPORTED_PROVIDER: {explorer}");
+        var (listed, datasets, listMessage) = await harness.Call("databases.list", new JsonObject { ["connectionId"] = id });
+        check(listed == "ok" && Datasets(datasets).SequenceEqual(["archive@us-east1", "sales@", "staging@US"]) && fake.To(BigQueryFake.DatasetList).Count() == 2
+            && fake.To(BigQueryFake.DatasetList).First().Uri.Query.Contains("maxResults=1000", StringComparison.Ordinal),
+            $"databases.list for a BigQuery handle lists every page of the billing project's datasets by name, dropping names BigQuery refuses and locations that are not ids: {listed} {listMessage} {datasets}");
+        var (columns, _, _) = await harness.Call("tables.columns", new JsonObject { ["connectionId"] = id, ["database"] = "sales", ["schema"] = "dbo", ["name"] = "t" });
+        check(columns == "UNSUPPORTED_PROVIDER", $"a SQL Server-only method for a BigQuery handle is refused with UNSUPPORTED_PROVIDER: {columns}");
         var (closed, disconnected, _) = await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = id });
         var (again, twice, _) = await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = id });
         check(closed == "ok" && disconnected.GetProperty("disconnected").GetBoolean() && again == "ok" && !twice.GetProperty("disconnected").GetBoolean() && harness.Service.BigQuery.Count == 0,
@@ -637,6 +643,9 @@ internal static class BigQueryChecks
         using var deniedHarness = new Harness(denied);
         var refused = await deniedHarness.Call("bigquery.projects", Args(user));
         check(refused.Code == "PERMISSION_DENIED", $"a refused projects.list is PERMISSION_DENIED: {refused.Code} {refused.Message}");
+        var discovered = await harness.Call("connections.databases", user);
+        check(discovered.Code == "ok" && Datasets(discovered.Result).SequenceEqual(["archive@us-east1", "sales@", "staging@US"]) && harness.Fake.To(BigQueryFake.Jobs).Any() is false,
+            $"connections.databases with BigQuery's options lists the project's datasets for the Connect dialog without creating any job: {discovered.Code} {discovered.Message}");
         Clean(check, harness.Fake, "pre-connect");
         Clean(check, denied, "pre-connect refused");
     }

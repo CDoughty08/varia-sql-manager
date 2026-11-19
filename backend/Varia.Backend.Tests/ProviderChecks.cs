@@ -31,10 +31,10 @@ internal static class ProviderChecks
             $"options without a provider and with 'sqlserver' are SQL Server's; 'bigquery' preview is refused with UNSUPPORTED_PROVIDER, a BigQuery connect reads BigQuery's options (SQL Server's are invalid for it), and an unknown provider is invalid: {preview} {previewSqlServer} {previewBigQuery} {connectBigQuery} {previewUnknown}");
 
         var connectionId = Guid.NewGuid().ToString();
-        var byHandle = Parse($$"""{"connectionId":"{{connectionId}}"}""");
-        var sqlServerHandle = await Code(() => service.DispatchAsync("databases.list", byHandle, wire));
+        var byHandle = Parse($$"""{"connectionId":"{{connectionId}}","database":"sales","schema":"dbo","name":"orders"}""");
+        var sqlServerHandle = await Code(() => service.DispatchAsync("tables.columns", byHandle, wire));
         service.ConnectionProvider = id => id == connectionId ? Providers.BigQuery : Providers.SqlServer;
-        var bigQueryHandle = await Code(() => service.DispatchAsync("databases.list", byHandle, wire));
+        var bigQueryHandle = await Code(() => service.DispatchAsync("tables.columns", byHandle, wire));
         var bigQueryExplorer = await Code(() => service.DispatchAsync("explorer.children", Parse($$"""{"connectionId":"{{connectionId}}","requestId":"{{Guid.NewGuid()}}","nodeId":"server"}"""), wire));
         var bigQueryLanguage = await Code(() => service.DispatchAsync("language.complete", Parse($$"""{"text":"","context":{"providerId":"sqlserver","connectionId":"{{connectionId}}"},"position":{"line":1,"column":1} }"""), wire));
         check(bigQueryLanguage == "UNSUPPORTED_PROVIDER", $"a language request for a stub BigQuery connection, named in its context, is refused with UNSUPPORTED_PROVIDER: {bigQueryLanguage}");
