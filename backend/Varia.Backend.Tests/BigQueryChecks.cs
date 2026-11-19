@@ -249,8 +249,12 @@ internal static class BigQueryChecks
             Directory.CreateSymbolicLink(netLink, "/net/files.example.com/export");
             check(Outcome(Path.Combine(netLink, "token.jwt")) == "AUTH_KEY_FILE: The federation configuration's credential file is not on a local disk.",
                 "a link into /net is refused from its text before it is followed: " + Outcome(Path.Combine(netLink, "token.jwt")));
-            check(Outcome("/proc/self/environ") == "AUTH_KEY_FILE: The federation configuration's credential file is a system file, not a subject token.",
-                "a process's environment under /proc is refused: " + Outcome("/proc/self/environ"));
+            // macOS has no /proc; /dev is refused on every Unix.
+            if (OperatingSystem.IsLinux())
+                check(Outcome("/proc/self/environ") == "AUTH_KEY_FILE: The federation configuration's credential file is a system file, not a subject token.",
+                    "a process's environment under /proc is refused: " + Outcome("/proc/self/environ"));
+            check(Outcome("/dev/null") == "AUTH_KEY_FILE: The federation configuration's credential file is a system file, not a subject token.",
+                "a device under /dev is refused: " + Outcome("/dev/null"));
             var procLink = Path.Combine(root, "environ.jwt");
             File.CreateSymbolicLink(procLink, "/proc/self/environ");
             check(Outcome(procLink).Contains("is a system file", StringComparison.Ordinal), "a link to /proc is refused by its target");
