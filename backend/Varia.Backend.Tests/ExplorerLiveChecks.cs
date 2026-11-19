@@ -88,7 +88,12 @@ internal static class ExplorerLiveChecks
             check(profile.Linux == linux, "the profile says whether SQL Server runs on Linux, as sys.dm_os_host_info does (" + (linux ? "Linux" : "Windows") + ")");
         }
         check(info.Linux == linux, "connect reports whether SQL Server runs on Linux, for the explorerServerLinux context key");
-        check((await client.Labels(Object(Server))).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs"]), "the server's folders, in SSMS order");
+        // SQL Server Agent's node follows the folders where the edition has Agent (the renderer shows it only behind its release gate).
+        string[] serverRows = Varia.Backend.Agent.AgentCatalog.Current.PlatformOf(info.EngineEdition ?? 0, linux) is null
+            ? ["Databases", "Security", "Server Objects", "Integration Services Catalogs"]
+            : ["Databases", "Security", "Server Objects", "Integration Services Catalogs", "SQL Server Agent"];
+        var serverLabels = await client.Labels(Object(Server));
+        check(serverLabels.SequenceEqual(serverRows), "the server's folders, in SSMS order, then SQL Server Agent where the edition has it: " + string.Join(", ", serverLabels));
         // Without a catalog the folder is empty on Windows; SQL Server on Linux cannot have one, and the folder says so.
         if (!(await client.Labels(Folder(Server, "databases"))).Contains("SSISDB"))
         {
