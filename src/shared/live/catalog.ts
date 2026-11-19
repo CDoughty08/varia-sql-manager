@@ -276,7 +276,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'explorer.agentService': {
     id: 'explorer.agentService', source: 'explorer', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only for a login with VIEW SERVER STATE (checked with HAS_PERMS_BY_NAME, so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services, or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected. Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows.',
+    description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only where HAS_PERMS_BY_NAME says the login may (so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services (VIEW SERVER STATE before SQL Server 2022, VIEW SERVER SECURITY or PERFORMANCE STATE from it), or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected (VIEW SERVER STATE before 2022, VIEW SERVER PERFORMANCE STATE from it). Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows.',
     status: ['agentXps', 'serviceState', 'startupType']
   },
   'explorer.availability': {

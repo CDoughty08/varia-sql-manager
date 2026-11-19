@@ -82,7 +82,9 @@ checks impersonated a scratch SQL login (`EXECUTE AS LOGIN`) that was a member o
 
 - **Agent's state (Object Explorer's `explorer.agentService`).** On Windows `sys.dm_server_services` lists `SQL Server Agent
   (<instance>)` with its status and startup type. Where it lists no Agent row, the probe falls back to whether an
-  `SQLAgent - …` session is connected (running or stopped, no startup type). The Agent live suite's check says which
+  `SQLAgent - …` session is connected (running or stopped, no startup type), only for a login that sees other sessions
+  (VIEW SERVER PERFORMANCE STATE from SQL Server 2022; without it the state is unknown, as 0 sessions would read as
+  stopped). The DMV itself answers VIEW SERVER SECURITY or PERFORMANCE STATE from 2022, VIEW SERVER STATE before. The Agent live suite's check says which
   answered, so CI's Linux container log records the Linux answer. Managed Instance's Agent always runs and cannot be
   stopped (Microsoft's T-SQL differences page), so the probe reads running there without the DMV.
 - **Subsystems.** `msdb.dbo.syssubsystems` lists TSQL as `subsystem_id` 1. Object Explorer's Proxies folder lists every
