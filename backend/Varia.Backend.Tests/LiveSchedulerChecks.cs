@@ -128,7 +128,9 @@ internal static class LiveSchedulerChecks
         ("hash index scan", "SELECT h.total_bucket_count FROM sys.dm_db_xtp_hash_index_stats AS h;"),
         // Functions whose own definitions do a refused thing: the lint matches names, so it refuses the wrapper by name.
         ("compiles a literal naming a linked server", "SELECT d.name FROM sys.dm_exec_describe_first_result_set(N'SELECT a FROM s.d.dbo.t', NULL, 0) AS d;"),
-        ("ledger digests from a url", "SELECT TOP (1) d.digest FROM sys.fn_ledger_retrieve_digests_from_url(N'https://h/x') AS d ORDER BY d.digest;"),
+        ("compiles a plan guide", "SELECT v.msgnum FROM sys.plan_guides AS g CROSS APPLY sys.fn_validate_plan_guide(g.plan_guide_id) AS v;"),
+        ("ekm provider keys", "SELECT k.key_name FROM sys.dm_cryptographic_provider_keys(1) AS k;"),
+        ("ledger digests from a url","SELECT TOP (1) d.digest FROM sys.fn_ledger_retrieve_digests_from_url(N'https://h/x') AS d ORDER BY d.digest;"),
         ("referenced entities", "SELECT r.referenced_entity_name FROM sys.dm_sql_referenced_entities(N'dbo.p', N'OBJECT') AS r;"),
         ("my permissions", "SELECT p.permission_name FROM sys.fn_my_permissions(N'dbo.t', N'OBJECT') AS p;"),
         ("database access", "SELECT HAS_DBACCESS(N'msdb') AS a;"),
