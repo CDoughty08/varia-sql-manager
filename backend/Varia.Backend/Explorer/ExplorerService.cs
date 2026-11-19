@@ -49,6 +49,9 @@ internal sealed class ExplorerOptions
     public TimeSpan? PeekMappingBudget { get; set; }
     /// <summary>Replaces agent.profile's budget from the Agent catalogue (timeout checks).</summary>
     public TimeSpan? AgentProfileBudget { get; set; }
+    /// <summary>Fails every catalog statement with this error once its connection is open, in place of running it (offline checks
+    /// of how a server's refusal maps).</summary>
+    public Func<SqlException>? TestStatementFailure { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
@@ -459,6 +462,7 @@ internal sealed partial class ExplorerService : IDisposable
                     return failed(await SsisOpenFailureAsync(connectionId, subject, database!, token));
                 }
                 opened?.Invoke();
+                if (Options.TestStatementFailure is { } failure) throw failure();
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");
