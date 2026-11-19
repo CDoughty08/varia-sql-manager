@@ -94,11 +94,14 @@ export function nextStop(stops: readonly HTMLElement[], at: Element | null, back
  * What Copy in the Properties menu writes: the facts whose text is selected in the pane, else every fact it shows, as
  * Name<TAB>Value lines with the platform's line breaks (as a grid copies). None while the facts load or failed.
  */
-function propertiesTarget(pane: HTMLElement, crlf: boolean) {
+function selectedFacts(pane: HTMLElement): HTMLElement[] {
+  const selection = pane.ownerDocument.getSelection()
+  return selection && !selection.isCollapsed ? [...pane.querySelectorAll<HTMLElement>('.peek-fact')].filter(fact => selection.containsNode(fact, true)) : []
+}
+function propertiesTarget(pane: HTMLElement, crlf: boolean, before?: readonly HTMLElement[]) {
   const facts = [...pane.querySelectorAll<HTMLElement>('.peek-fact')]
   if (!facts.length) return null
-  const selection = pane.ownerDocument.getSelection()
-  const picked = selection && !selection.isCollapsed ? facts.filter(fact => selection.containsNode(fact, true)) : []
+  const picked = (before ?? selectedFacts(pane)).filter(fact => facts.includes(fact))
   const lines = (picked.length ? picked : facts).map(fact => [fact.querySelector('dt')?.textContent ?? '', fact.querySelector('dd')?.textContent ?? ''] as const)
   return { kind: 'peekProperties' as const, text: peekPropertiesText(lines, crlf), selected: picked.length > 0 }
 }
@@ -106,8 +109,13 @@ function propertiesTarget(pane: HTMLElement, crlf: boolean) {
 /** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
 export function PropertiesPane({ peek }: { peek: OpenPeek }) {
   const { platform } = useWorkbench()
-  const menu = useMenuTarget<HTMLDivElement>(pane => propertiesTarget(pane, platform === 'win32'))
-  return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"><Properties peek={peek} /></div>
+  // A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened by a press reads
+  // the selection as that press began; a key press (Shift+F10, the menu key) reads it as it is.
+  const pressed = useRef<HTMLElement[] | undefined>(undefined)
+  const menu = useMenuTarget<HTMLDivElement>(pane => { const before = pressed.current; pressed.current = undefined; return propertiesTarget(pane, platform === 'win32', before) })
+  return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"
+    onPointerDownCapture={event => { pressed.current = selectedFacts(event.currentTarget) }}
+    onKeyDownCapture={() => { pressed.current = undefined }}><Properties peek={peek} /></div>
 }
 
 /** The kind's groups of facts for the node's subtype, a refused group's words in place of its facts. */

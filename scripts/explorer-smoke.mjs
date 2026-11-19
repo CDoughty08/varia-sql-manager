@@ -720,6 +720,11 @@ try {
   await page.keyboard.press('Shift+F10')
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toBe('Row count\t12,345')
+  // A right-click with nothing selected copies every fact, though macOS selects the word under the pointer as it opens the menu.
+  await page.evaluate(() => getSelection().removeAllRanges())
+  await peekProperties.getByText('Row count', { exact: true }).click({ button: 'right' })
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
   await expect(peekCard).toBeVisible()
   // The tabs: Columns is a grid of the list that came with the facts (no request of its own), each row with its declaration;
   // Dependencies both ways (a dependency in this database peeks in the same card, and Back returns), and Top rows runs only

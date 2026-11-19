@@ -165,6 +165,10 @@ internal static partial class PeekChecks
                 if (!batch.Lists.Select(list => list.Id).SequenceEqual(lists.Select(list => list.Id)) || batch.Mapping != spec.ListSpecs.Any(list => list.Id == "userMapping")
                     || batch.Lists.Zip(lists).Any(pair => !PeekSql.Composed.Contains(pair.First.Id) && !pair.First.Columns.Take(pair.Second.Columns.Count).SequenceEqual(pair.Second.Columns.Select(column => column.Id))))
                     problems.Add(name + ": its lists are not the catalogue's");
+                // A column's collation and the database's are in different collations (the database's and the server's): compared
+                // as they are, a database collated apart from its server fails the batch with Msg 468.
+                if (batch.Lists.Any(list => list.Id == "columns") && !batch.Text.Contains("c.collation_name COLLATE Latin1_General_100_BIN2 <> d.collation_name COLLATE Latin1_General_100_BIN2", StringComparison.Ordinal))
+                    problems.Add(name + ": it compares collation names across collations");
                 if (batch.Mapping != batch.Text.Contains(PeekSql.MappingDatabases, StringComparison.Ordinal)) problems.Add(name + ": User mapping's databases");
                 if (batch.Lists.Count + (batch.Mapping ? 1 : 0) > 0 && System.Text.RegularExpressions.Regex.Matches(batch.Text, @"SELECT TOP \(@take\) ").Count != batch.Lists.Count + (batch.Mapping ? 1 : 0) - noFiles)
                     problems.Add(name + ": a list without TOP (@take)");
@@ -266,7 +270,7 @@ internal static partial class PeekChecks
                 ["name"] = name, ["quotedName"] = "[" + name.Replace("]", "]]") + "]", ["type"] = type, ["quotedType"] = "[" + type + "]", ["quotedTypeSchema"] = "[sys]", ["userDefined"] = false,
                 ["assemblyType"] = false, ["baseType"] = null, ["maxLength"] = (short)4, ["precision"] = (byte)10, ["scale"] = (byte)0, ["nullable"] = true, ["identity"] = false, ["seed"] = null,
                 ["increment"] = null, ["computed"] = false, ["computedText"] = null, ["persisted"] = null, ["defaultText"] = null, ["collation"] = null, ["sparse"] = false, ["columnSet"] = false,
-                ["rowGuid"] = false, ["generated"] = (byte)0, ["hidden"] = false, ["xmlDocument"] = false, ["quotedXmlSchema"] = null, ["quotedXmlCollection"] = null, ["xmlSchema"] = null,
+                ["rowGuid"] = false, ["generated"] = (byte)0, ["hidden"] = false, ["mask"] = null, ["xmlDocument"] = false, ["quotedXmlSchema"] = null, ["quotedXmlCollection"] = null, ["xmlSchema"] = null,
                 ["xmlCollection"] = null, ["vectorDimensions"] = null, ["primaryKey"] = false, ["foreignKey"] = false
             };
             more?.Invoke(raw);
@@ -295,6 +299,19 @@ internal static partial class PeekChecks
             && set is [.., "[Props] xml COLUMN_SET FOR ALL_SPARSE_COLUMNS"], "a period column, a ROWGUIDCOL column and a column set are declared: " + Show(start) + " " + Show(guid) + " " + Show(set));
         var big = PeekSql.ListRow("columns", Column("N", "bigint", raw => { raw["identity"] = true; raw["seed"] = 1000000000000m; raw["increment"] = -5L; raw["nullable"] = false; }));
         check(big is [_, _, _, _, "1000000000000, -5", .., "[N] bigint IDENTITY(1000000000000,-5) NOT NULL"], "an identity's seed and increment are written as invariant numbers: " + Show(big));
+        // The batch reads a seed and increment as text, so a numeric(38) one past System.Decimal's range still reads.
+        var huge = PeekSql.ListRow("columns", Column("H", "numeric", raw => { raw["precision"] = (byte)38; raw["identity"] = true; raw["seed"] = "99999999999999999999999999999999999999"; raw["increment"] = "1"; raw["nullable"] = false; }));
+        check(huge is [_, "numeric(38,0)", _, _, "99999999999999999999999999999999999999, 1", .., "[H] numeric(38,0) IDENTITY(99999999999999999999999999999999999999,1) NOT NULL"],
+            "an identity's seed read as text is written as it is, past System.Decimal's range: " + Show(huge));
+        var ledger = PeekSql.ListRow("columns", Column("ledger_start_transaction_id", "bigint", raw => { raw["nullable"] = false; raw["generated"] = (byte)5; raw["hidden"] = true; }));
+        var sequence = PeekSql.ListRow("columns", Column("ledger_end_sequence_number", "bigint", raw => { raw["generated"] = (byte)8; raw["hidden"] = true; }));
+        var masked = PeekSql.ListRow("columns", Column("Email", "varchar", raw => { raw["maxLength"] = (short)100; raw["mask"] = "partial(1, \"X''X\", 0)"; }));
+        check(ledger is [.., "[ledger_start_transaction_id] bigint GENERATED ALWAYS AS TRANSACTION_ID START HIDDEN NOT NULL"]
+            && sequence is [.., "[ledger_end_sequence_number] bigint GENERATED ALWAYS AS SEQUENCE_NUMBER END HIDDEN NULL"]
+            && masked is [.., "[Email] varchar(100) MASKED WITH (FUNCTION = N'partial(1, \"X''X\", 0)') NULL"],
+            "a ledger table's generated columns and a masked column are declared: " + Show(ledger) + " " + Show(sequence) + " " + Show(masked));
+        check(PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)) == "'01:02:03.4000000'" && PeekSql.Literal(new DateTime(2024, 1, 2, 3, 4, 5)) == "'2024-01-02T03:04:05'",
+            "a CLR default's time and date are written as quoted literals: " + PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)));
 
         static Dictionary<string, object?> Parameter(string name, string type, string module, Action<Dictionary<string, object?>>? more = null)
         {

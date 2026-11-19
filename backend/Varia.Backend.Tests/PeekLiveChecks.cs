@@ -403,9 +403,10 @@ internal static class PeekLiveChecks
             + "CREATE SYNONYM " + s + ".[SY]]'表] FOR " + s + ".[T]]'表];\nCREATE SYNONYM " + s + ".[SYR] FOR [Remote]]Srv].[Db].[dbo].[X];\nGO\n"
             + "CREATE TYPE " + s + ".[AT]]'表] FROM nvarchar(20) NOT NULL;\nGO\nCREATE TYPE " + s + ".[TT]]'表] AS TABLE (Id int NOT NULL PRIMARY KEY, Name nvarchar(10) NULL, Phone " + s + ".[AT]]'表] NULL);\nGO\n"
             // Every column shape Peek's Columns list declares: identity, a collation of its own and a named default, an alias type,
-            // persisted and plain computed columns, SPARSE, ROWGUIDCOL.
+            // persisted and plain computed columns, SPARSE, ROWGUIDCOL, a masked column.
             + "CREATE TABLE " + s + ".[Shapes]]'表] (Id int IDENTITY(5,2) NOT NULL, Code varchar(10) COLLATE Latin1_General_100_BIN2 NOT NULL CONSTRAINT [DF_Pk4Code] DEFAULT ('x'), "
-            + "Phone " + s + ".[AT]]'表] NULL, Total AS (Id * 2) PERSISTED NOT NULL, Half AS (Id / 2), Note nvarchar(max) SPARSE NULL, [Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid()));\nGO\n"
+            + "Phone " + s + ".[AT]]'表] NULL, Total AS (Id * 2) PERSISTED NOT NULL, Half AS (Id / 2), Note nvarchar(max) SPARSE NULL, [Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid()), "
+            + "Mail varchar(100) MASKED WITH (FUNCTION = 'partial(1,\"X''X\",0)') NULL);\nGO\n"
             + "CREATE PROCEDURE " + s + ".[UsesTypes] @a " + s + ".[AT]]'表], @t " + s + ".[TT]]'表] READONLY, @n nvarchar(10) = N'it''s', @o int = -1 OUTPUT AS SELECT 1;\nGO\n"
             + "SELECT NEXT VALUE FOR " + s + ".[S]]'表];\nGO\n", database);
         // The scratch login: random password (never printed), a server role, CONNECT SQL denied, and a hostile-named user here.
@@ -499,12 +500,13 @@ internal static class PeekLiveChecks
             var shapes = await Peek(service, connectionId, Own("table", "Shapes]'表"), json);
             var shapeRows = shapes.Lists?.GetValueOrDefault("columns")?.Rows ?? [];
             string? Definition(string column) => shapeRows.FirstOrDefault(row => row[0] as string == column)?[7] as string;
-            check(shapes is { Error: null } && shapeRows.Count == 7
+            check(shapes is { Error: null } && shapeRows.Count == 8
                 && shapeRows[0] is ["Id", "int", false, null, "5, 2", null, null, "[Id] int IDENTITY(5,2) NOT NULL"]
                 && shapeRows[1] is ["Code", "varchar(10)", false, null, null, null, "('x')", "[Code] varchar(10) COLLATE Latin1_General_100_BIN2 NOT NULL DEFAULT ('x')"]
                 && Definition("Phone") == "[Phone] " + s + ".[AT]]'表] NULL" && shapeRows[2][1] as string == "AT]'表(nvarchar(20))"
                 && Definition("Total") == "[Total] AS ([Id]*(2)) PERSISTED NOT NULL" && shapeRows[3][5] as string == "([Id]*(2))" && Definition("Half") == "[Half] AS ([Id]/(2))"
-                && Definition("Note") == "[Note] nvarchar(max) SPARSE NULL" && Definition("Row]'表") == "[Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid())",
+                && Definition("Note") == "[Note] nvarchar(max) SPARSE NULL" && Definition("Row]'表") == "[Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid())"
+                && Definition("Mail") == "[Mail] varchar(100) MASKED WITH (FUNCTION = N'partial(1, \"X''X\", 0)') NULL",
                 "a table's Columns list shows every field and declares each column as CREATE TABLE writes it: " + (shapes.Error?.Message ?? JsonSerializer.Serialize(shapeRows)));
             var copied = await sql("CREATE TABLE " + s + ".[ShapesCopy] (" + string.Join(", ", shapeRows.Select(row => row[7] as string)) + ");\n", database);
             check(copied.Status == "completed", "the Definition column declares a table again: " + copied.Error);

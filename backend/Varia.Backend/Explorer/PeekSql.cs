@@ -223,7 +223,7 @@ internal static class PeekSql
     internal static readonly HashSet<string> Composed = new(StringComparer.Ordinal) { "columns", "parameters" };
     /// <summary>The Columns and Parameters lists' column aliases, declared before <see cref="Lists"/>, which reads them as it starts.</summary>
     private static readonly string[] ColumnParts = ["name", "quotedName", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "baseType", "maxLength", "precision", "scale",
-        "nullable", "identity", "seed", "increment", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden",
+        "nullable", "identity", "seed", "increment", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden", "mask",
         "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "vectorDimensions", "primaryKey", "foreignKey"];
     private static readonly string[] ParameterParts = ["name", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "tableType", "typeSchema", "baseType", "maxLength",
         "precision", "scale", "output", "readOnly", "hasDefault", "defaultValue", "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "cursor", "moduleType"];
@@ -251,16 +251,19 @@ internal static class PeekSql
     /// <summary>A table's, view's or table type's columns as the Columns folder lists them (<see cref="ExplorerQueries.ColumnVisibility"/>),
     /// in column order, with what a column's declaration needs: its name and its type's names through QUOTENAME, the type's
     /// sizes, its identity's seed and increment, its computed expression, its default (without the constraint's name), and its
-    /// collation only where it is not the database's. A table type's lookup leaves its user_type_id in @object_id, so its
+    /// collation only where it is not the database's (compared under a binary collation: sys.databases is in the server's
+    /// collation, sys.all_columns in the database's, and the two may conflict). A table type's lookup leaves its user_type_id in @object_id, so its
     /// columns are its table object's. Expressions are read one past a local grid's 4,000 characters a cell, which then says
     /// it cut them.</summary>
     private static string ColumnsList(string kind, SqlRender r) => "SELECT TOP (@take) c.name AS [name], QUOTENAME(c.name) AS [quotedName], ty.name AS [type], "
         + "QUOTENAME(ty.name) AS [quotedType], QUOTENAME(tys.name) AS [quotedTypeSchema], ty.is_user_defined AS [userDefined], ty.is_assembly_type AS [assemblyType], "
         + "bt.name AS [baseType], c.max_length AS [maxLength], c.precision AS [precision], c.scale AS [scale], c.is_nullable AS [nullable], c.is_identity AS [identity], "
-        + "idc.seed_value AS [seed], idc.increment_value AS [increment], c.is_computed AS [computed], LEFT(cc.definition, 4001) AS [computedText], cc.is_persisted AS [persisted], "
-        + "LEFT(dc.definition, 4001) AS [defaultText], CASE WHEN c.collation_name <> d.collation_name THEN c.collation_name END AS [collation], c.is_sparse AS [sparse], "
+        + "CONVERT(nvarchar(64), idc.seed_value) AS [seed], CONVERT(nvarchar(64), idc.increment_value) AS [increment], c.is_computed AS [computed], LEFT(cc.definition, 4001) AS [computedText], cc.is_persisted AS [persisted], "
+        + "LEFT(dc.definition, 4001) AS [defaultText], CASE WHEN c.collation_name COLLATE Latin1_General_100_BIN2 <> d.collation_name COLLATE Latin1_General_100_BIN2 THEN c.collation_name END AS [collation], c.is_sparse AS [sparse], "
         + "c.is_column_set AS [columnSet], c.is_rowguidcol AS [rowGuid], " + r.Col(13, "c.generated_always_type", "CONVERT(tinyint, 0)") + " AS [generated], "
-        + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " AS [hidden], c.is_xml_document AS [xmlDocument], QUOTENAME(xss.name) AS [quotedXmlSchema], "
+        + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " AS [hidden], "
+        + r.Col(13, "(SELECT LEFT(mc.masking_function, 4001) FROM sys.masked_columns AS mc WHERE mc.object_id = c.object_id AND mc.column_id = c.column_id)", "CONVERT(nvarchar(4000), NULL)")
+        + " AS [mask], c.is_xml_document AS [xmlDocument], QUOTENAME(xss.name) AS [quotedXmlSchema], "
         + "QUOTENAME(xs.name) AS [quotedXmlCollection], xss.name AS [xmlSchema], xs.name AS [xmlCollection], " + (r.VectorDimensions ? "c.vector_dimensions" : "CONVERT(int, NULL)")
         + " AS [vectorDimensions], CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.indexes AS i JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id "
         + "WHERE i.object_id = c.object_id AND i.is_primary_key = 1 AND ic.column_id = c.column_id) THEN 1 ELSE 0 END) AS [primaryKey], "
@@ -610,7 +613,7 @@ internal static class PeekSql
     {
         bool primaryKey = Bool(raw["primaryKey"]) == true, foreignKey = Bool(raw["foreignKey"]) == true, identity = Bool(raw["identity"]) == true;
         var key = primaryKey && foreignKey ? "PK, FK" : primaryKey ? "PK" : foreignKey ? "FK" : null;
-        string? seed = identity ? Literal(raw["seed"]) : null, increment = identity ? Literal(raw["increment"]) : null;
+        string? seed = identity ? Number(raw["seed"]) : null, increment = identity ? Number(raw["increment"]) : null;
         var computed = Bool(raw["computed"]) == true ? raw["computedText"] as string : null;
         var defaultText = raw["defaultText"] as string;
         return [raw["name"], ExplorerLabels.TypeText(TypeOf(raw, tableType: false)), Bool(raw["nullable"]), key, seed is null || increment is null ? null : seed + ", " + increment,
@@ -620,7 +623,7 @@ internal static class PeekSql
     /// <summary>A column's declaration as CREATE TABLE writes it, <c>[OrderDate] datetime2(3) NOT NULL DEFAULT (sysutcdatetime())</c>:
     /// the name through QUOTENAME, the type as Script As writes it (sizes, max, user types schema-qualified, an XML column's schema
     /// collection), COLLATE only where it is not the database's, SPARSE, IDENTITY(seed,increment), a period column's GENERATED
-    /// ALWAYS and HIDDEN, ROWGUIDCOL, NULL or NOT NULL, and the default without its constraint's name; a computed column as
+    /// ALWAYS (and a ledger column's) and HIDDEN, MASKED WITH its masking function, ROWGUIDCOL, NULL or NOT NULL, and the default without its constraint's name; a computed column as
     /// <c>AS (expression)</c> with PERSISTED; a column set as XML COLUMN_SET FOR ALL_SPARSE_COLUMNS. Constraints over columns
     /// (keys, checks) are left to Script As.</summary>
     internal static string ColumnDefinition(Dictionary<string, object?> raw, string? seed, string? increment, string? computed, string? defaultText)
@@ -638,14 +641,26 @@ internal static class PeekSql
         if (Bool(raw["columnSet"]) == true) return text.Append(" COLUMN_SET FOR ALL_SPARSE_COLUMNS").ToString();
         if (raw["collation"] is string collation) text.Append(" COLLATE ").Append(collation);
         if (Bool(raw["sparse"]) == true) text.Append(" SPARSE");
+        // sys.masked_columns keeps the function as a literal holds it, its quotes already doubled: partial(1, "X''X", 0).
+        if (raw.GetValueOrDefault("mask") is string mask) text.Append(" MASKED WITH (FUNCTION = N'").Append(mask).Append("')");
         if (seed is not null && increment is not null) text.Append(" IDENTITY(").Append(seed).Append(',').Append(increment).Append(')');
         var generated = Int(raw["generated"]);
-        if (generated is 1 or 2) text.Append(generated == 1 ? " GENERATED ALWAYS AS ROW START" : " GENERATED ALWAYS AS ROW END").Append(Bool(raw["hidden"]) == true ? " HIDDEN" : "");
+        if (Generated(generated) is { } always) text.Append(" GENERATED ALWAYS AS ").Append(always).Append(Bool(raw["hidden"]) == true ? " HIDDEN" : "");
         if (Bool(raw["rowGuid"]) == true) text.Append(" ROWGUIDCOL");
         text.Append(nullable ? " NULL" : " NOT NULL");
         if (defaultText is not null) text.Append(" DEFAULT ").Append(defaultText);
         return text.ToString();
     }
+
+    /// <summary>What a generated column is generated as, by sys.columns' generated_always_type: a period column's row start or
+    /// end (2016), or a ledger table's transaction id or sequence number (2022).</summary>
+    private static string? Generated(int type) => type switch
+    {
+        1 => "ROW START", 2 => "ROW END", 5 => "TRANSACTION_ID START", 6 => "TRANSACTION_ID END", 7 => "SEQUENCE_NUMBER START", 8 => "SEQUENCE_NUMBER END", _ => null
+    };
+
+    /// <summary>An identity's seed or increment, which the batch reads as text: a numeric(38) one can pass System.Decimal's range.</summary>
+    private static string? Number(object? value) => value is string text ? text : Literal(value);
 
     private static readonly string[] ClrModules = ["PC", "FS", "FT", "AF"];
 
@@ -699,6 +714,7 @@ internal static class PeekSql
         DateTime date => "'" + date.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture) + "'",
         DateTimeOffset date => "'" + date.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture) + "'",
         Guid guid => "'" + guid.ToString("D") + "'",
+        TimeSpan time => "'" + time.ToString("c", CultureInfo.InvariantCulture) + "'",
         IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
         _ => "N'" + (value.ToString() ?? "").Replace("'", "''", StringComparison.Ordinal) + "'"
     };
