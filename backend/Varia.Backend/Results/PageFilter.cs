@@ -24,7 +24,7 @@ internal sealed class PageFilter
     private const int MinWords = 8;
     /// <summary>A column's grams held before its filter is sized: past this many a filter of two bits a gram at most
     /// <see cref="MaxFill"/> full needs all of <see cref="BuildWords"/>, so they go straight into it.</summary>
-    private const int HeldGrams = (int)(BuildWords * 64 * MaxFill / 2);
+    internal const int HeldGrams = (int)(BuildWords * 64 * MaxFill / 2);
     /// <summary>The share of bits set past which a column keeps no gram filter (a gram then passes half the time or more).</summary>
     private const double MaxFill = 0.4;
     private const char Surrogate = '\uD800';
@@ -98,7 +98,8 @@ internal sealed class PageFilter
     {
         var held = ArrayPool<ulong>.Shared.Rent(HeldGrams);
         try { return Build(page, resultColumns, wires, maxBytes, sized, held); }
-        finally { ArrayPool<ulong>.Shared.Return(held); }
+        // Cleared: grams are invertible, so a pooled array would keep pieces of cell text past the result's release.
+        finally { ArrayPool<ulong>.Shared.Return(held, clearArray: true); }
     }
 
     private static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes, bool sized, ulong[] held)

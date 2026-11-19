@@ -371,6 +371,11 @@ internal static class PageFilterChecks
                 if (sized is null ? full is null : full is not null && sized.SameAs(full)) same++;
             }
         smallStore.Release(small.ResultId);
+        // The pooled grams go back cleared (this thread's pool hands the same array out again).
+        var pooled = System.Buffers.ArrayPool<ulong>.Shared.Rent(PageFilter.HeldGrams);
+        var cleared = pooled.All(gram => gram == 0);
+        System.Buffers.ArrayPool<ulong>.Shared.Return(pooled);
+        check(cleared, "a filter build returns its pooled grams cleared, keeping no pieces of cell text");
         check(total > 10 && same == total, $"a filter built at its size is the one built in 16 KiB and halved: {same} of {total} pages");
     }
 
