@@ -146,6 +146,12 @@ internal static class DiffChecks
         check(model.KeyPair == -1 && Entries(model) == "=0:0 =1:1 =2:2" && model.Counts().Soft == 1,
             "whole rows match when the second result's column has another collation or type, compared by the first's: " + Entries(model));
 
+        // A type of another kind: the second result's text compares as the first's decimals (its sort kind too), so 1.0 is 1.00.
+        ResultColumn[] decimals = [new("Price", "decimal", "text", Precision: 9, Scale: 2)], texts = [new("Price", "nvarchar", "text")];
+        var (decimalLeft, textRight) = Pair(store, [["1.0"], ["2.50"]], [["1.00"], ["2.5"]], texts, decimals);
+        var byKind = ResultDiffer.Compare(decimalLeft, decimalLeft.SealedSnapshot(), textRight, textRight.SealedSnapshot(), false, CancellationToken.None);
+        check(Entries(byKind) == "=0:0 =1:1", "a second result's column of another kind compares by the first's kind, so 1.0 matches 1.00: " + Entries(byKind));
+
         var budget = store.BeginQuery("same");
         var a = Fill(store, budget, 0, [["Apple ", "2.0"]], [collated[0], new("Price", "decimal", "text")]);
         var b = Fill(store, budget, 1, [["APPLE", "2.00"], ["Apples", "2.01"]], [collated[0], new("Price", "decimal", "text")]);
