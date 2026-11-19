@@ -183,8 +183,15 @@ describe('result diffs', () => {
     // Over a layer or a diff colour the ellipsis takes the cell's text colour, which the contrast pairs check on those
     // stacks; the truncation colour is checked only on the grid, the stripe and the unfocused selection.
     expect(value('.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after', 'color')).toBe('inherit')
-    // NULL and links, too faint on a match, take the grid's text colour there (no contrast pair checks theirs on it).
-    expect(value('.rg-c.is-hit:is(.is-null, .is-link)', 'color')).toBe('var(--varia-resultsGrid-foreground)')
+    // NULL, links and read errors take the grid's text colour on any diff colour or layer (contrast pairs check theirs
+    // only on the grid and the stripe), before the focused selection's rule of the same weight, and not in forced colours.
+    const plain = rules.find(rule => rule.selector.startsWith('.rg-c:is(.is-null, .is-link, .is-err)'))
+    expect(plain?.at).toEqual(['@media (forced-colors: none)'])
+    expect(plain?.selector).toBe('.rg-c:is(.is-null, .is-link, .is-err):is(.is-hit, .is-chg), :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c:is(.is-null, .is-link, .is-err)')
+    expect(plain?.declarations).toEqual([{ property: 'color', value: 'var(--varia-resultsGrid-foreground)' }])
+    expect(css.indexOf('.rg-c:is(.is-null, .is-link, .is-err)')).toBeLessThan(css.indexOf('.rg:focus-within .rg-c.is-sel {'))
+    expect(screen.filter(rule => /is-null/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
+      .toEqual(['.rg-c.is-null', '.rg:not(:focus-within) .rg-c.is-sel.is-null'])
     // The old half's strikethrough sets only the line, keeping a link's or read error's underline beside it.
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration')).toBeUndefined()
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration-line')).toBe('line-through')

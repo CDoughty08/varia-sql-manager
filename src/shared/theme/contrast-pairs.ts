@@ -35,6 +35,16 @@ const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBac
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
   'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
 const tile: ColorKey[] = ['tile.background']
+/** A grid cell's colour under its translucent layers, without the selection: base, then highlight, then search match. */
+function cellStacks(): ColorKey[][] {
+  const highlights: ColorKey[] = ['resultsGrid.highlightYellowBackground', 'resultsGrid.highlightGreenBackground', 'resultsGrid.highlightBlueBackground', 'resultsGrid.highlightPurpleBackground', 'resultsGrid.highlightRedBackground']
+  const washed: ColorKey[][] = [[...grid, 'resultsGrid.diffAddedBackground'], [...grid, 'resultsGrid.diffRemovedBackground']]
+  const changed = (base: ColorKey[]): ColorKey[][] => [[...base, 'resultsGrid.diffChangedAddedBackground'], [...base, 'resultsGrid.diffChangedRemovedBackground']]
+  // A highlighted row has no stripe; an unhighlighted changed half keeps it.
+  const unhighlighted = [grid, striped, ...washed, ...changed(grid), ...changed(striped)]
+  const highlighted = [grid, ...washed, ...changed(grid)].flatMap(base => highlights.map(color => [...base, color]))
+  return [...unhighlighted, ...highlighted].flatMap(stack => [stack, [...stack, 'resultsGrid.hitOverlay' as ColorKey]])
+}
 /**
  * Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar
  * state, tiles, and the query bar's connection pill (an input's surface), which holds the environment tag.
@@ -164,6 +174,10 @@ export const contrastPairs: readonly ContrastPair[] = [
       ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).map(color => [...grid, `resultsGrid.diffChanged${kind}Background`, `resultsGrid.highlight${color}Background`, 'resultsGrid.selectionOverlay'] as ColorKey[])),
     ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`])
   ]),
+  // Every stack a cell can show (styles.css): its own colour (the grid, the stripe, a diff's wash or a changed value's
+  // colour), the row's highlight (which replaces the stripe), a search match, then the unfocused selection with the grid's
+  // text (NULL, links and read errors take it on all but the plain grid and stripe, where their own colours are checked) or the focused selection with its own.
+  ...cellStacks().flatMap(stack => [...text(['resultsGrid.foreground'], stack, [...stack, 'resultsGrid.inactiveSelectionOverlay']), ...text(['resultsGrid.selectionForeground'], [...stack, 'resultsGrid.selectionOverlay'])]),
   // The one-row layout's changed value (old struck through, then new), likewise under the selection.
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground']),
   ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.selectionOverlay']),

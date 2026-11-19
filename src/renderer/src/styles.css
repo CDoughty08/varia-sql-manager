@@ -1198,7 +1198,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row.tone-changedOld .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedRemovedBackground); background-color: var(--rg-tint); text-decoration-line: line-through; }
 /* A link's and a read error's underline (and the error's wavy style) stay under the strikethrough. */
 .rg-row.tone-changedOld .rg-c.is-chg:is(.is-err, .is-link) { text-decoration-line: underline line-through; }
-.rg-row.tone-changedNew .rg-c.is-chg.is-null, .rg-row.tone-changedOld .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
 .rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
 /* A comparison's gutter (GridView.paintGutter): a 3 px kind bar on the left, kept when the row is selected, the mark, then
    the row's number in its own input. An added or removed row's number takes its wash too, under its highlight. */
@@ -1276,6 +1275,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
 .rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
+/* NULL, link and read-error colours are checked on the grid, the stripe and the unfocused selection only: on a diff colour,
+   a highlight or a search match they take the grid's text colour (italics and the underlines still tell them apart). The
+   focused selection's text colour, a later rule of the same weight, still wins; forced colours keep their system colours. */
+@media (forced-colors: none) {
+  .rg-c:is(.is-null, .is-link, .is-err):is(.is-hit, .is-chg), :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c:is(.is-null, .is-link, .is-err) { color: var(--varia-resultsGrid-foreground); }
+}
 .rg:focus-within .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-selectionOverlay); color: var(--varia-resultsGrid-selectionForeground); }
 .rg:not(:focus-within) .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-inactiveSelectionOverlay); }
 /* NULL's tint is too faint on the unfocused selection's fill; it takes the grid's text color there. */
@@ -1283,8 +1288,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Search in results (GridView's marks): matches tinted, the active one outlined, and columns a column-name search leaves out
    faded. A selected match shows both layers, with the outline when it is the active one. */
 .rg-c.is-hit { --rg-hit: var(--varia-resultsGrid-hitOverlay); }
-/* NULL's and a link's colours are too faint on a match; they take the grid's text colour there (a link keeps its underline). */
-.rg-c.is-hit:is(.is-null, .is-link) { color: var(--varia-resultsGrid-foreground); }
 /* A cell's layers (docs/results-tools.md § Comparisons): its own colour (a diff's tint, NULL's) is background-color; over
    it, bottom first, the row's highlight, a search match and the selection, each a translucent image, so every one shows
    through those above it. The active cell is an outline. */
