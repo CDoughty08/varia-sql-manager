@@ -1317,7 +1317,8 @@ try {
     }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
     const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
     await expect.poll(async () => { const [scroll, client, offset] = (await sizes()).split(/ in | of /).map(Number); return scroll > client && offset > scroll || await sizes() }).toBe(true)
-    await expect.poll(headerHeight).toBeCloseTo(tallHeight + scrollbar, 0)
+    // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
+    await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
     await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
     await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)
   } else console.log('Results checks: local card scroll bar room skipped (overlay scroll bars take none).')
@@ -2748,33 +2749,53 @@ try {
   // 14f. Compare with Previous Result: the second result against the first, aligned by ItemId in the backend, adds their
   // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
   // name changed only in case underlined (equal by the collation), a removed and an added row, a row of context between.
+  // Only the data columns are columns: the change marker and each input's row number are drawn in the row header's gutter
+  // (no Change, R1 or R2 header), which names the row's kind and both rows for screen readers.
   await run('SELECT * FROM Items -- DIFF_FIXTURE')
   await expect(cell(3, 0, grid('Result 2'))).toHaveText('5')
   await cell(0, 0, grid('Result 2')).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Compare with Previous Result', exact: true }).click()
   const diff = grid('Result 3')
-  await expect(cell(5, 3, diff)).toHaveText('5')
-  for (const name of ['Change', 'R1', 'R2', 'ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
-  const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2, 3, 4, 5].map(column => cell(row, column, diff).textContent()))))
+  await expect(cell(5, 0, diff)).toHaveText('5')
+  for (const name of ['ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+  for (const name of ['Change', 'R1', 'R2', 'Old row', 'New row']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(0)
+  // The row-number corner and the three data columns.
+  await expect(diff.getByRole('columnheader')).toHaveCount(4)
+  const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, diff).textContent()))))
   expect(await diffRows()).toEqual([
-    ['\u2212', '1', 'NULL', '1', 'apple', '1.50'],
-    ['+', 'NULL', '1', '1', 'apple', '1.75'],
-    [' ', '2', '2', '2', 'PEAR', '2.00'],
-    ['\u2212', '3', 'NULL', '3', 'plum', '3.00'],
-    [' ', '4', '3', '4', 'fig', '4.00'],
-    ['+', 'NULL', '4', '5', 'kiwi', '5.00']
+    ['1', 'apple', '1.50'],
+    ['1', 'apple', '1.75'],
+    ['2', 'PEAR', '2.00'],
+    ['3', 'plum', '3.00'],
+    ['4', 'fig', '4.00'],
+    ['5', 'kiwi', '5.00']
   ])
+  // The gutter: each row's mark and its number in its own input (the old one's on a − row), its name on the row's header
+  // and in the tooltip. Both halves of the changed entry name both rows.
+  const gutters = [
+    ['\u22121', 'Changed, old values; row 1 in Result 1, row 1 in Result 2'],
+    ['+1', 'Changed, new values; row 1 in Result 1, row 1 in Result 2'],
+    ['2', 'Unchanged; row 2 in Result 1, row 2 in Result 2'],
+    ['\u22123', 'Removed; row 3 in Result 1'],
+    ['3', 'Unchanged; row 4 in Result 1, row 3 in Result 2'],
+    ['+4', 'Added; row 4 in Result 2']
+  ]
+  for (const [row, [drawn, name]] of gutters.entries()) {
+    await expect(diff.locator(`[aria-rowindex="${row + 2}"] ${gridPart.rowHeader}`)).toHaveText(name)
+    await expect(diff.locator(`${gridPart.rowNumber}[title^="${name}"]`)).toHaveText(drawn)
+  }
+  await expect(diff.locator(gridPart.diffMark).filter({ hasText: /^[\u2212+]$/ })).toHaveCount(4)
   await expect(diff.locator(gridPart.removedRow)).toHaveCount(2)
   await expect(diff.locator(gridPart.addedRow)).toHaveCount(2)
   await expect(diff.locator(gridPart.changedCell)).toHaveCount(2)
-  await expect(cell(0, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
-  await expect(cell(1, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
-  await expect(cell(2, 4, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
+  await expect(cell(0, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(1, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(2, 1, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
   await expect(strip('Result 3')).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
   await expect(page.getByText('Differences: Result 1 \u2192 Result 2', { exact: true })).toBeVisible()
   // The active cell names a changed value and its row's kind for screen readers.
-  await cell(1, 5, diff).click()
-  await expect(cell(1, 5, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
+  await cell(1, 2, diff).click()
+  await expect(cell(1, 2, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
   // Where the features meet: a highlighted removed row shows its highlight over the diff's tone, and a search match on a
   // changed value shows the match's tint over the changed one.
   const background = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
@@ -2786,10 +2807,10 @@ try {
   await expect(highlightedRemoved).toHaveCount(1)
   await expect.poll(() => background(highlightedRemoved)).not.toBe(removedTone)
   // The changed value's own tint, measured now that the selection moved off it.
-  const changedTint = await background(cell(1, 5, diff))
+  const changedTint = await background(cell(1, 2, diff))
   await searchBox.click()
   await page.keyboard.type('1.75')
-  const changedMatch = cell(1, 5, diff).and(diff.locator(gridPart.searchMatch))
+  const changedMatch = cell(1, 2, diff).and(diff.locator(gridPart.searchMatch))
   await expect(changedMatch).toHaveCount(1)
   await expect.poll(() => background(changedMatch)).not.toBe(changedTint)
   await searchBox.press('Escape')
@@ -2797,7 +2818,7 @@ try {
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked; highlights and search matches show over its tones.')
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights and search matches show over its tones.')
 
   // 14g. The Compare popover: on Result 1's grid it offers the other Table, Result 2 (never the comparison), as the old
   // side with Result 1 as the new. With one target it shows no list, only the two sides, and says nothing that does not

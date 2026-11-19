@@ -9,6 +9,7 @@ import { entryOf, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -92,7 +93,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const target = targetOf(args), shown = grid(target)
     const active = shown && results.selection(shown.tabId, shown.key)?.active
     const column = target?.column ?? active?.column
-    return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
+    return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && !isHiddenColumn(shown.set.descriptor.columns[column])
       ? { tabId: shown.tabId, key: shown.key, set: shown.set, column } : undefined
   }
   /**

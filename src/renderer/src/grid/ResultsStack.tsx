@@ -9,6 +9,7 @@ import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { stackReveals } from './result-picker'
+import { visibleColumnCount } from './hidden-columns'
 import { scrollbarSize } from './scrollbar'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
@@ -138,7 +139,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
 }) {
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry), number = entrySecondary(entry)
+  const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
   // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
   const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.

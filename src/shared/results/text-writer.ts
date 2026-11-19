@@ -35,7 +35,7 @@ export interface TextOptions {
   readonly clipboard?: boolean
 }
 /** A column as the writer needs it: its name, its SQL type (numbers and bits are typed in JSON) and how its cells travel. */
-export interface TextColumn { readonly name: string; readonly dataType: string; readonly wire: WireKind }
+export interface TextColumn { readonly name: string; readonly dataType: string; readonly wire: WireKind; readonly role?: string }
 /** Inclusive [first, last] ranges of rows and of columns. */
 export interface TextPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly (readonly [number, number])[] }
 export interface ResolvedPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly number[] }
@@ -402,6 +402,16 @@ export async function writeColumns(writer: TextWriter, pageAt: PageAt, turned: T
   }
 }
 
+/** Columns that are not data (ResultTextWriter.Hidden): a tone, and a diff's previous values, marker and row numbers. */
+const hiddenRoles = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone'])
+export const isHidden = (column: TextColumn | undefined): boolean => hiddenRoles.has(column?.role ?? '')
+/** The columns Save writes (ResultJobs.SavedColumns): the visible ones, a diff's marker and row numbers first. */
+export function savedColumns(columns: readonly TextColumn[], kind?: string): number[] {
+  const visible = columns.flatMap((column, at) => isHidden(column) ? [] : [at])
+  if (kind !== 'diff') return visible
+  return [...['mark', 'leftRow', 'rightRow'].map(role => columns.findIndex(column => column.role === role)), ...visible]
+}
+
 /** A header column names a transposed job's fields, so only such a job has one, and it is a column of the result. */
 export function validTurn(transposed: unknown, headerColumn: unknown, columnCount: number): boolean {
   if (transposed !== undefined && typeof transposed !== 'boolean') return false
@@ -422,7 +432,7 @@ export interface CopiedText { readonly text: Uint8Array; readonly rows: number; 
 /** Copy's text for parts of a result (all of it at once; callers check its size against their limit).
  *  `transposed` writes each part as a transposed grid draws it. */
 export async function copyText({ columns, pageAt, available, parts, headers, crlf, transposed = false, headerColumn }: CopyRequest, afterPage?: (writer: TextWriter) => Promise<void>): Promise<CopiedText> {
-  const plans = parts.map(part => resolvePart(part, columns.length, available))
+  const plans = parts.map(part => resolvePart(part, columns.length, available)).map(plan => plan && { ...plan, columns: plan.columns.filter(column => !isHidden(columns[column])) })
   if (plans.some(plan => plan === undefined) || !validTurn(transposed, headerColumn, columns.length)) throw new RangeError('The copy request is invalid.')
   const writer = new TextWriter(copyOptions(headers, crlf), columns)
   const after = afterPage && (() => afterPage(writer))
@@ -445,6 +455,8 @@ export async function copyText({ columns, pageAt, available, parts, headers, crl
 
 export interface ExportRequest {
   readonly columns: readonly TextColumn[]
+  /** The result's kind: a diff saves its marker and row numbers first (savedColumns). */
+  readonly kind?: string
   readonly pageAt: PageAt
   readonly rows: number
   readonly format: TextFormat
@@ -455,9 +467,9 @@ export interface ExportRequest {
 }
 /** A whole result as Save Results As writes it; `transposed`, as a transposed grid draws it (the writer's `rows` are then
  *  the source rows written and its `capped` those left out). */
-export async function exportText({ columns, pageAt, rows, format, headers, nullText, transposed = false, headerColumn }: ExportRequest, afterPage?: (writer: TextWriter) => Promise<void>): Promise<TextWriter> {
+export async function exportText({ columns, kind, pageAt, rows, format, headers, nullText, transposed = false, headerColumn }: ExportRequest, afterPage?: (writer: TextWriter) => Promise<void>): Promise<TextWriter> {
   const writer = new TextWriter(exportOptions(format, headers, nullText), columns)
-  const all = columns.map((_, i) => i)
+  const all = savedColumns(columns, kind)
   const after = afterPage && (() => afterPage(writer))
   writer.begin()
   if (transposed) {

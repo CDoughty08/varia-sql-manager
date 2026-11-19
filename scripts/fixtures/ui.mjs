@@ -300,6 +300,8 @@ export const gridPart = {
   rowHeader: '[role="rowheader"]',
   /** The drawn row numbers (screen readers read each row's own header instead). */
   rowNumber: '.rg-rn',
+  /** A comparison's gutter mark (− or +) before its row number, drawn only (the row's header names its kind and rows). */
+  diffMark: '.rg-dm',
   cell: '[role="gridcell"]',
   selectedCell: '[role="gridcell"][aria-selected="true"]',
   loadingCell: '.rg-c.is-load',

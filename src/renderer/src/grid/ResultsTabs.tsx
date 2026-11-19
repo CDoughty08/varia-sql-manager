@@ -8,6 +8,7 @@ import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
 import { minGridHeight } from './stack'
+import { visibleColumnCount } from './hidden-columns'
 import { groupView, pickerRequests, selectedEntry, selectedGroup, selectedItem, topItems } from './result-picker'
 import ResultsPicker from './ResultsPicker'
 
@@ -87,7 +88,7 @@ export function tabsFold(height: number, scrollbar: number = scrollbarSize()): '
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
 const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number }) {
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const columns = entry.descriptor.columns.length, number = entrySecondary(entry)
+  const columns = visibleColumnCount(entry.descriptor), number = entrySecondary(entry)
   // A named result's number leads its facts, as in its Stacked caption, so two tabs of one name are told apart on screen.
   const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (entry.descriptor.kind === 'executionPlan') facts.push('execution plan')

@@ -94,6 +94,8 @@ describe('the Compare popover', () => {
     compare.swap('t1')
     compare.setExact('t1', true)
     expect(compare.sidesOf('t1')).toMatchObject({ old: { key: keys[2] }, neu: { key: keys[0] } })
+    // The inputs' stored rows come from their handles: an entry keeps the descriptor it opened with.
+    handle(keys[2]).snapshot = { ...handle(keys[2]).snapshot, rowsStored: 40_000 }
     await compare.run('t1')
     await settle()
     expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
@@ -107,7 +109,7 @@ describe('the Compare popover', () => {
     compare.open('t1', keys[2])
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ active: keys[2], target: keys[0], swapped: true, exact: true })
     expect(compare.existing('t1', keys[2], keys[0], true)?.key).toBe(made.key)
-    expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true })
+    expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true, inputRows: 40_000 })
   })
 
   it('leaves the focus where the user put it while the comparison ran, and says a cancel in the picker', async () => {
