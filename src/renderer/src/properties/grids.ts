@@ -4,7 +4,7 @@ import { autogrowthText, fileTypeLabel, notApplicable } from '../../../shared/ac
 import type { DatabaseFilegroup, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import type { TablePropertiesModel } from '../../../shared/actions/tables.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import type { LocalTableData } from '../../../shared/results/local-table.ts'
+import { localTableLimits, type LocalTableData } from '../../../shared/results/local-table.ts'
 import { tokenText } from './table-fields'
 
 const number = (name: string) => ({ name, kind: 'number' as const })
@@ -26,12 +26,15 @@ export function partitionsTable(model: TablePropertiesModel): LocalTableData {
   }
 }
 
-/** Row-level security predicates on the table; a definition the describe cut ends in an ellipsis, as it did on screen. */
+/** A definition the describe cut ends in an ellipsis, as it did on screen, within the cell bound: the describe's cut is
+ *  already the bound's length, and a cell past it would lose the ellipsis and be marked cut by the grid instead. */
+const cutText = (text: string, truncated: boolean | undefined) => truncated ? `${text.slice(0, localTableLimits.cellChars - 1)}…` : text
+/** Row-level security predicates on the table. */
 export function predicatesTable(model: TablePropertiesModel): LocalTableData {
   return {
     columns: [{ name: 'Security policy' }, { name: 'Type' }, { name: 'Operation' }, { name: 'Predicate' }, { name: 'Enabled' }],
     rows: (model.securityPredicates ?? []).map(row => [displayText(row.policy), tokenText(row.type), row.operation ? tokenText(row.operation) : 'All',
-      `${displayText(row.predicate)}${row.predicateTruncated ? '…' : ''}`, row.enabled ? 'True' : 'False'])
+      cutText(displayText(row.predicate), row.predicateTruncated), row.enabled ? 'True' : 'False'])
   }
 }
 

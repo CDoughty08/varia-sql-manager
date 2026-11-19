@@ -136,7 +136,7 @@ describe('property sheet hints and sections', () => {
   it('lists the database files in a page grid, as the results grid draws rows, not an HTML table', () => {
     const files = inWorkbench(createElement(FilesSection, sectionProps()))
     expect(files).not.toContain('<table')
-    expect(files).toMatch(/<div class="properties-grid" style="height:\d+px"><div class="rg-frame local-grid" data-local-grid="page">/)
+    expect(files).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit="true" style="height:\d+px;flex:none">/)
     expect(files).toContain('aria-label="Database files"')
   })
   it('puts Files\' facts and its Owner field in groups of their own', () => {

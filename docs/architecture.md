@@ -275,9 +275,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
     mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
-    A `page` grid inside a document's sections (Table and Database Properties) sits in `PropertiesGrid`'s box, as tall as its
-    rows up to 12, since the sections column scrolls as one; its table is memoized on the model, so editing the draft keeps
-    its selection.
+    A `page` grid inside a document's sections (Table and Database Properties, `PropertiesGrid`) is `fit`: as tall as its
+    rows up to `maxRows`, with room for its strip and for a scroll bar only under wide columns, as a card is, since the
+    sections column scrolls as one. Its table is memoized on the model, so editing the draft keeps its selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
   (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
   (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the

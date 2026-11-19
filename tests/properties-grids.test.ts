@@ -2,11 +2,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TablePropertiesModel } from '../src/shared/actions/tables'
-import { boundTable, localCopyText } from '../src/shared/results/local-table'
+import { boundTable, localCopyText, localTableLimits, type LocalTableData } from '../src/shared/results/local-table'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import { filegroupLists, filegroupsTable, filesTable, partitionsTable, permissionsTable, predicatesTable } from '../src/renderer/src/properties/grids'
-import PropertiesGrid, { propertiesGridHeight, propertiesGridRows } from '../src/renderer/src/properties/PropertiesGrid'
+import PropertiesGrid, { propertiesGridRows } from '../src/renderer/src/properties/PropertiesGrid'
 import { databaseModel } from './fixtures/database-properties'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -44,6 +44,12 @@ describe('Properties lists as local tables', () => {
     ] }))
     expect(table.rows).toEqual([['rls.Tenant', 'Filter', 'All', '([rls].[fn]([TenantId]))', 'True'], ['rls.Tenant', 'Block', 'After insert', `${'x'.repeat(10)}…`, 'False']])
   })
+  it('keeps the ellipsis of a predicate the describe cut at the cell bound, so the grid neither drops it nor marks it cut', () => {
+    const table = boundTable(predicatesTable(tableModel({ securityPredicates: [{ policy: 'p', type: 'FILTER', predicate: 'y'.repeat(localTableLimits.cellChars), predicateTruncated: true, enabled: true }] })))
+    expect(table.cutCells).toBe(0)
+    expect(table.rows[0][3]).toHaveLength(localTableLimits.cellChars)
+    expect(table.rows[0][3]!.endsWith('y…')).toBe(true)
+  })
   it('splits filegroups into SSMS\'s three lists, Autogrow All Files only from SQL Server 2016', () => {
     const model = databaseModel({ filegroups: [
       { name: 'PRIMARY', type: 'rows', files: 1, readOnly: false, isDefault: true, autogrowAllFiles: false },
@@ -65,16 +71,23 @@ describe('Properties lists as local tables', () => {
 })
 
 describe('Properties grid', () => {
-  it('is as tall as its rows up to a window of them, with room for its words when empty', () => {
-    expect(propertiesGridHeight(3, 0)).toBe(22 + 3 * 20 + 2)
-    expect(propertiesGridHeight(500, 17)).toBe(22 + propertiesGridRows * 20 + 17 + 2)
-    expect(propertiesGridHeight(0, 17)).toBe(22 + 48 + 2)
-  })
-  it('draws a page grid named for its list inside a box of that height', () => {
-    const workbench = { ...workbenchFixture(), platform: 'win32' } as unknown as Workbench
-    const markup = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(PropertiesGrid, { table: filesTable(databaseModel()), label: 'Database files', empty: 'No files are listed.', suggestedName: 'AppData files' }) }))
-    expect(markup).toContain(`<div class="properties-grid" style="height:${propertiesGridHeight(2, 0)}px">`)
-    expect(markup).toMatch(/class="rg-frame local-grid" data-local-grid="page"/)
+  const workbench = { ...workbenchFixture(), platform: 'win32' } as unknown as Workbench
+  const draw = (table: LocalTableData, label = 'Database files') => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(PropertiesGrid, { table, label, empty: 'None.', suggestedName: 'AppData files' }) }))
+  /** The fitted frame's height: header, rows, any strip and the border (no scroll bar until the columns are wider than it). */
+  const heightOf = (markup: string) => Number(/data-local-fit="true" style="height:(\d+)px;flex:none"/.exec(markup)?.[1])
+  it('draws a fitted page grid named for its list, as tall as its rows up to a window of them', () => {
+    const markup = draw(filesTable(databaseModel()))
+    expect(markup).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit="true"/)
     expect(markup).toMatch(/role="grid"[^>]*aria-label="Database files"|aria-label="Database files"[^>]*role="grid"/)
+    expect(heightOf(markup)).toBe(22 + 2 * 20 + 2)
+    const many = { columns: [{ name: 'Name' }], rows: Array.from({ length: 40 }, (_, row) => [`r${row}`]) }
+    expect(heightOf(draw(many, 'Many'))).toBe(22 + propertiesGridRows * 20 + 2)
+    expect(heightOf(draw({ columns: [{ name: 'Name' }], rows: [] }, 'Empty'))).toBe(22 + 48 + 2)
+  })
+  it('makes room for its strip under its rows, rather than hiding a row behind it', () => {
+    const cut = { columns: [{ name: 'Text' }], rows: [['x'.repeat(localTableLimits.cellChars + 1)]] }
+    const markup = draw(cut, 'Cut')
+    expect(markup).toContain('1 value was cut to 4,000 characters.')
+    expect(heightOf(markup)).toBe(22 + 20 + 25 + 2)
   })
 })

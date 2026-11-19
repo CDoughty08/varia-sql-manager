@@ -503,6 +503,9 @@ try {
   await gridCell(filesGrid, 0, 0).click()
   await page.keyboard.press('ControlOrMeta+S')
   await expect(filesGridFrame.locator(gridPart.strip)).toHaveText('Saved 2 rows to appdata-files.csv.')
+  // The grid grows to make room for its strip: the last row still ends above it.
+  const topOf = locator => locator.evaluate(element => element.getBoundingClientRect().top)
+  expect(await bottomOf(gridCell(filesGrid, 1, 0))).toBeLessThanOrEqual(await topOf(filesGridFrame.locator(gridPart.strip)) + 0.5)
   const savedLines = (await readFile(savedFiles, 'utf8')).replace(/^\ufeff/, '').split('\r\n').filter(line => line && !line.startsWith('Logical Name,'))
   expect(savedLines).toEqual(['AppData_Archive2026_log,LOG,Not Applicable,8,"By 10 percent, Limited to 2097152 MB",C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\DATA,AppData_Archive2026_log.ldf',
     'AppData,ROWS Data,PRIMARY,8,"By 64 MB, Unlimited",C:\\Data,AppData.mdf'])
@@ -519,7 +522,7 @@ try {
   for (const name of ['FILESTREAM filegroups', 'Memory Optimized Data filegroups']) await expect(localGridFrame(page, name).locator(gridPart.overlay)).toHaveText('None.')
   await expect(properties().getByRole('table')).toHaveCount(0)
   await sectionList().getByRole('button', { name: 'Files' }).click()
-  const owner =page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
+  const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
   await properties().getByRole('button', { name: 'Browse for the owner', exact: true }).click()
   await expect(owner.getByLabel('Logins:', { exact: true })).toBeFocused()
   await page.keyboard.press('Escape')

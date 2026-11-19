@@ -34,8 +34,11 @@ export interface LocalGridProps {
   readonly suggestedName?: string
   /** False for a table whose order is its meaning (a report's rows): no header sort, no Sort items. */
   readonly sortable?: boolean
-  /** A card's tallest height in rows (12 by default). */
+  /** A card's tallest height in rows (12 by default), and a fitted page's. */
   readonly maxRows?: number
+  /** A page as tall as its rows, as a card is (up to `maxRows`, with room for its scroll bar and strip), for a page whose
+   *  column scrolls as one (Properties' sections), where filling the area would leave the grid no height. */
+  readonly fit?: boolean
   /** Scroll, widths and selection, kept by the owner across remounts; the grid keeps its own otherwise. */
   readonly state?: GridViewState
 }
@@ -63,7 +66,7 @@ const columnsOf = (table: LocalTableData) => table.columns.map(column => `${colu
  * work as in a results grid; Copy and Save write the same text through the TypeScript twin of ResultTextWriter (copy
  * here, a save in main). The menu reaches it as a grid with its own source (OutputTarget view `live`, LiveOutput).
  */
-function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, state }: LocalGridProps) {
+function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, state }: LocalGridProps) {
   const { commands, platform } = useWorkbench()
   const bound = useMemo(() => boundTable(table), [table])
   const columnsKey = useMemo(() => columnsOf(bound), [bound])
@@ -181,11 +184,11 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const dropped = bound.droppedColumns > 0 ? `Showing the first ${formatCount(columns)} ${plural(columns, 'column')}.` : undefined
   const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, dropped, cut].filter(Boolean).join(' ') || undefined
   const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
-  // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
-  // than it and for its strip.
-  const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
+  // A card (or a fitted page) is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar
+  // under columns wider than it and for its strip.
+  const height = preset === 'card' || fit ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
   return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
-    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
+    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': 'true' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.
