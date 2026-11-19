@@ -72,7 +72,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.
   'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.provider === 'bigquery' ? 45_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true, ...both },
-  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true },
+  // BigQuery: the project's datasets (the dialog's Default dataset), signed in with main's credential like connect.
+  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true, ...both },
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
   'connections.disconnect': { ...control, ...both, deadlineMs: 30_000 },
@@ -81,7 +82,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
-  'databases.list': metadata,
+  // A BigQuery handle lists its billing project's datasets (a query tab's Dataset box).
+  'databases.list': { ...metadata, ...both },
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000 },

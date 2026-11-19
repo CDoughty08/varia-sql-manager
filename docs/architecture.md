@@ -48,7 +48,10 @@ only when a summary line stops being true.
     reading credential files: a federation configuration's `credential_source.file` rotates, so the backend reads it
     itself on every token exchange, only at the path a configuration main read names, and only a regular local file of
     at most 64 KiB outside Varia's user data and the known credential folders (judged by its canonical path; UNC shares,
-    device and NT paths, network drives and `/proc`, `/sys`, `/dev` are refused). `VARIA_TEST_BIGQUERY_ENDPOINT`
+    device and NT paths, network drives and `/proc`, `/sys`, `/dev` are refused), and only once the user confirmed that
+    path in the Connect dialog (kept in `bigquery-connections.json`; main fails closed without it). The renderer names a
+    key file only by the reference main's picker returned and sees only its file name. BigQuery connects go through
+    `ConnectionOpenService` like SQL Server's, with the same target pins. `VARIA_TEST_BIGQUERY_ENDPOINT`
     (a loopback emulator) reaches only unpackaged backends and uses anonymous credentials.
   - New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels
     only in the sensitive `actions.execute`, reaches SQL only as one parameter in a constant batch, and is scrubbed from

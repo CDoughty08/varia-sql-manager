@@ -5,6 +5,7 @@ import { browserTimers, type Timers } from '../core/timers'
 import type { CommandArgs, Disposable, ExternalStore } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import type { FileService } from '../services/files'
+import { isBigQueryConnection } from '../services/connection-availability'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -26,16 +27,26 @@ export function filesContribution({ files, commands, documents, context, explore
   // The tab menu, or a key pressed on a focused tab (Delete, Ctrl+W), names its tab; otherwise the active document.
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
-  const newQuery = (args?: CommandArgs, sql = '') => {
+  // SSMS's procedure shortcuts are T-SQL: never opened on a BigQuery connection.
+  const refused = (sqlServer: boolean, connectionId: string | undefined) => {
+    if (!sqlServer || !connectionId) return false
+    const connection = connections.get(connectionId)
+    if (!connection || !isBigQueryConnection(connection)) return false
+    commands.reportError('This is a SQL Server command. Select a SQL Server connection first.')
+    return true
+  }
+  const newQuery = (args?: CommandArgs, sql = '', sqlServer = false) => {
     if (args?.editorGroup) {
       const group = editorGroups?.getSnapshot().groups.find(group => group.id === args.editorGroup)
       if (!group) return
       const source = group.active ? documents.get(group.active) : documents.active
+      if (refused(sqlServer, source?.connectionId)) return
       files.newFile(source?.connectionId, source?.database, sql)
       documents.focusActive()
       return
     }
     const target = context.get().activePanel === 'explorer' ? explorer.queryTarget() : undefined
+    if (refused(sqlServer, target?.connectionId ?? documents.active?.connectionId)) return
     if (!target) { files.newFile(undefined, undefined, sql); return }
     files.newFile(target.connectionId, target.database ?? connections.get(target.connectionId)?.database, sql)
     // Focus stays in the tree otherwise; SSMS puts it in the new query window.
@@ -54,7 +65,7 @@ export function filesContribution({ files, commands, documents, context, explore
   const registrations = [
     commands.register('file.new', { when: () => files.canRun(), run: newQuery }),
     // SSMS's default query shortcuts as palette commands: a New Query holding the call, left for the user to run.
-    ...Object.entries(procedureQueries).map(([id, sql]) => commands.register(id as keyof typeof procedureQueries, { when: () => files.canRun(), run: args => newQuery(args, sql) })),
+    ...Object.entries(procedureQueries).map(([id, sql]) => commands.register(id as keyof typeof procedureQueries, { when: () => files.canRun(), run: args => newQuery(args, sql, true) })),
     commands.register('file.reopenClosed', { when: () => files.canRun() && documents.canReopenClosed(), run: () => { documents.reopenClosed() } }),
     commands.register('file.open', { when: () => files.canRun(), run: () => files.open() }),
     commands.register('file.save', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId) }),

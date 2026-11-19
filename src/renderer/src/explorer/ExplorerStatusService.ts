@@ -11,6 +11,7 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { LiveHandle, LiveOwner, LiveService, LiveSettingsSource, LiveSnapshot, LiveTable } from '../live/LiveService'
 import type { ConnectionService, LiveConnection } from '../services/connections'
+import { isBigQueryConnection } from '../services/connection-availability'
 import type { PaneService } from '../services/panes'
 import type { TreeNode } from './tree-model'
 
@@ -295,9 +296,10 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     if (reopen) this.sync()
   }
 
-  /** Only connected Explorer members sample metadata. Pending connects and disconnect preflights have no probes. */
+  /** Only connected Explorer members sample metadata. Pending connects and disconnect preflights have no probes, and nor does
+   *  a BigQuery server (its probes are SQL Server's). */
   private wanted(): Map<string, string> {
-    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost && connection.inExplorer !== false && (!connection.lifecycle || connection.lifecycle.state === 'connected')).map(connection => [connection.id, statusKey(connection)]) : [])
+    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost && connection.inExplorer !== false && (!connection.lifecycle || connection.lifecycle.state === 'connected') && !isBigQueryConnection(connection)).map(connection => [connection.id, statusKey(connection)]) : [])
   }
 
   /** The live connections a view serves, oldest first: the first is the one it reads through. */

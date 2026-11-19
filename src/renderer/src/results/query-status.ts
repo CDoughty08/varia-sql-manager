@@ -5,7 +5,9 @@ import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { RunStatus } from './ResultsService'
 import { endedStatus, formatCount, formatElapsed, plural, statusLeads } from './status'
 
-export interface QueryStatusConnection { readonly server: string; readonly displayName?: string; readonly serverVersion?: string; readonly productVersion?: string; readonly lost?: true; readonly disconnected?: boolean }
+/** `providerId` 'bigquery': the server is the project, the login the Google account the connection verified, and the
+ *  database the default dataset. */
+export interface QueryStatusConnection { readonly server: string; readonly displayName?: string; readonly serverVersion?: string; readonly productVersion?: string; readonly lost?: true; readonly disconnected?: boolean; readonly providerId?: string; readonly login?: string }
 /** The parts of a tab's results the bar reads. */
 export interface QueryStatusRun {
   readonly status: RunStatus; readonly startedAt: number; readonly rowsRead: number; readonly summary?: { readonly status: Exclude<RunStatus, 'running' | 'lost' | 'closed'>; readonly elapsedMs: number }
@@ -76,10 +78,13 @@ export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {
   else { tone = 'disconnected'; icon = 'debug-disconnect'; text = 'Disconnected.' }
 
   const segments: QueryStatusSegment[] = []
-  const server = connection ? serverText(connection) : '', login = live ? sessionText(input.session) : ''
-  if (connection && settings['textEditor.statusBar.showServer']) segments.push({ key: 'server', label: 'Server', text: server })
-  if (login && settings['textEditor.statusBar.showLogin']) segments.push({ key: 'login', label: 'Login', text: login })
-  if (connection && settings['textEditor.statusBar.showDatabase']) segments.push({ key: 'database', label: 'Database', text: input.database })
+  // BigQuery has no SPID: its login segment is the account, and its database the default dataset.
+  const bigQuery = connection?.providerId === 'bigquery'
+  const server = connection ? serverText(connection) : '', login = !live ? '' : bigQuery ? live.login ?? '' : sessionText(input.session)
+  const database = bigQuery && !input.database ? 'No default dataset' : input.database
+  if (connection && settings['textEditor.statusBar.showServer']) segments.push({ key: 'server', label: bigQuery ? 'Project' : 'Server', text: server })
+  if (login && settings['textEditor.statusBar.showLogin']) segments.push({ key: 'login', label: bigQuery ? 'Account' : 'Login', text: login })
+  if (connection && settings['textEditor.statusBar.showDatabase']) segments.push({ key: 'database', label: bigQuery ? 'Dataset' : 'Database', text: database })
   // Before a first run, as in SSMS, a connected query shows 00:00:00 and 0 rows.
   const timed = bar && (!!run || !!live), mode = settings['textEditor.statusBar.executionTime']
   if (timed && mode !== 'none') {
@@ -92,5 +97,5 @@ export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {
     const rows = run?.rowsRead ?? 0
     segments.push({ key: 'rows', label: 'Rows', text: `${formatCount(rows)} ${plural(rows, 'row')}` })
   }
-  return { tone, icon, text, segments, place: [server || 'Disconnected', login, input.database].filter(Boolean).join(' | ') }
+  return { tone, icon, text, segments, place: [server || 'Disconnected', login, database].filter(Boolean).join(' | ') }
 }

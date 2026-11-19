@@ -37,6 +37,8 @@ export interface QueryContextModel {
   readonly databases: readonly string[]
   readonly database: string
   readonly databaseDisabled: boolean
+  /** A BigQuery connection lists datasets, with none (no default dataset) as a choice. */
+  readonly datasets: boolean
   /** The connection's name as the lists show it, for tooltips: `name (server)` or the server. */
   readonly serverName: string | undefined
   readonly serverValue: string
@@ -55,9 +57,11 @@ export function queryContextModel({ connectionId, targetId, target, lastServer, 
     .map(value => ({ id: value.id, label: value === connection ? presentation.label : serverLabel(value), disabled: value === connection ? !live : !isLiveConnection(value) }))]
   if (!connection && presentation.server) servers.push({ id: serverValue, label: presentation.label, disabled: true })
   const listed = live ? databases.map(value => value.name) : []
+  const datasets = (connection?.providerId ?? connection?.options.provider) === 'bigquery'
+  const choices = listed.includes(database) ? listed : [database, ...listed]
   return {
     connection, live, servers, serverDisabled: !query || running || busy,
-    databases: listed.includes(database) ? listed : [database, ...listed], database, databaseDisabled: !query || !live || running || busy,
+    databases: datasets && database ? ['', ...choices] : choices, database, databaseDisabled: !query || !live || running || busy, datasets,
     serverName: presentation.server ? presentation.label : undefined, serverValue, environment: presentation.environment, color: presentation.color
   }
 }

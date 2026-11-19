@@ -294,7 +294,7 @@ describe('Rename of a database (D3c)', () => {
     await actions.commitRename(node(), 'Sales')
     // Another server's AppData is another database; the saved options keep what the user connected with.
     expect(['home', 'elsewhere', 'server-a'].map(id => connections.get(id)?.database)).toEqual(['Sales', 'AppData', 'master'])
-    expect(connections.get('home')?.options.database).toBe('appdata')
+    expect((connections.get('home')?.options as { database?: string } | undefined)?.database).toBe('appdata')
     let server: number | undefined
     await vi.waitFor(() => { server = explorer.getSnapshot().rows.nodes.find(row => row?.connectionId === 'home' && row.ref.type === 'object' && row.ref.object.kind === 'server')?.id; expect(server).toBeDefined() })
     await expect(commands.execute('explorer.newQuery', { target: { kind: 'explorer', node: explorer.menuNode(server!)! } }, 'menu')).resolves.toBe(true)

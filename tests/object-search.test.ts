@@ -250,6 +250,14 @@ describe('ObjectSearchService', () => {
     expect(Object.keys(service.getSnapshot().indexes)).toEqual(['b'])
   })
 
+  it('leaves BigQuery connections out: no index on connect, and none in the live servers a search spans', () => {
+    const { service, calls, connections } = harness()
+    const bigQuery = { ...connection('bq'), providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } } as unknown as LiveConnection
+    connections.set([bigQuery, connection('a')])
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
+    expect(Object.keys(service.getSnapshot().indexes)).toEqual(['a'])
+  })
+
   it('builds nothing until the user asks when Options turns indexing on connect off', () => {
     const { service, calls, connections, timers } = harness({ indexOnConnect: false })
     connections.set([connection('a'), connection('b')])

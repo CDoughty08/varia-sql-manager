@@ -35,6 +35,7 @@ export const svgIcons = {
   'ssis-environment': { path: 'M2.5 3.5h11M2.5 7.5h11M2.5 11.5h7M13.5 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z', use: 'Integration Services environments (planned).' },
   transpose: { path: 'M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h4M6.5 2.5v4M9 5.5h1.5a1 1 0 0 1 1 1V9M10.5 8l1 1 1-1M5.5 9v1.5a1 1 0 0 0 1 1H9M8 10.5l1 1-1 1', use: 'Transpose: the results toolbar\'s Transpose button and the Transpose commands.' },
   pivot: { path: 'M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h11M6.5 2.5v11M8.5 10.5h3M10 9l1.5 1.5-1.5 1.5', use: 'Pivot: the results toolbar\'s Pivot toggle and the Pivot command.' },
+  bigquery: { path: 'M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM10.2 10.2l3.3 3.3M5.5 8.5v-1M7.5 8.5v-3M9.5 8.5v-2', use: 'BigQuery connections: saved and recent connections in Connect, and BigQuery servers.' },
   'fuzzy-match': { path: 'M2.5 6.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0M2.5 10.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0', use: 'The Fuzzy Match toggle in Search Objects (an approximately-equal sign).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons

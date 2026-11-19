@@ -26,6 +26,5 @@ export function normalizedProvider(value: unknown): unknown { return value === '
 /** The provider of connection options, a target or a record that may predate providers: a missing one is SQL Server. */
 export function providerOf(value: { readonly provider?: ProviderId } | undefined): ProviderId { return value?.provider ?? 'sqlserver' }
 
-/** The engine of the server an Object Explorer node is on, or '' for no node. Every node is SQL Server's until BigQuery's
- *  Explorer (docs/bigquery-plan.md, BQ-5). */
-export const explorerNodeProvider = (node: object | undefined): ProviderContext => node ? 'sqlserver' : ''
+/** The engine of the server an Object Explorer node is on (its target's `provider`, absent for SQL Server), or '' for no node. */
+export const explorerNodeProvider = (node: { readonly provider?: ProviderId } | undefined): ProviderContext => node ? node.provider ?? 'sqlserver' : ''

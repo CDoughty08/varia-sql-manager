@@ -2,7 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
-import type { ProviderContext } from '../../../shared/providers.ts'
+import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
@@ -71,8 +71,7 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
   const folder = target?.folder ? folderSpecs[target.folder] : undefined
   return {
     explorerHasSelection: !!target,
-    // Every Object Explorer server is SQL Server's until BigQuery's Explorer (docs/bigquery-plan.md, BQ-5).
-    explorerSelectionProvider: target ? 'sqlserver' : '',
+    explorerSelectionProvider: explorerNodeProvider(target),
     explorerSelectionKind: target?.kind ?? '',
     explorerSelectionFolder: target?.folder ?? '',
     explorerSelectionFilterable: !!target && !!folder?.filter?.length,
@@ -193,16 +192,19 @@ const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema
 
 /** What a node is, and the server it is on: the engine and platform its connection's profile reported at connect. A database's
  *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
-const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux'> | undefined, runtime: DatabaseRuntime | undefined): ExplorerTarget => ({
+const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
   ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
-  engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux
+  engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {})
 })
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
-export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
+export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'> & { readonly options?: { readonly provider?: string } }): string {
+  if (connection.options?.provider === 'bigquery') return `(BigQuery${connection.login ? ' - ' + connection.login : ''})`
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : connection.serverVersion ? `(SQL Server ${connection.serverVersion})` : '(SQL Server)'
 }
+/** BigQuery's root has no children until its Explorer (docs/bigquery-plan.md, BQ-5): its datasets are not SQL Server's catalog. */
+const browsable = (connection: LiveConnection): boolean => connection.options.provider !== 'bigquery'
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
  * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
@@ -842,7 +844,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (!available && !root.lost) this.markLost(root)
       else if (available && root.lost) {
         root.lost = false
-        root.hasChildren = true
+        root.hasChildren = browsable(connection)
         root.generation++
         added.push(root.id)
       }
@@ -852,7 +854,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = roots
     if (removedAt >= 0) this.selected = roots[Math.min(removedAt, roots.length - 1)]
     if (this.selected === undefined && roots.length) this.selected = added[0] ?? roots[0]
-    for (const id of added) this.openRoot(id)
+    for (const id of added) if (this.nodes.get(id)?.hasChildren) this.openRoot(id)
     this.invalidate()
     // A seek on a server that went away ends now, not when a load that will never come settles.
     if (this.seeking) this.advanceSeek()
@@ -993,7 +995,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.targetId = connection.targetId
     this.updateRoot(node, connection)
-    node.hasChildren = connectionAvailable(connection)
+    node.hasChildren = connectionAvailable(connection) && browsable(connection)
     node.lost = !connectionAvailable(connection)
     node.lastUsed = ++this.clock
     this.rootByConnection.set(connection.id, node.id)

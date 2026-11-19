@@ -1,8 +1,9 @@
 import { createHmac, randomBytes } from 'node:crypto'
-import type { AuthenticationMode } from '../shared/auth'
+import type { AuthenticationMode, BigQueryAuthenticationMode } from '../shared/auth'
 import { showsIdentity, usesPassword } from '../shared/auth'
-import type { AdvancedConnectionOptions, ConnectionOptions } from '../shared/contracts'
-import { advancedDefaults, connectionOptionsSchema } from '../shared/connections'
+import type { AdvancedConnectionOptions, BigQueryConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
+import { advancedDefaults, bigQueryConnectionOptionsSchema, connectionOptionsSchema } from '../shared/connections'
+import { bigQueryTargetOptions } from '../shared/connection-targets'
 
 declare const connectionIdentityKey: unique symbol
 /** Main-owned, process-local comparison material. Never include it in IPC, persisted state, logs or errors. */
@@ -14,7 +15,7 @@ export interface ConnectionIdentityMaterial { readonly key: ConnectionIdentityKe
 
 /** The stable account identity established by trusted authentication, never a requested account or a token value. */
 export interface ConnectionPrincipalEvidence {
-  readonly authentication: AuthenticationMode
+  readonly authentication: AuthenticationMode | BigQueryAuthenticationMode
   readonly id: string
 }
 
@@ -30,17 +31,31 @@ export class ConnectionIdentityRegistry {
   readonly #secret = randomBytes(32)
   #disposed = false
 
-  key(options: ConnectionOptions, principal?: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
-    return this.#material(options, principal, false)?.key
+  key(options: ProviderConnectionOptions, principal?: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
+    return options.provider === 'bigquery' ? this.#bigQuery(options, principal)?.key : this.#material(options, principal, false)?.key
   }
 
   /** Only an authenticated backend answer may prove that SQL Server accepted an empty supplied password. */
-  authenticatedKey(options: ConnectionOptions, principal: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
+  authenticatedKey(options: ProviderConnectionOptions, principal: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
     return this.authenticatedMaterial(options, principal)?.key
   }
 
-  authenticatedMaterial(options: ConnectionOptions, principal: ConnectionPrincipalEvidence): ConnectionIdentityMaterial | undefined {
-    return this.#material(options, principal, true)
+  authenticatedMaterial(options: ProviderConnectionOptions, principal: ConnectionPrincipalEvidence): ConnectionIdentityMaterial | undefined {
+    return options.provider === 'bigquery' ? this.#bigQuery(options, principal) : this.#material(options, principal, true)
+  }
+
+  /**
+   * BigQuery has no password to compare before opening: a key's or federation configuration's account is known only once
+   * Google verified it, so only that pinned principal (with the mode and key file reference) identifies the credential.
+   */
+  #bigQuery(options: BigQueryConnectionOptions, principal: ConnectionPrincipalEvidence | undefined): ConnectionIdentityMaterial | undefined {
+    if (this.#disposed || !principal) return undefined
+    const parsed = bigQueryConnectionOptionsSchema.safeParse(options)
+    if (!parsed.success || principal.authentication !== parsed.data.authentication || !principal.id.startsWith('bigquery:') || principal.id.length > 1024) return undefined
+    const value = parsed.data
+    const credential = createHmac('sha256', this.#secret).update(JSON.stringify(['credential', 'bigquery', value.authentication, value.keyFile ?? '', value.impersonateServiceAccount?.toLowerCase() ?? '', principal.id])).digest('hex') as ConnectionCredentialKey
+    const key = createHmac('sha256', this.#secret).update(JSON.stringify(['bigquery', bigQueryTargetOptions(value)])).update('\0').update(credential).digest('hex') as ConnectionIdentityKey
+    return Object.freeze({ key, credential })
   }
 
   rekey(options: ConnectionOptions, credential: ConnectionCredentialKey): ConnectionIdentityKey | undefined {

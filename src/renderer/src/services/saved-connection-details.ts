@@ -1,7 +1,9 @@
-import type { ConnectionProfile } from '../../../shared/connections'
 import { changedConnectionDetails, type ConnectionDetails } from '../../../shared/connection-targets'
 import { entryKey } from './environments'
-import { detailsOf, type ConnectionService } from './connections'
+import { detailsOf, type ConnectionService, type SavedOptions } from './connections'
+
+/** A saved entry of either engine's History. */
+interface SavedEntry { readonly options: SavedOptions; readonly autoReconnect?: ConnectionDetails['autoReconnect'] }
 
 const presentation = (details: ConnectionDetails) => JSON.stringify([details.displayName ?? '', details.color ?? '', details.environment ?? ''])
 
@@ -12,7 +14,7 @@ const presentation = (details: ConnectionDetails) => JSON.stringify([details.dis
  * settings, only connections still showing this entry's previous labels follow it.
  * Returns how many connections changed.
  */
-export function applySavedDetails(connections: Pick<ConnectionService, 'getSnapshot' | 'details' | 'setDetails'>, profiles: readonly ConnectionProfile[], saved: ConnectionProfile, before?: ConnectionDetails): number {
+export function applySavedDetails(connections: Pick<ConnectionService, 'getSnapshot' | 'details' | 'setDetails'>, profiles: readonly SavedEntry[], saved: SavedEntry, before?: ConnectionDetails): number {
   const key = entryKey(saved.options)
   if (key === undefined) return 0
   const aliased = profiles.filter(profile => entryKey(profile.options) === key).length > 1

@@ -152,23 +152,17 @@ describe('BigQuery credential material (main)', () => {
     expect(() => validateResult('bigquery.projects', { projects: [{ id: 'NOT A PROJECT' }] })).toThrow()
   })
 
-  it('adds the credential in main for a BigQuery connect and both pre-connect methods, and disconnects the handles it opened', () => {
+  it('adds the credential in main when the connection owner sends a BigQuery connect or dataset list, and for the pre-connect methods', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
-    expect(main).toContain(`if (method === 'connections.connect' && isBigQueryOptions(validated as { provider?: string })) {`)
-    expect(main).toContain(`await backend.request('connections.connect', { ...options, credential: await bigQueryCredentials.material(options) })`)
+    // BigQuery connects through ConnectionOpenService like SQL Server; main adds the material only as the owner sends it.
+    expect(main).not.toContain('bigQueryHandles')
+    expect(main).toContain('await connectionOpen.connect(validated as ProviderConnectionOptions, context)')
+    expect(main).toContain(`backend.request('connections.connect', await withBigQueryCredential(params) as ConnectionOptions`)
+    expect(main).toContain(`backend.request('connections.databases', await withBigQueryCredential(params) as ConnectionOptions`)
+    expect(main).toContain('credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions)')
     expect(main).toContain(`if (method === 'bigquery.account' || method === 'bigquery.projects') {`)
     expect(main).toContain('const credential = await bigQueryCredentials.material(params)')
-    expect(main).toContain(`if (method === 'connections.disconnect' && bigQueryHandles.delete(`)
-    // An answer that fails validation still releases the handle the backend opened.
-    const guarded = main.slice(main.indexOf(`try { info = validateResult('connections.connect', answer) as ConnectionInfo }`), main.indexOf('bigQueryHandles.add(info.id)'))
-    expect(guarded).toContain('catch (error) {')
-    expect(guarded).toContain(`void backend.request('connections.disconnect', { connectionId: id })`)
-    // The BigQuery branch comes before SQL Server's connect, which would treat the options as SQL Server's.
-    expect(main.indexOf(`isBigQueryOptions(validated`)).toBeLessThan(main.indexOf('await connectionOpen.connect(validated as ConnectionOptions, context)'))
-    // Closing refuses new sign-ins, and a page reset forgets the handles its backend generation took with it.
     expect(main).toContain(`['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)`)
-    const reset = main.slice(main.indexOf('function resetRendererState('), main.indexOf('/** A dialog the page asked for'))
-    expect(reset).toContain('bigQueryHandles.clear()')
   })
 
   it('accepts a BigQuery connect answer with its dataset and pinned principal, and keeps SQL Server\'s bounds', () => {

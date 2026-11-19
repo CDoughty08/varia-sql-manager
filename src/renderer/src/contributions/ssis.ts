@@ -19,12 +19,12 @@ export function ssisContribution({ commands, explorer, ssisProperties, operation
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const connectionFor = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
-    if (node) return node.kind === 'ssisCatalog' && !node.lost && connections.isLive(node.connectionId) ? node.connectionId : undefined
+    if (node) return node.kind === 'ssisCatalog' && !node.lost && connections.isLiveSqlServer(node.connectionId) ? node.connectionId : undefined
     const selected = explorer.menuNode(explorer.getSnapshot().selected)
-    if (selected && !selected.lost && connections.isLive(selected.connectionId)) return selected.connectionId
+    if (selected && !selected.lost && connections.isLiveSqlServer(selected.connectionId)) return selected.connectionId
     const active = documents.active?.connectionId
-    if (active && connections.isLive(active)) return active
-    const live = connections.live()
+    if (active && connections.isLiveSqlServer(active)) return active
+    const live = connections.liveSqlServer()
     return live.length === 1 ? live[0].id : undefined
   }
   const documentOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return operations.get(id) ? id : undefined }
@@ -46,7 +46,7 @@ export function ssisContribution({ commands, explorer, ssisProperties, operation
       const spec = ssisVerbSpecs[verb]
       const target = (args?: CommandArgs) => {
         const node = nodeOf(args)
-        return node && !node.lost && node.kind !== 'folder' && spec.kinds.includes(node.kind) && node.ref.type === 'object' && connections.isLive(node.connectionId) ? node : undefined
+        return node && !node.lost && node.kind !== 'folder' && spec.kinds.includes(node.kind) && node.ref.type === 'object' && connections.isLiveSqlServer(node.connectionId) ? node : undefined
       }
       return commands.register(spec.command, {
         when: args => !!target(args),

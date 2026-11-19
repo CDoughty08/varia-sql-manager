@@ -45,6 +45,8 @@ export interface ExplorerTarget {
   readonly listedAt?: number
   readonly engine?: ServerEngine
   readonly linux?: boolean
+  /** The server's engine; absent for SQL Server. */
+  readonly provider?: 'bigquery'
 }
 
 export type TextFilterOp = typeof textFilterOps[number]

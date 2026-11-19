@@ -303,8 +303,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.changed({ ...current, documents })
     return true
   }
-  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
-    return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
+  /** Where a new tab on `connectionId` starts when nothing names a database: SQL Server's in master, BigQuery's with no
+   *  default dataset. */
+  defaultDatabase(connectionId: string | undefined): string { return connectionId && this.options.provider?.(connectionId) === 'bigquery' ? '' : 'master' }
+  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database?: string, unsaved = false): QueryDocument {
+    return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database ?? (this.active?.database || this.defaultDatabase(connectionId)), connectionId, unsaved)
   }
   /** `eol` is an opened file's line ending: the model takes it, normalizing a file whose line endings were mixed. */
   create(name: string, sql: string, database: string, connectionId?: string, unsaved = false, file?: QueryDocument['file'], eol?: LineEnding): QueryDocument {
