@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { backendConnectionHandleSchema, connectionAuthenticationSchema, connectionTargetOptionsSchema } from './connection-targets'
+import { backendConnectionHandleSchema, connectionAuthenticationSchema, sqlServerTargetOptionsSchema } from './connection-targets'
 
 export { backendConnectionBindingChangeSchema, type BackendConnectionBindingChange } from './connection-binding-receipts.ts'
 
@@ -9,7 +9,7 @@ export const connectionBindingsChangedSchema = z.object({
   warning: z.string().max(512).optional(),
   changes: z.array(z.object({
     targetId: z.uuid(), handle: backendConnectionHandleSchema, revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-    options: connectionTargetOptionsSchema, authentication: connectionAuthenticationSchema
+    options: sqlServerTargetOptionsSchema, authentication: connectionAuthenticationSchema
   }).strict()).min(1).max(200)
 }).strict().refine(value => value.changes.every(change => change.handle.generation === value.generation), 'Binding updates belong to one backend generation.')
 export type ConnectionBindingsChanged = z.infer<typeof connectionBindingsChangedSchema>

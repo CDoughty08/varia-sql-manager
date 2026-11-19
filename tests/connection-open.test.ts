@@ -16,10 +16,11 @@ import { connectionTargetOptions, type BackendConnectionHandle } from '../src/sh
 import type { ConnectionInfo, ConnectionOptions } from '../src/shared/contracts'
 import type { ConnectionBindingsChanged } from '../src/shared/connection-bindings'
 import type { ActionExecuteRequest, ActionExecuteResult } from '../src/shared/actions/schema'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const options: ConnectionOptions = { server: 'server', database: 'Sales', authentication: 'sql', username: 'reader', password: 'test-secret', trustServerCertificate: false }
 const principalId = 'sid:01020304'
-const principal = { provider: 'sqlServer', authentication: 'sql', id: principalId } as const
+const principal = { provider: 'sqlserver', authentication: 'sql', id: principalId } as const
 const directories: string[] = []
 const services: ConnectionOpenService[] = []
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
@@ -314,7 +315,7 @@ describe('main connection ownership', () => {
     expect(before.database).toBe('Sales')
     await service.accept(first.requestId)
     await service.finishBindingMutation(service.beginBindingMutation(passwordMutation(before.id))!, mutationResult(before.id, 1, { passwordChanged: true }))
-    expect(authentication.resolve(first.targetId)?.options.database).toBe('')
+    expect((authentication.resolve(first.targetId)?.options as SqlServerTargetOptions | undefined)?.database).toBe('')
     const current = request()
     expect(await service.connect({ ...defaultDatabase, password: 'new-secret' }, current)).toMatchObject({ ok: true, value: { id: before.id, database: 'Sales' } })
     await service.accept(current.requestId)
@@ -329,7 +330,7 @@ describe('main connection ownership', () => {
     await service.accept(first.requestId)
     const ticket = service.beginBindingMutation({ action: 'rename', connectionId: before.id, requestId: randomUUID(), target: { kind: 'database', name: 'Sales' }, newName: 'RenamedSales' })!
     await service.finishBindingMutation(ticket, mutationResult(before.id, 1, { newDatabase: 'RenamedSales' }))
-    expect(authentication.resolve(first.targetId)?.options.database).toBe('RenamedSales')
+    expect((authentication.resolve(first.targetId)?.options as SqlServerTargetOptions | undefined)?.database).toBe('RenamedSales')
     expect(bindingEvents[0].changes[0].options).toEqual(connectionTargetOptions({ ...options, database: 'RenamedSales' }))
     const current = request()
     expect(await service.connect({ ...options, database: 'RenamedSales' }, current)).toMatchObject({ ok: true, value: { id: before.id, targetId: first.targetId, database: 'RenamedSales' } })

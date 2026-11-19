@@ -17,7 +17,7 @@ function fixture() {
   value.api.push(readyBackend())
   const accept = (connectionId: string) => {
     const attempt = value.connections.beginConnect(connectionOptions, 1, targetId)!
-    expect(value.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }, attempt).status).toBe('accepted')
+    expect(value.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }, attempt).status).toBe('accepted')
   }
   accept(handle)
   const beginDisconnect = () => value.connectionTargets.beginDisconnect(targetId, crypto.randomUUID())!

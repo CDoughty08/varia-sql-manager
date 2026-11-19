@@ -43,3 +43,10 @@ export function requiresUser(mode: AuthenticationMode): boolean { return authent
 /** User name shows the signed-in Windows identity and is not stored (Windows Authentication, Entra Integrated). */
 export function showsIdentity(mode: AuthenticationMode): boolean { return authenticationCatalog[mode].user === 'identity' }
 export function isEntra(mode: AuthenticationMode): boolean { return authenticationCatalog[mode].entra }
+
+/** BigQuery's authentication modes: their own list, not members of SQL Server's, so SQL Server's mode lists, Entra rules and
+ *  EntraModes.cs stay closed. gcloud credentials (Application Default Credentials) are the default. */
+export const bigQueryAuthenticationModes = ['gcloud', 'serviceAccountKey', 'externalAccount'] as const
+export type BigQueryAuthenticationMode = typeof bigQueryAuthenticationModes[number]
+/** The modes that read a key or configuration file main keeps the path of. */
+export function usesKeyFile(mode: BigQueryAuthenticationMode): boolean { return mode !== 'gcloud' }

@@ -8,7 +8,7 @@ const backendChange = () => ({ connectionId: randomUUID(), bindingRevision: 1, p
 const rendererChange = () => ({
   targetId: randomUUID(), handle: { id: randomUUID(), generation: 3 }, revision: 1,
   options: connectionTargetOptions({ server: 'server', database: 'Sales', authentication: 'sql', username: 'reader', trustServerCertificate: false }),
-  authentication: { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'sid:01020304' }, credential: null }
+  authentication: { principal: { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'sid:01020304' }, credential: null }
 })
 
 describe('authoritative connection binding contracts', () => {

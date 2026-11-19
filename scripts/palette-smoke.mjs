@@ -232,7 +232,7 @@ try {
         const principalId = 'sid:' + Buffer.from(params.username || 'fixture-account').toString('hex')
         const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.test',
           generation: 1, targetId: context?.targetId ?? crypto.randomUUID(), principalId,
-          authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } }
+          authentication: { principal: { provider: 'sqlserver', authentication: params.authentication, id: principalId } } }
         globalThis.variaConnections[info.id] = info
         return { ok: true, value: info }
       }

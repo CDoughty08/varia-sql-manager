@@ -410,6 +410,8 @@ if (liveGroup is null)
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
+        ("SortKind", Sync(() => SortKindChecks.Run(Check))),
+        ("Provider", () => ProviderChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
@@ -452,6 +454,7 @@ if (liveGroup is null)
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
+        ("Agent", () => AgentChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
@@ -981,6 +984,7 @@ try
     await Suite("ActivityAction", () => ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
+    await Suite("Agent", () => AgentLiveChecks.RunAsync(Check, service, info, json));
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."

@@ -131,6 +131,13 @@ describe('CI workflow', () => {
     expect(job).toContain('image: mcr.microsoft.com/mssql/server:2022-latest')
     expect(job).toContain('VARIA_TEST_SQL_USER: sa')
   })
+  it('runs SQL Server Agent in the live and Linux smoke containers, not the benchmarks\', and requires it in the live job', () => {
+    const yaml = readFileSync('.github/workflows/ci.yml', 'utf8'), slice = (from: string, to: string) => yaml.slice(yaml.indexOf(`  ${from}:`), yaml.indexOf(`  ${to}:`))
+    for (const job of [slice('live', 'smoke-linux'), slice('smoke-linux', 'smoke-windows')]) expect(job).toContain("MSSQL_AGENT_ENABLED: 'true'")
+    expect(slice('bench-linux', 'regressions')).not.toContain('MSSQL_AGENT_ENABLED')
+    expect(slice('live', 'smoke-linux')).toContain("VARIA_TEST_SQL_AGENT: '1'")
+    expect(readFileSync('.claude/hooks/session-start.sh', 'utf8')).toMatch(/-e MSSQL_AGENT_ENABLED=true[\s\S]*export VARIA_TEST_SQL_AGENT=1/)
+  })
   it('runs every platform on every code-changing pull request, drafts included, in at most 13 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     for (const [name, job] of own) expect(job.if, name).toBe(runAlways)

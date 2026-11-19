@@ -3,10 +3,11 @@ import type { ConnectionInfo, ConnectionOptions } from '../src/shared/contracts'
 import { ConnectionService, detailsOf } from '../src/renderer/src/services/connections'
 import { acceptConnectionReceipt } from '../src/renderer/src/services/connection-receipts'
 import { deferred } from './fixtures/documents'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const options: ConnectionOptions = { server: 'sql-prod-01', database: 'Sales', authentication: 'sql', username: 'alex', password: 'sample', trustServerCertificate: false }
-const info = (targetId: string, handle = id(50)): ConnectionInfo => ({ id: handle, targetId, generation: 1, server: 'sql-prod-01', database: 'Sales', serverVersion: '17', authentication: { principal: { provider: 'sqlServer', authentication: 'sql', id: 'alex' } } })
+const info = (targetId: string, handle = id(50)): ConnectionInfo => ({ id: handle, targetId, generation: 1, server: 'sql-prod-01', database: 'Sales', serverVersion: '17', authentication: { principal: { provider: 'sqlserver', authentication: 'sql', id: 'alex' } } })
 function fixture() {
   const connections = new ConnectionService()
   const attempt = connections.beginConnect(options, 1, id(1))!
@@ -92,7 +93,7 @@ describe('authenticated connection receipt adoption', () => {
     const accepting = acceptConnectionReceipt(setup)
     expect(setup.connections.bindingRevision({ id: setup.info.id, generation: 1 })).toBe(0)
     setup.connections.bindingsChanged({ generation: 1, changes: [{ targetId: id(1), handle: { id: setup.info.id, generation: 1 }, revision: 1,
-      options: setup.connections.connectionTargets.get(id(1))!.options, authentication: setup.info.authentication! }] })
+      options: setup.connections.connectionTargets.get(id(1))!.options as SqlServerTargetOptions, authentication: setup.info.authentication! }] })
     pending.resolve({ ok: true, value: { accepted: true, retained: true } })
     expect(await accepting).toBeUndefined()
     expect(setup.connections.bindingRevision({ id: setup.info.id, generation: 1 })).toBe(1)

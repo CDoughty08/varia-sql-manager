@@ -799,8 +799,8 @@ internal static partial class ViewSorter
         };
         // The date and time types' text is fixed-width, so its byte order is its instants': read as ticks, 8 bytes are the
         // whole value. A cell written any other way (or of another width than the first) gives the key back to its bytes.
-        if (kind == Kind.Ordinal && wire == WireKind.Text && TypeName(meta) is "date" or "datetime" or "datetime2" or "smalldatetime" or "time")
-            key = new InstantKey(capacity, TypeName(meta) == "time");
+        if (kind == Kind.Ordinal && wire == WireKind.Text && IsInstant(meta))
+            key = new InstantKey(capacity, meta.SortKind == ColumnTypes.Time);
         var lengths = set.Lengths[column];
         // Each page's rows in the key: its own, or the kept rows that fall in it (kept is in base row order).
         int[]? starts = null;
@@ -887,28 +887,23 @@ internal static partial class ViewSorter
 
     private static Kind KindFor(SortMode mode) => mode == SortMode.Chars ? Kind.Chars : Kind.Bytes;
 
-    /// <summary>A column's type name without its size or precision ("decimal(18,2)" is decimal), in lower case.</summary>
-    internal static string TypeName(ResultColumn column)
-    {
-        var type = column.DataType;
-        var cut = type.IndexOf('(');
-        return (cut < 0 ? type : type[..cut]).Trim().ToLowerInvariant();
-    }
-
     /// <summary>A column whose lengths a Chars or Bytes key may sort by: character types, xml and json.</summary>
     internal static bool IsText(ResultColumn column) => column.Collation is not null || column.Role is "xml" or "json"
-        || TypeName(column) is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext" or "sysname" or "xml" or "json";
+        || column.SortKind is ColumnTypes.Text or ColumnTypes.Json;
+
+    /// <summary>date, time, datetime, datetime2 and smalldatetime, whose fixed-width text an InstantKey reads as ticks.</summary>
+    internal static bool IsInstant(ResultColumn column) => column.SortKind is ColumnTypes.Date or ColumnTypes.DateTime or ColumnTypes.Time;
 
     internal static Kind KindOf(ResultColumn column, WireKind wire)
     {
         if (wire == WireKind.Binary) return Kind.Ordinal;
-        return TypeName(column) switch
+        if (ColumnTypes.IsExact(column)) return Kind.Exact;
+        if (ColumnTypes.IsGuid(column)) return Kind.Guid;
+        return column.SortKind switch
         {
-            "bit" or "tinyint" or "smallint" or "int" or "bigint" or "decimal" or "numeric" or "money" or "smallmoney" => Kind.Exact,
-            "real" or "float" => Kind.Approximate,
-            "datetimeoffset" => Kind.Ticks,
-            "uniqueidentifier" => Kind.Guid,
-            "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext" or "sysname" when column.Collation is not null => Kind.Collated,
+            ColumnTypes.Float => Kind.Approximate,
+            ColumnTypes.Timestamp => Kind.Ticks,
+            ColumnTypes.Text when column.Collation is not null => Kind.Collated,
             _ => Kind.Ordinal
         };
     }

@@ -3,6 +3,7 @@
 // A new unary method needs one entry here, usually `metadata`; the C# lane table is SqlService.LaneOf.
 import type { BackendMethod, BackendMethods } from '../contracts'
 import { actionDrainMs } from '../actions/catalog.ts'
+import { bothProviders, providersOf, type ProviderId } from '../providers.ts'
 
 export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
@@ -33,10 +34,16 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   /** Its EVENT frames are charged against its credit, and only one may be unacknowledged (docs/ipc.md, Live
    *  subscriptions). Only live.subscribe sets it; such a request has no DATA frames. */
   readonly creditedEvents?: boolean
+  /** The engines it serves; absent, SQL Server only (`defaultProviders`), so a new method is SQL Server's until it says
+   *  otherwise. Main refuses a request whose connection is another provider's with UNSUPPORTED_PROVIDER before sending it
+   *  (`requestProvider`), and SqlService.DispatchAsync checks again (`Providers.BothMethods` mirrors this). Methods that name a
+   *  query, session or result rather than a connection are declared for both and checked only in C#. */
+  readonly providers?: readonly ProviderId[]
 }
 
 const metadata = { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 } as const
 const control = { kind: 'unary', lane: 'control', deadlineMs: 10_000 } as const
+const both = { providers: bothProviders } as const
 const backstopGraceMs = 5000
 /** How long an Entra MFA connect or Load databases may wait for the browser sign-in (the backend's own limit). */
 export const entraSignInMs = 180_000
@@ -61,7 +68,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'plans.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   // EstimatedPlanCapture: 30 s acquisition + 2 s isolated-session cleanup, inside this fixed deadline.
   'plans.estimate': { kind: 'unary', lane: 'query', deadlineMs: 35_000 },
-  'system.health': control,
+  'system.health': { ...control, ...both },
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.
   'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true },
@@ -75,44 +82,44 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000 },
-  'query.cancel': control,
+  'query.cancel': { ...control, ...both },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
-  'query.session.close': { ...control, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
+  'query.session.close': { ...control, ...both, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
   // One SELECT @@TRANCOUNT in an idle session (a busy one answers at once); a prompt waits on it, so it is short.
-  'query.session.state': { ...control, deadlineMs: 5000 },
+  'query.session.state': { ...control, ...both, deadlineMs: 5000 },
   // Bookkeeping only (ResultVisibility): answered at once, so it never queues behind reads.
-  'results.visibility': control,
+  'results.visibility': { ...control, ...both },
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
-  'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
-  'results.close': control,
+  'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000, ...both },
+  'results.close': { ...control, ...both },
   // Tools › Options' result memory limit, from main: it changes two figures in memory, at once.
-  'results.setMemoryLimit': control,
+  'results.setMemoryLimit': { ...control, ...both },
   // Reads the lengths recorded beside stored pages: memory only, at most 16,384 numbers.
-  'results.rowBytes': control,
+  'results.rowBytes': { ...control, ...both },
   // Sorts a result's stored rows in memory off the frame loop (5 million rows take seconds); Stop cancels it.
-  'results.view': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
-  'results.viewClose': control,
+  'results.view': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
+  'results.viewClose': { ...control, ...both },
   // Hashes every row of a stored result off the frame loop (seconds for millions of rows when no key is unique).
-  'results.identify': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.identify': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Reads at most 16,384 stored identities.
-  'results.rowIds': control,
+  'results.rowIds': { ...control, ...both },
   // Scans a result's identities in memory: milliseconds per million rows.
-  'results.findRows': { kind: 'unary', lane: 'results', deadlineMs: 60_000 },
+  'results.findRows': { kind: 'unary', lane: 'results', deadlineMs: 60_000, ...both },
   // Aligns two stored results and writes their unified diff off the frame loop (seconds for millions of rows).
-  'results.diff': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.diff': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Searches a result's stored rows in memory off the frame loop, as results.view sorts them; a newer search cancels it.
-  'results.search': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.search': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Profiles stored rows in memory off the frame loop, two passes over the pages; Stop and a newer profile cancel it.
-  'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Groups and aggregates stored rows in memory off the frame loop, then stores the pivot as a result; Stop cancels it.
-  'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Groups a column's stored values in memory off the frame loop, as a filter compares them; a newer request cancels it.
-  'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // A window of a kept snapshot; a new search scans its values once, in memory, off the frame loop.
-  'results.distinctRead': { kind: 'unary', lane: 'results', deadlineMs: 30_000 },
+  'results.distinctRead': { kind: 'unary', lane: 'results', deadlineMs: 30_000, ...both },
   // Ticks in a kept snapshot; ticking a search's values scans them once, as a read does.
-  'results.distinctTick': { kind: 'unary', lane: 'results', deadlineMs: 30_000 },
-  'results.distinctClose': control,
+  'results.distinctTick': { kind: 'unary', lane: 'results', deadlineMs: 30_000, ...both },
+  'results.distinctClose': { ...control, ...both },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
@@ -125,8 +132,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'explorer.peekDefinition': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.dependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
-  'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
-  'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },
+  'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000, ...both },
+  'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0, ...both },
   // The backend answers its own 55 s budget as a TIMEOUT value, inside this deadline; main cancels it from the renderer (varia:scripting-cancel).
   'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
@@ -171,6 +178,26 @@ export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.c
 export const backendMethods = (Object.keys(methodPolicies) as BackendMethod[]).filter(method => !method.startsWith('debug.')) as readonly BackendMethod[]
 
 export function isBackendMethod(method: string): method is BackendMethod { return Object.hasOwn(methodPolicies, method) }
+
+/** The engines a method serves (its policy's `providers`, or SQL Server only). */
+export function methodProviders(method: BackendMethod): readonly ProviderId[] { return providersOf(methodPolicies[method]) }
+/** The methods whose provider comes from their parameters (`provider`; absent: SQL Server): they open a connection. */
+export const providerParamMethods = ['connections.connect', 'connections.databases', 'connections.preview'] as const satisfies readonly BackendMethod[]
+/**
+ * The provider a request is for, as main can tell it: the connection options' for a method that opens one, the handle's
+ * (`providerOfConnection`, main's record of what each connect opened) for a method that names a `connectionId`, and
+ * undefined for one that names neither (a query, session or result id: C# resolves those).
+ */
+export function requestProvider(method: BackendMethod, params: unknown, providerOfConnection: (id: string) => ProviderId | undefined): ProviderId | undefined {
+  const record = params !== null && typeof params === 'object' ? params as Record<string, unknown> : {}
+  if ((providerParamMethods as readonly string[]).includes(method)) return record.provider === 'bigquery' ? 'bigquery' : 'sqlserver'
+  // A language request names its connection in its context.
+  const context = record.context !== null && typeof record.context === 'object' ? record.context as Record<string, unknown> : {}
+  const connectionId = typeof record.connectionId === 'string' ? record.connectionId : typeof context.connectionId === 'string' ? context.connectionId : undefined
+  return connectionId === undefined ? undefined : providerOfConnection(connectionId)
+}
+/** Whether `method` may be sent for a request of `provider` (undefined: main cannot tell, and C# checks). */
+export function methodAllows(method: BackendMethod, provider: ProviderId | undefined): boolean { return provider === undefined || methodProviders(method).includes(provider) }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */
 export function deadlineFor<M extends BackendMethod>(method: M, params: BackendMethods[M]['params']): { deadlineMs: number; backstopMs: number } {

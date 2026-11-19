@@ -1481,7 +1481,7 @@ try {
   await page.evaluate(() => window.__variaRecovery.flush())
   const recovered = async folder => (await readdir(folder, { withFileTypes: true }).catch(() => [])).reduce(async (texts, entry) => [...await texts,
     ...entry.isDirectory() ? await recovered(resolve(folder, entry.name)) : [await readFile(resolve(folder, entry.name), 'utf8')]], Promise.resolve([]))
-  const copies = await recovered(resolve(profile, 'AutoRecover'))
+  const copies = await recovered(resolve(profile, 'WorkbenchAutoRecover'))
   expect(copies.some(text => text.includes('PASSWORD=<password>'))).toBe(true)
   expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
   console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, maps a database (Select Schema, a role, keys) but never an offline one, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')

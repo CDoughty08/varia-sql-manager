@@ -315,6 +315,28 @@ describe('BackendSupervisor restarts', () => {
   })
 })
 
+describe('BackendSupervisor providers', () => {
+  it('refuses a method for another engine before sending it or starting a backend, and forgets a handle\'s engine on disconnect', async () => {
+    const { value, backends } = simulated()
+    const refused = await failure(value.request('connections.connect', { ...options, provider: 'bigquery' } as never))
+    expect(refused).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedProvider })
+    expect(backends).toEqual([])
+    const connection = await value.request('connections.connect', { ...options, provider: 'sqlserver' })
+    await expect(value.request('databases.list', { connectionId: connection.id })).resolves.toEqual({ method: 'databases.list' })
+    // A stub BigQuery handle: main's record of what each connect opened.
+    const providers = (value as unknown as { providers: Map<string, string> }).providers
+    expect(providers.get(connection.id)).toBe('sqlserver')
+    providers.set('bq-handle', 'bigquery')
+    expect(await failure(value.request('databases.list', { connectionId: 'bq-handle' }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    expect(await failure(value.request('explorer.children', { connectionId: 'bq-handle', requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    // A method declared for both engines that names no connection is C#'s to check.
+    await expect(value.request('results.close', { resultIds: [1] })).resolves.toEqual({ method: 'results.close' })
+    expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect', 'databases.list', 'results.close'])
+    await value.request('connections.disconnect', { connectionId: connection.id })
+    expect(providers.has(connection.id)).toBe(false)
+  })
+})
+
 describe('BackendSupervisor liveness', () => {
   it('reports a live but silent backend as unresponsive and never kills it', async () => {
     const { value, advance, backends, statuses } = simulated()

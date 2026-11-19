@@ -259,6 +259,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                     log("Could not delete a stale scratch backup file of " + group.Key);
             await run(HistorySql(group.Key), "msdb");
         }
+        // Agent objects go first: a login that still owns a scratch job cannot be dropped (15170).
+        await SweepAgentAsync(run, log);
         var logins = await run("SELECT name FROM sys.server_principals WHERE (name LIKE N'VariaScratch[_]%' OR name LIKE N'##VariaScratch[_]%') AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
             if (SweepableLogin(row[0]!))

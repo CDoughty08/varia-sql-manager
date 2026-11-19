@@ -47,6 +47,7 @@ import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
+import { migrateProfile, profileFiles } from './profile-migration'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
@@ -195,9 +196,9 @@ const pathsRefused = profilePathsRefused(smokeProfile)
 const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRecentDocuments(process.platform, app)
 const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), { ...systemRecent ? { system: systemRecent } : {}, pathsRefused })
 // AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
-const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
+const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
-const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
+const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
 const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending(), async () => {
   await connectionOpen?.whenCancelledWorkDrained()
 }, generation => {
@@ -789,6 +790,8 @@ app.whenReady().then(async () => {
   }
   // The page and its popouts share the default session; any download there is the page's own (download-guard.ts).
   refuseDownloads(session.defaultSession)
+  // 0.9.0's files are copied to 0.10.0's names once, before any store reads them; the 0.9.0 files stay as they were.
+  await migrateProfile(app.getPath('userData'))
   if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy(), { keepServed: !app.isPackaged }))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
@@ -873,10 +876,10 @@ app.whenReady().then(async () => {
   if (testSeams) testHooks = installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
-  const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
-  // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
+  const connectionStore = new ConnectionStore(join(app.getPath('userData'), profileFiles.connections.current))
+  // Remember password: OS-protected ciphertext beside the connections file, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
-  const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), profileFiles.savedPasswords.current), secretCipher)
   // A smoke profile disables secret storage on purpose, as a keyring-less desktop does.
   workspaceSealer = new ConnectionWorkspaceSealer(secretCipher, { trustUnsealed: !!smokeProfile })
   credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending

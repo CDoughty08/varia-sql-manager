@@ -420,7 +420,42 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>The request's token: CANCEL frames and its header deadline. Live checks call without a context.</summary>
     private static CancellationToken Token(RequestContext? context) => context?.Token ?? CancellationToken.None;
 
-    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context = null) => method switch
+    /// <summary>Which engine owns a connection handle. Every handle is SQL Server's until a BigQuery service registers its own;
+    /// offline checks put a stub provider here.</summary>
+    internal Func<string, string?> ConnectionProvider { get; set; } = _ => Providers.SqlServer;
+    /// <summary>Which engine owns the query, session or result a handle-less request names; null leaves it SQL Server's, as
+    /// every such id is today. Offline checks put a stub provider here.</summary>
+    internal Func<string, JsonElement, string?>? RequestProvider { get; set; }
+
+    /// <summary>The engine a request is for: the options' <c>provider</c> for a method that opens a connection, the handle's
+    /// for one that names a <c>connectionId</c> (a language request's, in its context), and otherwise the engine that owns the query, session or result it names.</summary>
+    internal string ProviderOf(string method, JsonElement parameters)
+    {
+        if (Array.IndexOf(Providers.ParameterMethods, method) >= 0) return Providers.OfOptions(parameters);
+        if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("connectionId", out var id) && id.ValueKind == JsonValueKind.String)
+            return ConnectionProvider(id.GetString()!) ?? Providers.SqlServer;
+        // A language request names its connection in its context.
+        if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty("connectionId", out var contextId) && contextId.ValueKind == JsonValueKind.String)
+            return ConnectionProvider(contextId.GetString()!) ?? Providers.SqlServer;
+        return RequestProvider?.Invoke(method, parameters) ?? Providers.SqlServer;
+    }
+
+    /// <summary>Main refuses a method for a connection of another engine before sending it; this checks again first thing,
+    /// before any service runs, and answers UNSUPPORTED_PROVIDER as an error response.</summary>
+    internal void CheckProvider(string method, JsonElement parameters)
+    {
+        if (!Providers.Of(method).Contains(ProviderOf(method, parameters)))
+            throw new RequestException("UNSUPPORTED_PROVIDER", "This method is not available for this kind of connection.");
+    }
+
+    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context = null)
+    {
+        CheckProvider(method, parameters);
+        return await RouteAsync(method, parameters, json, context);
+    }
+
+    private async Task<object> RouteAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context) => method switch
     {
         "system.health" => health ??= new
         {
@@ -430,10 +465,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             SmoVersion = typeof(Server).Assembly.GetName().Version?.ToString(),
             SqlClientVersion = typeof(SqlConnection).Assembly.GetName().Version?.ToString()
         },
-        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json), Token(context), context),
-        "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json), Token(context)),
+        "connections.connect" => await ConnectAsync(ReadConnect(parameters, json), Token(context), context),
+        "connections.databases" => await DiscoverDatabasesAsync(ReadConnect(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
-        "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
+        "connections.preview" => ConnectionSettings.Preview(ReadConnect(parameters, json)),
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
@@ -498,6 +533,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
+
+    /// <summary>The connection options union: the provider first, then SQL Server's strict record. CheckProvider has already
+    /// refused another engine's options, since no method that opens a connection serves one yet. The record reads
+    /// <c>provider</c> itself rather than the options being rewritten without it, which would copy the password into
+    /// buffers nothing zeroes; it is cleared so options are equal however the request spelled SQL Server.</summary>
+    private static ConnectOptions ReadConnect(JsonElement value, JsonSerializerOptions json) => Providers.OfOptions(value) == Providers.SqlServer
+        ? Read<ConnectOptions>(value, json) with { Provider = null }
+        : throw new RequestException("UNSUPPORTED_PROVIDER", "This method is not available for this kind of connection.");
 
     private static string Name(string? value, int maxLength = 128)
     {

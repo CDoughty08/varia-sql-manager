@@ -172,7 +172,7 @@ export async function prepare(method: string, validated: unknown, value: unknown
   const prepared: PreparedRequest = { method, validated, params: validated, ...(context ? { context } : {}), injected: false }
   if (!connectMethods.has(method)) return prepared
   const options = validated as ConnectionOptions, background = context?.mode === 'background'
-  if (context?.expectedPrincipal && context.expectedPrincipal.authentication !== options.authentication) throw new ConnectionPreparationError('identity-changed', 'The expected account uses another authentication mode.')
+  if (context?.expectedPrincipal && (context.expectedPrincipal.provider !== 'sqlserver' || context.expectedPrincipal.authentication !== options.authentication)) throw new ConnectionPreparationError('identity-changed', 'The expected account uses another authentication mode.')
   if (background && (!context?.expectedPrincipal || options.password)) throw new ConnectionPreparationError('credentials-required', 'Reconnect requires the previous account and matching saved credentials.')
   if (context?.credential && options.password && context.credentialIntent !== 'update-credentials') throw new ConnectionPreparationError('credentials-required', 'Use Update Credentials to replace the remembered credential.')
   if (background) prepared.params = { ...options, nonInteractive: true }
