@@ -198,7 +198,6 @@ export const electron = {
     env.VARIA_TEST_HOT_EXIT ??= '0'
     // Varia plays animations whatever the system asks unless the user opts in; the emulated reduced motion applies only with this.
     if (!motion) env.VARIA_TEST_FOLLOW_SYSTEM_MOTION ??= '1'
-    // Under xvfb, with --disable-gpu (xvfb.mjs).
     const args = xvfbArgs(options.args ?? [], env)
     // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
     // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
