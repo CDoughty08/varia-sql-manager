@@ -115,6 +115,11 @@ npm run test:smoke:wsl -- --all
   `KRB5CCNAME` to a cache that does not exist) runs `tests/kerberos-live.test.ts`: Integrated authentication without a
   ticket must fail cleanly. A real Kerberos round trip needs a KDC and a domain-joined SQL Server, so it is a manual
   check: `kinit`, then connect with Windows authentication to a server name or SPN registered for Kerberos.
+- **BigQuery.** `VARIA_TEST_BIGQUERY_ENDPOINT` (a loopback http address such as `http://localhost:9050`, honoured only by
+  unpackaged builds) puts the backend in emulator mode against `ghcr.io/goccy/bigquery-emulator`, and
+  `-- --bigquery-emulator-live` runs the emulator checks (docs/bigquery.md#testing has the `docker run` line; on Windows use
+  `127.0.0.1`). The offline checks need nothing: `-- --bigquery-checks` runs them alone. No check ever contacts a real
+  Google Cloud project, and none reads a project id or credential from the environment.
 - **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
   Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.
 - **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner

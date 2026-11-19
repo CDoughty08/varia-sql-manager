@@ -1,0 +1,1 @@
+{"kind":"bigquery#dataset","etag":"example","id":"varia-alpha:sales","selfLink":"https://bigquery.googleapis.com/bigquery/v2/projects/varia-alpha/datasets/sales","datasetReference":{"datasetId":"sales","projectId":"varia-alpha"},"creationTime":"1763337600000","lastModifiedTime":"1763337600000","location":"EU","type":"DEFAULT"}

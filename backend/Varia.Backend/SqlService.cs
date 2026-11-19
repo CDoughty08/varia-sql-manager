@@ -8,6 +8,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
+using Varia.Backend.BigQuery;
 using Varia.Backend.Activity;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
@@ -36,7 +37,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
-        "ssis.describe", "ssis.execute", "ssis.catalogSetup"
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup",
+        "bigquery.account", "bigquery.projects"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -91,6 +93,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly SessionActions sessionActions;
     private readonly EntraService entra;
     private readonly LanguageServiceBroker language;
+    private readonly BigQueryService bigQuery;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -173,7 +176,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <param name="packHidden">Packs results hidden for a few seconds (<see cref="ResultPacker"/>), turning the store's packing on
     /// request if it is off. The backend process asks (<see cref="FromEnvironment"/>); the checks ask only where they test the
     /// policy, so no other check's budget figures depend on how long it takes.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null, bool packHidden = false)
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null, bool packHidden = false, BigQueryEnvironment? bigQuery = null)
     {
         // Before any session opens: the checks host the service in their own process, so the floor is the service's, not Program's.
         ThreadPoolFloor.Ensure();
@@ -188,6 +191,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         this.hooks = hooks;
         this.publish = publish;
+        this.bigQuery = new BigQueryService(bigQuery ?? BigQueryEnvironment.Production());
+        ConnectionProvider = id => this.bigQuery.Owns(id) ? Providers.BigQuery : Providers.SqlServer;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
@@ -241,10 +246,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The user's limit, in MiB, as main read it from the settings when it started this process.
         var limit = ResultStore.LimitFromEnvironment(Environment.GetEnvironmentVariable("VARIA_RESULT_MEMORY_MIB"));
         // The product packs hidden results (ResultPacker), which turns the store's packing on request.
-        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish, packHidden: true);
+        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish, packHidden: true, bigQuery: BigQueryEnvironment.FromEnvironment());
     }
 
     public IReadOnlyList<string> Methods { get; }
+    /// <summary>The BigQuery engine (the checks reach its connections and limits through it).</summary>
+    internal BigQueryService BigQuery => bigQuery;
     /// <summary>Stored query results (the live checks read them back through it).</summary>
     public ResultStore Results => store;
     /// <summary>Object Explorer's node provider (the checks set its test options).</summary>
@@ -399,7 +406,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -411,7 +418,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -422,7 +429,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Which engine owns a connection handle. Every handle is SQL Server's until a BigQuery service registers its own;
     /// offline checks put a stub provider here.</summary>
-    internal Func<string, string?> ConnectionProvider { get; set; } = _ => Providers.SqlServer;
+    internal Func<string, string?> ConnectionProvider { get; set; }
     /// <summary>Which engine owns the query, session or result a handle-less request names; null leaves it SQL Server's, as
     /// every such id is today. Offline checks put a stub provider here.</summary>
     internal Func<string, JsonElement, string?>? RequestProvider { get; set; }
@@ -438,6 +445,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
             && context.TryGetProperty("connectionId", out var contextId) && contextId.ValueKind == JsonValueKind.String)
             return ConnectionProvider(contextId.GetString()!) ?? Providers.SqlServer;
+        // BigQuery's handle-less methods (bigquery.account, bigquery.projects) are BigQuery's by declaration.
+        if (Providers.Of(method) is [Providers.BigQuery]) return Providers.BigQuery;
         return RequestProvider?.Invoke(method, parameters) ?? Providers.SqlServer;
     }
 
@@ -465,11 +474,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             SmoVersion = typeof(Server).Assembly.GetName().Version?.ToString(),
             SqlClientVersion = typeof(SqlConnection).Assembly.GetName().Version?.ToString()
         },
-        "connections.connect" => await ConnectAsync(ReadConnect(parameters, json), Token(context), context),
+        "connections.connect" => Providers.OfOptions(parameters) == Providers.BigQuery
+            ? await bigQuery.ConnectAsync(Read<BigQueryConnectOptions>(parameters, json), Token(context), context)
+            : await ConnectAsync(ReadConnect(parameters, json), Token(context), context),
         "connections.databases" => await DiscoverDatabasesAsync(ReadConnect(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(ReadConnect(parameters, json)),
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
+        "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
+        "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -791,6 +804,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
+        // A BigQuery handle has none of the SQL Server state below.
+        if (bigQuery.Owns(args.ConnectionId)) return new { Disconnected = bigQuery.Disconnect(args.ConnectionId) };
         bool removed;
         string? connectionString;
         lock (bindingGate)
@@ -3031,6 +3046,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssis.Dispose();
         ssisActions.Dispose();
         CancelAll();
+        bigQuery.Dispose();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();
         pools.Clear();

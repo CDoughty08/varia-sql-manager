@@ -111,6 +111,9 @@ export const errorCodes = [
   // Backend: a Microsoft Entra sign-in failed or must be repeated; the message says what to do.
   'AUTH_ENTRA',
   'AUTH_IDENTITY',
+  // Backend: BigQuery failures (docs/bigquery.md, Errors): a sign-in to repeat, a key or configuration file Varia cannot
+  // use, the API or billing off for the project, a quota or rate limit, legacy SQL, and a missing permission.
+  'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL', 'PERMISSION_DENIED',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.

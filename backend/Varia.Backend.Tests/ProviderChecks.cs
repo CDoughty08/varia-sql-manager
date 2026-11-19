@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Varia.Backend.Tests;
 
 /// <summary>SqlService.DispatchAsync refuses a method for another engine's connection first thing (Providers), with a stub
-/// provider standing in for the BigQuery service that does not exist yet.</summary>
+/// provider standing in for a BigQuery handle where a check needs one without connecting.</summary>
 internal static class ProviderChecks
 {
     public static async Task RunAsync(Action<bool, string> check)
@@ -27,8 +27,8 @@ internal static class ProviderChecks
         var serialised = JsonSerializer.SerializeToElement(new ConnectOptions("sql-prod-01", "Sales", "windows", null, null, false), new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var previewSerialised = await Code(() => service.DispatchAsync("connections.preview", serialised, wire));
         check(!serialised.TryGetProperty("provider", out _) && previewSerialised == "ok", $"serialised ConnectOptions write no provider and are SQL Server's: {previewSerialised}");
-        check(preview == "ok" && previewSqlServer == "ok" && previewBigQuery == "UNSUPPORTED_PROVIDER" && connectBigQuery == "UNSUPPORTED_PROVIDER" && previewUnknown == "INVALID_PARAMS",
-            $"options without a provider and with 'sqlserver' are SQL Server's; 'bigquery' is refused with UNSUPPORTED_PROVIDER before any connection, and an unknown provider is invalid: {preview} {previewSqlServer} {previewBigQuery} {connectBigQuery} {previewUnknown}");
+        check(preview == "ok" && previewSqlServer == "ok" && previewBigQuery == "UNSUPPORTED_PROVIDER" && connectBigQuery == "INVALID_PARAMS" && previewUnknown == "INVALID_PARAMS",
+            $"options without a provider and with 'sqlserver' are SQL Server's; 'bigquery' preview is refused with UNSUPPORTED_PROVIDER, a BigQuery connect reads BigQuery's options (SQL Server's are invalid for it), and an unknown provider is invalid: {preview} {previewSqlServer} {previewBigQuery} {connectBigQuery} {previewUnknown}");
 
         var connectionId = Guid.NewGuid().ToString();
         var byHandle = Parse($$"""{"connectionId":"{{connectionId}}"}""");
@@ -48,7 +48,7 @@ internal static class ProviderChecks
         check(closeBigQuery != "UNSUPPORTED_PROVIDER" && health == "ok" && planBigQuery == "UNSUPPORTED_PROVIDER",
             $"a method declared for both engines passes the check for a BigQuery request, and a SQL Server-only one does not: {closeBigQuery} {health} {planBigQuery}");
 
-        check(Providers.Of("results.read").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("connections.connect").SequenceEqual([Providers.SqlServer])
+        check(Providers.Of("results.read").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("connections.connect").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("bigquery.projects").SequenceEqual([Providers.BigQuery]) && Providers.Of("connections.preview").SequenceEqual([Providers.SqlServer])
             && Providers.Of("not.a.method").SequenceEqual([Providers.SqlServer]),
             "a method serves SQL Server only unless Providers.BothMethods names it");
     }

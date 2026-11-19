@@ -14,15 +14,20 @@ internal static class Providers
 
     /// <summary>Methods declared for both engines: those that name a query, session or result rather than a connection, and
     /// system.health. SqlService resolves their provider from what the id names.</summary>
-    internal static readonly string[] BothMethods = ["system.health", "query.cancel", "query.session.close", "query.session.state",
+    internal static readonly string[] BothMethods = ["system.health", "connections.connect", "connections.disconnect", "query.cancel", "query.session.close", "query.session.state",
         "results.visibility", "results.read", "results.close", "results.setMemoryLimit", "results.rowBytes", "results.view", "results.viewClose",
         "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot",
         "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose", "results.copy", "results.export"];
 
+    /// <summary>Methods only BigQuery serves. Those without a connection handle (the pre-connect bigquery.account and
+    /// bigquery.projects) are BigQuery's by declaration, with nothing to resolve.</summary>
+    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects"];
+    private static readonly string[] BigQueryOnly = [BigQuery];
+
     /// <summary>The methods whose provider is their parameters' <c>provider</c> (absent: SQL Server): they open a connection.</summary>
     internal static readonly string[] ParameterMethods = ["connections.connect", "connections.databases", "connections.preview"];
 
-    public static IReadOnlyList<string> Of(string method) => Array.IndexOf(BothMethods, method) >= 0 ? Both : SqlServerOnly;
+    public static IReadOnlyList<string> Of(string method) => Array.IndexOf(BothMethods, method) >= 0 ? Both : Array.IndexOf(BigQueryMethods, method) >= 0 ? BigQueryOnly : SqlServerOnly;
 
     /// <summary>A connection options object's provider; a missing one is SQL Server (every 0.9.0 request), anything else
     /// unknown is invalid.</summary>

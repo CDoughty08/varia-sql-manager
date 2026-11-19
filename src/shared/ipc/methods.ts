@@ -71,11 +71,14 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'system.health': { ...control, ...both },
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.
-  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true },
+  'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.provider === 'bigquery' ? 45_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true, ...both },
   'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true },
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
-  'connections.disconnect': { ...control, deadlineMs: 30_000 },
+  'connections.disconnect': { ...control, ...both, deadlineMs: 30_000 },
+  // BigQuery before connecting (the dialog's account line and project picker): main injects the credential material.
+  'bigquery.account': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
+  'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
   'databases.list': metadata,
