@@ -1,7 +1,7 @@
 import { Component, createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
-import { isPeekListTab, peekLists, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
+import { isPeekListTab, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { displayText, insertTextFor } from '../../../shared/explorer/refs.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
 import type { CommandArgs } from '../core/types'
@@ -11,11 +11,15 @@ import { onUnexpectedError } from '../core/errors'
 import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
 import { useKeybindingsRevision } from '../core/useCommand'
+import type { LocalGridPreset } from '../grid/LocalGrid'
+import { useMenuTarget } from '../menus/useMenuTarget'
+import type { PeekPropertiesTarget } from '../menus/targets'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
-import { formatPeekValue, peekObjectName, placePeek, placePeekAt } from './peek-format'
-import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekAnchor, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
+import { formatPeekValue, peekObjectName, peekPropertiesText, placePeek, placePeekAt } from './peek-format'
+import { PeekListGrid } from './PeekListGrid'
+import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekAnchor, type PeekDefinition, type PeekDependencies, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 import { settingsDocumentOptions } from '../services/documents'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
@@ -87,6 +91,62 @@ export function nextStop(stops: readonly HTMLElement[], at: Element | null, back
   return back ? [...stops].reverse().find(stop => !after(stop)) ?? stops[stops.length - 1] : stops.find(after) ?? stops[0]
 }
 
+/** Whether a range covers some of a fact's text: a triple-click's paragraph ends at the next fact's start, which touches it
+ *  without selecting any of it. */
+function covers(range: Range, fact: HTMLElement): boolean {
+  if (!range.intersectsNode(fact)) return false
+  const part = fact.ownerDocument.createRange()
+  part.selectNodeContents(fact)
+  if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset)
+  if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset)
+  return part.toString().trim() !== ''
+}
+function selectedFacts(pane: HTMLElement): HTMLElement[] {
+  const selection = pane.ownerDocument.getSelection()
+  if (!selection || selection.isCollapsed) return []
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index))
+  return [...pane.querySelectorAll<HTMLElement>('.peek-fact')].filter(fact => ranges.some(range => covers(range, fact)))
+}
+
+/**
+ * The Properties menu's target: Copy writes the facts whose text is selected in the pane, else every fact it shows, as
+ * Name<TAB>Value lines with the platform's line breaks (as a grid copies); none while the facts load or failed.
+ * A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened while a press is
+ * down (macOS, Linux) reads the selection as that press began (`press`). The press ends wherever the pointer is released,
+ * and then a menu (Windows opens it on release; Shift+F10 and the menu key, which KeybindingService takes before the pane
+ * sees them) reads the selection as it is.
+ */
+export function propertiesMenu(crlf: boolean) {
+  let pressed: HTMLElement[] | undefined
+  return {
+    press(pane: HTMLElement) {
+      pressed = selectedFacts(pane)
+      const doc = pane.ownerDocument
+      const release = () => { pressed = undefined; doc.removeEventListener('pointerup', release, true); doc.removeEventListener('pointercancel', release, true) }
+      doc.addEventListener('pointerup', release, true)
+      doc.addEventListener('pointercancel', release, true)
+    },
+    target(pane: HTMLElement): PeekPropertiesTarget | null {
+      const facts = [...pane.querySelectorAll<HTMLElement>('.peek-fact')]
+      if (!facts.length) return null
+      const picked = (pressed ?? selectedFacts(pane)).filter(fact => facts.includes(fact))
+      pressed = undefined
+      const lines = (picked.length ? picked : facts).map(fact => [fact.querySelector('dt')?.textContent ?? '', fact.querySelector('dd')?.textContent ?? ''] as const)
+      return { kind: 'peekProperties', text: peekPropertiesText(lines, crlf) }
+    }
+  }
+}
+
+/** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
+export function PropertiesPane({ peek }: { peek: OpenPeek }) {
+  const { platform } = useWorkbench()
+  const [copy] = useState(() => propertiesMenu(platform === 'win32'))
+  const menu = useMenuTarget<HTMLDivElement>(pane => copy.target(pane))
+  return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"
+    onPointerDownCapture={event => copy.press(event.currentTarget)}><Properties peek={peek} /></div>
+}
+
+/** The kind's groups of facts for the node's subtype, a refused group's words in place of its facts. */
 export function Properties({ peek }: { peek: OpenPeek }) {
   const { facts } = peek
   if (facts.status === 'loading') return <p className="peek-note" role="status">Loading properties…</p>
@@ -119,19 +179,6 @@ function Pending({ part, loading }: { part: PeekPart<unknown> | undefined; loadi
       if (open) view.selectTab(open.tab)
     }}>Retry</button></div>
   return null
-}
-
-/** The Columns or Parameters folder as the tree lists it, with the tree's icons and labels. */
-function Members({ part }: { part: PeekPart<PeekMembers> | undefined }) {
-  if (part?.status !== 'ready') return <Pending part={part} loading="Loading…" />
-  const { nodes, more } = part.value
-  if (!nodes.length) return <p className="peek-note">{peekMessages.noMembers}</p>
-  return <>
-    <ul className="peek-list" aria-label="Members">{nodes.map((node, index) => <li key={index} className="peek-item">
-      <ExplorerIcon name={node.icon} /><bdi className="peek-item-name">{node.label}</bdi>{node.sublabel && <span className="peek-item-note">{node.sublabel}</span>}
-    </li>)}</ul>
-    {more && <p className="peek-note">There are more; Object Explorer lists them all.</p>}
-  </>
 }
 
 const dependencyName = (dependency: PeekDependency) => displayText([dependency.server, dependency.database, dependency.schema, dependency.name].filter(part => part !== undefined).join('.'))
@@ -180,18 +227,14 @@ export function PeekRowsPart({ part }: { part: PeekPart<PeekRows> | undefined })
   </div>
 }
 
-/** One of the kind's lists (`peekLists`), which come with the facts: a table of the list's columns, values formatted as facts are. */
-export function PeekListView({ id, part, list }: { id: PeekListId; part: OpenPeek['facts']; list: PeekList | undefined }) {
+/**
+ * One of the kind's lists (`peekLists`: Columns or Parameters, an index's columns, a trigger's events …), which come with the
+ * facts, as a local grid: a card's in the hover card, a page's (with Save Results As) in a promoted tab.
+ */
+export function PeekListView({ id, part, list, preset, objectName }: { id: PeekListId; part: OpenPeek['facts']; list: PeekList | undefined; preset: LocalGridPreset; objectName: string }) {
   if (part.status !== 'ready') return <Pending part={part} loading="Loading…" />
-  const spec = peekLists[id], rows = list?.rows ?? []
   return <>
-    {rows.length === 0 ? <p className="peek-note">{spec.empty}</p> : <table className="peek-rows" aria-label={spec.title}>
-      <thead><tr>{spec.columns.map(column => <th key={column.id} scope="col"><bdi>{column.label}</bdi></th>)}</tr></thead>
-      <tbody>{rows.map((row, r) => <tr key={r}>{spec.columns.map((column, c) => {
-        const text = formatPeekValue(column, row[c] ?? null)
-        return <td key={column.id} title={text}>{text}</td>
-      })}</tr>)}</tbody>
-    </table>}
+    <PeekListGrid id={id} list={list} preset={preset} objectName={objectName} />
     {list?.truncated && <p className="peek-note">There are more than the card lists.</p>}
     {list?.unread !== undefined && <p className="peek-note">{list.unread === 1 ? '1 database' : `${list.unread.toLocaleString()} databases`} could not be read.</p>}
   </>
@@ -223,10 +266,10 @@ function PaneTitle({ title, children }: { title: string; children?: ReactNode })
   return <div className="peek-pane-title"><span>{title}</span><span className="peek-spacer" />{children}</div>
 }
 
-function panel(open: OpenPeek, editor: PeekEditor | undefined): ReactNode {
+function panel(open: OpenPeek, editor: PeekEditor | undefined, preset: LocalGridPreset): ReactNode {
   const tab: PeekTab = open.tab
-  if (isPeekListTab(tab)) return <PeekListView id={tab} part={open.facts} list={open.lists?.[tab]} />
-  return tab === 'definition' ? <Definition part={open.definition} editor={editor} open={open} /> : tab === 'members' ? <Members part={open.members} />
+  if (isPeekListTab(tab)) return <PeekListView id={tab} part={open.facts} list={open.lists?.[tab]} preset={preset} objectName={peekName(open)} />
+  return tab === 'definition' ? <Definition part={open.definition} editor={editor} open={open} />
     : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRowsPart part={open.rows} />
 }
 
@@ -262,6 +305,9 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
   // The model of a definition the view has moved on from goes at once, even while another tab shows.
   const shownKey = definition?.text === undefined ? undefined : String(open.id)
   useEffect(() => { editor?.keep(shownKey) }, [editor, shownKey])
+  // A promoted tab has a document's room: its lists fill the panel and offer Save Results As; the card's are sized to their rows.
+  const preset: LocalGridPreset = inEditorPane ? 'page' : 'card'
+  const fills = open.tab === 'rows' || open.tab === 'definition' || (preset === 'page' && isPeekListTab(open.tab))
   return <PeekViewContext.Provider value={view}>
     <div className="peek-body">
       <div className="peek-pane">
@@ -276,11 +322,11 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
               onClick={() => { beforeScript?.(); void commands.execute('explorer.modify', target, 'toolbar') }}>Modify</button>}
           </>}
         </div>
-        <div key={`${open.id}:${open.tab}`} className={open.tab === 'rows' || open.tab === 'definition' ? 'peek-scroll peek-grid' : 'peek-scroll'} id={`${idPrefix}-panel`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${open.tab}`}>{panel(open, editor)}</div>
+        <div key={`${open.id}:${open.tab}`} className={fills ? 'peek-scroll peek-grid' : 'peek-scroll'} id={`${idPrefix}-panel`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${open.tab}`}>{panel(open, editor, preset)}</div>
       </div>
       <div className="peek-pane peek-side">
         <PaneTitle title="Properties" />
-        <div className="peek-scroll"><Properties peek={open} /></div>
+        <PropertiesPane peek={open} />
       </div>
     </div>
   </PeekViewContext.Provider>
@@ -382,10 +428,14 @@ function PeekCardView({ placement }: { readonly placement: PeekPlacement }) {
   }, [open?.id, open?.source, place])
 
   // A press outside the card closes it; a press on a row then selects that row as usual. The definition editor's widgets
-  // (hover, read-only message) live outside the card, in a host of their own, and count as inside.
+  // (hover, read-only message) live outside the card, in a host of their own, and count as inside, as do the menus its grids
+  // and Properties open (MenuLayer draws them in the window's menu layer).
   useEffect(() => {
     if (!open || !doc) return
-    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node) && !inPeekEditorWidgets(event.target, card.current)) service.close() }
+    const press = (event: PointerEvent) => {
+      if (card.current?.contains(event.target as Node) || inPeekEditorWidgets(event.target, card.current) || (event.target as Element | null)?.closest?.('.menu-layer')) return
+      service.close()
+    }
     doc.addEventListener('pointerdown', press, true)
     return () => doc.removeEventListener('pointerdown', press, true)
   }, [open?.id, doc, service])

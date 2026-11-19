@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (349)
+## Commands (350)
 
 ### File
 
@@ -319,6 +319,7 @@ keys it uses are listed below.
 | Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |
 | Copy Fully Qualified Name (not in the palette) | `search.copyQualifiedName` | Ctrl+Shift+C (`searchHitsFocus`) | Ctrl+Shift+C (`searchHitsFocus`) | ⇧⌘C (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Fully Qualified Name |
 | Copy Bracketed Name (not in the palette) | `search.copyBracketedName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Bracketed Name |
+| Copy Properties (not in the palette) | `peek.copyProperties` | — | — | — | Always | Peek Properties context menu › Copy |
 
 ### Table Designer
 
@@ -1043,6 +1044,14 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | So**r**t Text by Characters | `output.sortTextByChars` | Always |
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
+
+#### Peek Properties context menu (`peek.properties.context`)
+
+Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, or all of them when none is, on the clipboard as Name and Value lines separated by a tab.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `peek.copyProperties` | Always |
 
 ## Context keys (164)
 

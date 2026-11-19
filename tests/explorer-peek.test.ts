@@ -3,18 +3,23 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
 import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDefinitionResult, type PeekDependenciesResult, type PeekResult } from '../src/shared/explorer/peek'
-import { explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
+import { peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { definitionLoading, PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
-import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
+import { formatPeekValue, peekListTable, peekPropertiesText, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
 import { copyableDefinition, PeekService, type PeekChange } from '../src/renderer/src/explorer/PeekService'
 import { maxClipboardText, type ApiResult, type ExplorerChildrenResult, type QueryResult } from '../src/shared/contracts'
 import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { dependencyLimits } from '../src/shared/explorer/dependencies'
+
+// A list tab's grid needs the workbench; these checks read which list and preset the tab draws.
+vi.mock('../src/renderer/src/explorer/PeekListGrid', () => ({
+  PeekListGrid: ({ id, preset }: { id: string; preset: string }) => createElement('div', { 'data-peek-list': id, 'data-preset': preset })
+}))
 
 const connectionId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222'
 const node = (kind: 'table' | 'procedure' | 'login' | 'user', id = 1, name = 'Customer'): ExplorerMenuNode => ({
@@ -34,6 +39,13 @@ describe('Peek catalogue', () => {
         expect(fact.id, fact.id).toMatch(/^[a-z][A-Za-z]+$/)
         if (fact.since !== undefined) expect(fact.since > minBand && fact.since <= maxBand, fact.id).toBe(true)
       }
+    }
+    // The backend's catalogue parser holds list column ids to the facts' rule: plain words, distinct, never the module's "definition".
+    for (const [id, list] of Object.entries(peekLists)) {
+      const ids = list.columns.map(column => column.id.toLowerCase())
+      expect(new Set(ids).size, id).toBe(ids.length)
+      expect(ids, id).not.toContain('definition')
+      for (const column of list.columns) expect(column.id, `${id}.${column.id}`).toMatch(/^[a-z][A-Za-z]*$/)
     }
     // Schema-scoped objects start as SSMS's General page does.
     for (const kind of ['table', 'view', 'procedure', 'function', 'synonym', 'sequence'] as const) expect(peekFacts(kind).slice(0, 4).map(fact => fact.id), kind).toEqual(['schema', 'created', 'modified', 'systemObject'])
@@ -728,10 +740,10 @@ describe('Peek tabs', () => {
   const facts = (extra: Partial<PeekResult> = {}): ApiResult<PeekResult> => ok({ facts: { schema: 'dbo', modified: '2024-01-02T03:04:05' }, elapsedMs: 1, ...extra })
 
   it('gives tables and views a Top rows tab and every kind Columns or Parameters and Dependencies, with no rows request of its own', () => {
-    expect(peekTabsOf('table')).toEqual(['definition', 'members', 'dependencies', 'rows'])
-    expect(peekTabsOf('view')).toEqual(['definition', 'members', 'dependencies', 'rows'])
-    expect(peekTabsOf('procedure')).toEqual(['definition', 'members', 'dependencies'])
-    expect([peekTabTitle('table', 'members'), peekTabTitle('function', 'members'), peekTabTitle('view', 'rows')]).toEqual(['Columns', 'Parameters', 'Top rows'])
+    expect(peekTabsOf('table')).toEqual(['definition', 'columns', 'dependencies', 'rows'])
+    expect(peekTabsOf('view')).toEqual(['definition', 'columns', 'dependencies', 'rows'])
+    expect(peekTabsOf('procedure')).toEqual(['definition', 'parameters', 'dependencies'])
+    expect([peekTabTitle('table', 'columns'), peekTabTitle('function', 'parameters'), peekTabTitle('view', 'rows')]).toEqual(['Columns', 'Parameters', 'Top rows'])
     // Top rows runs through query.execute and the results port: explorer.peekRows is gone from main and the backend's catalogue.
     expect(Object.keys(requestSchemas)).not.toContain('explorer.peekRows')
     expect(Object.keys(methodPolicies)).not.toContain('explorer.peekRows')
@@ -764,34 +776,26 @@ describe('Peek tabs', () => {
     service.selectTab('dependencies')
     expect(api.explorerPeekDependencies).toHaveBeenCalledTimes(2)
   })
-  it('asks for the Columns of a subtyped table with a request the children schema accepts', () => {
-    const { service, api } = setup()
-    service.peek({ ...node('table'), subtype: 'systemVersioned' }, 'hover')
-    service.selectTab('members')
-    const [request] = api.explorerChildren.mock.calls[0] as unknown as [unknown]
-    expect(explorerChildrenParamsSchema.safeParse({ ...(request as object), requestId }).success).toBe(true)
-  })
-  it('reads Columns or Parameters and Top rows only once their tab is chosen, and each once per card', async () => {
-    const { service, api, children, executes, results, open } = setup()
+  it('reads Columns or Parameters with the facts, never with a request of their own, and Top rows once its tab is chosen', async () => {
+    const { service, api, peeks, executes, results, open } = setup()
     service.peek(node('table'), 'hover')
-    expect(api.explorerChildren).not.toHaveBeenCalled()
     expect(api.execute).not.toHaveBeenCalled()
-    service.selectTab('members')
-    expect(api.explorerChildren).toHaveBeenCalledWith({ connectionId, requestId: 'id-3', node: { type: 'folder', owner: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customer' }, folder: 'columns' }, pageSize: peekLimits.members })
-    const column = { ref: { type: 'object' as const, object: { kind: 'column' as const, database: 'Sales', parent: { kind: 'table' as const, schema: 'dbo', name: 'Customer' }, name: 'Id' } }, label: 'Id', sublabel: '(PK, int, not null)', icon: 'column' as never, hasChildren: false }
-    children[0]!(ok({ nodes: [column], elapsedMs: 1, cursor: 'v1.columns.x' }))
+    const columns = { rows: [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL']] }
+    peeks[0]!(facts({ lists: { columns } }))
     await flush()
-    expect(open().members).toEqual({ status: 'ready', value: { nodes: [column], more: true } })
+    service.selectTab('columns')
+    expect(open()).toMatchObject({ tab: 'columns', lists: { columns } })
+    expect(api.explorerChildren).not.toHaveBeenCalled()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
     service.selectTab('rows')
-    service.selectTab('members')
+    service.selectTab('columns')
     service.selectTab('rows')
-    expect(api.explorerChildren).toHaveBeenCalledTimes(1)
     await flush()
     expect(api.execute).toHaveBeenCalledTimes(1)
-    executes[0]!(ok(summary('id-4')))
+    executes[0]!(ok(summary('id-3')))
     await flush()
-    expect(open().rows).toEqual({ status: 'ready', value: { key: 'id-4' } })
-    expect(results.held()).toEqual(['id-4'])
+    expect(open().rows).toEqual({ status: 'ready', value: { key: 'id-3' } })
+    expect(results.held()).toEqual(['id-3'])
     // A procedure has no Top rows tab.
     service.peek(node('procedure', 2), 'menu')
     service.selectTab('rows')
@@ -801,29 +805,29 @@ describe('Peek tabs', () => {
     expect(results.held()).toEqual([])
   })
   it('cancels the tabs\' reads with the peek\'s when the card closes, and drops their late answers', async () => {
-    const { service, api, children, open, results } = setup()
+    const { service, api, dependencies, open, results } = setup()
     service.peek(node('table'), 'menu')
-    service.selectTab('members')
+    service.selectTab('dependencies')
     service.selectTab('rows')
     service.close()
     expect(api.explorerCancel).toHaveBeenCalledWith(['id-1', 'id-3'])
     expect(results.released).toContain('id-4')
-    children[0]!(ok({ nodes: [], elapsedMs: 1 }))
+    dependencies[0]!(ok({ uses: [], usedBy: [], elapsedMs: 1 }))
     await flush()
     expect(service.getSnapshot().open).toBeUndefined()
     service.peek(node('table'), 'menu')
-    service.selectTab('members')
-    children[1]!(ok({ nodes: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'slow', retryable: true } }))
+    service.selectTab('dependencies')
+    dependencies[1]!(ok({ uses: [], usedBy: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'slow', retryable: true } }))
     await flush()
-    expect(open().members).toEqual({ status: 'error', message: 'slow' })
+    expect(open().dependencies).toEqual({ status: 'error', message: 'slow' })
     // Choosing a failed tab again reads it again; a ready one is kept.
-    service.selectTab('members')
-    expect(open().members).toEqual({ status: 'loading' })
-    children[2]!(ok({ nodes: [], elapsedMs: 1 }))
+    service.selectTab('dependencies')
+    expect(open().dependencies).toEqual({ status: 'loading' })
+    dependencies[2]!(ok({ uses: [], usedBy: [], elapsedMs: 1 }))
     await flush()
-    service.selectTab('members')
-    expect(api.explorerChildren).toHaveBeenCalledTimes(3)
-    expect(open().members).toEqual({ status: 'ready', value: { nodes: [], more: false } })
+    service.selectTab('dependencies')
+    expect(api.explorerPeekDependencies).toHaveBeenCalledTimes(3)
+    expect(open().dependencies).toEqual({ status: 'ready', value: { uses: [], usesTruncated: false, usedBy: [], usedByTruncated: false } })
   })
   it('follows a dependency in the same card beside the same row, and Back returns to the tab it left', async () => {
     const { service, api, peeks, open } = setup()
@@ -868,23 +872,23 @@ describe('Peek kinds beyond modules', () => {
   it('declares each kind\'s tabs in the catalogue, Definition first, and lists only where the kind has them', () => {
     const tabs = Object.fromEntries(peekKinds.map(kind => [kind, peekTabsOf(kind)]))
     expect(tabs).toEqual({
-      table: ['definition', 'members', 'dependencies', 'rows'], view: ['definition', 'members', 'dependencies', 'rows'],
-      procedure: ['definition', 'members', 'dependencies'], function: ['definition', 'members', 'dependencies'],
+      table: ['definition', 'columns', 'dependencies', 'rows'], view: ['definition', 'columns', 'dependencies', 'rows'],
+      procedure: ['definition', 'parameters', 'dependencies'], function: ['definition', 'parameters', 'dependencies'],
       index: ['definition', 'indexColumns'], trigger: ['definition', 'events', 'dependencies'],
       databaseTrigger: ['definition', 'events'], serverTrigger: ['definition', 'events'],
       database: ['definition', 'files'], login: ['definition', 'serverRoles', 'userMapping'],
       synonym: ['definition', 'dependencies'], sequence: ['definition', 'dependencies'], type: ['definition', 'dependencies'],
-      tableType: ['definition', 'members', 'dependencies']
+      tableType: ['definition', 'columns', 'dependencies']
     })
     // A synonym has no Top rows, a sequence no Parameters, a database or a login no Dependencies.
-    expect([peekHas('synonym', 'rows'), peekHas('sequence', 'members'), peekHas('database', 'dependencies'), peekHas('login', 'dependencies')]).toEqual([false, false, false, false])
-    for (const kind of peekKinds) {
-      expect(peekTabsOf(kind)[0], kind).toBe('definition')
-      expect(peekHas(kind, 'members'), kind).toBe(peekSpecs[kind].members !== undefined)
-    }
+    expect([peekHas('synonym', 'rows'), peekHas('sequence', 'parameters'), peekHas('database', 'dependencies'), peekHas('login', 'dependencies')]).toEqual([false, false, false, false])
+    for (const kind of peekKinds) expect(peekTabsOf(kind)[0], kind).toBe('definition')
+    // Columns and Parameters are lists, read with the facts: the backend's catalogue names them for the kinds that show them.
+    expect(peekListsOf('table')).toEqual(['columns'])
+    expect(peekListsOf('function')).toEqual(['parameters'])
     expect(peekTabTitle('login', 'userMapping')).toBe('User mapping')
     expect(peekTabTitle('index', 'indexColumns')).toBe(peekLists.indexColumns.title)
-    expect(peekTabTitle('tableType', 'members')).toBe('Columns')
+    expect(peekTabTitle('tableType', 'columns')).toBe('Columns')
     expect(isPeekListTab('files')).toBe(true)
     expect(isPeekListTab('rows')).toBe(false)
     expect(peekListsOf('login')).toEqual(['serverRoles', 'userMapping'])
@@ -927,18 +931,33 @@ describe('Peek kinds beyond modules', () => {
     expect(formatPeekValue({ format: 'kb' }, 8192)).toBe('8.00 MB')
   })
 
-  it('shows a list\'s rows in its columns, says when it is empty, cut or partly unread, and waits for the facts', () => {
+  it('shows a list as a local table in its columns, its values worded as the properties are and NULL as NULL', () => {
+    const files = peekListTable(peekLists.files, [['Sales', 'ROWS', 8192, 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf'], ['Log', 'LOG', null, null, null]])
+    expect(files.columns.map(column => column.name)).toEqual(peekLists.files.columns.map(column => column.label))
+    expect(files.rows).toEqual([['Sales', 'Rows', '8.00 MB', 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf'], ['Log', 'Log', null, null, null]])
+    const columns = peekListTable(peekLists.columns, [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL']])
+    expect(columns.columns.map(column => column.name)).toEqual(['Name', 'Type', 'Nullable', 'Key', 'Identity', 'Computed', 'Default', 'Definition'])
+    expect(columns.rows).toEqual([['Id', 'int', 'False', 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL']])
+    expect(peekLists.parameters.columns.map(column => column.label)).toEqual(['Name', 'Type', 'Direction', 'Default', 'Definition'])
+    // Text keeps its control characters for the grid to show; a count is a number column, which sorts by value.
+    expect(peekListTable({ columns: [{ id: 'a', label: 'A', format: 'text' }, { id: 'n', label: 'N', format: 'count' }] }, [['x\ty', 1024]])).toEqual({ columns: [{ name: 'A' }, { name: 'N', kind: 'number' }], rows: [['x\ty', '1,024']] })
+  })
+
+  it('draws a list tab as the list\'s grid, a card\'s in the card and a page\'s in a tab, and says when it is cut or partly unread', () => {
     const ready = { status: 'ready' as const, value: {} }
-    const markup = renderToStaticMarkup(createElement(PeekListView, { id: 'files', part: ready, list: { rows: [['Sales', 'ROWS', 8192, 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf']], truncated: true } }))
-    expect(markup).toContain('aria-label="Files"')
-    expect(markup.match(/<th[^>]*>.*?<\/th>/g)).toHaveLength(peekLists.files.columns.length)
-    expect(markup).toContain('<td title="Rows">Rows</td>')
-    expect(markup).toContain('<td title="8.00 MB">8.00 MB</td>')
+    const markup = renderToStaticMarkup(createElement(PeekListView, { id: 'files', part: ready, list: { rows: [['Sales', 'ROWS', 8192, 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf']], truncated: true }, preset: 'card', objectName: 'Sales' }))
+    expect(markup).toContain('data-peek-list="files"')
+    expect(markup).toContain('data-preset="card"')
     expect(markup).toContain('There are more than the card lists.')
-    const empty = renderToStaticMarkup(createElement(PeekListView, { id: 'userMapping', part: ready, list: { rows: [], unread: 3 } }))
-    expect(empty).toContain(peekLists.userMapping.empty)
+    const empty = renderToStaticMarkup(createElement(PeekListView, { id: 'userMapping', part: ready, list: { rows: [], unread: 3 }, preset: 'page', objectName: 'sa' }))
+    expect(empty).toContain('data-preset="page"')
     expect(empty).toContain('3 databases could not be read.')
-    expect(renderToStaticMarkup(createElement(PeekListView, { id: 'serverRoles', part: ready, list: undefined }))).toContain(peekLists.serverRoles.empty)
+  })
+
+  it('copies the properties as Name and Value lines, one line a fact, with the platform\'s line breaks', () => {
+    expect(peekPropertiesText([['Schema', 'dbo'], ['Row count', '1,024']], false)).toBe('Schema\tdbo\nRow count\t1,024')
+    expect(peekPropertiesText([['Schema', 'dbo'], ['Filter', 'a\tb\r\nc']], true)).toBe('Schema\tdbo\r\nFilter\ta b c')
+    expect(peekPropertiesText([], true)).toBe('')
   })
 
   it('shows only the groups of the node\'s subtype, and says why a refused group is missing', () => {

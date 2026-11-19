@@ -9,7 +9,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  * - AppData › Tables: the five static subfolders, then dbo.Orders and `tables - 1` synthetic tables (dbo.table1…), in
  *   pages of `pageSize` with `total`, after `pageDelayMs`, filtered by name when asked; its first page fails with the
  *   error code `tablesError` while that is set. dbo.Orders › Columns has
- *   `Id (PK, int, not null)` and `CustomerName (nvarchar(50), null)`.
+ *   `Id (PK, int, not null)` and `CustomerName (nvarchar(50), null)`, which Peek's Columns list (with the facts) shows too.
  * - AppData › Views: `views` expandable views (dbo.view0…), paged the same way.
  * - Security › Audits fails with PERMISSION_DENIED until `auditsOk` is set.
  * - Server Objects › Linked Servers is held until `release()` or a cancel for its request.
@@ -184,6 +184,10 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
+        // A table's or view's Columns list comes with its facts, each row with its declaration (PeekSql's columns list).
+        ...params.target.kind === 'table' || params.target.kind === 'view' ? { lists: { columns: { rows: params.target.name === 'Orders'
+          ? [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL'], ['CustomerName', 'nvarchar(50)', true, null, null, null, "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]]
+          : [['Id', 'int', false, null, null, null, null, '[Id] int NOT NULL']] } } } : {},
         // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
         ...(() => {
           const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition

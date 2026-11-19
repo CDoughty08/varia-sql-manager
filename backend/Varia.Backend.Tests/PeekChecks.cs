@@ -159,11 +159,16 @@ internal static partial class PeekChecks
                         || !page.EndsWith("WHERE o.object_id = @object_id;\n", StringComparison.Ordinal))
                         problems.Add(name + ": its page");
                 }
-                // Each list reads the catalogue's columns first, in order, then its helpers; User mapping reads databases instead.
+                // Each list reads the catalogue's columns first, in order, then its helpers, except those ListRow composes (their rows are checked
+                // in ColumnAndParameterRows); User mapping reads databases instead.
                 var lists = spec.ListSpecs.Where(list => list.Id != "userMapping").ToList();
                 if (!batch.Lists.Select(list => list.Id).SequenceEqual(lists.Select(list => list.Id)) || batch.Mapping != spec.ListSpecs.Any(list => list.Id == "userMapping")
-                    || batch.Lists.Zip(lists).Any(pair => !pair.First.Columns.Take(pair.Second.Columns.Count).SequenceEqual(pair.Second.Columns.Select(column => column.Id))))
+                    || batch.Lists.Zip(lists).Any(pair => !PeekSql.Composed.Contains(pair.First.Id) && !pair.First.Columns.Take(pair.Second.Columns.Count).SequenceEqual(pair.Second.Columns.Select(column => column.Id))))
                     problems.Add(name + ": its lists are not the catalogue's");
+                // A column's collation and the database's are in different collations (the database's and the server's): compared
+                // as they are, a database collated apart from its server fails the batch with Msg 468.
+                if (batch.Lists.Any(list => list.Id == "columns") && !batch.Text.Contains("c.collation_name COLLATE Latin1_General_100_BIN2 <> d.collation_name COLLATE Latin1_General_100_BIN2", StringComparison.Ordinal))
+                    problems.Add(name + ": it compares collation names across collations");
                 if (batch.Mapping != batch.Text.Contains(PeekSql.MappingDatabases, StringComparison.Ordinal)) problems.Add(name + ": User mapping's databases");
                 if (batch.Lists.Count + (batch.Mapping ? 1 : 0) > 0 && System.Text.RegularExpressions.Regex.Matches(batch.Text, @"SELECT TOP \(@take\) ").Count != batch.Lists.Count + (batch.Mapping ? 1 : 0) - noFiles)
                     problems.Add(name + ": a list without TOP (@take)");
@@ -254,6 +259,95 @@ internal static partial class PeekChecks
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
     }
 
+    /// <summary>A Columns or Parameters row from the parts its statement reads: every shown field, and the declaration as T-SQL.</summary>
+    private static void ColumnAndParameterRows(Action<bool, string> check)
+    {
+        static Dictionary<string, object?> Column(string name, string type, Action<Dictionary<string, object?>>? more = null)
+        {
+            var raw = new Dictionary<string, object?>
+            {
+                ["name"] = name, ["quotedName"] = "[" + name.Replace("]", "]]") + "]", ["type"] = type, ["quotedType"] = "[" + type + "]", ["quotedTypeSchema"] = "[sys]", ["userDefined"] = false,
+                ["assemblyType"] = false, ["baseType"] = null, ["maxLength"] = (short)4, ["precision"] = (byte)10, ["scale"] = (byte)0, ["nullable"] = true, ["identity"] = false, ["seed"] = null,
+                ["increment"] = null, ["computed"] = false, ["computedText"] = null, ["persisted"] = null, ["defaultText"] = null, ["collation"] = null, ["sparse"] = false, ["columnSet"] = false,
+                ["rowGuid"] = false, ["generated"] = (byte)0, ["hidden"] = false, ["mask"] = null, ["xmlDocument"] = false, ["quotedXmlSchema"] = null, ["quotedXmlCollection"] = null, ["xmlSchema"] = null,
+                ["xmlCollection"] = null, ["vectorDimensions"] = null, ["primaryKey"] = false, ["foreignKey"] = false
+            };
+            more?.Invoke(raw);
+            return raw;
+        }
+        string Show(object?[] row) => JsonSerializer.Serialize(row);
+        var id = PeekSql.ListRow("columns", Column("Id", "int", raw => { raw["nullable"] = false; raw["identity"] = true; raw["seed"] = 1; raw["increment"] = 1; raw["primaryKey"] = true; raw["foreignKey"] = true; }));
+        check(id is ["Id", "int", false, "PK, FK", "1, 1", null, null, "[Id] int IDENTITY(1,1) NOT NULL"], "an identity key column reads its key, seed and increment, and its declaration: " + Show(id));
+        var dated = PeekSql.ListRow("columns", Column("Order]Date", "datetime2", raw => { raw["scale"] = (byte)3; raw["nullable"] = false; raw["defaultText"] = "(sysutcdatetime())"; }));
+        check(dated is ["Order]Date", "datetime2(3)", false, null, null, null, "(sysutcdatetime())", "[Order]]Date] datetime2(3) NOT NULL DEFAULT (sysutcdatetime())"],
+            "a column's default is its expression without the constraint's name, and its name is quoted as QUOTENAME writes it: " + Show(dated));
+        var text = PeekSql.ListRow("columns", Column("Name", "nvarchar", raw => { raw["maxLength"] = (short)-1; raw["collation"] = "Latin1_General_BIN2"; raw["sparse"] = true; }));
+        check(text is [_, "nvarchar(max)", true, null, null, null, null, "[Name] nvarchar(max) COLLATE Latin1_General_BIN2 SPARSE NULL"], "a collation other than the database's and SPARSE are declared: " + Show(text));
+        var total = PeekSql.ListRow("columns", Column("Total", "decimal", raw => { raw["precision"] = (byte)19; raw["scale"] = (byte)4; raw["computed"] = true; raw["computedText"] = "([Qty]*[Price])"; raw["persisted"] = true; raw["nullable"] = false; }));
+        var loose = PeekSql.ListRow("columns", Column("Half", "int", raw => { raw["computed"] = true; raw["computedText"] = "([Qty]/(2))"; raw["persisted"] = false; }));
+        check(total is [_, "decimal(19,4)", false, null, null, "([Qty]*[Price])", null, "[Total] AS ([Qty]*[Price]) PERSISTED NOT NULL"] && loose is [.., "[Half] AS ([Qty]/(2))"],
+            "a computed column is declared by its expression, with PERSISTED (and NOT NULL only then): " + Show(total) + " " + Show(loose));
+        var phone = PeekSql.ListRow("columns", Column("Phone", "Phone]Number", raw => { raw["userDefined"] = true; raw["baseType"] = "nvarchar"; raw["maxLength"] = (short)40; raw["quotedType"] = "[Phone]]Number]"; raw["quotedTypeSchema"] = "[Sales]"; }));
+        var doc = PeekSql.ListRow("columns", Column("Doc", "xml", raw => { raw["maxLength"] = (short)-1; raw["xmlDocument"] = true; raw["xmlSchema"] = "dbo"; raw["xmlCollection"] = "Orders"; raw["quotedXmlSchema"] = "[dbo]"; raw["quotedXmlCollection"] = "[Orders]"; }));
+        check(phone is [_, "Phone]Number(nvarchar(20))", .., "[Phone] [Sales].[Phone]]Number] NULL"] && doc is [_, "XML(DOCUMENT dbo.Orders)", .., "[Doc] xml(DOCUMENT [dbo].[Orders]) NULL"],
+            "a user type is declared schema-qualified as Script As writes it, and an XML column with its schema collection: " + Show(phone) + " " + Show(doc));
+        var start = PeekSql.ListRow("columns", Column("ValidFrom", "datetime2", raw => { raw["scale"] = (byte)7; raw["nullable"] = false; raw["generated"] = (byte)1; raw["hidden"] = true; }));
+        var guid = PeekSql.ListRow("columns", Column("Row", "uniqueidentifier", raw => { raw["nullable"] = false; raw["rowGuid"] = true; raw["defaultText"] = "(newsequentialid())"; }));
+        var set = PeekSql.ListRow("columns", Column("Props", "xml", raw => { raw["maxLength"] = (short)-1; raw["columnSet"] = true; }));
+        check(start is [.., "[ValidFrom] datetime2(7) GENERATED ALWAYS AS ROW START HIDDEN NOT NULL"] && guid is [.., "[Row] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newsequentialid())"]
+            && set is [.., "[Props] xml COLUMN_SET FOR ALL_SPARSE_COLUMNS"], "a period column, a ROWGUIDCOL column and a column set are declared: " + Show(start) + " " + Show(guid) + " " + Show(set));
+        var big = PeekSql.ListRow("columns", Column("N", "bigint", raw => { raw["identity"] = true; raw["seed"] = 1000000000000m; raw["increment"] = -5L; raw["nullable"] = false; }));
+        check(big is [_, _, _, _, "1000000000000, -5", .., "[N] bigint IDENTITY(1000000000000,-5) NOT NULL"], "an identity's seed and increment are written as invariant numbers: " + Show(big));
+        // The batch reads a seed and increment as text, so a numeric(38) one past System.Decimal's range still reads.
+        var huge = PeekSql.ListRow("columns", Column("H", "numeric", raw => { raw["precision"] = (byte)38; raw["identity"] = true; raw["seed"] = "99999999999999999999999999999999999999"; raw["increment"] = "1"; raw["nullable"] = false; }));
+        check(huge is [_, "numeric(38,0)", _, _, "99999999999999999999999999999999999999, 1", .., "[H] numeric(38,0) IDENTITY(99999999999999999999999999999999999999,1) NOT NULL"],
+            "an identity's seed read as text is written as it is, past System.Decimal's range: " + Show(huge));
+        var ledger = PeekSql.ListRow("columns", Column("ledger_start_transaction_id", "bigint", raw => { raw["nullable"] = false; raw["generated"] = (byte)5; raw["hidden"] = true; }));
+        var sequence = PeekSql.ListRow("columns", Column("ledger_end_sequence_number", "bigint", raw => { raw["generated"] = (byte)8; raw["hidden"] = true; }));
+        var masked = PeekSql.ListRow("columns", Column("Email", "varchar", raw => { raw["maxLength"] = (short)100; raw["mask"] = "partial(1, \"X''X\", 0)"; }));
+        check(ledger is [.., "[ledger_start_transaction_id] bigint GENERATED ALWAYS AS TRANSACTION_ID START HIDDEN NOT NULL"]
+            && sequence is [.., "[ledger_end_sequence_number] bigint GENERATED ALWAYS AS SEQUENCE_NUMBER END HIDDEN NULL"]
+            && masked is [.., "[Email] varchar(100) MASKED WITH (FUNCTION = N'partial(1, \"X''X\", 0)') NULL"],
+            "a ledger table's generated columns and a masked column are declared: " + Show(ledger) + " " + Show(sequence) + " " + Show(masked));
+        var stream = PeekSql.ListRow("columns", Column("Doc", "varbinary", raw => { raw["maxLength"] = (short)-1; raw["filestream"] = true; }));
+        var replicated = PeekSql.ListRow("columns", Column("R", "int", raw => { raw["identity"] = true; raw["seed"] = "1"; raw["increment"] = "1"; raw["notForReplication"] = true; raw["nullable"] = false; }));
+        check(stream is [.., "[Doc] varbinary(max) FILESTREAM NULL"] && replicated is [.., "[R] int IDENTITY(1,1) NOT FOR REPLICATION NOT NULL"],
+            "a FILESTREAM column and an identity NOT FOR REPLICATION are declared: " + Show(stream) + " " + Show(replicated));
+        check(PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)) == "'01:02:03.4000000'" && PeekSql.Literal(new DateTime(2024, 1, 2, 3, 4, 5)) == "'2024-01-02T03:04:05'",
+            "a CLR default's time and date are written as quoted literals: " + PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)));
+
+        static Dictionary<string, object?> Parameter(string name, string type, string module, Action<Dictionary<string, object?>>? more = null)
+        {
+            var raw = new Dictionary<string, object?>
+            {
+                ["name"] = name, ["type"] = type, ["quotedType"] = "[" + type + "]", ["quotedTypeSchema"] = "[sys]", ["userDefined"] = false, ["assemblyType"] = false, ["tableType"] = false,
+                ["typeSchema"] = "sys", ["baseType"] = null, ["maxLength"] = (short)4, ["precision"] = (byte)10, ["scale"] = (byte)0, ["output"] = false, ["readOnly"] = false, ["hasDefault"] = false,
+                ["defaultValue"] = null, ["xmlDocument"] = false, ["quotedXmlSchema"] = null, ["quotedXmlCollection"] = null, ["xmlSchema"] = null, ["xmlCollection"] = null, ["cursor"] = false,
+                ["moduleType"] = module, ["nullable"] = true
+            };
+            more?.Invoke(raw);
+            return raw;
+        }
+        var defaults = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @OrderId int = 0 OUTPUT, @Name nvarchar(20) = N'x', @Rows dbo.Rows READONLY, @c CURSOR VARYING OUTPUT AS SELECT 1");
+        var order = PeekSql.ListRow("parameters", Parameter("@OrderId", "int", "P ", raw => raw["output"] = true), defaults);
+        var name = PeekSql.ListRow("parameters", Parameter("@Name", "nvarchar", "P ", raw => raw["maxLength"] = (short)40), defaults);
+        var rows = PeekSql.ListRow("parameters", Parameter("@Rows", "Rows", "P ", raw => { raw["userDefined"] = true; raw["tableType"] = true; raw["readOnly"] = true; raw["typeSchema"] = "dbo"; raw["quotedTypeSchema"] = "[dbo]"; }), defaults);
+        var cursor = PeekSql.ListRow("parameters", Parameter("@c", "int", "P ", raw => { raw["cursor"] = true; raw["output"] = true; }), defaults);
+        check(order is ["@OrderId", "int", "Input/Output", "0", "@OrderId int = 0 OUTPUT"] && name is [_, "nvarchar(20)", "Input", "N'x'", "@Name nvarchar(20) = N'x'"]
+            && rows is [_, "dbo.Rows", "Input", null, "@Rows [dbo].[Rows] READONLY"] && cursor is [_, "cursor", "Input/Output", null, "@c CURSOR VARYING OUTPUT"],
+            "a T-SQL module's parameters read their direction, their default from the header, and their declaration: " + Show(order) + " " + Show(name) + " " + Show(rows) + " " + Show(cursor));
+        var clr = PeekSql.ListRow("parameters", Parameter("@s", "nvarchar", "PC", raw => { raw["maxLength"] = (short)-1; raw["hasDefault"] = true; raw["defaultValue"] = "it's"; }), null);
+        var clrNull = PeekSql.ListRow("parameters", Parameter("@n", "int", "FS", raw => raw["hasDefault"] = true), null);
+        var unread = PeekSql.ListRow("parameters", Parameter("@a", "int", "P "), null);
+        check(clr is [.., "N'it''s'", "@s nvarchar(max) = N'it''s'"] && clrNull is [.., "NULL", "@n int = NULL"] && unread is [.., null, "@a int"],
+            "a CLR module's default comes from sys.parameters as a literal, and an unread header gives none: " + Show(clr) + " " + Show(clrNull) + " " + Show(unread));
+        // A natively compiled module's NOT NULL parameter; a table-valued or cursor one is never declared NOT NULL.
+        var native = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @p int NOT NULL = 1 WITH NATIVE_COMPILATION, SCHEMABINDING AS BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'us_english') END");
+        var notNull = PeekSql.ListRow("parameters", Parameter("@p", "int", "P ", raw => raw["nullable"] = false), native);
+        var table = PeekSql.ListRow("parameters", Parameter("@t", "Rows", "P ", raw => { raw["userDefined"] = true; raw["tableType"] = true; raw["readOnly"] = true; raw["nullable"] = false; raw["quotedTypeSchema"] = "[dbo]"; }), null);
+        check(notNull is [.., "1", "@p int NOT NULL = 1"] && table is [.., "@t [dbo].[Rows] READONLY"], "a native module's NOT NULL parameter is declared so: " + Show(notNull) + " " + Show(table));
+    }
+
     /// <summary>A text read as the renderer reads it: SUBSTRING's page of <paramref name="size"/> from each offset, trimmed as the backend trims it.</summary>
     private static List<string> Pages(string text, int size)
     {
@@ -298,6 +392,7 @@ internal static partial class PeekChecks
         var fileRow = PeekSql.ListRow("files", new() { ["name"] = "f", ["type"] = "ROWS", ["size"] = 8192L, ["growth"] = 8192, ["path"] = "C:\\x.mdf", ["percentGrowth"] = false, ["maxSize"] = -1 });
         check(listRow is ["Name", true, false, "nvarchar(50)"] && fileRow is ["f", "ROWS", 8192L, "By 64 MB, unlimited", "C:\\x.mdf"],
             "an index column's type and a file's growth read as the tree and SSMS's Files page write them: " + JsonSerializer.Serialize(listRow) + " " + JsonSerializer.Serialize(fileRow));
+        ColumnAndParameterRows(check);
         check(PeekSql.FunctionType("SQL_SCALAR_FUNCTION") == "Scalar-valued" && PeekSql.FunctionType("SQL_INLINE_TABLE_VALUED_FUNCTION") == "Inline table-valued"
             && PeekSql.FunctionType("SQL_TABLE_VALUED_FUNCTION") == "Multi-statement table-valued" && PeekSql.FunctionType("AGGREGATE_FUNCTION") == "CLR aggregate"
             && PeekSql.FunctionType("SOMETHING_NEW") == "SOMETHING_NEW", "a function's type is in SSMS's words, and an unknown type as the server names it");

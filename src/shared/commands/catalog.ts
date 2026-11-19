@@ -1374,6 +1374,11 @@ export const commandCatalog = {
     providerContext: 'own',
     title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
+  },
+  // Peek's Properties pane (peek.properties.context): the facts whose text is selected, else all of them, as Name<TAB>Value lines.
+  'peek.copyProperties': {
+    title: 'Copy Properties', category: 'Object Explorer', icon: 'copy', palette: false,
+    menus: [{ menu: 'peek.properties.context', group: '1_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
   }
 } as const satisfies Record<string, CommandDescriptor>
 
