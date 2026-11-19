@@ -23,6 +23,10 @@ internal static class ProviderChecks
         var previewText = JsonSerializer.Serialize(await service.DispatchAsync("connections.preview", Parse(options), wire), wire);
         var previewSqlServerText = JsonSerializer.Serialize(await service.DispatchAsync("connections.preview", withProvider("sqlserver"), wire), wire);
         check(previewText == previewSqlServerText, "options naming 'sqlserver' read the same as options without a provider");
+        // Options a caller serialises from the record (as the live checks do) carry no provider member and pass the check.
+        var serialised = JsonSerializer.SerializeToElement(new ConnectOptions("sql-prod-01", "Sales", "windows", null, null, false), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var previewSerialised = await Code(() => service.DispatchAsync("connections.preview", serialised, wire));
+        check(!serialised.TryGetProperty("provider", out _) && previewSerialised == "ok", $"serialised ConnectOptions write no provider and are SQL Server's: {previewSerialised}");
         check(preview == "ok" && previewSqlServer == "ok" && previewBigQuery == "UNSUPPORTED_PROVIDER" && connectBigQuery == "UNSUPPORTED_PROVIDER" && previewUnknown == "INVALID_PARAMS",
             $"options without a provider and with 'sqlserver' are SQL Server's; 'bigquery' is refused with UNSUPPORTED_PROVIDER before any connection, and an unknown provider is invalid: {preview} {previewSqlServer} {previewBigQuery} {connectBigQuery} {previewUnknown}");
 
