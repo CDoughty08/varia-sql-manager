@@ -1439,15 +1439,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
-.client-statistics { overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+/* The report fills the pane: tools and status above, the grid (LocalGrid, page) in what is left, the notes under it. */
+.client-statistics { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.client-statistics > .local-grid { flex: 1; min-height: 160px; }
+.client-statistics > details { flex: none; }
 .client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
 .client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
 .client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
-.client-statistics table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-.client-statistics th, .client-statistics td { border-bottom: 1px solid var(--varia-widget-border); padding: var(--varia-space-2); text-align: left; vertical-align: top; }
-.client-statistics td { white-space: nowrap; }
-.client-statistics td:last-child { white-space: normal; }
-.client-statistics th[scope="row"] { font-weight: 500; }
 .memory-status { margin-left: var(--varia-space-2); }
 /* Discard results after execution (DiscardStatus): shown only while it is on, as plain as the memory control beside it. */
 .discard-status { display: flex; margin-left: var(--varia-space-2); }
@@ -2160,17 +2158,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
 .live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
 .live-chart[data-table] .live-chart-canvas { display: none; }
-/* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
-.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; outline: none; }
-.live-chart-table-wrap:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
-/* As wide as the plot it replaces, so the caption takes one line; the header stays in view as the rows scroll (on the
-   chart's surface, which LiveChart sets on the thead). */
-.live-chart-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
-.live-chart-table caption { padding-bottom: 2px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
-.live-chart-table thead { position: sticky; top: 0; z-index: 1; }
-.live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
-.live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
-.live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
+/* The table takes the plot's place at its size: a one-line caption, then the grid (LocalGrid, card) in the room left,
+   sized by LiveChart to the rows that fit, so it never spills over the card or what is around it. */
+.live-chart-table-wrap { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.live-chart-table-caption { flex: none; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
+.live-chart-table-room { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+/* Never taller than the room: a strip (a failed copy) takes a row from the grid rather than going out of sight. */
+.live-chart-table-room > .local-grid { max-height: 100%; }
 @media (forced-colors: active) {
   .live-chart-swatch line { stroke: CanvasText; }
   /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */

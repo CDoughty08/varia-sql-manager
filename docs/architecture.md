@@ -296,7 +296,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   - **Local tables** show through `LocalGrid` (`grid/LocalGrid.tsx`): a small read-only table the renderer already holds (a
     Peek list, a Properties table), never a backend result. `GridView` reads any `GridSource` (the six read members of a
     `ResultHandle`); `LocalSource` (`grid/local-source.ts`) serves the table from memory, and a sort is a new source the
-    grid swaps in. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
+    grid swaps in. A new table object is a new grid, unless its owner keeps the view state (`state`) and the columns are the
+    same: then it is swapped into the same view (a live chart's table re-sampled each tick), so a drag or resize under way goes on. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
     built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
     with its own source (view `live`, `LiveOutput`); a `card` has no Save. Its strip says what the bounds left out (rows
     past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
