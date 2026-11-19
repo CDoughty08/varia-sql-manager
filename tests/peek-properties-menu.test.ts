@@ -31,6 +31,22 @@ describe('Peek Properties menu', () => {
     expect(menu.target(document.createElement('div'))).toBeNull()
   })
 
+  it('leaves out a fact the selection only touches, as a triple-click\'s paragraph ends at the next fact\'s start', () => {
+    const element = pane(), menu = propertiesMenu(false)
+    const range = document.createRange()
+    range.setStart(fact(element, 'Schema'), 0)
+    range.setEnd(fact(element, 'Row count').firstChild!, 0)
+    getSelection()!.removeAllRanges()
+    getSelection()!.addRange(range)
+    expect(menu.target(element)?.text).toBe('Schema\tdbo')
+    // And one that starts at a fact's very end touches it without selecting it either.
+    range.setStart(element.querySelectorAll('dd')[1].firstChild!, '12,345'.length)
+    range.setEnd(fact(element, 'Data space').firstChild!, 4)
+    getSelection()!.removeAllRanges()
+    getSelection()!.addRange(range)
+    expect(menu.target(element)?.text).toBe('Data space\t2.00 MB')
+  })
+
   it('reads the selection as a press began while it is down, then live once it ends', () => {
     const element = pane(), menu = propertiesMenu(false)
     // A right-click with nothing selected, which selects the word under it before the menu opens: every fact.
