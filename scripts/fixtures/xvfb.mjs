@@ -6,10 +6,10 @@ export function underXvfb(env = process.env, platform = process.platform) {
 export const gpuSwitch = '--disable-gpu'
 
 /**
- * A smoke launch's arguments: under xvfb, with `--disable-gpu`. A virtual display has no GPU, so Chromium's first GPU
- * process failed to start on almost every CI launch and was replaced by a software one; about one launch in 1,400 the failed
- * process never finished exiting, no replacement started, and the window ran no animation frames at all ("animationFrame":
- * "none within 2 s", the editor hidden for 30 s). Starting in software skips that process, and the first frame comes sooner.
+ * An Electron launch's arguments: under xvfb, with `--disable-gpu`. A virtual display has no GPU, so Chromium's first GPU
+ * process failed to start on almost every CI launch and was replaced by a software one. Rarely (2 of about 4,700 launches
+ * under load) the failed process never exited and nothing replaced it, so the window ran no animation frames and the editor
+ * stayed hidden. Starting in software never runs that process.
  */
 export function xvfbArgs(args, env = process.env, platform = process.platform) {
   return underXvfb(env, platform) && !args.includes(gpuSwitch) ? [...args, gpuSwitch] : args

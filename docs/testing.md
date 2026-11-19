@@ -11,8 +11,8 @@ rules.
   lock (below). A stopped check prints its running lanes' output.
 - `npm run test:smoke` runs the suites in package.json's `test:smoke`; `node scripts/smoke-shards.mjs 2/3` runs one CI
   shard. The fixture launches the hidden smoke window with `--disable-frame-rate-limit` (Chromium otherwise draws it at
-  one frame a second, and every Playwright press waits for frames). Under xvfb it adds `--disable-gpu`: the virtual display has no GPU, and a GPU process that failed to start
-  sometimes never exited, leaving the window with no frames (`scripts/fixtures/xvfb.mjs`). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
+  one frame a second, and every Playwright press waits for frames). Every Electron launch under xvfb adds `--disable-gpu` through `xvfbArgs` (`scripts/fixtures/xvfb.mjs` says why).
+  `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
   of each launch there; it holds the environment, so never upload one from a run with secrets.
 - `npm run test:smoke:wsl -- <suite>...` runs smoke suites on Linux from a Windows checkout, through WSL (below). Run
   it for a change that can behave differently on Linux (window state, menus, clipboard, file paths) before pushing.

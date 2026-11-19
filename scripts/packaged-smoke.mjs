@@ -10,6 +10,7 @@ import { getCurrentFuseWire } from '@electron/fuses'
 import { exited, removeProfile } from './fixtures/owned-app.mjs'
 import { closeMs, within } from './fixtures/smoke.mjs'
 import { backendReady } from './fixtures/ui.mjs'
+import { xvfbArgs } from './fixtures/xvfb.mjs'
 import { asarProblems, isReadyToRun, readAsar, readyToRunAssemblies } from './packaged-contents.mjs'
 import { hostRid, sqlToolsServiceProblems } from './prepare-sqltools-service.mjs'
 
@@ -59,7 +60,7 @@ const temporaryProfile = process.env.VARIA_PACKAGED_PROFILE ? undefined : mkdtem
 const profile = temporaryProfile ?? resolve(process.env.VARIA_PACKAGED_PROFILE)
 const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
 phase('starting owned application')
-const child = spawn(executable, args, { env, stdio: 'ignore' })
+const child = spawn(executable, xvfbArgs(args), { env, stdio: 'ignore' })
 let browser
 async function smoke() {
   phase('connecting to application')

@@ -200,7 +200,7 @@ export const electron = {
     env.VARIA_TEST_HOT_EXIT ??= '0'
     // Varia plays animations whatever the system asks unless the user opts in; the emulated reduced motion applies only with this.
     if (!motion) env.VARIA_TEST_FOLLOW_SYSTEM_MOTION ??= '1'
-    // Under xvfb, with --disable-gpu: a failed GPU start sometimes left the window running no frames (xvfb.mjs).
+    // Under xvfb, with --disable-gpu (xvfb.mjs).
     const args = xvfbArgs(options.args ?? [], env)
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))

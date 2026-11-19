@@ -9,6 +9,7 @@ import { stopIfLowMemory } from './fixtures/memory-load.mjs'
 import { enlargeOutput, pinStackedResults } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
+import { xvfbArgs } from './fixtures/xvfb.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -70,7 +71,7 @@ async function run(sql, timeout = 60000) {
 }
 
 async function launch(env) {
-  app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  app = await electron.launch({ args: xvfbArgs(['.']), env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   // Smoke windows stay hidden, and a hidden window gets about one animation frame a second; show it without focus.
