@@ -51,9 +51,9 @@ internal sealed class ExplorerOptions
     public TimeSpan? AgentProfileBudget { get; set; }
     /// <summary>Replaces the reader the Error Logs listing runs xp_enumerrorlogs through (offline checks).</summary>
     public Varia.Backend.Agent.AgentReader? AgentReader { get; set; }
-    /// <summary>Fails every catalog statement with the error this returns for its database (null at server scope) once its
-    /// connection is open, in place of running it (offline checks of how a server's refusal maps).</summary>
-    public Func<string?, SqlException>? TestStatementFailure { get; set; }
+    /// <summary>Fails every catalog statement with the error this returns for its database (null at server scope) and text once
+    /// its connection is open, in place of running it (offline checks of how a server's refusal maps); it may wait on the token.</summary>
+    public Func<string?, string, CancellationToken, Task<SqlException>>? TestStatementFailure { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
@@ -479,7 +479,7 @@ internal sealed partial class ExplorerService : IDisposable
                     return failed(await SsisOpenFailureAsync(connectionId, subject, database!, token));
                 }
                 opened?.Invoke();
-                if (Options.TestStatementFailure is { } failure) throw failure(database);
+                if (Options.TestStatementFailure is { } failure) throw await failure(database, statement, token);
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");

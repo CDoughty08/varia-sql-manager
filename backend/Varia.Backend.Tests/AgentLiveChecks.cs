@@ -230,7 +230,7 @@ internal static class AgentLiveChecks
                 await using (var read = await command.ExecuteReaderAsync()) facts = await AgentProfileSql.ReadAsync(read, "windows", 3, CancellationToken.None);
                 // The server-scope batch agent.profile falls back to when msdb refuses a login reads the same server facts, and no role.
                 await using var server = new SqlCommand(AgentProfileSql.Render(new SqlRender(band), msdb: false), connection);
-                await using (var read = await server.ExecuteReaderAsync()) serverFacts = await AgentProfileSql.ReadAsync(read, "windows", 3, CancellationToken.None, msdb: false);
+                await using (var read = await server.ExecuteReaderAsync()) serverFacts = await AgentProfileSql.ReadServerAsync(read, "windows", 3, CancellationToken.None);
             }
             finally { await Run("REVERT;"); }
             check(facts is { MsdbAccess: true, Sysadmin: false, UserRole: true, ReaderRole: false, OperatorRole: false, PurgeHistory: false, ServerServices: false, Sessions: false, AlterAnyCredential: false, AgentXps: true },
