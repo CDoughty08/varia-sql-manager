@@ -1332,13 +1332,18 @@ try {
     await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: Array.from({ length: 40 }, (_, i) => [`row ${i}`]) })
     const tallFrame = localGridFrame(page, 'Local header'), tallHeight = await headerHeight()
     // The scroller as wide as the columns and half a scroll bar, whatever the frame's border: beside the vertical bar they
-    // overflow, without it they would fit.
-    await tallFrame.evaluate((element, [half, parts]) => {
-      const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
-      element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
-    }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
+    // overflow, without it they would fit. The columns can still settle narrower after the first measure (a slow runner), so
+    // each poll sizes the frame again from the head's current width until the scroller overflows only beside the bar.
     const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
-    await expect.poll(async () => { const [scroll, client, offset] = (await sizes()).split(/ in | of /).map(Number); return scroll > client && offset > scroll || await sizes() }).toBe(true)
+    await expect.poll(async () => {
+      const measured = await tallFrame.evaluate((element, [half, parts]) => {
+        const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
+        element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
+        return `${scroller.scrollWidth} in ${scroller.clientWidth} of ${scroller.offsetWidth}`
+      }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
+      const [scroll, client, offset] = measured.split(/ in | of /).map(Number)
+      return scroll > client && offset > scroll || measured
+    }, { timeout: 15_000 }).toBe(true)
     // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
     await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
     await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
