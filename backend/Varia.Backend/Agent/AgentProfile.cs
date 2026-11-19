@@ -63,6 +63,11 @@ namespace Varia.Backend.Agent
             return new(platform, engineEdition, msdb, Bit(0), Bit(1), Bit(2), Bit(3), Bit(4), state || security || performance, state || performance, Bit(8), Bit(9), Option(10), Option(11), Bit(12));
         }
 
+        /// <summary>The server-scope batch's one row (<see cref="Render"/> without msdb): msdb access, every Agent role and the msdb
+        /// permissions off.</summary>
+        public static Task<AgentProfileDto?> ReadServerAsync(SqlDataReader reader, string platform, int engineEdition, CancellationToken token) =>
+            ReadAsync(reader, platform, engineEdition, token, msdb: false);
+
         /// <summary>msdb refused the login (916, where its guest CONNECT was revoked) and the server-scope read failed too: no Agent
         /// role, nothing read.</summary>
         public static AgentProfileDto NoMsdb(string platform, int engineEdition) => new(platform, engineEdition, false, false, false, false, false, false, false, false, false, false, null, null, false);
@@ -119,13 +124,24 @@ namespace Varia.Backend.Explorer
                     error => AgentProfileSql.Failed(error, opened, platform, server.EngineEdition),
                     source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget), () => opened = true);
                 // msdb refused the login: the server's own facts (server state, ALTER ANY CREDENTIAL, clustering, the options) are
-                // still this login's to read, so read them at server scope rather than report them false. Failing, no role and nothing read.
+                // still this login's to read, so read them at server scope rather than report them false, within what is left of the
+                // one budget. A statement failing or the budget running out keeps the no-role profile the 916 already settled; a
+                // refused open or sign-in is the error itself, and a disconnect or the caller's cancel still cancels.
                 if (result is { Profile.MsdbAccess: false })
                 {
                     var unread = result;
-                    result = await RunAsync(args.ConnectionId, null, "SQL Server Agent", profile, QueryScope.Server, AgentProfileSql.Render(new SqlRender(profile.Band), msdb: false), values,
-                        async (_, reader) => new AgentProfileResult(await AgentProfileSql.ReadAsync(reader, platform, server.EngineEdition, source.Token, msdb: false) ?? unread.Profile, 0),
-                        _ => unread, source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget));
+                    var serverOpened = false;
+                    try
+                    {
+                        result = await RunAsync(args.ConnectionId, null, "SQL Server Agent", profile, QueryScope.Server, AgentProfileSql.Render(new SqlRender(profile.Band), msdb: false), values,
+                            async (_, reader) => new AgentProfileResult(await AgentProfileSql.ReadServerAsync(reader, platform, server.EngineEdition, source.Token) ?? unread.Profile, 0),
+                            error => serverOpened ? unread : new AgentProfileResult(null, 0, error),
+                            source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), opened: () => serverOpened = true);
+                    }
+                    catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested && !entry.Forgotten)
+                    {
+                        result = unread;
+                    }
                 }
                 return result with { ElapsedMs = watch.ElapsedMilliseconds };
             }

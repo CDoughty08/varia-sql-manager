@@ -95,21 +95,48 @@ internal static class AgentChecks
             "agent.profile answers msdb refusing the login (NO_DB_ACCESS once open) as a profile with no role, and any other failure, a refused open included, as the error itself");
         // msdb refusing the login once the pool connection is open (916 from the scope wrapper) is a profile with no role; the
         // server-scope read of its server facts follows, and failing too (1222 here) leaves that profile with nothing read.
+        static Microsoft.Data.SqlClient.SqlException NoMsdb() => ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal is not able to access the database \"msdb\" under the current security context.");
         var refusing = new ExplorerChecks.FakeHost { Opening = (_, _) => Task.CompletedTask };
-        var scopes = new List<string?>();
-        using (var service = new ExplorerService(refusing, new ExplorerOptions { TestStatementFailure = database =>
+        var scopes = new List<(string? Database, string Statement)>();
+        using (var service = new ExplorerService(refusing, new ExplorerOptions { TestStatementFailure = (database, statement, _) =>
         {
-            lock (scopes) scopes.Add(database);
-            return database == "msdb"
-                ? ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal is not able to access the database \"msdb\" under the current security context.")
-                : ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.");
+            lock (scopes) scopes.Add((database, statement));
+            return Task.FromResult(database == "msdb" ? NoMsdb() : ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded."));
         } }))
         {
             var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            bool Batch(string text, bool msdb) => Enumerable.Range(ExplorerCatalog.MinBand, ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1)
+                .Any(band => AgentProfileSql.Render(new SqlRender(band), msdb) == text);
             check(result is { Error: null, Profile: { MsdbAccess: false, Sysadmin: false, UserRole: false, ServerServices: false, AgentXps: null } } && service.RunningCount == 0
-                && scopes.SequenceEqual(["msdb", null]),
-                "agent.profile whose msdb refuses the login after the connection opened (916) reads the server facts at server scope next, and with that failing too answers a profile with msdb access off and no role: "
-                + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope ?? "server")));
+                && scopes is [("msdb", var first), (null, var second)] && Batch(first, true) && Batch(second, false),
+                "agent.profile whose msdb refuses the login after the connection opened (916) runs the server-scope batch at server scope next, and with that failing too answers a profile with msdb access off and no role: "
+                + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope.Database ?? "server")));
+        }
+        // The server-scope read shares the one budget: past it, the no-role profile the 916 settled, within the budget, never a TIMEOUT.
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            AgentProfileBudget = TimeSpan.FromMilliseconds(200),
+            TestStatementFailure = async (database, _, token) =>
+            {
+                if (database != "msdb") await Task.Delay(TimeSpan.FromSeconds(5), token);
+                return NoMsdb();
+            }
+        }))
+        {
+            var slowWatch = System.Diagnostics.Stopwatch.StartNew();
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Error: null, Profile.MsdbAccess: false } && slowWatch.ElapsedMilliseconds < 4000 && service.RunningCount == 0,
+                "agent.profile whose server-scope read outlasts the one budget answers the no-role profile, not a TIMEOUT: " + result.Error?.Code + " in " + slowWatch.ElapsedMilliseconds + " ms");
+        }
+        // A server-scope read whose connection the server refuses to open (18456) is that error, not "no role".
+        var opens = 0;
+        var disabled = new ExplorerChecks.FakeHost { Opening = (_, _) => Interlocked.Increment(ref opens) == 1 ? Task.CompletedTask
+            : throw ConnectionFailureChecks.Sql(18456, 1, 14, "server", "Login failed for user.") };
+        using (var service = new ExplorerService(disabled, new ExplorerOptions { TestStatementFailure = (_, _, _) => Task.FromResult(NoMsdb()) }))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && opens == 2 && service.RunningCount == 0,
+                "agent.profile whose server-scope read cannot open its connection (18456) answers that error, not a no-role profile: " + result.Error?.Code + " opens " + opens);
         }
         check(new[] { 13, 16 }.All(band => AgentProfileSql.Render(new SqlRender(band), msdb: false) is var text && !text.Contains("msdb", StringComparison.OrdinalIgnoreCase)
                 && !text.Contains("IS_ROLEMEMBER", StringComparison.Ordinal) && text.Contains("IsClustered", StringComparison.Ordinal) && text.Contains("16384", StringComparison.Ordinal)),
